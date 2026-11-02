@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
@@ -13,16 +13,18 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::watch;
 
-use super::{AgentInfo, Error, PaneInfo, WorkspaceInfo};
+use super::screen::Screen;
+use super::{AgentInfo, Error, PaneInfo, PaneRead, WorkspaceInfo};
 
 pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
 /// Every method collied calls. The API also runs programs and writes files on other machines,
 /// stores documents and stops the core; none of that is ever called.
-pub const METHODS: [&str; 5] = [
+pub const METHODS: [&str; 6] = [
     "hello",
     "server.status",
     "events.subscribe",
+    "terminal.attach",
     "terminal.kill",
     "terminal.rm",
 ];
@@ -36,6 +38,18 @@ const SILENCE: Duration = Duration::from_secs(45);
 const MAX_LINE: u64 = 16 << 20;
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+/// The history a watch keeps: the most the phone reads (`MAX_READ_LINES`).
+const HISTORY: u32 = protocol::limits::MAX_READ_LINES as u32;
+const DATA: u8 = 0;
+const CREDIT: u8 = 1;
+const CLOSE: u8 = 2;
+const MAX_FRAME: usize = 16 << 20;
+/// The core paints the screen in one burst right after its attach answer.
+const PAINT_QUIET: Duration = Duration::from_millis(20);
+const PAINT_MAX: Duration = Duration::from_secs(1);
+/// A watch-only attach never sizes the terminal, and nothing on the stream says when a
+/// desktop client did, so a watch checks the size the core's events report.
+const SIZE_CHECK: Duration = Duration::from_millis(500);
 
 pub fn owns(id: &str) -> bool {
     id.starts_with(PREFIX)
@@ -167,6 +181,10 @@ struct Terminal {
     title: String,
     #[serde(default)]
     turn: u64,
+    #[serde(default)]
+    cols: u16,
+    #[serde(default)]
+    rows: u16,
 }
 
 impl Terminal {
@@ -334,6 +352,12 @@ impl Live {
                             t.turn = turn;
                         }
                     }
+                    "size" => {
+                        let side = |k: &str| e.data[k].as_u64().and_then(|n| u16::try_from(n).ok());
+                        if let (Some(cols), Some(rows)) = (side("cols"), side("rows")) {
+                            (t.cols, t.rows) = (cols, rows);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -484,6 +508,25 @@ pub struct Core {
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
     herdr: AtomicU8,
+    held: Mutex<HashMap<String, Weak<Hold>>>,
+}
+
+type Slot = Arc<Mutex<Option<Screen>>>;
+
+/// A terminal kept attached while a phone watches it; the attach ends with the last watch.
+struct Hold {
+    screen: Slot,
+    task: tokio::task::AbortHandle,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+pub struct Watch {
+    _hold: Arc<Hold>,
 }
 
 impl Core {
@@ -493,6 +536,7 @@ impl Core {
             inner: Mutex::default(),
             settled: watch::channel(false).0,
             herdr: AtomicU8::new(0),
+            held: Mutex::default(),
         }
     }
 
@@ -630,21 +674,133 @@ impl Core {
         }
     }
 
+    /// The address and size of a terminal collied lists; nothing else is ever reached.
+    fn terminal(&self, id: &str) -> Result<(String, u16, u16), Error> {
+        let inner = self.lock();
+        inner
+            .live
+            .as_ref()
+            .and_then(|live| {
+                let address = id.strip_prefix(live.group.as_str())?.strip_prefix(':')?;
+                let t = &live.terminals.get(address)?.terminal;
+                Some((address.to_owned(), t.cols, t.rows))
+            })
+            .ok_or_else(|| Error::Core {
+                kind: "not_found".to_owned(),
+                message: "no such terminal".to_owned(),
+            })
+    }
+
+    fn size(&self, address: &str) -> Option<(u16, u16)> {
+        let inner = self.lock();
+        let t = &inner.live.as_ref()?.terminals.get(address)?.terminal;
+        Some((t.cols, t.rows))
+    }
+
+    pub fn columns(&self, id: &str) -> Result<Option<u16>, Error> {
+        Ok(Some(self.terminal(id)?.1))
+    }
+
+    /// From the watched screen while a watch holds one, else through an attach of its own
+    /// that ends with the read.
+    pub async fn read(
+        &self,
+        id: &str,
+        source: &str,
+        lines: Option<u32>,
+    ) -> Result<PaneRead, Error> {
+        let (address, cols, rows) = self.terminal(id)?;
+        let slot = crate::lock(&self.held)
+            .get(&address)
+            .and_then(Weak::upgrade)
+            .map(|h| h.screen.clone());
+        if let Some(text) =
+            slot.and_then(|s| crate::lock(&s).as_mut().map(|s| s.read(source, lines)))
+        {
+            return Ok(PaneRead {
+                text,
+                truncated: false,
+            });
+        }
+        let history = match source {
+            "visible" => 0,
+            _ => lines.unwrap_or(HISTORY).min(HISTORY),
+        };
+        let (mut attach, mut screen) =
+            Attach::open(&self.socket, &address, cols, rows, history).await?;
+        let painted = attach.paint(&mut screen).await;
+        attach.close().await;
+        painted?;
+        Ok(PaneRead {
+            text: screen.read(source, lines),
+            truncated: false,
+        })
+    }
+
+    pub fn watch(self: &Arc<Self>, id: &str) -> Result<Watch, Error> {
+        let (address, ..) = self.terminal(id)?;
+        let mut held = crate::lock(&self.held);
+        held.retain(|_, h| h.strong_count() > 0);
+        if let Some(h) = held.get(&address).and_then(Weak::upgrade) {
+            return Ok(Watch { _hold: h });
+        }
+        let screen = Slot::default();
+        let task = tokio::spawn(self.clone().stream(address.clone(), screen.clone()));
+        let h = Arc::new(Hold {
+            screen,
+            task: task.abort_handle(),
+        });
+        held.insert(address, Arc::downgrade(&h));
+        Ok(Watch { _hold: h })
+    }
+
+    /// Keeps `slot` on the terminal's screen until aborted with the last watch, attaching
+    /// again when its size changes or the stream ends.
+    async fn stream(self: Arc<Self>, address: String, slot: Slot) {
+        loop {
+            let attached = async {
+                let (cols, rows) = self.size(&address)?;
+                let (mut attach, mut screen) =
+                    Attach::open(&self.socket, &address, cols, rows, HISTORY)
+                        .await
+                        .ok()?;
+                attach.paint(&mut screen).await.ok()?;
+                *crate::lock(&slot) = Some(screen);
+                Some(attach)
+            }
+            .await;
+            let Some(mut attach) = attached else {
+                tokio::time::sleep(RETRY_FIRST).await;
+                continue;
+            };
+            let mut check = tokio::time::interval(SIZE_CHECK);
+            loop {
+                tokio::select! {
+                    next = attach.next() => match next {
+                        Ok(Some(bytes)) => {
+                            if let Some(s) = crate::lock(&slot).as_mut() {
+                                s.feed(&bytes);
+                            }
+                            if attach.credit(bytes.len()).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) | Err(_) => break,
+                    },
+                    _ = check.tick() => {
+                        if self.size(&address) != Some(attach.size) {
+                            break;
+                        }
+                    }
+                }
+            }
+            *crate::lock(&slot) = None;
+        }
+    }
+
     /// Only a terminal collied lists.
     pub async fn close(&self, id: &str) -> Result<(), Error> {
-        let address = {
-            let inner = self.lock();
-            inner.live.as_ref().and_then(|live| {
-                id.strip_prefix(live.group.as_str())?
-                    .strip_prefix(':')
-                    .filter(|a| live.terminals.contains_key(*a))
-                    .map(str::to_owned)
-            })
-        }
-        .ok_or_else(|| Error::Core {
-            kind: "not_found".to_owned(),
-            message: "no such terminal".to_owned(),
-        })?;
+        let (address, ..) = self.terminal(id)?;
         let mut conn = Conn::open(&self.socket).await?;
         conn.call::<Value>(
             "terminal.kill",
@@ -703,16 +859,42 @@ struct ErrorBody {
     data: Value,
 }
 
+async fn connect(socket: &Path) -> Result<UnixStream, Error> {
+    let stream = tokio::time::timeout(TIMEOUT, UnixStream::connect(socket))
+        .await
+        .map_err(|_| Error::Timeout)??;
+    // The socket is 0755: its folder alone keeps other users from serving one there.
+    if stream.peer_cred()?.uid() != rustix::process::geteuid().as_raw() {
+        return Err(Error::Unsupported("is served by another user".to_owned()));
+    }
+    Ok(stream)
+}
+
+fn request(id: u64, method: &str, params: Value) -> Result<Vec<u8>, Error> {
+    if !METHODS.contains(&method) {
+        return Err(Error::Unsupported(format!(
+            "{method} is not a method collied calls"
+        )));
+    }
+    tracing::debug!(method, id, "herdr-core request");
+    Ok(serde_json::to_vec(
+        &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
+    )?)
+}
+
+fn answer<R: DeserializeOwned>(reply: Reply) -> Result<R, Error> {
+    if let Some(e) = reply.error {
+        return Err(Error::Core {
+            kind: e.data["kind"].as_str().unwrap_or("error").to_owned(),
+            message: e.message,
+        });
+    }
+    Ok(serde_json::from_value(reply.result.ok_or(Error::Empty)?)?)
+}
+
 impl Conn {
     async fn open(socket: &Path) -> Result<Self, Error> {
-        let stream = tokio::time::timeout(TIMEOUT, UnixStream::connect(socket))
-            .await
-            .map_err(|_| Error::Timeout)??;
-        // The socket is 0755: its folder alone keeps other users from serving one there.
-        if stream.peer_cred()?.uid() != rustix::process::geteuid().as_raw() {
-            return Err(Error::Unsupported("is served by another user".to_owned()));
-        }
-        let (reader, writer) = stream.into_split();
+        let (reader, writer) = connect(socket).await?.into_split();
         Ok(Self {
             reader: BufReader::new(reader),
             writer,
@@ -742,36 +924,187 @@ impl Conn {
         params: Value,
         timeout: Duration,
     ) -> Result<R, Error> {
-        if !METHODS.contains(&method) {
-            return Err(Error::Unsupported(format!(
-                "{method} is not a method collied calls"
-            )));
-        }
         self.next += 1;
         let id = self.next;
-        let mut line = serde_json::to_vec(
-            &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-        )?;
+        let mut line = request(id, method, params)?;
         line.push(b'\n');
-        tracing::debug!(method, id, "herdr-core request");
         tokio::time::timeout(timeout, async {
             self.writer.write_all(&line).await?;
             loop {
                 let reply: Reply = serde_json::from_slice(&self.line().await?)?;
-                if reply.id != json!(id) {
-                    continue;
+                if reply.id == json!(id) {
+                    return answer(reply);
                 }
-                if let Some(e) = reply.error {
-                    return Err(Error::Core {
-                        kind: e.data["kind"].as_str().unwrap_or("error").to_owned(),
-                        message: e.message,
-                    });
-                }
-                return Ok(serde_json::from_value(reply.result.ok_or(Error::Empty)?)?);
             }
         })
         .await
         .map_err(|_| Error::Timeout)?
+    }
+}
+
+/// A watch-only attach (`observe`) on a framed connection of its own: the core never takes
+/// input from it or sizes the terminal to it. Reads keep partial frames in `buf`, so a read
+/// dropped in a `select!` loses nothing.
+struct Attach {
+    reader: OwnedReadHalf,
+    writer: OwnedWriteHalf,
+    buf: Vec<u8>,
+    channel: u32,
+    /// The terminal's size when attached, as the core answered it.
+    size: (u16, u16),
+}
+
+#[derive(Deserialize)]
+struct Attached {
+    channel: u32,
+    terminal: Size,
+}
+
+#[derive(Deserialize)]
+struct Size {
+    cols: u16,
+    rows: u16,
+}
+
+impl Attach {
+    async fn open(
+        socket: &Path,
+        address: &str,
+        cols: u16,
+        rows: u16,
+        history: u32,
+    ) -> Result<(Self, Screen), Error> {
+        let (reader, writer) = connect(socket).await?.into_split();
+        let mut attach = Self {
+            reader,
+            writer,
+            buf: Vec::new(),
+            channel: 0,
+            size: (0, 0),
+        };
+        let attached: Attached = tokio::time::timeout(TIMEOUT, async {
+            let mut hello = request(0, "hello", json!({ "generation": GENERATION, "framed": true }))?;
+            hello.push(b'\n');
+            attach.writer.write_all(&hello).await?;
+            answer::<Value>(serde_json::from_slice(&attach.line().await?)?)?;
+            let params = json!({
+                "terminal": address, "cols": cols, "rows": rows, "observe": true, "history": history,
+            });
+            attach.send(0, DATA, &request(1, "terminal.attach", params)?).await?;
+            loop {
+                let (channel, kind, payload) = attach.frame().await?;
+                if channel == 0 && kind == DATA {
+                    let reply: Reply = serde_json::from_slice(&payload)?;
+                    if reply.id == json!(1) {
+                        return answer(reply);
+                    }
+                }
+            }
+        })
+        .await
+        .map_err(|_| Error::Timeout)??;
+        attach.channel = attached.channel;
+        let t = attached.terminal;
+        attach.size = (t.cols, t.rows);
+        Ok((attach, Screen::new(t.cols, t.rows, history as usize)))
+    }
+
+    async fn fill(&mut self) -> Result<(), Error> {
+        self.buf.reserve(64 << 10);
+        if self.reader.read_buf(&mut self.buf).await? == 0 {
+            return Err(Error::Closed);
+        }
+        Ok(())
+    }
+
+    async fn line(&mut self) -> Result<Vec<u8>, Error> {
+        loop {
+            if let Some(end) = self.buf.iter().position(|b| *b == b'\n') {
+                return Ok(self.buf.drain(..=end).collect());
+            }
+            if self.buf.len() as u64 > MAX_LINE {
+                return Err(Error::LineTooLong);
+            }
+            self.fill().await?;
+        }
+    }
+
+    /// `[channel u32 LE][kind u8][len u32 LE][payload]`.
+    async fn frame(&mut self) -> Result<(u32, u8, Vec<u8>), Error> {
+        loop {
+            if let Some(header) = self.buf.get(..9) {
+                let len = u32::from_le_bytes([header[5], header[6], header[7], header[8]]) as usize;
+                if len > MAX_FRAME {
+                    return Err(Error::LineTooLong);
+                }
+                if self.buf.len() >= 9 + len {
+                    let channel = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+                    let kind = header[4];
+                    let payload = self.buf[9..9 + len].to_vec();
+                    self.buf.drain(..9 + len);
+                    return Ok((channel, kind, payload));
+                }
+            }
+            self.fill().await?;
+        }
+    }
+
+    async fn send(&mut self, channel: u32, kind: u8, payload: &[u8]) -> Result<(), Error> {
+        let mut frame = Vec::with_capacity(9 + payload.len());
+        frame.extend_from_slice(&channel.to_le_bytes());
+        frame.push(kind);
+        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        frame.extend_from_slice(payload);
+        self.writer.write_all(&frame).await?;
+        Ok(())
+    }
+
+    /// The terminal's next output, or `None` once it ended. The core sends no more than its
+    /// credit: each read is given back with [`Self::credit`].
+    async fn next(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        loop {
+            let (channel, kind, payload) = self.frame().await?;
+            if channel != self.channel {
+                continue;
+            }
+            match kind {
+                DATA => return Ok(Some(payload)),
+                CLOSE => return Ok(None),
+                _ => {}
+            }
+        }
+    }
+
+    async fn credit(&mut self, bytes: usize) -> Result<(), Error> {
+        let credit = (bytes as u32).to_le_bytes();
+        self.send(self.channel, CREDIT, &credit).await
+    }
+
+    /// The paint follows the attach answer at once; it is over when the stream pauses, or
+    /// a second after it began for a terminal whose output never does.
+    async fn paint(&mut self, screen: &mut Screen) -> Result<(), Error> {
+        let mut deadline = None;
+        loop {
+            let wait = deadline.map_or(TIMEOUT, |at: tokio::time::Instant| {
+                PAINT_QUIET.min(at.saturating_duration_since(tokio::time::Instant::now()))
+            });
+            match tokio::time::timeout(wait, self.next()).await {
+                Ok(Ok(Some(bytes))) => {
+                    screen.feed(&bytes);
+                    self.credit(bytes.len()).await?;
+                    deadline.get_or_insert(tokio::time::Instant::now() + PAINT_MAX);
+                }
+                Ok(Ok(None)) | Err(_) if deadline.is_some() => return Ok(()),
+                Ok(Ok(None)) => return Err(Error::Closed),
+                Err(_) => return Err(Error::Timeout),
+                Ok(Err(e)) => return Err(e),
+            }
+        }
+    }
+
+    async fn close(mut self) {
+        let channel = self.channel;
+        let _ = self.send(channel, CLOSE, &[]).await;
     }
 }
 
@@ -883,10 +1216,13 @@ mod tests {
                 .contains("older")
         );
         let lacking = hello(1, "0.1.16", &METHODS[..3]);
-        assert_eq!(lacking.missing(), ["terminal.kill", "terminal.rm"]);
+        assert_eq!(
+            lacking.missing(),
+            ["terminal.attach", "terminal.kill", "terminal.rm"]
+        );
         assert_eq!(
             lacking.problem().as_deref(),
-            Some("lacks terminal.kill, terminal.rm")
+            Some("lacks terminal.attach, terminal.kill, terminal.rm")
         );
         let mut odd = hello(1, "0.1.16", &METHODS);
         odd.core.id = "../x".into();
@@ -1182,6 +1518,96 @@ mod tests {
         Arc::new(core)
     }
 
+    /// A core that answers every attach with a one-line paint and records what each client
+    /// asked and the kinds of the frames it wrote after the attach.
+    async fn fake_core(socket: &Path) -> Arc<Mutex<(Vec<Value>, Vec<u8>, usize)>> {
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        let seen = Arc::new(Mutex::new((Vec::new(), Vec::new(), 0)));
+        let record = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let record = record.clone();
+                tokio::spawn(async move {
+                    let (reader, mut writer) = stream.into_split();
+                    let mut a = Attach {
+                        reader,
+                        writer: tokio::net::UnixStream::pair().unwrap().0.into_split().1,
+                        buf: Vec::new(),
+                        channel: 0,
+                        size: (0, 0),
+                    };
+                    a.line().await.unwrap();
+                    writer
+                        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"framed\":true}}\n")
+                        .await
+                        .unwrap();
+                    let (_, _, request) = a.frame().await.unwrap();
+                    let request: Value = serde_json::from_slice(&request).unwrap();
+                    crate::lock(&record).0.push(request["params"].clone());
+                    let frame = |channel: u32, kind: u8, payload: &[u8]| {
+                        let mut f = channel.to_le_bytes().to_vec();
+                        f.push(kind);
+                        f.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                        f.extend_from_slice(payload);
+                        f
+                    };
+                    let answer = json!({"jsonrpc": "2.0", "id": 1, "result": {
+                        "channel": 7, "terminal": {"cols": 80, "rows": 24},
+                    }});
+                    writer
+                        .write_all(&frame(0, DATA, &serde_json::to_vec(&answer).unwrap()))
+                        .await
+                        .unwrap();
+                    writer.write_all(&frame(7, DATA, b"ready")).await.unwrap();
+                    while let Ok((_, kind, _)) = a.frame().await {
+                        crate::lock(&record).1.push(kind);
+                    }
+                    crate::lock(&record).2 += 1;
+                });
+            }
+        });
+        seen
+    }
+
+    #[tokio::test]
+    async fn attaches_only_watch_and_never_type_or_resize() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("core.sock");
+        let seen = fake_core(&socket).await;
+        let core = followed(socket);
+        let id = format!("hc:{ID}:t1");
+        let read = core.read(&id, "recent_unwrapped", Some(50)).await.unwrap();
+        assert_eq!(read.text, "ready");
+        let watch = core.watch(&id).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(watch);
+        for _ in 0..100 {
+            if crate::lock(&seen).2 == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (params, kinds, closed) = crate::lock(&seen).clone();
+        assert_eq!(closed, 2, "the read and the watch both detached");
+        assert_eq!(params.len(), 2);
+        for p in &params {
+            assert_eq!(p["observe"], json!(true), "{p}");
+            assert_eq!(p["terminal"], json!("t1"));
+        }
+        assert_eq!(
+            (params[0]["history"].clone(), params[1]["history"].clone()),
+            (json!(50), json!(HISTORY))
+        );
+        assert!(
+            kinds.contains(&CREDIT) && kinds.contains(&CLOSE),
+            "{kinds:?}"
+        );
+        assert!(
+            kinds.iter().all(|k| matches!(*k, CREDIT | CLOSE)),
+            "only credit and close follow an attach: {kinds:?}"
+        );
+    }
+
     #[tokio::test]
     async fn without_a_followed_core_herdr_answers_alone() {
         let dir = tempfile::tempdir().unwrap();
@@ -1241,22 +1667,6 @@ mod tests {
                 .unwrap_err()
                 .0,
             protocol::ErrorCode::HerdrUnavailable
-        );
-        let drive = Arc::new(drive);
-        let watch = drive
-            .watch(
-                protocol::TerminalId::new(format!("hc:{ID}:t1")).unwrap(),
-                200,
-                false,
-            )
-            .await;
-        assert_eq!(
-            watch.err(),
-            Some((
-                protocol::ErrorCode::Internal,
-                crate::runtime::NOT_YET.to_owned()
-            )),
-            "a watch that would never send output is refused"
         );
     }
 

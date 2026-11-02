@@ -1,0 +1,120 @@
+
+  >_ OpenAI Codex (v0.166.0)
+     ~/src/demo/fixture/runs/sample/workspace
+
+
+› Reply with the single word pong and nothing else. Do not run commands.
+
+
+• pong
+
+  Worked for 3s • 8:55 PM
+
+
+› Reply with a markdown list of three fruits, each with a bold name and a one-line description. Do not run commands.
+
+
+• • Apple: A crisp fruit with a sweet or tart flavor.
+  • Banana: A soft, sweet fruit with a yellow peel.
+  • Orange: A juicy citrus fruit with a bright, tangy flavor.
+
+  Worked for 3s • 8:55 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  demo-model1 high · ~/src/demo/fixture/runs/sample/workspace · feature-branch-one · +1200 -30 · Ready · Context 98% left
+  ? for shortcuts                                                                                                                                                              ⚠ 1 warning · f2 to view

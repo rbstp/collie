@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+alacritty_terminal = { version = "0.26.0", default-features = false }
 anyhow = "1.0.104"
 apns-h2 = "0.11.0"
 base64.workspace = true

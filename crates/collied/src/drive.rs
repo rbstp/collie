@@ -501,16 +501,16 @@ impl Driver {
         lines: u16,
         low_data: bool,
     ) -> Result<Watcher, Fail> {
-        // Nothing reads a herdr-core screen yet: a watch would never send output.
-        if runtime::herdr_core::owns(terminal_id.as_str()) {
-            return fail(ErrorCode::Internal, runtime::NOT_YET);
-        }
-        self.find_agent(&terminal_id).await?;
+        let a = self.find_agent(&terminal_id).await?;
+        let hold = self.runtime.watch(&a.pane_id).map_err(herdr_fail)?;
         let (tx, rx) = mpsc::channel(1);
-        let task = tokio::spawn(
-            self.clone()
-                .watch_loop(terminal_id, lines, low_data, None, tx),
-        );
+        let watch = self
+            .clone()
+            .watch_loop(terminal_id, lines, low_data, None, tx);
+        let task = tokio::spawn(async move {
+            let _hold = hold;
+            watch.await
+        });
         Ok(Watcher { rx, task })
     }
 

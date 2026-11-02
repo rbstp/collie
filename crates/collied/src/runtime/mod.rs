@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 pub mod herdr;
 pub mod herdr_core;
+pub mod screen;
 
 use self::herdr_core::Core;
 
@@ -128,6 +129,12 @@ impl Runtime {
         self.core.as_ref()
     }
 
+    fn followed(&self) -> Result<&Arc<Core>, Error> {
+        self.core
+            .as_ref()
+            .ok_or_else(|| Error::Unsupported(NOT_YET.to_owned()))
+    }
+
     /// herdr's answer, plus the core's agents while it is followed. Without a followed core
     /// this is herdr's answer unchanged, its error included.
     fn merge<T: Default>(
@@ -212,8 +219,11 @@ impl Runtime {
         herdr::pane_get(&self.herdr, pane_id).await
     }
 
+    /// A herdr-core terminal's own width; herdr's is its layout rect's.
     pub async fn pane_columns(&self, pane_id: &str) -> Result<Option<u16>, Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.columns(pane_id);
+        }
         herdr::pane_columns(&self.herdr, pane_id).await
     }
 
@@ -223,7 +233,9 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.read(pane_id, source, lines).await;
+        }
         herdr::agent_read(&self.herdr, pane_id, source, lines).await
     }
 
@@ -233,8 +245,19 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
-        herdr_only(pane_id)?;
+        if herdr_core::owns(pane_id) {
+            return self.followed()?.read(pane_id, source, lines).await;
+        }
         herdr::pane_read(&self.herdr, pane_id, source, lines).await
+    }
+
+    /// Keeps a herdr-core terminal attached until dropped, so a watch's reads come from one
+    /// emulated screen; herdr needs nothing kept.
+    pub fn watch(&self, pane_id: &str) -> Result<Option<herdr_core::Watch>, Error> {
+        if !herdr_core::owns(pane_id) {
+            return Ok(None);
+        }
+        self.followed()?.watch(pane_id).map(Some)
     }
 
     pub async fn agent_explain(&self, target: &str) -> Result<herdr::Explain, Error> {
@@ -352,10 +375,7 @@ impl Runtime {
 
     pub async fn pane_close(&self, pane_id: &str) -> Result<(), Error> {
         if herdr_core::owns(pane_id) {
-            return match &self.core {
-                Some(core) => core.close(pane_id).await,
-                None => Err(Error::Unsupported(NOT_YET.to_owned())),
-            };
+            return self.followed()?.close(pane_id).await;
         }
         herdr::pane_close(&self.herdr, pane_id).await
     }
