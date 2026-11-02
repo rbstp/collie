@@ -3,7 +3,7 @@
 ## To run collie
 
 - **An Apple silicon Mac**, not an Intel one, **or an x86_64 Linux machine** with a systemd user manager. On Linux, collie is tested only on Arch Linux with Omarchy.
-- **herdr 0.9.5**, the tested version. Collie also lists the agents of a running **herdr-core 0.1.16** (Herdr 2, `hc`), beside herdr's or on its own, with no setting; for now you can follow their status, watch their screens, read a Claude Code or Codex agent's conversation and close them, not prompt them.
+- **herdr 0.9.5**, the tested version. Collie also lists the agents of a running **herdr-core 0.1.16** (Herdr 2, `hc`), beside herdr's or on its own, with no setting; you can follow their status, watch their screens, prompt them, answer their approvals, read a Claude Code or Codex agent's conversation and close them; new tasks still start in herdr.
 - **[Claude Code](../agents/claude-code.md), [Codex](../agents/codex.md) or [GitHub Copilot](../agents/copilot.md) CLI**, the only agents Collie is tested with; their features differ.
 - **An iPhone on iOS 26 or later**, and optionally an Apple Watch on watchOS 26 or later.
 - **A personal Tailscale account.** You need no Tailscale app; a restrictive policy may need a [grant](tailnet-policy.md).

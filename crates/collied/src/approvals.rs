@@ -19,6 +19,7 @@ use crate::flock;
 use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
+use crate::runtime::herdr_core::Core;
 use crate::runtime::{self, AgentInfo, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
 
@@ -270,6 +271,11 @@ impl Approvals {
 
     pub fn with_budget(mut self, budget: Duration) -> Self {
         self.budget = budget;
+        self
+    }
+
+    pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
+        self.runtime = self.runtime.with_core(core);
         self
     }
 

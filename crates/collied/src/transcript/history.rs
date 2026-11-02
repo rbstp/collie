@@ -999,6 +999,7 @@ mod tests {
             agent_session: Some(AgentSession { value: id.into() }),
             interactive_ready: true,
             launch_pending: false,
+            read_only: false,
         };
         (dir, t, agent, path)
     }

@@ -79,8 +79,6 @@ const CLONE_PROTOCOLS: [(&str, &str); 7] = [
 /// `UF_HIDDEN` from `sys/stat.h`: Finder hides `~/Library` with it, not with a dot.
 #[cfg(target_os = "macos")]
 pub(crate) const UF_HIDDEN: u32 = 0x8000;
-/// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
-const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
 fn startup_prompt(kind: &AgentKind, screen: Option<&str>) -> &'static str {
     if kind.as_str() == "codex" && screen.is_some_and(prompt::codex_update) {
@@ -101,6 +99,15 @@ pub fn herdr_fail(e: runtime::Error) -> Fail {
         runtime::Error::Unsupported(why) => return (ErrorCode::Internal, why.clone()),
         runtime::Error::Core { kind, .. } if kind == "not_found" => {
             return (ErrorCode::NotFound, "not found".to_owned());
+        }
+        runtime::Error::Core { kind, .. } if kind == "blocked" => {
+            return (ErrorCode::AgentBlocked, BLOCKED.to_owned());
+        }
+        runtime::Error::Core { kind, .. } if kind == "status_mismatch" => {
+            return (
+                ErrorCode::AgentNotReady,
+                "the agent's status changed; nothing was sent".to_owned(),
+            );
         }
         runtime::Error::Core { kind, .. } => {
             return (ErrorCode::Internal, format!("herdr-core refused: {kind}"));
@@ -360,7 +367,7 @@ impl Driver {
 
     async fn ready_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         let (current, ready) = self.current_agent(terminal_id).await?;
-        ready.map(|()| current)
+        ready.and_then(|()| takes_input(&current)).map(|()| current)
     }
 
     async fn readable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
@@ -373,7 +380,7 @@ impl Driver {
     async fn writable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         match self.current_agent(terminal_id).await? {
             (current, Err((ErrorCode::AgentBlocked, _))) if current.agent.is_some() => Ok(current),
-            (current, ready) => ready.map(|()| current),
+            (current, ready) => ready.and_then(|()| takes_input(&current)).map(|()| current),
         }
     }
 
@@ -667,7 +674,7 @@ impl Driver {
         }
         authorized(auth)?;
         self.runtime
-            .agent_prompt(&a.pane_id, p.text.as_str())
+            .agent_prompt(&a.pane_id, p.text.as_str(), &a.agent_status)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -768,9 +775,8 @@ impl Driver {
         let a = self.writable_agent(&p.terminal_id).await?;
         self.input_safeguards(&a, true).await?;
         authorized(auth)?;
-        let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.text.as_str());
         self.runtime
-            .pane_send_input(&a.pane_id, &paste, &["enter"])
+            .type_text(&a.pane_id, p.text.as_str(), &a.agent_status)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -816,12 +822,13 @@ impl Driver {
         if current.agent.as_deref() != Some("claude") {
             return fail(ErrorCode::AgentNotReady, "not a Claude Code agent");
         }
+        takes_input(&current)?;
         if !self.scrolled(&current.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, "already at the bottom");
         }
         authorized(auth)?;
         self.runtime
-            .pane_send_text(&current.pane_id, SCROLL_BOTTOM)
+            .scroll_bottom(&current.pane_id)
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)
@@ -864,7 +871,7 @@ impl Driver {
         }
         authorized(auth)?;
         self.runtime
-            .pane_send_text(&a.pane_id, p.digit.as_str())
+            .notice_digit(&a.pane_id, p.digit.as_str())
             .await
             .map_err(herdr_fail)?;
         let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
@@ -1460,7 +1467,7 @@ impl Driver {
             }
             authorized(auth).map_err(left_open)?;
             self.runtime
-                .agent_prompt(&name, text.as_str())
+                .agent_prompt(&name, text.as_str(), &current.agent_status)
                 .await
                 .map_err(|e| left_open(herdr_fail(e)))?;
         }
@@ -2245,6 +2252,16 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
     }
     if current.agent.is_none() || current.launch_pending {
         return fail(ErrorCode::AgentNotReady, "agent is not ready");
+    }
+    Ok(())
+}
+
+fn takes_input(a: &AgentInfo) -> Result<(), Fail> {
+    if a.read_only {
+        return fail(
+            ErrorCode::AgentNotReady,
+            "the agent reports no status, so it takes no input from the phone",
+        );
     }
     Ok(())
 }

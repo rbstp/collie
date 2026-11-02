@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use collie_core::{AgentState, CollieCore, MachineFlock, TerminalSource};
+use collied::approvals::Approvals;
+use collied::audit::Audit;
 use collied::config::TasksConfig;
 use collied::control::{Client, Reply, Request};
 use collied::drive::{Authorized, Driver, Watched};
@@ -16,10 +18,11 @@ use collied::runtime::{AgentInfo, Runtime, herdr};
 use collied::server::{self, ServerConfig};
 use common::*;
 use protocol::{
-    ErrorCode, PaneCloseParams, ReadParams, ReadSource, Response, TerminalId, WorkspaceCloseParams,
-    WorkspaceId,
+    AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
+    ApprovalOutcome, Decision, ErrorCode, Event, Key, OpId, PaneCloseParams, PromptText,
+    ReadParams, ReadSource, Response, TerminalId, WorkspaceCloseParams, WorkspaceId,
 };
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 /// The session in the Claude Code transcript fixture.
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
@@ -707,4 +710,353 @@ fn fake_codex() {
         .read_line(&mut String::new())
         .unwrap();
     std::thread::sleep(Duration::from_secs(600));
+}
+
+// A stand-in Claude Code for input: it reports `done`, `error` and `idle` in turn, each with
+// an empty input box, and prints each prompt it reads. Then two Bash permission prompts:
+// the first is drawn again once the test creates `redraw`, and answered with a line; the
+// second shows once the test creates `next`, and is answered with one key, read raw.
+const INPUT_AGENT: &str = r#"st() { printf '\033]7501;state=%s:app=claude-code%s\033\\' "$1" "$2"; }
+cols=$(stty size | cut -d' ' -f2)
+rule() { i=0; while [ $i -lt $cols ]; do printf '\342\224\200'; i=$((i+1)); done; printf '\n'; }
+box() { rule; printf '\342\235\257 \033[2mTry "fix lint errors"\033[0m\n'; rule; }
+prompt() { IFS= read -r p; st working; printf '\033[2J\033[Hgot %s\n' "$p"; }
+dialog() { printf '\033[2J\033[H'; cat "$1"; st blocked ':kind=permission:msg=approve Bash'; }
+st done; box
+prompt; st error; box
+prompt; st idle; box
+prompt
+dialog dialog1
+( while [ ! -e redraw ]; do sleep 0.1; done; dialog dialog1; touch redrawn ) &
+IFS= read -r answer
+printf '\033[2J\033[Happroved\n'; st idle
+while [ ! -e next ]; do sleep 0.1; done
+dialog dialog2
+stty raw -echo; k=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'); stty sane
+printf '\033[2J\033[Hdenied %s\n' "$k"; st idle
+exec sleep 600"#;
+
+const DIALOG: &str = "\
+────────────────────────────────────────
+ Bash command
+
+   rm -rf build
+   Remove the build directory
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands
+   3. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+";
+
+// Each byte it reads, as hex on a line of its own in `keys`.
+const KEY_DUMP: &str = r#"printf '\033]7501;state=idle:app=keydump\033\\'
+stty raw -echo
+while :; do dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' >> keys; echo >> keys; done"#;
+
+/// What each key reaches a program with no keyboard modes set as, from herdr-core 0.1.16.
+fn key_bytes(key: Key) -> &'static str {
+    match key {
+        Key::Enter => "0d",
+        Key::Esc => "1b",
+        Key::Up => "1b5b41",
+        Key::Down => "1b5b42",
+        Key::Left => "1b5b44",
+        Key::ShiftLeft => "1b5b313b3244",
+        Key::Right => "1b5b43",
+        Key::Tab => "09",
+        Key::ShiftTab => "1b5b5a",
+        Key::Backspace => "7f",
+        Key::CtrlC => "03",
+        Key::CtrlEnter => "1b5b32373b353b31337e",
+        Key::CtrlA => "01",
+        Key::CtrlB => "02",
+        Key::CtrlE => "05",
+        Key::CtrlK => "0b",
+        Key::CtrlL => "0c",
+        Key::CtrlU => "15",
+        Key::CtrlW => "17",
+    }
+}
+
+const KEYS: [Key; 19] = [
+    Key::Enter,
+    Key::Esc,
+    Key::Up,
+    Key::Down,
+    Key::Left,
+    Key::ShiftLeft,
+    Key::Right,
+    Key::Tab,
+    Key::ShiftTab,
+    Key::Backspace,
+    Key::CtrlC,
+    Key::CtrlEnter,
+    Key::CtrlA,
+    Key::CtrlB,
+    Key::CtrlE,
+    Key::CtrlK,
+    Key::CtrlL,
+    Key::CtrlU,
+    Key::CtrlW,
+];
+
+#[test]
+fn live_herdr_core_input() {
+    if !hc_installed() {
+        return;
+    }
+    let mut core = CoreSession::start("hci");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(input_scenario(&core));
+    drop(rt);
+    assert!(core.stop(), "dedicated herdr-core did not stop");
+}
+
+async fn input_scenario(core: &CoreSession) {
+    let work = std::fs::canonicalize(&core.work).unwrap();
+    std::fs::write(work.join("dialog1"), DIALOG).unwrap();
+    std::fs::write(
+        work.join("dialog2"),
+        DIALOG
+            .replace("build", "dist")
+            .replace("rm commands", "rm -rf"),
+    )
+    .unwrap();
+    let claude = run(core, "collie-input", &work, INPUT_AGENT);
+    let copilot = run_argv(
+        core,
+        "collie-copilot",
+        &work,
+        &["/bin/bash", "-c", "exec -a copilot sleep 600"],
+    );
+    let dump = run(core, "collie-keys", &work, KEY_DUMP);
+
+    let followed = Arc::new(Core::new(core.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(followed.clone().run(stopped));
+    let none = core.root.join("no-herdr.sock");
+    let rt = Runtime::new(none.clone()).with_core(Some(followed.clone()));
+    let drive = Driver::new(none.clone(), vec![], std::slice::from_ref(&work))
+        .unwrap()
+        .with_core(Some(followed.clone()));
+    let yes: Authorized = Arc::new(|| true);
+    let find = async |address: &str| -> Option<AgentInfo> {
+        rt.agent_list()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|a| a.terminal_id.ends_with(&format!(":{address}")))
+    };
+    let status = async |address: &str, status: &str| {
+        until(status, async || {
+            find(address).await.filter(|a| a.agent_status == status)
+        })
+        .await
+    };
+    let shows = async |address: &str, text: &str| {
+        until(text, async || {
+            let screen = core.hc(&["read", "--json", address])["text"]
+                .as_str()?
+                .to_owned();
+            screen.contains(text).then_some(())
+        })
+        .await;
+    };
+    let op = |c: char| OpId::new(c.to_string().repeat(22)).unwrap();
+    let prompt = |id: &TerminalId, text: &str| AgentPromptParams {
+        op_id: op('P'),
+        terminal_id: id.clone(),
+        text: PromptText::new(text.to_owned()).unwrap(),
+        expected_draft: None,
+    };
+    let keys = |id: &TerminalId, keys: Vec<Key>| AgentSendKeysParams {
+        op_id: op('K'),
+        terminal_id: id.clone(),
+        keys,
+    };
+
+    // No OSC 7501 report: read-only.
+    let c = until("the Copilot stand-in", async || find(&copilot).await).await;
+    assert_eq!(
+        (c.agent.as_deref(), c.agent_status.as_str(), c.read_only),
+        (Some("copilot"), "unknown", true)
+    );
+    let cid = TerminalId::new(c.terminal_id).unwrap();
+    let refused = |r: Result<Response, (ErrorCode, String)>| r.unwrap_err().0;
+    assert_eq!(
+        refused(drive.prompt(prompt(&cid, "hi"), &yes).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(
+        refused(drive.send_keys(keys(&cid, vec![Key::Enter]), &yes).await.0),
+        ErrorCode::AgentNotReady
+    );
+    let typed = AgentTypeTextParams {
+        op_id: op('T'),
+        terminal_id: cid.clone(),
+        text: PromptText::new("yes".to_owned()).unwrap(),
+    };
+    assert_eq!(
+        refused(drive.type_text(typed, &yes).await),
+        ErrorCode::AgentNotReady
+    );
+
+    // Prompts reach a done, an error and an idle agent.
+    let a = status(&claude, "done").await;
+    let id = TerminalId::new(a.terminal_id.clone()).unwrap();
+    assert_eq!(
+        drive.draft(&id).await,
+        Ok(Response::Draft {
+            text: Some(String::new())
+        })
+    );
+    assert_eq!(
+        drive.prompt(prompt(&id, "one"), &yes).await,
+        Ok(Response::Ok)
+    );
+    shows(&claude, "got one").await;
+    status(&claude, "unknown").await;
+    assert_eq!(
+        drive.prompt(prompt(&id, "two"), &yes).await,
+        Ok(Response::Ok)
+    );
+    shows(&claude, "got two").await;
+    status(&claude, "idle").await;
+    assert_eq!(
+        drive.prompt(prompt(&id, "three"), &yes).await,
+        Ok(Response::Ok)
+    );
+    // The fake reads it, then shows its first dialog.
+
+    // One dialog keeps its approval through a redraw; Approve answers it, Deny the next.
+    let audit = Arc::new(Audit::open(&core.root.join("audit.log")).unwrap());
+    let (tx, mut events) = broadcast::channel(16);
+    let approvals =
+        Approvals::new(none, "nMAC".into(), tx, audit, None).with_core(Some(followed.clone()));
+    let raise = async |events: &mut broadcast::Receiver<Event>, after: u64| {
+        let blocked = until("a new dialog", async || {
+            find(&claude)
+                .await
+                .filter(|a| a.agent_status == "blocked" && a.state_change_seq > after)
+        })
+        .await;
+        let workspaces = rt.poll().await.unwrap().workspaces;
+        approvals
+            .observe(&rt.agent_list().await.unwrap(), &workspaces)
+            .await;
+        let approval = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|e| match e {
+                Event::ApprovalNeeded { approval } => Some(approval),
+                _ => None,
+            })
+            .expect("no approval for the blocked agent");
+        assert_eq!(
+            approval.options,
+            [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+        );
+        (blocked.state_change_seq, approval)
+    };
+    let (seq, approval) = raise(&mut events, a.state_change_seq).await;
+    assert!(
+        approval.snippet.contains("rm -rf build"),
+        "{}",
+        approval.snippet
+    );
+    std::fs::write(work.join("redraw"), "").unwrap();
+    until("the redrawn dialog", async || {
+        work.join("redrawn").exists().then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let agents = rt.agent_list().await.unwrap();
+    approvals
+        .observe(&agents, &rt.poll().await.unwrap().workspaces)
+        .await;
+    assert!(events.try_recv().is_err(), "the redraw raised nothing");
+    let pending = approvals.pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].approval_id, approval.approval_id);
+    let now = agents
+        .iter()
+        .find(|x| x.terminal_id == a.terminal_id)
+        .unwrap();
+    assert_eq!(now.state_change_seq, seq);
+    let decide = |approval: &protocol::Approval, decision| ApprovalDecideParams {
+        approval_id: approval.approval_id.clone(),
+        decision,
+        choice: None,
+        nonce: approval.nonce.clone(),
+        note: None,
+    };
+    let applied = |approval: &protocol::Approval, decision| {
+        Ok(Response::ApprovalResolved {
+            approval_id: approval.approval_id.clone(),
+            outcome: ApprovalOutcome::Applied {
+                decision,
+                by: "live".into(),
+            },
+        })
+    };
+    assert_eq!(
+        approvals
+            .decide("live", "nLIVE", decide(&approval, Decision::Approve), &yes)
+            .await,
+        applied(&approval, Decision::Approve)
+    );
+    shows(&claude, "approved").await;
+    std::fs::write(work.join("next"), "").unwrap();
+    let (next_seq, next) = raise(&mut events, seq).await;
+    assert!(next_seq > seq);
+    assert_ne!(next.approval_id, approval.approval_id);
+    assert!(next.snippet.contains("rm -rf dist"), "{}", next.snippet);
+    assert_eq!(
+        approvals
+            .decide("live", "nLIVE", decide(&next, Decision::Deny), &yes)
+            .await,
+        applied(&next, Decision::Deny)
+    );
+    shows(&claude, "denied 1b").await;
+
+    // Every key, and Ctrl+End, a notice digit and a paste through a typing attach, which
+    // leaves the size a desktop client chose.
+    let d = until("the key dump", async || find(&dump).await).await;
+    let desktop = Desktop::attach(core, &dump, 70, 20);
+    until("the desktop client's size", async || {
+        (size(core, &dump) == (70, 20)).then_some(())
+    })
+    .await;
+    let mut expected = String::new();
+    let dumped = async |expected: &str| {
+        until(expected, async || {
+            let keys = std::fs::read_to_string(work.join("keys")).ok()?;
+            (keys.replace('\n', "") == expected).then_some(())
+        })
+        .await;
+    };
+    for key in KEYS {
+        rt.agent_send_keys(&d.pane_id, &[key.herdr_name()])
+            .await
+            .unwrap();
+        expected.push_str(key_bytes(key));
+        dumped(&expected).await;
+    }
+    rt.scroll_bottom(&d.pane_id).await.unwrap();
+    expected.push_str("1b5b313b3546");
+    rt.notice_digit(&d.pane_id, "1").await.unwrap();
+    expected.push_str("31");
+    dumped(&expected).await;
+    rt.pane_send_text(&d.pane_id, "/x").await.unwrap();
+    expected.push_str("2f78");
+    dumped(&expected).await;
+    assert_eq!(size(core, &dump), (70, 20));
+    drop(desktop);
+
+    stop.send_replace(true);
+    task.await.unwrap();
 }

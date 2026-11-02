@@ -10,19 +10,24 @@ pub const MAX_CONTEXT_CHARS: usize = 600;
 /// are used rather than digit shortcuts, whose select-only or select-and-submit behaviour
 /// has varied across Claude Code versions: a digit that submits followed by an Enter
 /// would answer the next queued prompt.
+/// A herdr-core agent's blocked kind (OSC 7501) stands in for the rule id: Claude Code
+/// 2.1.316 reports `permission` for its permission and plan prompts and `question` for its
+/// forms.
 const CLAUDE_MENU_RULES: &[&str] = &[
     "bash_permission_prompt",
     "generic_permission_prompt",
     "live_blocked_form",
     "legacy_no_prompt_blocker",
     "dynamic_workflow_prompt",
+    "permission",
+    "question",
 ];
 
 pub fn uses_menu(kind: &str, rule: Option<&str>) -> bool {
     kind == "claude" && rule.is_some_and(|r| CLAUDE_MENU_RULES.contains(&r))
 }
 
-const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form"];
+const CLAUDE_FORM_RULES: &[&str] = &["live_blocked_form", "question"];
 
 /// herdr's rule (claude manifest 2026.10.11.1) for a form in a session named with `/rename`
 /// or `--name`: Claude Code draws the name on a rule under the form's footer, with its task
@@ -44,7 +49,7 @@ pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
 
 /// herdr rule ids (claude manifest 2026.09.11.1) under which Claude Code 2.1.289 shows its
 /// plan prompt ("Would you like to proceed?").
-const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker"];
+const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker", "permission"];
 
 const FEEDBACK: &str = "Tell Claude what to change";
 const FEEDBACK_HINT: &str = "shift+tab to approve with this feedback";
@@ -2395,6 +2400,15 @@ mod tests {
             "a menu with a decision is a permission prompt"
         );
         assert!(open_to_text("claude", Some("live_blocked_form"), QUESTION));
+        // herdr-core's blocked kinds, as Claude Code 2.1.316 reports them for these screens.
+        let (permission, question) = (Some("permission"), Some("question"));
+        assert!(uses_menu("claude", permission) && uses_menu("claude", question));
+        assert!(open_to_text("claude", permission, PLAN_LIVE));
+        assert!(open_to_text("claude", question, QUESTION));
+        for screen in [PLAN, TRUST, TRUST_LIVE, BASH, BASH_LIVE] {
+            assert!(!open_to_text("claude", permission, screen), "{screen}");
+            assert!(!open_to_keys("claude", permission, screen), "{screen}");
+        }
 
         let typed = Menu::parse(PLAN_TYPED_LIVE).unwrap();
         assert_eq!(typed.options[2], "use echo instead");

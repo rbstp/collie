@@ -25,7 +25,7 @@ When the prompt offers to amend, you can add a one-line note. `/effort` and some
 
 ## Slash commands
 
-Start a prompt with `/` and collie copies the command into Claude Code's input box, so its menu shows live on the phone. ↑ and ↓ highlight a command, ⇥ takes it into your prompt, and only **Send** runs it. Dictation and double-tap pastes are not copied.
+Start a prompt with `/` and collie copies the command into Claude Code's input box, so its menu shows live on the phone. ↑ and ↓ highlight a command, ⇥ takes it into your prompt, and only **Send** runs it. Dictation and double-tap pastes are not copied. In Herdr 2, the machine's box takes about 3 s to follow each further change, since herdr-core waits for typing to pause before it sends the next keys.
 
 ## Notices
 

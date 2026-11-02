@@ -13,6 +13,7 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::watch;
 
+use super::herdr::{Explain, MatchedRule};
 use super::screen::Screen;
 use super::{AgentInfo, AgentSession, Error, PaneInfo, PaneRead, WorkspaceInfo};
 
@@ -20,19 +21,26 @@ pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
 /// Every method collied calls. The API also runs programs and writes files on other machines,
 /// stores documents and stops the core; none of that is ever called.
-pub const METHODS: [&str; 6] = [
+pub const METHODS: [&str; 10] = [
     "hello",
     "server.status",
     "events.subscribe",
     "terminal.attach",
     "terminal.kill",
     "terminal.rm",
+    "terminal.get",
+    "terminal.read",
+    "terminal.send",
+    "terminal.keys",
 ];
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
 const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
 const TIMEOUT: Duration = Duration::from_secs(5);
 const KILL_TIMEOUT: Duration = Duration::from_secs(15);
+/// A send or keys call first waits until nobody has typed for about 3 s, and input through
+/// a typing attach counts as typing.
+const INPUT_TIMEOUT: Duration = Duration::from_secs(15);
 /// The core sends a heartbeat every 15 s.
 const SILENCE: Duration = Duration::from_secs(45);
 const MAX_LINE: u64 = 16 << 20;
@@ -232,6 +240,9 @@ struct Status {
     state: String,
     #[serde(default)]
     app: Option<String>,
+    /// `permission`, `question` or `auth`, on a blocked report.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -395,6 +406,13 @@ impl Live {
     }
 }
 
+fn not_found() -> Error {
+    Error::Core {
+        kind: "not_found".to_owned(),
+        message: "no such terminal".to_owned(),
+    }
+}
+
 /// Terminals on other machines (`box/t7`) are skipped, so the phone never reaches another
 /// machine through the core.
 fn local(address: &str) -> bool {
@@ -447,6 +465,7 @@ fn agent(
         agent_session: session.map(|value| AgentSession { value }),
         interactive_ready: false,
         launch_pending: false,
+        read_only: t.status.is_none(),
     })
 }
 
@@ -575,19 +594,19 @@ impl Core {
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
         let inner = self.lock();
         let live = inner.live.as_ref()?;
-        Some(live.agents(|kind, address, pid| {
-            match kind {
-                "claude" => {
-                    crate::transcript::claude_session(self.claude_sessions.as_deref()?, pid)
-                }
-                "codex" => inner
-                    .codex
-                    .get(address)
-                    .filter(|(bound, _)| *bound == pid)
-                    .map(|(_, session)| session.clone()),
-                _ => None,
-            }
-        }))
+        Some(live.agents(|kind, address, pid| self.session(&inner, kind, address, pid)))
+    }
+
+    fn session(&self, inner: &Inner, kind: &str, address: &str, pid: u32) -> Option<String> {
+        match kind {
+            "claude" => crate::transcript::claude_session(self.claude_sessions.as_deref()?, pid),
+            "codex" => inner
+                .codex
+                .get(address)
+                .filter(|(bound, _)| *bound == pid)
+                .map(|(_, session)| session.clone()),
+            _ => None,
+        }
     }
 
     /// A Codex session reported by collied's SessionStart hook from `reporter` (the hook's
@@ -756,10 +775,100 @@ impl Core {
                 let t = &live.terminals.get(address)?.terminal;
                 Some((address.to_owned(), t.cols, t.rows))
             })
-            .ok_or_else(|| Error::Core {
-                kind: "not_found".to_owned(),
-                message: "no such terminal".to_owned(),
-            })
+            .ok_or_else(not_found)
+    }
+
+    /// The agent as the core has it right now, for the ready check before a write.
+    pub async fn get(&self, id: &str) -> Result<AgentInfo, Error> {
+        let (address, ..) = self.terminal(id)?;
+        let mut conn = Conn::open(&self.socket).await?;
+        let t: Terminal = conn
+            .call("terminal.get", json!({ "terminal": address }), TIMEOUT)
+            .await?;
+        if t.address != address {
+            return Err(not_found());
+        }
+        let inner = self.lock();
+        let live = inner.live.as_ref().ok_or(Error::Closed)?;
+        let seq = live.terminals.get(&address).map_or(live.seq, |h| h.seq);
+        agent(
+            &live.group,
+            &Held { terminal: t, seq },
+            &|kind, address, pid| self.session(&inner, kind, address, pid),
+        )
+        .ok_or_else(not_found)
+    }
+
+    /// A blocked report's kind (`permission`, `question`) stands in for herdr's rule id.
+    pub fn explain(&self, id: &str) -> Result<Explain, Error> {
+        let (address, ..) = self.terminal(id)?;
+        let inner = self.lock();
+        let kind = inner
+            .live
+            .as_ref()
+            .and_then(|live| live.terminals.get(&address)?.terminal.status.clone())
+            .filter(|s| s.state == "blocked")
+            .and_then(|s| s.kind);
+        Ok(Explain {
+            matched_rule: kind.map(|id| MatchedRule { id }),
+        })
+    }
+
+    /// The screen as text, without an attach: what herdr's `detection` source gives.
+    pub async fn screen_text(&self, id: &str) -> Result<String, Error> {
+        #[derive(Deserialize)]
+        struct Read {
+            text: String,
+        }
+        let (address, ..) = self.terminal(id)?;
+        let mut conn = Conn::open(&self.socket).await?;
+        let read: Read = conn
+            .call("terminal.read", json!({ "terminal": address }), TIMEOUT)
+            .await?;
+        Ok(read.text)
+    }
+
+    /// Pasted, then Enter. `seen` is the status collied's ready check saw: `if` takes only
+    /// `idle` or `working`, so a `done` or `error` agent is sent to without it and only the
+    /// core's own refusal of `blocked` applies after the check. `force` types into a blocked
+    /// agent, for an answer to its dialog.
+    pub async fn send(&self, id: &str, text: &str, seen: &str, force: bool) -> Result<(), Error> {
+        let (address, ..) = self.terminal(id)?;
+        let mut params = json!({ "terminal": address, "text": text });
+        if force {
+            params["force"] = json!(true);
+        } else if matches!(seen, "idle" | "working") {
+            params["if"] = json!(seen);
+        }
+        let mut conn = Conn::open(&self.socket).await?;
+        conn.call::<Value>("terminal.send", params, INPUT_TIMEOUT)
+            .await?;
+        Ok(())
+    }
+
+    /// Named keys, which the core encodes for the program's keyboard modes.
+    pub async fn keys(&self, id: &str, keys: &[&str]) -> Result<(), Error> {
+        let (address, ..) = self.terminal(id)?;
+        let mut conn = Conn::open(&self.socket).await?;
+        conn.call::<Value>(
+            "terminal.keys",
+            json!({ "terminal": address, "keys": keys }),
+            INPUT_TIMEOUT,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Raw input without Enter, which no RPC takes, through a typing attach closed after the
+    /// write. A typing attach sizes the terminal to what it asks, so it asks for the size the
+    /// terminal has, which a desktop client may have chosen.
+    pub async fn type_raw(&self, id: &str, text: &str) -> Result<(), Error> {
+        let (address, cols, rows) = self.terminal(id)?;
+        let (mut attach, _) = Attach::open(&self.socket, &address, cols, rows, 0, false).await?;
+        let channel = attach.channel;
+        let sent = attach.send(channel, DATA, text.as_bytes()).await;
+        attach.close().await;
+        sent
     }
 
     fn size(&self, address: &str) -> Option<(u16, u16)> {
@@ -798,7 +907,7 @@ impl Core {
             _ => lines.unwrap_or(HISTORY).min(HISTORY),
         };
         let (mut attach, mut screen) =
-            Attach::open(&self.socket, &address, cols, rows, history).await?;
+            Attach::open(&self.socket, &address, cols, rows, history, true).await?;
         let painted = attach.paint(&mut screen).await;
         attach.close().await;
         painted?;
@@ -832,7 +941,7 @@ impl Core {
             let attached = async {
                 let (cols, rows) = self.size(&address)?;
                 let (mut attach, mut screen) =
-                    Attach::open(&self.socket, &address, cols, rows, HISTORY)
+                    Attach::open(&self.socket, &address, cols, rows, HISTORY, true)
                         .await
                         .ok()?;
                 attach.paint(&mut screen).await.ok()?;
@@ -1082,9 +1191,9 @@ impl Conn {
     }
 }
 
-/// A watch-only attach (`observe`) on a framed connection of its own: the core never takes
-/// input from it or sizes the terminal to it. Reads keep partial frames in `buf`, so a read
-/// dropped in a `select!` loses nothing.
+/// An attach on a framed connection of its own. A watch-only one (`observe`) never types or
+/// sizes the terminal; a typing one sizes it to what it asks. Reads keep partial frames in
+/// `buf`, so a read dropped in a `select!` loses nothing.
 struct Attach {
     reader: OwnedReadHalf,
     writer: OwnedWriteHalf,
@@ -1113,6 +1222,7 @@ impl Attach {
         cols: u16,
         rows: u16,
         history: u32,
+        observe: bool,
     ) -> Result<(Self, Screen), Error> {
         let (reader, writer) = connect(socket).await?.into_split();
         let mut attach = Self {
@@ -1128,7 +1238,7 @@ impl Attach {
             attach.writer.write_all(&hello).await?;
             answer::<Value>(serde_json::from_slice(&attach.line().await?)?)?;
             let params = json!({
-                "terminal": address, "cols": cols, "rows": rows, "observe": true, "history": history,
+                "terminal": address, "cols": cols, "rows": rows, "observe": observe, "history": history,
             });
             attach.send(0, DATA, &request(1, "terminal.attach", params)?).await?;
             loop {
@@ -1355,14 +1465,14 @@ mod tests {
                 .unwrap()
                 .contains("older")
         );
-        let lacking = hello(1, "0.1.16", &METHODS[..3]);
+        let lacking = hello(1, "0.1.16", &METHODS[..7]);
         assert_eq!(
             lacking.missing(),
-            ["terminal.attach", "terminal.kill", "terminal.rm"]
+            ["terminal.read", "terminal.send", "terminal.keys"]
         );
         assert_eq!(
             lacking.problem().as_deref(),
-            Some("lacks terminal.attach, terminal.kill, terminal.rm")
+            Some("lacks terminal.read, terminal.send, terminal.keys")
         );
         let mut odd = hello(1, "0.1.16", &METHODS);
         odd.core.id = "../x".into();
@@ -1665,11 +1775,25 @@ mod tests {
         Arc::new(core)
     }
 
-    /// A core that answers every attach with a one-line paint and records what each client
-    /// asked and the kinds of the frames it wrote after the attach.
-    async fn fake_core(socket: &Path) -> Arc<Mutex<(Vec<Value>, Vec<u8>, usize)>> {
+    #[derive(Default, Clone)]
+    struct Seen {
+        /// Each attach's params.
+        attaches: Vec<Value>,
+        /// The kinds of the frames each client wrote after its attach.
+        kinds: Vec<u8>,
+        /// What clients typed on their attaches.
+        typed: Vec<u8>,
+        /// Attaches that ended.
+        closed: usize,
+        /// Line-mode calls, as `{method, params}`.
+        calls: Vec<Value>,
+    }
+
+    /// A core that answers every attach with a one-line paint, and every line-mode call with
+    /// `answer` (else an error), recording what clients asked.
+    async fn fake_core(socket: &Path, answer: fn(&str) -> Value) -> Arc<Mutex<Seen>> {
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
-        let seen = Arc::new(Mutex::new((Vec::new(), Vec::new(), 0)));
+        let seen = Arc::new(Mutex::new(Seen::default()));
         let record = seen.clone();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -1683,14 +1807,40 @@ mod tests {
                         channel: 0,
                         size: (0, 0),
                     };
-                    a.line().await.unwrap();
+                    let mut line = a.line().await.unwrap();
+                    loop {
+                        let request: Value = serde_json::from_slice(&line).unwrap();
+                        if request["method"] == "hello" {
+                            break;
+                        }
+                        let result = answer(request["method"].as_str().unwrap());
+                        crate::lock(&record).calls.push(
+                            json!({"method": request["method"], "params": request["params"]}),
+                        );
+                        let reply = if result.is_null() {
+                            json!({"jsonrpc": "2.0", "id": request["id"], "error": {
+                                "code": -32000, "message": "refused", "data": {"kind": "status_mismatch"},
+                            }})
+                        } else {
+                            json!({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                        };
+                        let mut out = serde_json::to_vec(&reply).unwrap();
+                        out.push(b'\n');
+                        writer.write_all(&out).await.unwrap();
+                        match a.line().await {
+                            Ok(next) => line = next,
+                            Err(_) => return,
+                        }
+                    }
                     writer
                         .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"framed\":true}}\n")
                         .await
                         .unwrap();
                     let (_, _, request) = a.frame().await.unwrap();
                     let request: Value = serde_json::from_slice(&request).unwrap();
-                    crate::lock(&record).0.push(request["params"].clone());
+                    crate::lock(&record)
+                        .attaches
+                        .push(request["params"].clone());
                     let frame = |channel: u32, kind: u8, payload: &[u8]| {
                         let mut f = channel.to_le_bytes().to_vec();
                         f.push(kind);
@@ -1706,10 +1856,14 @@ mod tests {
                         .await
                         .unwrap();
                     writer.write_all(&frame(7, DATA, b"ready")).await.unwrap();
-                    while let Ok((_, kind, _)) = a.frame().await {
-                        crate::lock(&record).1.push(kind);
+                    while let Ok((_, kind, payload)) = a.frame().await {
+                        let mut r = crate::lock(&record);
+                        r.kinds.push(kind);
+                        if kind == DATA {
+                            r.typed.extend_from_slice(&payload);
+                        }
                     }
-                    crate::lock(&record).2 += 1;
+                    crate::lock(&record).closed += 1;
                 });
             }
         });
@@ -1720,7 +1874,7 @@ mod tests {
     async fn attaches_only_watch_and_never_type_or_resize() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("core.sock");
-        let seen = fake_core(&socket).await;
+        let seen = fake_core(&socket, |_| Value::Null).await;
         let core = followed(socket);
         let id = format!("hc:{ID}:t1");
         let read = core.read(&id, "recent_unwrapped", Some(50)).await.unwrap();
@@ -1729,12 +1883,17 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         drop(watch);
         for _ in 0..100 {
-            if crate::lock(&seen).2 == 2 {
+            if crate::lock(&seen).closed == 2 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let (params, kinds, closed) = crate::lock(&seen).clone();
+        let Seen {
+            attaches: params,
+            kinds,
+            closed,
+            ..
+        } = crate::lock(&seen).clone();
         assert_eq!(closed, 2, "the read and the watch both detached");
         assert_eq!(params.len(), 2);
         for p in &params {
@@ -1753,6 +1912,113 @@ mod tests {
             kinds.iter().all(|k| matches!(*k, CREDIT | CLOSE)),
             "only credit and close follow an attach: {kinds:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn input_goes_through_send_keys_and_a_same_size_typing_attach() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("core.sock");
+        let seen = fake_core(&socket, |method| match method {
+            "terminal.get" => {
+                let mut t = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+                t["turn"] = json!(3);
+                t
+            }
+            "terminal.read" => json!({"text": "screen", "complete": true, "how": "screen"}),
+            "terminal.send" | "terminal.keys" => json!({"turn": 3, "status": "idle"}),
+            _ => Value::Null,
+        })
+        .await;
+        let core = followed(socket);
+        crate::lock(&core.inner)
+            .live
+            .as_mut()
+            .unwrap()
+            .terminals
+            .get_mut("t1")
+            .unwrap()
+            .terminal
+            .cols = 70;
+        let id = format!("hc:{ID}:t1");
+        let rt = Runtime::new(dir.path().join("herdr.sock")).with_core(Some(core.clone()));
+
+        let a = rt.agent_get(&id).await.unwrap();
+        assert_eq!(
+            (
+                a.terminal_id.as_str(),
+                a.agent_status.as_str(),
+                a.state_change_seq,
+                a.read_only
+            ),
+            (id.as_str(), "idle", 10, false)
+        );
+        assert_eq!(rt.detection_text(&id).await.unwrap(), "screen");
+        for seen in ["idle", "working", "done", "unknown"] {
+            rt.agent_prompt(&id, "hi", seen).await.unwrap();
+        }
+        rt.type_text(&id, "yes", "blocked").await.unwrap();
+        rt.agent_send_keys(&id, &["down", "enter"]).await.unwrap();
+        rt.scroll_bottom(&id).await.unwrap();
+        rt.notice_digit(&id, "2").await.unwrap();
+        rt.pane_send_text(&id, "/model").await.unwrap();
+        assert!(matches!(
+            rt.agent_get(&format!("hc:{ID}:t9")).await,
+            Err(Error::Core { kind, .. }) if kind == "not_found"
+        ));
+        for _ in 0..100 {
+            if crate::lock(&seen).closed == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let seen = crate::lock(&seen).clone();
+        let calls: Vec<String> = seen.calls.iter().map(|c| c.to_string()).collect();
+        let t = |rest: &str| format!(r#"{{"method":"terminal.{rest}}}"#);
+        assert_eq!(
+            calls,
+            [
+                t(r#"get","params":{"terminal":"t1"}"#),
+                t(r#"read","params":{"terminal":"t1"}"#),
+                t(r#"send","params":{"if":"idle","terminal":"t1","text":"hi"}"#),
+                t(r#"send","params":{"if":"working","terminal":"t1","text":"hi"}"#),
+                t(r#"send","params":{"terminal":"t1","text":"hi"}"#),
+                t(r#"send","params":{"terminal":"t1","text":"hi"}"#),
+                t(r#"send","params":{"force":true,"terminal":"t1","text":"yes"}"#),
+                t(r#"keys","params":{"keys":["down","enter"],"terminal":"t1"}"#),
+                t(r#"keys","params":{"keys":["ctrl+end"],"terminal":"t1"}"#),
+                t(r#"keys","params":{"keys":["2"],"terminal":"t1"}"#),
+            ]
+        );
+        assert_eq!(seen.attaches.len(), 1);
+        let p = &seen.attaches[0];
+        assert_eq!(
+            (&p["observe"], &p["cols"], &p["rows"]),
+            (&json!(false), &json!(70), &json!(24)),
+            "a typing attach asks for the size the terminal has"
+        );
+        assert_eq!(seen.typed, b"/model");
+        assert_eq!(seen.kinds, [DATA, CLOSE]);
+
+        crate::lock(&core.inner)
+            .live
+            .as_mut()
+            .unwrap()
+            .terminals
+            .get_mut("t1")
+            .unwrap()
+            .terminal
+            .status = Some(Status {
+            state: "blocked".into(),
+            app: Some("claude-code".into()),
+            kind: Some("permission".into()),
+        });
+        let rule = rt
+            .agent_explain(&id)
+            .await
+            .unwrap()
+            .matched_rule
+            .map(|r| r.id);
+        assert_eq!(rule.as_deref(), Some("permission"));
     }
 
     const SESSION: &str = "01a199ed-7993-7261-8219-300d543d764b";
@@ -1919,15 +2185,11 @@ mod tests {
             .with_core(Some(followed(dir.path().join("core.sock"))));
         let id = format!("hc:{ID}:t1");
         assert!(matches!(
-            rt.agent_get(&id).await,
+            rt.agent_focus(&id).await,
             Err(Error::Unsupported(_))
         ));
         assert!(matches!(
-            rt.detection_text(&id).await,
-            Err(Error::Unsupported(_))
-        ));
-        assert!(matches!(
-            rt.agent_prompt(&id, "x").await,
+            rt.pane_processes(&id).await,
             Err(Error::Unsupported(_))
         ));
         assert!(matches!(
