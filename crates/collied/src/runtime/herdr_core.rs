@@ -59,6 +59,14 @@ pub const STRIPPED: [&str; 16] = [
 /// The kinds a task starts in herdr-core: those that report OSC 7501, without which nothing
 /// says the agent is ready or what dialog it shows.
 pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
+/// Set on the terminals collied starts as tasks, to the agent kind.
+const TASK_LABEL: &str = "collie.kind";
+
+/// What a task's terminal carries: its kind, and the task label the phone gave.
+pub struct Task<'a> {
+    pub kind: &'a str,
+    pub label: Option<&'a str>,
+}
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
 const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
@@ -246,6 +254,8 @@ struct Terminal {
     cols: u16,
     #[serde(default)]
     rows: u16,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
 }
 
 impl Terminal {
@@ -1055,6 +1065,7 @@ impl Core {
         &self,
         cwd: &str,
         name: &str,
+        task: &Task<'_>,
         cli: &Path,
         args: &[&str],
     ) -> Result<String, Error> {
@@ -1067,12 +1078,17 @@ impl Core {
             .ok_or(Error::Closed)?;
         let argv = task_argv(cli, args)
             .ok_or_else(|| Error::Unsupported("the agent's path is not UTF-8".to_owned()))?;
+        let mut labels = serde_json::Map::new();
+        labels.insert(TASK_LABEL.to_owned(), json!(task.kind));
+        if let Some(label) = task.label {
+            labels.insert("collie.label".to_owned(), json!(label));
+        }
         let mut conn = Conn::open(&self.socket).await?;
         let run: Run = conn
             .call(
                 "terminal.run",
                 json!({
-                    "argv": argv, "cwd": cwd, "name": name,
+                    "argv": argv, "cwd": cwd, "name": name, "labels": labels,
                     "env": {"TERM": "xterm-256color", "COLORTERM": "truecolor"},
                     "no_parent": true, "no_notify": true,
                 }),
@@ -1083,6 +1099,20 @@ impl Core {
             return Err(not_found());
         }
         Ok(format!("{group}:{}", run.address))
+    }
+
+    /// Whether collied started the terminal as a task: only then may an archive remove the
+    /// worktree it runs in.
+    pub fn task(&self, id: &str) -> bool {
+        let Ok((address, ..)) = self.terminal(id) else {
+            return false;
+        };
+        let inner = self.lock();
+        inner.live.as_ref().is_some_and(|live| {
+            live.terminals
+                .get(&address)
+                .is_some_and(|h| h.terminal.labels.contains_key(TASK_LABEL))
+        })
     }
 
     /// Only a terminal collied lists.
@@ -2334,9 +2364,18 @@ mod tests {
         let cli = Path::new("/opt/bin/codex");
         let args = super::super::herdr::agent_args("codex", Some(SESSION), false);
         assert_eq!(
-            core.start("/w", "collie-0a1b2c3d", cli, &args)
-                .await
-                .unwrap(),
+            core.start(
+                "/w",
+                "collie-0a1b2c3d",
+                &Task {
+                    kind: "codex",
+                    label: Some("fix tests"),
+                },
+                cli,
+                &args
+            )
+            .await
+            .unwrap(),
             format!("hc:{ID}:t2")
         );
         let calls = crate::lock(&seen).calls.clone();
@@ -2373,6 +2412,10 @@ mod tests {
             json!({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
         );
         assert_eq!(
+            params["labels"],
+            json!({"collie.kind": "codex", "collie.label": "fix tests"})
+        );
+        assert_eq!(
             super::super::herdr::agent_args("codex", None, false),
             ["--no-daemon"]
         );
@@ -2381,6 +2424,148 @@ mod tests {
             ["--resume", SESSION, "--settings", r#"{"ultracode":true}"#]
         );
         assert!(super::cli("copilot").is_none());
+    }
+
+    /// A herdr that answers `ping`, `answer`'s methods, and an error for anything else.
+    fn fake_herdr(socket: &Path, answer: fn(&str) -> Option<Value>) {
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (reader, mut writer) = stream.into_split();
+                let mut line = String::new();
+                BufReader::new(reader).read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let method = request["method"].as_str().unwrap();
+                let reply = match (method, answer(method)) {
+                    ("ping", _) => json!({"id": request["id"], "result": {
+                        "type": "pong", "version": "0.9.5", "protocol": 1,
+                    }}),
+                    (_, Some(result)) => json!({"id": request["id"], "result": result}),
+                    (_, None) => json!({"id": request["id"], "error": {
+                        "code": "unknown_method", "message": "no",
+                    }}),
+                };
+                writer
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A repository with a linked worktree under a canonical root, and a core whose only
+    /// terminal is an idle Codex started in that worktree, a task of collied's or not.
+    fn worktree_task(task: bool) -> (tempfile::TempDir, PathBuf, PathBuf, Arc<Core>) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        let checkout = repo.join(".worktree/feat");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat",
+                checkout.to_str().unwrap(),
+            ],
+        );
+        let mut t = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+        t["cwd"] = json!(checkout);
+        if task {
+            t["labels"] = json!({"collie.kind": "codex"});
+        }
+        let core = Core::new(root.join("core.sock"));
+        core.lock().live = Some(live(10, json!([t])));
+        (dir, root, checkout, Arc::new(core))
+    }
+
+    fn archive_params() -> protocol::TaskArchiveParams {
+        protocol::TaskArchiveParams {
+            op_id: protocol::OpId::new("a".repeat(22)).unwrap(),
+            terminal_id: protocol::TerminalId::new(format!("hc:{ID}:t1")).unwrap(),
+            confirm: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn archive_never_removes_a_worktree_collie_did_not_start_the_agent_in() {
+        let (_dir, root, checkout, core) = worktree_task(false);
+        let seen = fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.kill" => json!({"address": "t1"}),
+            "terminal.rm" => json!({"removed": "t1"}),
+            _ => Value::Null,
+        })
+        .await;
+        assert!(!core.task(&format!("hc:{ID}:t1")));
+        let drive =
+            crate::drive::Driver::new(root.join("herdr.sock"), vec![], std::slice::from_ref(&root))
+                .unwrap()
+                .with_core(Some(core));
+        let yes: crate::drive::Authorized = Arc::new(|| true);
+        let Ok(protocol::Response::TaskArchived { message }) =
+            drive.task_archive(archive_params(), &yes).await
+        else {
+            panic!("not archived");
+        };
+        assert!(message.starts_with("Closed pane."), "{message}");
+        assert!(checkout.exists(), "the checkout stays");
+        let methods: Vec<Value> = (crate::lock(&seen).calls.iter())
+            .map(|c| c["method"].clone())
+            .collect();
+        assert_eq!(methods, [json!("terminal.kill"), json!("terminal.rm")]);
+    }
+
+    #[tokio::test]
+    async fn archive_leaves_a_worktree_herdr_has_open() {
+        let (_dir, root, checkout, core) = worktree_task(true);
+        let seen = fake_core(&root.join("core.sock"), |_| Value::Null).await;
+        assert!(core.task(&format!("hc:{ID}:t1")));
+        static LISTED: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+        LISTED
+            .set((
+                root.join("repo").display().to_string(),
+                checkout.display().to_string(),
+            ))
+            .unwrap();
+        fake_herdr(&root.join("herdr.sock"), |method| {
+            let (repo, checkout) = LISTED.get().unwrap();
+            (method == "worktree.list").then(|| {
+                json!({"type": "worktree_list", "source": {"source_checkout_path": repo},
+                    "worktrees": [{"path": checkout, "branch": "feat", "open_workspace_id": "w3",
+                        "is_bare": false, "is_linked_worktree": true}]})
+            })
+        });
+        let drive =
+            crate::drive::Driver::new(root.join("herdr.sock"), vec![], std::slice::from_ref(&root))
+                .unwrap()
+                .with_core(Some(core));
+        let yes: crate::drive::Authorized = Arc::new(|| true);
+        let (code, message) = drive
+            .task_archive(archive_params(), &yes)
+            .await
+            .unwrap_err();
+        assert_eq!(code, protocol::ErrorCode::InvalidParams);
+        assert!(
+            message.contains("herdr has this checkout open"),
+            "{message}"
+        );
+        assert!(checkout.exists());
+        assert!(crate::lock(&seen).calls.is_empty(), "no agent was closed");
     }
 
     #[tokio::test]
@@ -2394,20 +2579,7 @@ mod tests {
             .with_core(Some(Arc::new(Core::new(dir.path().join("core.sock")))));
         assert!(unfollowed.task_core().await.is_none());
 
-        let listener = tokio::net::UnixListener::bind(&herdr).unwrap();
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                let (reader, mut writer) = stream.into_split();
-                let mut line = String::new();
-                BufReader::new(reader).read_line(&mut line).await.unwrap();
-                let id = serde_json::from_str::<Value>(&line).unwrap()["id"].clone();
-                let pong = json!({"id": id, "result": {"type": "pong", "version": "0.9.5", "protocol": 1}});
-                writer
-                    .write_all(format!("{pong}\n").as_bytes())
-                    .await
-                    .unwrap();
-            }
-        });
+        fake_herdr(&herdr, |_| None);
         assert!(rt.task_core().await.is_none(), "herdr answers");
     }
 

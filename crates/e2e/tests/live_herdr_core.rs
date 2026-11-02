@@ -1208,11 +1208,18 @@ fn live_herdr_core_tasks() {
             (bin, path)
         }
     };
-    let env = [("COLLIE_E2E_BIN", bin.as_str()), ("PATH", path.as_str())];
+    // A scratch HOME, so the owner's git and gh configuration never reach the archive.
+    let home = format!("{bin}/home");
+    let env = [
+        ("COLLIE_E2E_BIN", bin.as_str()),
+        ("PATH", path.as_str()),
+        ("HOME", home.as_str()),
+    ];
     if !in_child_with("live_herdr_core_tasks", &env) {
         let _ = std::fs::remove_dir_all(&bin);
         return;
     }
+    std::fs::create_dir_all(&home).unwrap();
     let dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
     let mut core = CoreSession::start_with("hct", &dummies);
     let rt = runtime();
@@ -1382,6 +1389,10 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     assert_eq!(
         core.hc(&["get", "--json", &codex_address])["cwd"],
         checkout.to_str().unwrap()
+    );
+    assert_eq!(
+        core.hc(&["get", "--json", &codex_address])["labels"],
+        serde_json::json!({"collie.kind": "codex", "collie.label": "e2e"})
     );
 
     let Ok(Response::TaskWorktrees { source, worktrees }) = drive

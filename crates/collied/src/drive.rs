@@ -1031,7 +1031,7 @@ impl Driver {
         if !Path::new(requested.as_str()).starts_with(source.as_str()) {
             return fail(
                 ErrorCode::InvalidParams,
-                "herdr returned another source checkout",
+                "the worktree list names another source checkout",
             );
         }
         let worktrees = list
@@ -1284,7 +1284,7 @@ impl Driver {
         if !Path::new(source.as_str()).starts_with(checkout.as_str()) {
             return fail(
                 ErrorCode::InvalidParams,
-                "herdr returned another source checkout",
+                "the worktree list names another source checkout",
             );
         }
         let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
@@ -1521,7 +1521,6 @@ impl Driver {
         Ok(())
     }
 
-    /// herdr's `worktree.list`, or git's for a task in herdr-core.
     async fn worktree_list(
         &self,
         cwd: &Cwd,
@@ -1556,7 +1555,16 @@ impl Driver {
         let args = runtime::herdr::agent_args(p.agent.as_str(), resume, p.ultracode);
         authorized(auth)?;
         let id = core
-            .start(cwd.as_str(), &name, &cli, &args)
+            .start(
+                cwd.as_str(),
+                &name,
+                &runtime::herdr_core::Task {
+                    kind: p.agent.as_str(),
+                    label: p.label.as_ref().map(|l| l.as_str()),
+                },
+                &cli,
+                &args,
+            )
             .await
             .map_err(herdr_fail)?;
         let left = |(code, message): Fail| {
@@ -1584,7 +1592,6 @@ impl Driver {
         })
     }
 
-    /// The checkout must be the linked worktree git lists at `path`, on `branch`.
     async fn start_core_worktree_task(
         &self,
         core: &Core,
@@ -1630,47 +1637,55 @@ impl Driver {
         while tokio::time::Instant::now() < deadline {
             tokio::time::sleep(START_POLL).await;
             let a = match self.runtime.agent_get(id).await {
-                Ok(a) => a,
-                // Not listed before the CLI leads its terminal, nor once it has finished.
+                Ok(a) => Some(a),
+                // Not listed before the CLI leads its terminal and reports a status or runs
+                // as `claude` or `codex` (an npm install runs as `node`), nor once it ended.
                 Err(runtime::Error::Core { kind, .. }) if listed && kind == "not_found" => {
                     return fail(
                         ErrorCode::AgentNotReady,
                         "agent exited before becoming interactive",
                     );
                 }
-                Err(_) => continue,
+                Err(_) => None,
             };
-            listed = true;
-            let pane = runtime::herdr_core::pane(&a);
-            self.started_check(&a, &pane, name, kind).await?;
-            if matches!(
-                flock::status(&a.agent_status),
-                AgentStatus::Idle | AgentStatus::Done
-            ) {
-                match since {
-                    Some((seq, at)) if seq == a.state_change_seq => {
-                        if at.elapsed() >= SCREEN_SETTLE {
-                            return Ok(pane);
+            if let Some(a) = &a {
+                listed = true;
+                let pane = runtime::herdr_core::pane(a);
+                self.started_check(a, &pane, name, kind).await?;
+                if matches!(
+                    flock::status(&a.agent_status),
+                    AgentStatus::Idle | AgentStatus::Done
+                ) {
+                    match since {
+                        Some((seq, at)) if seq == a.state_change_seq => {
+                            if at.elapsed() >= SCREEN_SETTLE {
+                                return Ok(pane);
+                            }
                         }
+                        _ => since = Some((a.state_change_seq, tokio::time::Instant::now())),
                     }
-                    _ => since = Some((a.state_change_seq, tokio::time::Instant::now())),
+                    continue;
                 }
-                continue;
+                since = None;
+                if !a.read_only {
+                    continue;
+                }
             }
-            since = None;
-            // Claude Code reports nothing at its folder trust prompt, so no approval answers it.
-            if a.read_only
-                && kind.as_str() == "claude"
-                && self
-                    .runtime
-                    .detection_text(id)
-                    .await
-                    .is_ok_and(|t| prompt::Menu::parse(&t).is_some_and(|m| m.is_trust_prompt()))
+            // Without a status nothing says a startup dialog is open: Claude Code reports
+            // nothing at its folder trust prompt, so no approval answers it.
+            let Ok(screen) = self.runtime.detection_text(id).await else {
+                continue;
+            };
+            if kind.as_str() == "claude"
+                && prompt::Menu::parse(&screen).is_some_and(|m| m.is_trust_prompt())
             {
                 return fail(
                     ErrorCode::AgentBlocked,
                     "the agent asks whether to trust this folder; answer it in the terminal",
                 );
+            }
+            if kind.as_str() == "codex" && prompt::shows_dialog(&screen) {
+                return fail(ErrorCode::AgentBlocked, startup_prompt(kind, Some(&screen)));
             }
         }
         fail(
@@ -1932,19 +1947,46 @@ impl Driver {
             );
         }
         let core_worktree = if runtime::herdr_core::owns(terminal_id.as_str()) {
-            self.core_worktree(pane).await?
+            self.core_worktree(terminal_id.as_str(), pane).await?
         } else {
             None
         };
         let (repo, closed) = if let Some((repo, checkout)) = core_worktree {
+            let inside = |a: &&AgentInfo| {
+                a.cwd
+                    .as_deref()
+                    .is_some_and(|cwd| Path::new(cwd).starts_with(checkout.as_str()))
+            };
+            if snapshot
+                .agents
+                .iter()
+                .filter(inside)
+                .any(|a| !self.core_task(&a.terminal_id))
+            {
+                return fail(
+                    ErrorCode::InvalidParams,
+                    "an agent collie did not start works in this checkout; nothing was closed",
+                );
+            }
+            if self.runtime.ping().await.is_ok() {
+                let open = self
+                    .runtime
+                    .worktree_list(checkout.as_str())
+                    .await
+                    .map_err(herdr_fail)?
+                    .worktrees
+                    .iter()
+                    .any(|w| w.path == checkout.as_str() && w.open_workspace_id.is_some());
+                if open {
+                    return fail(
+                        ErrorCode::InvalidParams,
+                        "herdr has this checkout open in a workspace; nothing was closed",
+                    );
+                }
+            }
             // Like herdr's `worktree.remove`, which closes the worktree's whole workspace:
-            // every agent started in the checkout ends, then the checkout goes.
-            for agent in snapshot.agents.iter().filter(|a| {
-                a.workspace_id == pane.workspace_id
-                    && a.cwd
-                        .as_deref()
-                        .is_some_and(|cwd| Path::new(cwd).starts_with(checkout.as_str()))
-            }) {
+            // every task agent started in the checkout ends, then the checkout goes.
+            for agent in snapshot.agents.iter().filter(inside) {
                 authorized(auth)?;
                 self.runtime
                     .pane_close(&agent.pane_id)
@@ -2136,16 +2178,28 @@ impl Driver {
         })
     }
 
-    /// A herdr-core group knows no worktree, so git says whether the folder a herdr-core
-    /// task started in is a linked worktree's checkout: its main checkout and the checkout.
-    async fn core_worktree(&self, pane: &PaneInfo) -> Result<Option<(Cwd, Cwd)>, Fail> {
+    /// The source checkout and checkout of the linked worktree a herdr-core task collied
+    /// started runs in. A herdr-core group knows no worktree, so git says; a terminal collied
+    /// did not start as a task never has its folder removed.
+    async fn core_worktree(
+        &self,
+        terminal_id: &str,
+        pane: &PaneInfo,
+    ) -> Result<Option<(Cwd, Cwd)>, Fail> {
+        if !self.core_task(terminal_id) {
+            return Ok(None);
+        }
         let Some(cwd) = (pane.cwd.as_deref()).and_then(|cwd| resolve_cwd(cwd, &self.roots).ok())
         else {
             return Ok(None);
         };
-        let Ok(listed) = git::worktree_list(&cwd).await else {
+        // A folder in no repository is a regular folder; any other git failure stops the
+        // archive, so a checkout is never left behind for `gh poi` to run in.
+        let top = git::line(&cwd, &["rev-parse", "--show-toplevel"]).await?;
+        if top.as_deref() != Some(cwd.as_str()) {
             return Ok(None);
-        };
+        }
+        let listed = git::worktree_list(&cwd).await?;
         if !listed
             .worktrees
             .iter()
@@ -2156,6 +2210,11 @@ impl Driver {
         let repo =
             resolve_cwd(&listed.source.source_checkout_path, &self.roots).map_err(invalid)?;
         Ok(Some((repo, cwd)))
+    }
+
+    fn core_task(&self, terminal_id: &str) -> bool {
+        runtime::herdr_core::owns(terminal_id)
+            && self.runtime.core().is_some_and(|c| c.task(terminal_id))
     }
 }
 
