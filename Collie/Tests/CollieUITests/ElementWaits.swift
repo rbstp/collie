@@ -120,10 +120,9 @@ extension XCUIApplication {
         // menu's cell.
         guard ready else { return withInteractionOptions(1) { item.tap() } }
         let settled = last
-        let center = item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        withInteractionOptions(1) { center.tap() }
+        withInteractionOptions(1) { item.tap() }
         // The open menu can drop the tap and stay open, so an item still where it was tapped was not chosen.
-        if !eventually(within: 10, { !item.exists || (try? item.snapshot())?.frame != settled }) { withInteractionOptions(1) { center.tap() } }
+        if !eventually(within: 10, { !item.exists || (try? item.snapshot())?.frame != settled }) { withInteractionOptions(1) { item.tap() } }
     }
 
     /// Rotates and waits for the window to follow. A rotation with the keyboard up in a session could leave the app never
