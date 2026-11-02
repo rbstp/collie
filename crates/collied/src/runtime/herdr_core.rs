@@ -41,6 +41,9 @@ const KILL_TIMEOUT: Duration = Duration::from_secs(15);
 /// A send or keys call first waits until nobody has typed for about 3 s, and input through
 /// a typing attach counts as typing.
 const INPUT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long after the last typing the core holds a send or keys call: measured 2.8 to 3.3 s
+/// on herdr-core 0.1.16.
+pub const TYPING_HOLD: Duration = Duration::from_millis(3500);
 /// The core sends a heartbeat every 15 s.
 const SILENCE: Duration = Duration::from_secs(45);
 const MAX_LINE: u64 = 16 << 20;
@@ -273,12 +276,21 @@ struct Held {
     terminal: Terminal,
     /// `state_change_seq`: the seq of the event where the status's state last changed.
     seq: u64,
+    /// The status was left behind by a program that ended: herdr-core 0.1.16 keeps a
+    /// program's OSC 7501 status after it exits and its shell takes the terminal back, and a
+    /// prompt's Enter would then go to the shell. Cleared by the next report.
+    orphaned: bool,
 }
 
 struct Live {
     group: String,
     seq: u64,
     terminals: BTreeMap<String, Held>,
+    alive: fn(u32) -> bool,
+}
+
+fn alive(pid: u32) -> bool {
+    process(pid).is_some()
 }
 
 impl Live {
@@ -286,10 +298,13 @@ impl Live {
     /// when its state or turn moved, so a dialog seen across a gap still gets a new seq.
     fn snapshot(&mut self, seq: u64, terminals: Vec<Terminal>) {
         let mut next = BTreeMap::new();
-        for t in terminals.into_iter().filter(|t| local(&t.address)) {
-            let kept = self
-                .terminals
-                .get(&t.address)
+        for mut t in terminals.into_iter().filter(|t| local(&t.address)) {
+            let held = self.terminals.get(&t.address);
+            let orphaned = held.is_some_and(|h| h.orphaned && leader(&h.terminal) == leader(&t));
+            if orphaned {
+                t.status = None;
+            }
+            let kept = held
                 .filter(|h| h.terminal.state() == t.state() && h.terminal.turn == t.turn)
                 .map_or(seq, |h| h.seq);
             next.insert(
@@ -297,6 +312,7 @@ impl Live {
                 Held {
                     terminal: t,
                     seq: kept,
+                    orphaned,
                 },
             );
         }
@@ -327,6 +343,7 @@ impl Live {
                         Held {
                             terminal: t,
                             seq: kept,
+                            orphaned: false,
                         },
                     );
                 }
@@ -335,6 +352,7 @@ impl Live {
                 self.terminals.remove(&e.terminal);
             }
             kind => {
+                let alive = self.alive;
                 let Some(h) = self.terminals.get_mut(&e.terminal) else {
                     return;
                 };
@@ -345,7 +363,21 @@ impl Live {
                         t.foreground = None;
                         t.status = None;
                     }
-                    "foreground" => t.foreground = serde_json::from_value(e.data).ok().flatten(),
+                    "foreground" => {
+                        let next: Option<Foreground> =
+                            serde_json::from_value(e.data).ok().flatten();
+                        // The program that led the terminal ended; one that hands it to a
+                        // child it started is still there.
+                        let ended = leader(t).is_some_and(|old| {
+                            next.as_ref().and_then(|f| f.pid) != Some(old) && !alive(old)
+                        });
+                        if ended && t.status.is_some() {
+                            t.status = None;
+                            h.seq = e.seq;
+                            h.orphaned = true;
+                        }
+                        t.foreground = next;
+                    }
                     "status" => {
                         #[derive(Deserialize)]
                         struct Data {
@@ -357,6 +389,7 @@ impl Live {
                                 h.seq = e.seq;
                             }
                             t.status = status;
+                            h.orphaned = false;
                         }
                     }
                     "title" => {
@@ -404,6 +437,10 @@ impl Live {
             .filter_map(|h| agent(&self.group, h, &session))
             .collect()
     }
+}
+
+fn leader(t: &Terminal) -> Option<u32> {
+    t.foreground.as_ref().and_then(|f| f.pid)
 }
 
 fn not_found() -> Error {
@@ -745,6 +782,7 @@ impl Core {
             group,
             seq: 0,
             terminals: BTreeMap::new(),
+            alive,
         };
         live.snapshot(snap.seq, snap.terminals);
         self.lock().live = Some(live);
@@ -782,7 +820,7 @@ impl Core {
     pub async fn get(&self, id: &str) -> Result<AgentInfo, Error> {
         let (address, ..) = self.terminal(id)?;
         let mut conn = Conn::open(&self.socket).await?;
-        let t: Terminal = conn
+        let mut t: Terminal = conn
             .call("terminal.get", json!({ "terminal": address }), TIMEOUT)
             .await?;
         if t.address != address {
@@ -790,12 +828,20 @@ impl Core {
         }
         let inner = self.lock();
         let live = inner.live.as_ref().ok_or(Error::Closed)?;
-        let seq = live.terminals.get(&address).map_or(live.seq, |h| h.seq);
-        agent(
-            &live.group,
-            &Held { terminal: t, seq },
-            &|kind, address, pid| self.session(&inner, kind, address, pid),
-        )
+        let held = live.terminals.get(&address);
+        let seq = held.map_or(live.seq, |h| h.seq);
+        let orphaned = held.is_some_and(|h| h.orphaned);
+        if orphaned {
+            t.status = None;
+        }
+        let held = Held {
+            terminal: t,
+            seq,
+            orphaned,
+        };
+        agent(&live.group, &held, &|kind, address, pid| {
+            self.session(&inner, kind, address, pid)
+        })
         .ok_or_else(not_found)
     }
 
@@ -1493,6 +1539,7 @@ mod tests {
             group: format!("hc:{ID}"),
             seq: 0,
             terminals: BTreeMap::new(),
+            alive: |_| true,
         };
         live.snapshot(seq, serde_json::from_value(terminals).unwrap());
         live
@@ -1673,6 +1720,34 @@ mod tests {
         assert_eq!(shown(&l)[0].3, 30);
         event(&mut l, 32, "t2", "removed", json!({}));
         assert!(l.agents(none).is_empty() && l.terminals.len() == 1);
+    }
+
+    #[test]
+    fn a_status_left_by_a_program_that_ended_is_dropped() {
+        let codex = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+        let mut l = live(10, json!([codex]));
+        let fg = |pid: u32, argv0: &str| json!({"pid": pid, "argv": [argv0], "cwd": "/w"});
+        // Codex hands the terminal to an editor it started, then takes it back.
+        event(&mut l, 11, "t1", "foreground", fg(12, "vim"));
+        event(&mut l, 12, "t1", "foreground", fg(9, "codex"));
+        assert_eq!(shown(&l)[0].1, "idle");
+        l.alive = |pid| pid != 9;
+        event(&mut l, 13, "t1", "foreground", fg(3, "-zsh"));
+        assert!(
+            l.agents(none).is_empty(),
+            "a shell with Codex's last status"
+        );
+
+        let mut kept = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+        kept["foreground"] = fg(3, "-zsh");
+        l.snapshot(20, serde_json::from_value(json!([kept.clone()])).unwrap());
+        assert!(l.agents(none).is_empty(), "the core still holds the status");
+        let status = json!({"reported": true, "status": {"state": "idle", "app": "codex"}});
+        event(&mut l, 21, "t1", "status", status);
+        let a = &l.agents(none)[0];
+        assert_eq!((a.agent_status.as_str(), a.read_only), ("idle", false));
+        l.snapshot(22, serde_json::from_value(json!([kept])).unwrap());
+        assert_eq!(l.agents(none).len(), 1, "a new report holds");
     }
 
     #[test]
@@ -1972,6 +2047,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         let seen = crate::lock(&seen).clone();
+        assert_eq!(seen.closed, 1, "the typing attach closed");
         let calls: Vec<String> = seen.calls.iter().map(|c| c.to_string()).collect();
         let t = |rest: &str| format!(r#"{{"method":"terminal.{rest}}}"#);
         assert_eq!(

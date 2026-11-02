@@ -715,7 +715,11 @@ fn fake_codex() {
 // A stand-in Claude Code for input: it reports `done`, `error` and `idle` in turn, each with
 // an empty input box, and prints each prompt it reads. Then two Bash permission prompts:
 // the first is drawn again once the test creates `redraw`, and answered with a line; the
-// second shows once the test creates `next`, and is answered with one key, read raw.
+// second shows once the test creates `next`, and is answered with one key, read raw. Then
+// two prompts that take a note, read raw a byte at a time: ⇥ opens the amend field, typing
+// fills it, Enter or Esc ends it. The second is replaced by another dialog after a second
+// without input once the note reads `ok`, as when the dialog is answered on the machine and
+// a new one opens.
 const INPUT_AGENT: &str = r#"st() { printf '\033]7501;state=%s:app=claude-code%s\033\\' "$1" "$2"; }
 cols=$(stty size | cut -d' ' -f2)
 rule() { i=0; while [ $i -lt $cols ]; do printf '\342\224\200'; i=$((i+1)); done; printf '\n'; }
@@ -734,6 +738,28 @@ while [ ! -e next ]; do sleep 0.1; done
 dialog dialog2
 stty raw -echo; k=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'); stty sane
 printf '\033[2J\033[Hdenied %s\n' "$k"; st idle
+draw() { printf '\033[2J\033[H'; sed "s/1\. Yes\$/1. $2/" "$1"; }
+note() {
+  draw "$1" Yes; st blocked ':kind=permission:msg=approve Bash'
+  stty raw -echo min 0 time 10
+  n=; swapped=
+  while :; do
+    b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    case "$b" in
+      09) draw "$1" 'Yes, and tell Claude what to do next' ;;
+      0d) break ;;
+      1b) n=esc; break ;;
+      '') if [ -n "$2" ] && [ "$n" = ok ] && [ -z "$swapped" ]; then swapped=1; draw "$2" Yes; fi ;;
+      *) n="$n$(printf "\\$(printf %o 0x$b)")"; draw "$1" "Yes, $n" ;;
+    esac
+  done
+  stty sane
+  printf '\033[2J\033[Hamended %s\n' "$n"; st idle
+}
+while [ ! -e note1 ]; do sleep 0.1; done
+note dialog3
+while [ ! -e note2 ]; do sleep 0.1; done
+note dialog4 dialog5
 exec sleep 600"#;
 
 const DIALOG: &str = "\
@@ -828,6 +854,13 @@ async fn input_scenario(core: &CoreSession) {
             .replace("rm commands", "rm -rf"),
     )
     .unwrap();
+    for (name, dir) in [
+        ("dialog3", "cache"),
+        ("dialog4", "logs"),
+        ("dialog5", "home"),
+    ] {
+        std::fs::write(work.join(name), DIALOG.replace("build", dir)).unwrap();
+    }
     let claude = run(core, "collie-input", &work, INPUT_AGENT);
     let copilot = run_argv(
         core,
@@ -1022,6 +1055,61 @@ async fn input_scenario(core: &CoreSession) {
         applied(&next, Decision::Deny)
     );
     shows(&claude, "denied 1b").await;
+
+    // A note goes with Approve; Enter waits out the core's hold on keys after the note's own
+    // typing, then reads again, so it never lands in the dialog that replaced the noted one.
+    let noted = |approval: &protocol::Approval| ApprovalDecideParams {
+        note: Some(PromptText::new("ok".to_owned()).unwrap()),
+        ..decide(approval, Decision::Approve)
+    };
+    std::fs::write(work.join("note1"), "").unwrap();
+    let (note_seq, first) = raise(&mut events, next_seq).await;
+    assert!(first.supports_note);
+    assert_eq!(
+        approvals.decide("live", "nLIVE", noted(&first), &yes).await,
+        applied(&first, Decision::Approve)
+    );
+    shows(&claude, "amended ok").await;
+    std::fs::write(work.join("note2"), "").unwrap();
+    let (_, replaced) = raise(&mut events, note_seq).await;
+    assert_eq!(
+        approvals
+            .decide("live", "nLIVE", noted(&replaced), &yes)
+            .await,
+        Ok(Response::ApprovalResolved {
+            approval_id: replaced.approval_id.clone(),
+            outcome: ApprovalOutcome::Superseded,
+        })
+    );
+    rt.agent_send_keys(&a.pane_id, &["esc"]).await.unwrap();
+    shows(&claude, "amended esc").await;
+
+    // herdr-core keeps a status after its program exits to the shell; collied does not list
+    // the shell as that agent.
+    let shell = run_argv(core, "collie-shell", &work, &["/bin/sh", "-i"]);
+    std::fs::write(
+        work.join("reporter"),
+        "printf '\\033]7501;state=idle:app=codex\\033\\\\'\nwhile [ ! -e leave ]; do sleep 0.1; done\n",
+    )
+    .unwrap();
+    core.hc(&["send", "--json", &shell, "sh reporter"]);
+    let reporter = status(&shell, "idle").await;
+    assert_eq!(reporter.agent.as_deref(), Some("codex"));
+    until("the reporting program to lead the terminal", async || {
+        let t = core.hc(&["get", "--json", &shell]);
+        (t["foreground"]["argv"][1] == "reporter").then_some(())
+    })
+    .await;
+    std::fs::write(work.join("leave"), "").unwrap();
+    until("the shell to leave the list", async || {
+        find(&shell).await.is_none().then_some(())
+    })
+    .await;
+    assert_eq!(
+        core.hc(&["get", "--json", &shell])["status"]["app"],
+        "codex",
+        "herdr-core still holds the status"
+    );
 
     // Every key, and Ctrl+End, a notice digit and a paste through a typing attach, which
     // leaves the size a desktop client chose.
