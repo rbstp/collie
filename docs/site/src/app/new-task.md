@@ -1,6 +1,6 @@
 # New task
 
-**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick.
+**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
@@ -50,3 +50,12 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 | A regular folder | Closes only the pane; runs `gh poi` when the repository is inside a task root |
 
 Archiving the last pane of a repository workspace with linked worktree sessions leaves a shell there to keep those sessions open.
+
+## Herdr 2
+
+When herdr is not running on the machine and herdr-core (Herdr 2) is, **New task** starts the agent in Herdr 2, in a terminal of its own in the machine's **Herdr 2** group. While herdr runs, tasks start in herdr. You change no setting.
+
+- You can start Claude Code and Codex, once `collied` finds them on the machine. Copilot CLI does not start there: it reports no status in Herdr 2, so collie could not tell when it is ready.
+- Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in herdr. If the agent fails to start, it keeps running, and the checkout stays; the error names them.
+- When Claude Code asks whether to trust the folder, the task stops without sending your prompt. Answer it on the machine: Claude Code reports nothing while it asks, so no approval reaches the phone.
+- **Archive** ends every Herdr 2 agent that started in the task's linked worktree and removes the checkout, **uncommitted changes included**, then runs `gh poi`; for a regular folder it ends only that agent. collie does not [archive a Herdr 2 task by itself](pull-requests.md#archive-when-the-pull-request-merges) when its pull request merges.

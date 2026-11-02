@@ -135,6 +135,16 @@ impl Runtime {
         self.core.as_ref()
     }
 
+    /// Where a new task starts: herdr while it answers, which gives the agent herdr's screen
+    /// rules, focus and workspace; the followed core only when herdr does not.
+    pub async fn task_core(&self) -> Option<Arc<Core>> {
+        let core = self.core.as_ref().filter(|c| c.following())?;
+        herdr::ping(&self.herdr)
+            .await
+            .is_err()
+            .then(|| core.clone())
+    }
+
     fn followed(&self) -> Result<&Arc<Core>, Error> {
         self.core
             .as_ref()

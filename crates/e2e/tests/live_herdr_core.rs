@@ -1170,3 +1170,261 @@ async fn input_scenario(core: &CoreSession) {
     stop.send_replace(true);
     task.await.unwrap();
 }
+
+/// herdr's and Claude Code's session variables, as a core started inside a herdr pane
+/// running Claude Code holds them: a task agent must get none.
+const STARTER: [&str; 16] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_BIN_PATH",
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+
+/// New task, a worktree task and archive with herdr-core alone. collied finds stand-in
+/// `claude` and `codex` CLIs first on its `PATH`; the core holds dummy values for every
+/// starter variable, which point nowhere.
+#[test]
+fn live_herdr_core_tasks() {
+    if !hc_installed() {
+        return;
+    }
+    let (bin, path) = match std::env::var("COLLIE_E2E_BIN") {
+        Ok(bin) => (bin, std::env::var("PATH").unwrap_or_default()),
+        Err(_) => {
+            let bin = format!("/tmp/hct-{}", std::process::id());
+            let path = format!("{bin}:{}", std::env::var("PATH").unwrap_or_default());
+            (bin, path)
+        }
+    };
+    let env = [("COLLIE_E2E_BIN", bin.as_str()), ("PATH", path.as_str())];
+    if !in_child_with("live_herdr_core_tasks", &env) {
+        let _ = std::fs::remove_dir_all(&bin);
+        return;
+    }
+    let dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
+    let mut core = CoreSession::start_with("hct", &dummies);
+    let rt = runtime();
+    rt.block_on(tasks_scenario(&core, Path::new(&bin)));
+    drop(rt);
+    assert!(core.stop(), "dedicated herdr-core did not stop");
+}
+
+/// A stand-in agent CLI: it records its environment and arguments, reports OSC 7501 as
+/// `app`, and records each line typed into it. Run under the CLI's name, not a shell's.
+fn stand_in(bin: &Path, cli: &str, app: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let record = bin.join("record");
+    let record = record.display();
+    let agent = format!(
+        r#"printf '\033]7501;state=idle:app={app}\033\\'
+while IFS= read -r p; do printf '%s\n' "$p" >> '{record}/prompts-{cli}'; done
+exec sleep 600"#
+    );
+    let script = format!(
+        r#"#!/bin/bash
+env > '{record}/env-{cli}'
+printf '%s\n' "$@" > '{record}/args-{cli}'
+exec -a {cli} /bin/bash -c "$(cat '{record}/../{cli}.agent')"
+"#
+    );
+    std::fs::write(bin.join(format!("{cli}.agent")), agent).unwrap();
+    let path = bin.join(cli);
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=e2e",
+            "-c",
+            "user.email=e2e@example.invalid",
+        ])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+async fn tasks_scenario(core: &CoreSession, bin: &Path) {
+    use protocol::{
+        AgentKind, Cwd, Label, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams,
+    };
+    std::fs::create_dir_all(bin.join("record")).unwrap();
+    stand_in(bin, "claude", "claude-code");
+    stand_in(bin, "codex", "codex");
+    let record = |name: &str| std::fs::read_to_string(bin.join("record").join(name)).ok();
+
+    let work = std::fs::canonicalize(&core.work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let held = run(core, "collie-env", &work, "env > held; exec sleep 600");
+    let held_env = until("the core's environment", async || {
+        std::fs::read_to_string(work.join("held")).ok()
+    })
+    .await;
+    assert!(
+        held_env.contains("HERDR_PANE_ID=collie-e2e")
+            && held_env.contains("CLAUDE_CODE_CHILD_SESSION=collie-e2e"),
+        "the core passes its starter's variables to a terminal"
+    );
+    core.hc(&["kill", "--json", &held]);
+    std::fs::remove_file(work.join("held")).unwrap();
+
+    let followed = Arc::new(Core::new(core.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(followed.clone().run(stopped));
+    tokio::time::timeout(Duration::from_secs(5), followed.settled())
+        .await
+        .unwrap();
+    let kinds = vec![
+        AgentKind::new("claude").unwrap(),
+        AgentKind::new("codex").unwrap(),
+    ];
+    let drive = Driver::new(
+        core.root.join("no-herdr.sock"),
+        kinds.clone(),
+        std::slice::from_ref(&work),
+    )
+    .unwrap()
+    .with_core(Some(followed.clone()));
+    let yes: Authorized = Arc::new(|| true);
+
+    let Ok(Response::TaskOptions(options)) = drive.task_options().await else {
+        panic!("no task options");
+    };
+    assert_eq!(options.agents, kinds);
+
+    let new = |agent: &str, prompt: &str, worktree| TaskNewParams {
+        op_id: OpId::new("N".repeat(22)).unwrap(),
+        cwd: Cwd::new(work.to_str().unwrap()).unwrap(),
+        agent: AgentKind::new(agent).unwrap(),
+        prompt: Some(PromptText::new(prompt.to_owned()).unwrap()),
+        label: Some(Label::new("e2e").unwrap()),
+        new_folder: None,
+        worktree,
+        clone: None,
+        resume: None,
+        ultracode: false,
+    };
+    let started = |reply| match reply {
+        (
+            Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+            }),
+            _,
+        ) => (workspace_id, terminal_id),
+        (other, _) => panic!("task not started: {other:?}"),
+    };
+
+    let (group, claude) = started(
+        drive
+            .task_new(new("claude", "fix the test", None), &yes)
+            .await,
+    );
+    assert!(group.as_str().starts_with("hc:"), "{group:?}");
+    assert!(claude.as_str().starts_with(&format!("{}:", group.as_str())));
+    until("the prompt in Claude Code", async || {
+        record("prompts-claude").filter(|p| p.contains("fix the test"))
+    })
+    .await;
+    assert_eq!(record("args-claude").as_deref(), Some("\n"));
+    let stripped = |env: String| {
+        for name in STARTER {
+            assert!(
+                !env.lines().any(|l| l.starts_with(&format!("{name}="))),
+                "{name} reached the agent"
+            );
+        }
+        env
+    };
+    let env = stripped(record("env-claude").unwrap());
+    assert!(env.contains("TERM=xterm-256color") && env.contains("COLORTERM=truecolor"));
+
+    let branch = TaskWorktree::Create {
+        branch: "feat/hc-task".to_owned(),
+    };
+    let (_, codex) = started(
+        drive
+            .task_new(new("codex", "review it", Some(branch)), &yes)
+            .await,
+    );
+    let checkout = work.join(".worktree/feat-hc-task");
+    until("the prompt in Codex", async || {
+        record("prompts-codex").filter(|p| p.contains("review it"))
+    })
+    .await;
+    assert_eq!(record("args-codex").as_deref(), Some("--no-daemon\n"));
+    stripped(record("env-codex").unwrap());
+    assert!(
+        git(&work, &["worktree", "list", "--porcelain"])
+            .contains(&format!("worktree {}\nHEAD", checkout.display()))
+    );
+    let codex_address = codex.as_str().rsplit(':').next().unwrap().to_owned();
+    assert_eq!(
+        core.hc(&["get", "--json", &codex_address])["cwd"],
+        checkout.to_str().unwrap()
+    );
+
+    let Ok(Response::TaskWorktrees { source, worktrees }) = drive
+        .task_worktrees(
+            TaskWorktreesParams {
+                cwd: Cwd::new(work.to_str().unwrap()).unwrap(),
+            },
+            &yes,
+        )
+        .await
+    else {
+        panic!("no worktrees");
+    };
+    assert_eq!(source.as_str(), work.to_str().unwrap());
+    assert_eq!(worktrees.len(), 1);
+    assert_eq!(worktrees[0].branch.as_deref(), Some("feat/hc-task"));
+
+    let archive = |id: &TerminalId| TaskArchiveParams {
+        op_id: OpId::new("A".repeat(22)).unwrap(),
+        terminal_id: id.clone(),
+        confirm: true,
+    };
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&codex), &yes).await
+    else {
+        panic!("the worktree task was not archived");
+    };
+    assert!(
+        message.starts_with("Removed worktree checkout"),
+        "{message}"
+    );
+    assert!(!checkout.exists());
+    assert!(core.hc(&["get", "--json", &codex_address]).is_null());
+    assert!(!git(&work, &["worktree", "list"]).contains("feat-hc-task"));
+
+    let claude_address = claude.as_str().rsplit(':').next().unwrap().to_owned();
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&claude), &yes).await
+    else {
+        panic!("the task was not archived");
+    };
+    assert!(message.starts_with("Closed pane."), "{message}");
+    assert!(core.hc(&["get", "--json", &claude_address]).is_null());
+    assert!(work.exists());
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}

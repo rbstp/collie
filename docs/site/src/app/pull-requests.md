@@ -22,4 +22,6 @@ With **Settings > Sessions > Archive when the PR merges** on, `collied` [archive
 - agents have no subagent running, which `collied` must be able to confirm;
 - checkout has no uncommitted or untracked changes and no commits outside the pull request.
 
+A task in Herdr 2 is never archived this way; archive it yourself.
+
 Done, Woke and Archived alerts follow **Settings > Notifications > Notify when an agent finishes**.

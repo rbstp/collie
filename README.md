@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/rbstp/collie/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/rbstp/collie/actions/workflows/ci.yml)
 
-collie is a remote control for [herdr](https://github.com/herdrdev/herdr) coding agents. A small daemon, `collied`, runs next to herdr on your Mac or Linux machine, and the Collie app on your iPhone reaches it over your own tailnet, with no open port on your network; the Apple Watch app works through the iPhone. From the phone, you follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
+collie is a remote control for coding agents in [herdr](https://github.com/herdrdev/herdr) and herdr-core (Herdr 2). A small daemon, `collied`, runs next to them on your Mac or Linux machine, and the Collie app on your iPhone reaches it over your own tailnet, with no open port on your network; the Apple Watch app works through the iPhone. From the phone, you follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
 
 Documentation: <https://collie.rbstp.dev>
 
@@ -13,12 +13,12 @@ Documentation: <https://collie.rbstp.dev>
 
 ## Requirements
 
-- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5; collied also lists the agents and status of a running herdr-core 0.1.16 (Herdr 2)
+- An Apple silicon Mac, or an x86_64 Linux machine with a systemd user manager, running herdr 0.9.5, herdr-core 0.1.16 (Herdr 2), or both
 - An iPhone on iOS 26 or later; an Apple Watch on watchOS 26 or later is optional
 - A personal Tailscale account
 - An Apple Developer account to build the app, and an APNs key for push notifications
 
-Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, and on Linux only on Arch Linux with Omarchy. [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
+Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, and on Linux only on Arch Linux with Omarchy. In Herdr 2, collie does what it does in herdr, except that it cannot bring an agent to the front on the desktop, it starts tasks there only while herdr is not running, and it only reads agents that report no status there, such as Copilot CLI. [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
 
 ## Quick start
 

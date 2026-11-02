@@ -21,7 +21,7 @@ pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
 /// Every method collied calls. The API also runs programs and writes files on other machines,
 /// stores documents and stops the core; none of that is ever called.
-pub const METHODS: [&str; 10] = [
+pub const METHODS: [&str; 11] = [
     "hello",
     "server.status",
     "events.subscribe",
@@ -32,7 +32,33 @@ pub const METHODS: [&str; 10] = [
     "terminal.read",
     "terminal.send",
     "terminal.keys",
+    "terminal.run",
 ];
+/// herdr's and Claude Code's session variables, which a core passes from whatever started
+/// it to every terminal: herdr's hooks would report a herdr-core agent's session against the
+/// starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION` saves no transcript.
+/// Named, not matched by pattern, so variables the user chose (`CLAUDE_CONFIG_DIR`) stay.
+pub const STRIPPED: [&str; 16] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_BIN_PATH",
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+/// The kinds a task starts in herdr-core: those that report OSC 7501, without which nothing
+/// says the agent is ready or what dialog it shows.
+pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
 const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
@@ -67,6 +93,27 @@ const SIZE_CHECK: Duration = Duration::from_millis(500);
 
 pub fn owns(id: &str) -> bool {
     id.starts_with(PREFIX)
+}
+
+/// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
+/// matches one. A path holding `=` would be read as a variable by `env`.
+pub fn cli(kind: &str) -> Option<PathBuf> {
+    if !TASK_KINDS.contains(&kind) {
+        return None;
+    }
+    crate::usage::program(kind).filter(|p| p.to_str().is_some_and(|s| !s.contains('=')))
+}
+
+/// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since `terminal.run`'s
+/// `env` is set on top of the core's environment and cannot remove a variable.
+fn task_argv(cli: &Path, args: &[&str]) -> Option<Vec<String>> {
+    let mut argv = vec!["/usr/bin/env".to_owned()];
+    for name in STRIPPED {
+        argv.extend(["-u".to_owned(), name.to_owned()]);
+    }
+    argv.push(cli.to_str()?.to_owned());
+    argv.extend(args.iter().map(|a| (*a).to_owned()));
+    Some(argv)
 }
 
 /// Where `hc` would find the core, from `var` (collied's own environment): `HC_SOCKET`, else
@@ -604,6 +651,10 @@ impl Core {
         crate::lock(&self.inner)
     }
 
+    pub fn following(&self) -> bool {
+        self.lock().live.is_some()
+    }
+
     /// herdr's hooks exit without `HERDR_PANE_ID`, so herdr-core agents get their session
     /// here: Claude Code's from the file its foreground process keeps, Codex's from the hook.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
@@ -996,6 +1047,42 @@ impl Core {
                 tokio::time::sleep(RETRY_FIRST).await;
             }
         }
+    }
+
+    /// A task agent in a terminal of its own, with no parent to notify; returns its id. The
+    /// terminal identity goes in `env`, as the core asks its clients to pass it.
+    pub async fn start(
+        &self,
+        cwd: &str,
+        name: &str,
+        cli: &Path,
+        args: &[&str],
+    ) -> Result<String, Error> {
+        #[derive(Deserialize)]
+        struct Run {
+            address: String,
+        }
+        let group = (self.lock().live.as_ref())
+            .map(|live| live.group.clone())
+            .ok_or(Error::Closed)?;
+        let argv = task_argv(cli, args)
+            .ok_or_else(|| Error::Unsupported("the agent's path is not UTF-8".to_owned()))?;
+        let mut conn = Conn::open(&self.socket).await?;
+        let run: Run = conn
+            .call(
+                "terminal.run",
+                json!({
+                    "argv": argv, "cwd": cwd, "name": name,
+                    "env": {"TERM": "xterm-256color", "COLORTERM": "truecolor"},
+                    "no_parent": true, "no_notify": true,
+                }),
+                TIMEOUT,
+            )
+            .await?;
+        if !local(&run.address) {
+            return Err(not_found());
+        }
+        Ok(format!("{group}:{}", run.address))
     }
 
     /// Only a terminal collied lists.
@@ -1483,11 +1570,16 @@ mod tests {
         let lacking = hello(1, "0.1.16", &METHODS[..7]);
         assert_eq!(
             lacking.missing(),
-            ["terminal.read", "terminal.send", "terminal.keys"]
+            [
+                "terminal.read",
+                "terminal.send",
+                "terminal.keys",
+                "terminal.run"
+            ]
         );
         assert_eq!(
             lacking.problem().as_deref(),
-            Some("lacks terminal.read, terminal.send, terminal.keys")
+            Some("lacks terminal.read, terminal.send, terminal.keys, terminal.run")
         );
         let mut odd = hello(1, "0.1.16", &METHODS);
         odd.core.id = "../x".into();
@@ -2182,29 +2274,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archive_refuses_a_herdr_core_agent() {
+    async fn archive_closes_a_herdr_core_agent() {
         let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("core.sock");
+        let seen = fake_core(&socket, |method| match method {
+            "terminal.kill" => json!({"address": "t1"}),
+            "terminal.rm" => json!({"removed": "t1"}),
+            _ => Value::Null,
+        })
+        .await;
         let drive = crate::drive::Driver::new(
             dir.path().join("herdr.sock"),
             vec![],
             &[dir.path().to_owned()],
         )
         .unwrap()
-        .with_core(Some(followed(dir.path().join("core.sock"))));
+        .with_core(Some(followed(socket)));
         let yes: crate::drive::Authorized = Arc::new(|| true);
         let archive = |id: String| protocol::TaskArchiveParams {
             op_id: protocol::OpId::new("a".repeat(22)).unwrap(),
             terminal_id: protocol::TerminalId::new(id).unwrap(),
             confirm: true,
         };
+        let Ok(protocol::Response::TaskArchived { message }) = drive
+            .task_archive(archive(format!("hc:{ID}:t1")), &yes)
+            .await
+        else {
+            panic!("not archived");
+        };
+        assert!(message.starts_with("Closed pane."), "{message}");
+        let calls: Vec<Value> = crate::lock(&seen).calls.clone();
         assert_eq!(
-            drive
-                .task_archive(archive(format!("hc:{ID}:t1")), &yes)
-                .await,
-            Err((
-                protocol::ErrorCode::Internal,
-                crate::runtime::NOT_YET.to_owned()
-            ))
+            calls,
+            [
+                json!({"method": "terminal.kill", "params": {"terminal": "t1"}}),
+                json!({"method": "terminal.rm", "params": {"terminal": "t1"}}),
+            ]
         );
         assert_eq!(
             drive
@@ -2214,6 +2319,96 @@ mod tests {
                 .0,
             protocol::ErrorCode::HerdrUnavailable
         );
+    }
+
+    #[tokio::test]
+    async fn a_task_agent_starts_without_the_starters_session_variables() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("core.sock");
+        let seen = fake_core(&socket, |method| match method {
+            "terminal.run" => json!({"address": "t2", "state": "live"}),
+            _ => Value::Null,
+        })
+        .await;
+        let core = followed(socket);
+        let cli = Path::new("/opt/bin/codex");
+        let args = super::super::herdr::agent_args("codex", Some(SESSION), false);
+        assert_eq!(
+            core.start("/w", "collie-0a1b2c3d", cli, &args)
+                .await
+                .unwrap(),
+            format!("hc:{ID}:t2")
+        );
+        let calls = crate::lock(&seen).calls.clone();
+        let params = &calls[0]["params"];
+        let argv: Vec<&str> = params["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        let mut expected = vec!["/usr/bin/env"];
+        for name in STRIPPED {
+            expected.extend(["-u", name]);
+        }
+        expected.extend(["/opt/bin/codex", "resume", SESSION, "--no-daemon"]);
+        assert_eq!(argv, expected);
+        assert_eq!(STRIPPED.len(), 16);
+        assert_eq!(
+            (
+                &params["cwd"],
+                &params["name"],
+                &params["no_parent"],
+                &params["no_notify"]
+            ),
+            (
+                &json!("/w"),
+                &json!("collie-0a1b2c3d"),
+                &json!(true),
+                &json!(true)
+            )
+        );
+        assert_eq!(
+            params["env"],
+            json!({"TERM": "xterm-256color", "COLORTERM": "truecolor"})
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("codex", None, false),
+            ["--no-daemon"]
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("claude", Some(SESSION), true),
+            ["--resume", SESSION, "--settings", r#"{"ultracode":true}"#]
+        );
+        assert!(super::cli("copilot").is_none());
+    }
+
+    #[tokio::test]
+    async fn tasks_start_in_herdr_while_it_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let herdr = dir.path().join("herdr.sock");
+        let rt =
+            Runtime::new(herdr.clone()).with_core(Some(followed(dir.path().join("core.sock"))));
+        assert!(rt.task_core().await.is_some(), "herdr does not answer");
+        let unfollowed = Runtime::new(herdr.clone())
+            .with_core(Some(Arc::new(Core::new(dir.path().join("core.sock")))));
+        assert!(unfollowed.task_core().await.is_none());
+
+        let listener = tokio::net::UnixListener::bind(&herdr).unwrap();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (reader, mut writer) = stream.into_split();
+                let mut line = String::new();
+                BufReader::new(reader).read_line(&mut line).await.unwrap();
+                let id = serde_json::from_str::<Value>(&line).unwrap()["id"].clone();
+                let pong = json!({"id": id, "result": {"type": "pong", "version": "0.9.5", "protocol": 1}});
+                writer
+                    .write_all(format!("{pong}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        assert!(rt.task_core().await.is_none(), "herdr answers");
     }
 
     #[tokio::test]

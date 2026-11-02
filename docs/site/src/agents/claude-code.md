@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | 5-hour and weekly, with the [status line tap](../install/claude-code.md#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | [Slash command menu](#slash-commands), [notice buttons](#notices), [draft sync](#draft-sync) and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | Yes |
-| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode |
+| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode, in herdr or [Herdr 2](../app/new-task.md#herdr-2) |
 
 ## Set up
 

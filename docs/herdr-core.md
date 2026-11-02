@@ -1,6 +1,6 @@
 # herdr-core (Herdr 2) backend plan
 
-Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. This page is the plan, the evidence behind it and the follow-up issues. Phases 1 (the runtime boundary, #631), 2 (agents and status, #632), 3 (screens, #633), 4 (input and approvals, #634) and 5 (sessions, #635) are built; what collied does is in [architecture.md](architecture.md#herdr-core-herdr-2). herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
+Spike for [#629](https://github.com/rbstp/collie/issues/629), 2026-11-01. This page is the plan, the evidence behind it and the follow-up issues. All six phases are built: 1 (the runtime boundary, #631), 2 (agents and status, #632), 3 (screens, #633), 4 (input and approvals, #634), 5 (sessions, #635) and 6 (tasks, #636); what collied does is in [architecture.md](architecture.md#herdr-core-herdr-2). herdr's own behavior is in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket).
 
 ## Summary
 
@@ -292,8 +292,8 @@ Claude Code's session from `~/.claude/sessions/<pid>.json` for the terminal's fo
 
 New task, resume, worktree and pull request worktree tasks, and archive, through `terminal.run`, `git worktree` and `terminal.kill`, used only when herdr does not answer.
 
-- [ ] With herdr stopped, New task starts Claude Code and Codex in herdr-core, in a worktree when asked.
-- [ ] Agents start through `/usr/bin/env -u` with every name in the plan's fixed list (the six `HERDR_*` variables, `CLAUDECODE`, the seven `CLAUDE_CODE_*` session variables, `CLAUDE_EFFORT` and `CLAUDE_PID`, sixteen names), so none reaches them from a core that holds them, and Claude Code saves its transcript.
-- [ ] Archive kills the task's terminals and removes its worktree.
-- [ ] With both running, tasks still start in herdr.
-- [ ] Live tests run a core in their own `HC_SESSION` with scratch XDG paths, and never start, stop or touch the user's core.
+- [x] With herdr stopped, New task starts Claude Code and Codex in herdr-core, in a worktree when asked.
+- [x] Agents start through `/usr/bin/env -u` with every name in the plan's fixed list (the six `HERDR_*` variables, `CLAUDECODE`, the seven `CLAUDE_CODE_*` session variables, `CLAUDE_EFFORT` and `CLAUDE_PID`, sixteen names), so none reaches them from a core that holds them, and Claude Code saves its transcript.
+- [x] Archive kills the task's terminals and removes its worktree.
+- [x] With both running, tasks still start in herdr.
+- [x] Live tests run a core in their own `HC_SESSION` with scratch XDG paths, and never start, stop or touch the user's core.

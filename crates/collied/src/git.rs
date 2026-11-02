@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::drive::{Fail, resolve_cwd};
+use crate::runtime::herdr::{WorktreeInfo, WorktreeList, WorktreeSource};
 
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
@@ -226,6 +227,57 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
         }
     }
     Ok(list)
+}
+
+/// What herdr's `worktree.list` answers, for a herdr-core task: the main checkout is the
+/// first entry and the source, every other entry a linked worktree.
+pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
+    let (out, ok, truncated) = git_command(
+        cwd,
+        &["worktree", "list", "--porcelain", "-z"],
+        256 * 1024,
+        &[],
+    )
+    .await?;
+    if !ok || truncated {
+        return Err(error("Git could not list the worktrees"));
+    }
+    let lines: Vec<&[u8]> = out.split(|b| *b == 0).collect();
+    let mut worktrees: Vec<WorktreeInfo> = Vec::new();
+    for record in lines.split(|line| line.is_empty()) {
+        let mut path = None;
+        let mut branch = None;
+        let mut bare = false;
+        for line in record {
+            if let Some(p) = line.strip_prefix(b"worktree ") {
+                path = std::str::from_utf8(p).ok().map(str::to_owned);
+            } else if let Some(name) = line.strip_prefix(b"branch refs/heads/") {
+                branch = std::str::from_utf8(name).ok().map(str::to_owned);
+            } else if *line == b"bare" {
+                bare = true;
+            }
+        }
+        if let Some(path) = path {
+            worktrees.push(WorktreeInfo {
+                path,
+                branch,
+                open_workspace_id: None,
+                is_bare: bare,
+                is_linked_worktree: !worktrees.is_empty(),
+            });
+        }
+    }
+    let source_checkout_path = worktrees
+        .first()
+        .ok_or_else(|| error("Git listed no worktree"))?
+        .path
+        .clone();
+    Ok(WorktreeList {
+        source: WorktreeSource {
+            source_checkout_path,
+        },
+        worktrees,
+    })
 }
 
 /// The phone may only pick a worktree collied itself listed for the agent's repository.

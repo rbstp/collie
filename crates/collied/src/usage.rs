@@ -207,7 +207,8 @@ fn codex_account(response: &Value) -> Result<bool, CodexUsageError> {
     }
 }
 
-pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> {
+/// `name` in collied's `PATH`, then where installers put it, as an absolute path.
+pub(crate) fn program(name: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .into_iter()
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
@@ -220,11 +221,13 @@ pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> 
     if let Ok(home) = crate::config::home_dir() {
         dirs.extend([home.join(".cargo/bin"), home.join(".local/bin")]);
     }
-    let bin = dirs
-        .into_iter()
-        .map(|dir| dir.join("codex"))
+    dirs.into_iter()
+        .map(|dir| dir.join(name))
         .find(|path| path.is_file())
-        .ok_or(CodexUsageError)?;
+}
+
+pub async fn fetch_codex_usage() -> Result<Option<CodexUsage>, CodexUsageError> {
+    let bin = program("codex").ok_or(CodexUsageError)?;
     let mut child = tokio::process::Command::new(bin)
         .arg("app-server")
         .stdin(Stdio::piped())

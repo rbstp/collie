@@ -1,6 +1,6 @@
 # collie
 
-collie lets you watch and steer your [herdr](https://github.com/herdrdev/herdr) coding agents from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where herdr runs, and the Collie app reaches it over your own tailnet.
+collie lets you watch and steer your coding agents in [herdr](https://github.com/herdrdev/herdr) and herdr-core (Herdr 2) from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where they run, and the Collie app reaches it over your own tailnet.
 
 <div class="screenshots">
 <img class="screenshot-light" src="images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: six agents, one blocked on an approval">
