@@ -143,10 +143,11 @@ ios-project: ios-ghostty
 ios-build-sim: ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' CODE_SIGNING_ALLOWED=NO build
 
-ios-test diagnostics="on-failure": ios-framework ios-project
+ios-test diagnostics="on-failure" workers="": ios-framework ios-project
     swift test --package-path Collie/GhosttyTerminal
     cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
-    {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
+    {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' \
+        {{ if workers == "" { "" } else { "-parallel-testing-enabled YES -parallel-testing-worker-count " + workers } }} CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
 # With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>.

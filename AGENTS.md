@@ -76,6 +76,7 @@ docs/site/check-site.sh /tmp/collie-site
 - Commit messages and pull request titles are plain sentences: imperative, sentence case, no type prefix, no trailing period, like the existing history ("Keep a merged pull request until the branch moves").
 - Merging a pull request into `master` uploads a TestFlight build. Put `[skip-release]` in the title of a pull request that should not ship one (docs, CI, tests only).
 - Pull requests that change only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` skip the macOS `rust` and `ios` CI jobs (the `changes` job in `.github/workflows/ci.yml`). Any other path runs them; tests read `docs/protocol/` and `docs/tailnet.md`.
+- The `ios` job also runs only for pull requests that touch what the app builds from or its tests read: `Collie/`, `crates/` `collie-core`, `protocol`, `tailnet`, `tls`, `tailscale-sys` and `uniffi-bindgen`, `crates/collied/tests/fixtures/`, `docs/protocol/`, `scripts/ghostty/`, `scripts/notices.py`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `about.toml`, `.gitmodules`, the `justfile` and `ci.yml`. A collied-only pull request skips it; pushes to `master` run it. When the app starts reading another path, add it to that list in the `changes` job.
 - Keep published iOS, collied, CollieBar and CollieTray releases on the same version, tag and source commit, including UI-only changes.
 - Release details, signing and secrets: `docs/release.md`.
 

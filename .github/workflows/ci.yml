@@ -22,12 +22,13 @@ permissions:
   contents: read
 
 jobs:
-  # rust and ios are required checks, so a site-only pull request skips them with if
+  # rust and ios are required checks, so a pull request skips them with if
   # (a skipped job passes) rather than with paths-ignore (which would leave them pending).
   changes:
     runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      ios: ${{ steps.diff.outputs.ios }}
 
     steps:
       - name: checkout
@@ -46,6 +47,7 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "ios=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
@@ -55,6 +57,12 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+          # What the app builds from or its tests read (PreviewTests reads collied's fixtures).
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^(Collie/|crates/(collie-core|protocol|tailnet|tls|tailscale-sys|uniffi-bindgen)/|crates/collied/tests/fixtures/|docs/protocol/|scripts/ghostty/|scripts/notices\.py$|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|about\.toml$|justfile$)'; then
+            echo "ios=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ios=false" >> "$GITHUB_OUTPUT"
           fi
 
   rust:
@@ -136,7 +144,7 @@ jobs:
 
   ios:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code != 'false') }}
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ios != 'false') }}
     runs-on: xcode-27
 
     steps:
@@ -145,10 +153,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
-
-      # Overlaps the simulator's first boot on a fresh runner with the builds below.
-      - name: boot the simulator
-        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
       # setup-go otherwise unpacks Go from scratch on every macOS runner.
       - name: cache the Go toolchain
@@ -167,6 +171,11 @@ jobs:
 
       - name: install the rust toolchain
         run: rustup toolchain install
+
+      # Overlaps the simulator's first boot on a fresh runner with the builds below. Started any
+      # earlier, it held set up go at 125 to 230 s, against 3 s in the rust job.
+      - name: boot the simulator
+        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
 
       - name: cache cargo and go builds
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -219,7 +228,7 @@ jobs:
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test
-        run: just --no-deps ios-test never
+        run: just --no-deps ios-test never 3
 
   desktop-packaging:
     runs-on: ubuntu-24.04
