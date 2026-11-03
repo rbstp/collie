@@ -1524,6 +1524,16 @@ impl Driver {
                     let message = startup_prompt(&p.agent, screen.as_deref());
                     return fail(ErrorCode::AgentBlocked, message);
                 }
+            } else if runtime::herdr_core::owns(&pane.pane_id) {
+                // herdr-core has no screen rules: a Claude Code that reported idle beside a
+                // dialog (an MCP server approval) would take the prompt's Enter as its answer.
+                let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
+                if screen
+                    .as_deref()
+                    .is_none_or(|s| prompt::Menu::parse(s).is_some())
+                {
+                    return fail(ErrorCode::AgentBlocked, STARTUP_PROMPT);
+                }
             }
             authorized(auth)?;
             self.runtime
@@ -1627,6 +1637,13 @@ impl Driver {
             w.path == path.as_str() && w.is_linked_worktree && !w.is_bare && w.branch == branch
         }) {
             return Err(left(invalid("git lists a different checkout")));
+        }
+        // One task per checkout, as herdr keeps one workspace per worktree: archiving one
+        // would end the other and remove its checkout.
+        let occupied = (core.occupants().unwrap_or_default().iter())
+            .any(|o| o.worktree.as_deref() == Some(path.as_str()));
+        if occupied {
+            return Err(left(invalid("the worktree root pane is occupied")));
         }
         self.start_core_task(core, p, path, Some(path), auth)
             .await
@@ -2131,12 +2148,11 @@ impl Driver {
         })
     }
 
-    /// Like herdr's `worktree.remove`, which closes the worktree's whole workspace: every
-    /// task terminal working in the checkout ends, then the checkout goes. Nothing is closed
-    /// while anything else may work in it: a herdr-core terminal collied did not start, shells
-    /// included, a herdr pane, or a herdr workspace that has it open, and herdr must answer
-    /// unless it is not running at all. A terminal working in it is one whose start or
-    /// foreground folder, with symlinks resolved, lies in it.
+    /// Like herdr's `worktree.remove`: the task's terminal ends, then the checkout goes.
+    /// Nothing is closed while anything else may work in it: any other herdr-core terminal,
+    /// shells and other tasks included, a herdr pane, or a herdr workspace that has it open,
+    /// and herdr must answer unless it is not running at all. A terminal working in it is one
+    /// whose start or foreground folder, with symlinks resolved, lies in it.
     async fn archive_core_worktree(
         &self,
         terminal_id: &str,
@@ -2191,36 +2207,28 @@ impl Driver {
         if occupants.iter().any(|o| !o.task) {
             return refused("a terminal collie did not start works in this checkout");
         }
-        // Only the terminals of this worktree task end with it: another task in the checkout,
-        // such as a Resume there, has work of its own.
-        if (occupants.iter()).any(|o| o.worktree.as_deref() != Some(checkout.as_str())) {
+        // Only this task's terminal ends with it: another task in the checkout, such as a
+        // Resume there, has work of its own.
+        if occupants.iter().any(|o| o.id != terminal_id) {
             return refused("another task works in this checkout");
         }
-        let mut closed: Vec<&str> = Vec::new();
-        let stopped = |closed: &[&str], (code, message): Fail| {
-            let done = if closed.is_empty() {
-                String::new()
-            } else {
-                format!(" Closed {} before that.", closed.join(", "))
-            };
+        let left = |(code, message): Fail| {
             (
                 code,
-                format!("{message}; the checkout was left in place and gh poi was skipped.{done}"),
+                format!("{message}; the checkout was left in place and gh poi was skipped."),
             )
         };
-        for o in &occupants {
-            authorized(auth).map_err(|e| stopped(&closed, e))?;
-            if let Err(error) = self.runtime.pane_close(&o.id).await {
-                let (code, message) = herdr_fail(error);
-                let failure = (
-                    code,
-                    format!("Archive could not close agent {} ({message})", o.id),
-                );
-                return Err(stopped(&closed, failure));
-            }
-            closed.push(&o.id);
+        authorized(auth).map_err(left)?;
+        if let Err(error) = self.runtime.pane_close(terminal_id).await {
+            let (code, message) = herdr_fail(error);
+            return Err(left((
+                code,
+                format!("Archive could not close agent {terminal_id} ({message})"),
+            )));
         }
-        authorized(auth).map_err(|e| stopped(&closed, e))?;
+        authorized(auth).map_err(|(code, message)| {
+            (code, format!("{message}; agent {terminal_id} was closed, the checkout was left in place and gh poi was skipped."))
+        })?;
         let removed = git_worktree(
             repo,
             &["remove", "--force", checkout.as_str()],
@@ -2233,15 +2241,13 @@ impl Driver {
             return fail(
                 ErrorCode::Internal,
                 format!(
-                    "Worktree removal failed ({message}) after closing {}; gh poi was skipped.",
-                    closed.join(", ")
+                    "Worktree removal failed ({message}) after closing {terminal_id}; gh poi was skipped."
                 ),
             );
         }
         Ok(format!(
-            "Removed worktree checkout {} and closed {}.",
-            checkout.as_str(),
-            closed.join(", ")
+            "Removed worktree checkout {} and closed {terminal_id}.",
+            checkout.as_str()
         ))
     }
 
@@ -2362,6 +2368,8 @@ async fn add_worktree(source: &Cwd, branch: &str, path: &Cwd) -> Result<(), Fail
         .map_err(|message| {
             let left = if Path::new(path.as_str()).symlink_metadata().is_ok() {
                 format!("checkout path {} now exists", path.as_str())
+            } else if exists {
+                "the branch was there before".to_owned()
             } else {
                 "the branch may remain".to_owned()
             };

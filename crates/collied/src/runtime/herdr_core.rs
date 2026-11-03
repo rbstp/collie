@@ -2709,54 +2709,44 @@ mod tests {
     async fn archive_leaves_a_worktree_another_task_works_in() {
         let (_dir, root, _, checkout) = worktree();
         let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
-        // A Resume started in the checkout: collied's, but not this worktree task's.
-        let resume = task_in("t2", &checkout, json!({"collie.kind": "claude"}));
-        let core = core_of(
-            &root,
-            json!([codex_in(&checkout, worktree_task(&checkout)), resume]),
-        );
-        let (_, message) = archive(&root, core).await.unwrap_err();
-        assert!(
-            message.contains("another task works in this checkout"),
-            "{message}"
-        );
-        assert!(checkout.exists());
+        // A Resume started in the checkout, and a second task that recorded it too.
+        for other in [
+            task_in("t2", &checkout, json!({"collie.kind": "claude"})),
+            task_in("t2", &checkout, worktree_task(&checkout)),
+        ] {
+            let core = core_of(
+                &root,
+                json!([codex_in(&checkout, worktree_task(&checkout)), other]),
+            );
+            let (_, message) = archive(&root, core).await.unwrap_err();
+            assert!(
+                message.contains("another task works in this checkout"),
+                "{message}"
+            );
+            assert!(checkout.exists());
+        }
         assert!(methods(&seen).is_empty());
     }
 
     #[tokio::test]
-    async fn archive_names_the_agents_it_closed_before_one_failed() {
-        static KILLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    async fn archive_keeps_the_checkout_when_the_agent_does_not_close() {
         let (_dir, root, _, checkout) = worktree();
-        let seen = fake_core(&root.join("core.sock"), |method| match method {
-            "terminal.kill" if KILLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 => {
-                Value::Null
-            }
-            other => kill_and_rm(other),
-        })
-        .await;
-        let both = json!([
-            codex_in(&checkout, worktree_task(&checkout)),
-            task_in("t2", &checkout, worktree_task(&checkout)),
-        ]);
-        let (_, message) = archive(&root, core_of(&root, both)).await.unwrap_err();
+        let seen = fake_core(&root.join("core.sock"), |_| Value::Null).await;
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        let (_, message) = archive(&root, core).await.unwrap_err();
         assert!(
-            message.contains(&format!("could not close agent hc:{ID}:t2")),
+            message.contains(&format!("could not close agent hc:{ID}:t1")),
             "{message}"
         );
         assert!(
-            message.contains(&format!("Closed hc:{ID}:t1 before that.")),
+            message.contains("the checkout was left in place"),
             "{message}"
         );
-        assert!(checkout.exists(), "the checkout stays");
-        assert_eq!(
-            methods(&seen),
-            [
-                json!("terminal.kill"),
-                json!("terminal.rm"),
-                json!("terminal.kill")
-            ]
-        );
+        assert!(checkout.exists());
+        assert_eq!(methods(&seen), [json!("terminal.kill")]);
     }
 
     #[tokio::test]

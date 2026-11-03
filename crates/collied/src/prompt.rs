@@ -189,9 +189,9 @@ pub fn shows_dialog(text: &str) -> bool {
 }
 
 /// A startup dialog on a screen whose program reported no status yet: Codex's update picker,
-/// or an option under a cursor (`❯` or `›`) beside another option. Codex repaints a resumed
-/// session's prompts after `›`, so a prompt reading `1. ...` or naming folder trust, with no
-/// option beside it, does not count.
+/// or an option under a cursor (`❯` or `›`) beside another option, with no `›` line below
+/// it. Codex repaints a resumed session's prompts after `›` above its composer, also a `›`
+/// line, while a dialog replaces the composer.
 pub fn startup_dialog(text: &str) -> bool {
     let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
     let option = |l: &str| option_line(l.strip_prefix('›').unwrap_or(l)).is_some();
@@ -202,6 +202,7 @@ pub fn startup_dialog(text: &str) -> bool {
     codex_update(text)
         || (0..lines.len()).any(|i| {
             cursor(lines[i])
+                && !lines[i + 1..].iter().any(|l| l.starts_with('›'))
                 && [i.checked_sub(1), Some(i + 1)]
                     .into_iter()
                     .flatten()
@@ -2003,6 +2004,9 @@ mod tests {
         assert!(!startup_dialog(history));
         assert!(!startup_dialog("› 1. Read the tests first\n\n• Reading.\n"));
         assert!(!startup_dialog("› do you trust this folder now?\n"));
+        assert!(!startup_dialog(
+            "› 1. Read the tests\n  2. Fix the flake\n\n• Done.\n\n› Ask Codex to do anything\n"
+        ));
         assert!(startup_dialog(
             "  Do you trust the files in this folder?\n\n› 1. Yes, continue\n  2. No, quit\n"
         ));
