@@ -26,6 +26,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut wrap = Wrap::default();
     let mut numbered = None;
     let mut items = Vec::new();
+    let mut nested = false;
     let (mut plain, mut tail) = (String::new(), String::new());
     let rows: Vec<&str> = ansi.split('\n').collect();
     for (i, &row) in rows.iter().enumerate() {
@@ -36,12 +37,14 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
         if s.is_empty() {
+            nested |= matches!(prev, Prev::Held) || !items.is_empty();
             prev = Prev::Start;
             items.clear();
             continue;
         }
         if ind == 0 {
             items.clear();
+            nested = false;
             if let Some(text) = s.strip_prefix("❯ ").filter(|_| shaded_start(row)) {
                 (prose, prompt) = (false, Some(ends_in_space(row, false)));
                 prev = row_above(&mut tail, text, 2);
@@ -142,10 +145,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 row_above(&mut tail, s, ind)
             }
             Prev::Start => {
-                // Claude Code keeps a paragraph's leading spaces on its first row only.
-                if ind > 2 {
+                // Claude Code keeps a paragraph's leading spaces on its first row only. After a
+                // list or held rows, such as code, an indented row may belong to them instead.
+                if ind > 2 && !nested {
                     numbered = Some((2, format!("{}{s}", " ".repeat(ind - 2))));
                 }
+                nested &= ind > 2;
                 row_above(&mut tail, s, ind)
             }
             Prev::Row(..) | Prev::Held => Prev::Held,
@@ -676,7 +681,7 @@ mod tests {
     fn captured_paragraphs_with_a_first_line_indent_join_and_quotes_keep_their_rows() {
         let reply = include_str!("../tests/fixtures/claude-2.1.317/indented-paragraphs.ansi.txt");
         assert_eq!(claude_rule_columns(reply, 93), Some(91));
-        let rows = [1, 4, 5, 16, 17, 18, 19, 28, 29];
+        let rows = [1, 4, 5, 16, 17, 18, 19];
         assert_eq!(soft_wraps(reply, 91), (rows.to_vec(), vec![]));
     }
 
@@ -690,6 +695,38 @@ mod tests {
             "  ▎ the edge of the row.",
         ];
         assert_eq!(wraps(&rows, 40), [1]);
+    }
+
+    #[test]
+    fn an_indented_row_after_a_list_or_held_rows_keeps_its_own_indent() {
+        let rows = [
+            "⏺ Example:",
+            "",
+            "  def f():",
+            "      x = 1",
+            "",
+            "      return compute(argument_one, two)",
+            "  print(f())",
+        ];
+        assert_eq!(wraps(&rows, 40), [] as [u32; 0]);
+        let two_space = [
+            "⏺ Example:",
+            "",
+            "  def f():",
+            "    x = 1",
+            "",
+            "    return compute(argument_one, two, three)",
+            "  print(f())",
+        ];
+        assert_eq!(wraps(&two_space, 46), [] as [u32; 0]);
+        let rows = [
+            "⏺ Steps:",
+            "  1. Build it.",
+            "",
+            "     Then the second paragraph goes on until it",
+            "  npm run build",
+        ];
+        assert_eq!(wraps(&rows, 48), [] as [u32; 0]);
     }
 
     #[test]
