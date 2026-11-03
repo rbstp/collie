@@ -688,13 +688,20 @@ mod tests {
     }
 
     #[test]
-    fn a_lettered_marker_outside_a_list_is_prose() {
+    fn a_lettered_marker_is_an_item_only_at_an_items_text_indent() {
         let rows = [
             "⏺ The case that matters most here is Roe",
             "  v. Wade which the court cited again and",
             "  again.",
         ];
         assert_eq!(wraps(&rows, 41), [1, 2]);
+        let rows = [
+            "⏺ Notes:",
+            "  1. The case that matters the most: Roe",
+            "     v. Wade which the court cited again",
+            "     and again.",
+        ];
+        assert_eq!(wraps(&rows, 41), [] as [u32; 0]);
     }
 
     #[test]
