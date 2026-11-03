@@ -3303,8 +3303,9 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
-        let sent = (crate::lock(&seen).calls.iter()).any(|c| c["method"] == "terminal.send");
-        assert!(!sent, "no prompt was typed");
+        let typed = (crate::lock(&seen).calls.iter())
+            .any(|c| c["method"] == "terminal.send" || c["method"] == "terminal.keys");
+        assert!(!typed, "no prompt or key was typed");
     }
 
     #[tokio::test]

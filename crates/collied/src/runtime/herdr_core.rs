@@ -116,7 +116,10 @@ pub fn cli(kind: &str) -> Option<String> {
     if !TASK_KINDS.contains(&kind) {
         return None;
     }
+    // `program` joins folders under `$HOME`, which may be relative; `env` would resolve a
+    // relative path against the task's folder.
     crate::usage::program(kind)
+        .filter(|p| p.is_absolute())
         .and_then(|p| p.into_os_string().into_string().ok())
         .filter(|p| !p.contains('='))
 }
@@ -2497,7 +2500,7 @@ pub(crate) mod tests {
         });
     }
 
-    pub(crate) fn git(dir: &Path, args: &[&str]) {
+    fn git(dir: &Path, args: &[&str]) {
         let out = std::process::Command::new("git")
             .current_dir(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -2574,7 +2577,7 @@ pub(crate) mod tests {
         drive.task_archive(archive_params(), &auth).await
     }
 
-    pub(crate) fn kill_and_rm(method: &str) -> Value {
+    fn kill_and_rm(method: &str) -> Value {
         match method {
             "terminal.kill" => json!({"address": "t1"}),
             "terminal.rm" => json!({"removed": "t1"}),
@@ -2582,7 +2585,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn methods(seen: &Arc<Mutex<Seen>>) -> Vec<Value> {
+    fn methods(seen: &Arc<Mutex<Seen>>) -> Vec<Value> {
         (crate::lock(seen).calls.iter())
             .map(|c| c["method"].clone())
             .collect()
