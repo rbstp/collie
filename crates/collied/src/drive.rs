@@ -44,9 +44,9 @@ const WATCH_IDLE: Duration = Duration::from_secs(1);
 const WATCH_QUIET: Duration = Duration::from_secs(5);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
-/// herdr-core tasks run `git worktree` themselves. With the start's 30 s this fits the
-/// phone's 90 s for `task.new`, but not always beside a pull request's 75 s fetch budget,
-/// which the phone gives 165 s.
+/// herdr-core tasks run `git worktree` themselves. With the start's 30 s and the reads
+/// around them, a slow `git worktree add` can outlast the phone's wait for `task.new` (90 s,
+/// 165 s with a pull request); the task still completes on the machine.
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(45);
 /// As herdr's own `worktree.remove`.
 const WORKTREE_REMOVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -3179,6 +3179,172 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::runtime::herdr_core::tests as core_tests;
+
+    const NAME: &str = "collie-0000aaaa";
+    const DIALOG: &str = "\
+────────────────────────────────────────
+ Bash command
+
+   rm -rf build
+   Remove the build directory
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands
+   3. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend · ctrl+e to explain
+";
+
+    /// A Claude Code collied started as `NAME` in t1, with `status`, in the state `state`.
+    fn claude(cwd: &Path, status: serde_json::Value, state: &str) -> serde_json::Value {
+        let mut t = core_tests::terminal("t1", status, "claude");
+        t["name"] = serde_json::json!(NAME);
+        t["state"] = serde_json::json!(state);
+        t["cwd"] = serde_json::json!(cwd);
+        t
+    }
+
+    fn core_driver(root: &Path, core: Arc<Core>) -> Driver {
+        Driver::new(
+            root.join("herdr.sock"),
+            vec![AgentKind::new("claude").unwrap()],
+            &[root.to_owned()],
+        )
+        .unwrap()
+        .with_core(Some(core))
+    }
+
+    fn core_id() -> String {
+        format!("hc:{}:t1", core_tests::ID)
+    }
+
+    #[tokio::test]
+    async fn a_claude_code_with_no_status_and_a_menu_on_screen_fails_its_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(Path::new("/w"), serde_json::Value::Null, "live"),
+            "terminal.read" => serde_json::json!({"text": DIALOG}),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let t = claude(Path::new("/w"), serde_json::Value::Null, "live");
+        let core = core_tests::core_of(&root, serde_json::json!([t]));
+        let drive = core_driver(&root, core.clone());
+        let kind = AgentKind::new("claude").unwrap();
+        let failed = drive
+            .core_agent_ready(&core, &core_id(), NAME, &kind)
+            .await
+            .unwrap_err();
+        assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_exits_before_it_is_listed_fails_its_start_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(Path::new("/w"), serde_json::Value::Null, "finished"),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let t = claude(Path::new("/w"), serde_json::Value::Null, "finished");
+        let core = core_tests::core_of(&root, serde_json::json!([t]));
+        let drive = core_driver(&root, core.clone());
+        let kind = AgentKind::new("claude").unwrap();
+        let started = tokio::time::Instant::now();
+        let failed = drive
+            .core_agent_ready(&core, &core_id(), NAME, &kind)
+            .await
+            .unwrap_err();
+        assert_eq!(failed.1, "agent exited before becoming interactive");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn no_prompt_reaches_an_idle_claude_code_that_shows_a_menu_in_herdr_core() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let idle = || serde_json::json!({"state": "idle", "app": "claude-code"});
+        let seen = core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(
+                Path::new("/w"),
+                serde_json::json!({"state": "idle", "app": "claude-code"}),
+                "live",
+            ),
+            "terminal.read" => serde_json::json!({"text": DIALOG}),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let core = core_tests::core_of(
+            &root,
+            serde_json::json!([claude(Path::new("/w"), idle(), "live")]),
+        );
+        let drive = core_driver(&root, core.clone());
+        let a = drive.runtime.agent_get(&core_id()).await.unwrap();
+        let pane = runtime::herdr_core::pane(&a);
+        let p = TaskNewParams {
+            op_id: OpId::new("n".repeat(22)).unwrap(),
+            cwd: Cwd::new("/w").unwrap(),
+            agent: AgentKind::new("claude").unwrap(),
+            prompt: Some(protocol::PromptText::new("go".to_owned()).unwrap()),
+            label: None,
+            new_folder: None,
+            worktree: None,
+            clone: None,
+            resume: None,
+            ultracode: false,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let failed = drive
+            .prompt_started(&p, &pane, NAME, &core_id(), &yes)
+            .await
+            .unwrap_err();
+        assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+        let sent = (crate::lock(&seen).calls.iter()).any(|c| c["method"] == "terminal.send");
+        assert!(!sent, "no prompt was typed");
+    }
+
+    #[tokio::test]
+    async fn a_herdr_core_open_refuses_a_checkout_another_task_records() {
+        let (_dir, root, repo, checkout) = core_tests::worktree();
+        let task = core_tests::codex_in(&checkout, core_tests::worktree_task(&checkout));
+        let core = core_tests::core_of(&root, serde_json::json!([task]));
+        let drive = core_driver(&root, core.clone());
+        let p = TaskNewParams {
+            op_id: OpId::new("o".repeat(22)).unwrap(),
+            cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+            agent: AgentKind::new("claude").unwrap(),
+            prompt: Some(protocol::PromptText::new("go".to_owned()).unwrap()),
+            label: None,
+            new_folder: None,
+            worktree: Some(TaskWorktree::Open {
+                path: Cwd::new(checkout.to_str().unwrap()).unwrap(),
+            }),
+            clone: None,
+            resume: None,
+            ultracode: false,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let (code, message) = drive
+            .start_core_worktree_task(
+                &core,
+                &p,
+                &Cwd::new(repo.to_str().unwrap()).unwrap(),
+                &Cwd::new(checkout.to_str().unwrap()).unwrap(),
+                Some("feat".to_owned()),
+                &yes,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(code, ErrorCode::InvalidParams);
+        assert!(
+            message.ends_with("the worktree root pane is occupied"),
+            "{message}"
+        );
+    }
 
     #[test]
     fn only_a_linked_worktree_of_idle_or_done_agents_is_settled() {

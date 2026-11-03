@@ -1208,12 +1208,17 @@ fn live_herdr_core_tasks() {
             (bin, path)
         }
     };
-    // A scratch HOME, so the owner's git and gh configuration never reach the archive.
+    // A scratch HOME and configuration, so the owner's git and gh setup never reach the
+    // archive.
     let home = format!("{bin}/home");
+    let config = format!("{bin}/home/.config");
+    let gh = format!("{bin}/home/.config/gh");
     let env = [
         ("COLLIE_E2E_BIN", bin.as_str()),
         ("PATH", path.as_str()),
         ("HOME", home.as_str()),
+        ("XDG_CONFIG_HOME", config.as_str()),
+        ("GH_CONFIG_DIR", gh.as_str()),
     ];
     if std::env::var_os("COLLIE_E2E_BIN").is_none() {
         // Removed even when the child fails.
@@ -1227,7 +1232,7 @@ fn live_herdr_core_tasks() {
         in_child_with("live_herdr_core_tasks", &env);
         return;
     }
-    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&gh).unwrap();
     let dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
     let mut core = CoreSession::start_with("hct", &dummies);
     let rt = runtime();

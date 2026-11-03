@@ -117,7 +117,6 @@ pub fn cli(kind: &str) -> Option<String> {
         return None;
     }
     crate::usage::program(kind)
-        .filter(|p| p.is_absolute())
         .and_then(|p| p.into_os_string().into_string().ok())
         .filter(|p| !p.contains('='))
 }
@@ -264,8 +263,20 @@ struct Terminal {
     cols: u16,
     #[serde(default)]
     rows: u16,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_labels")]
     labels: BTreeMap<String, String>,
+}
+
+/// Labels any client can set: one that is not a string is skipped, so it cannot make a whole
+/// snapshot fail to decode and stop collied following the core.
+fn string_labels<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    let raw = Option::<BTreeMap<String, Value>>::deserialize(d)?.unwrap_or_default();
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v.as_str()?.to_owned())))
+        .collect())
 }
 
 impl Terminal {
@@ -1533,11 +1544,11 @@ impl Attach {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::runtime::Runtime;
 
-    const ID: &str = "0123456789abcdef0123456789abcdef";
+    pub(crate) const ID: &str = "0123456789abcdef0123456789abcdef";
 
     fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let vars: Vec<(String, String)> = vars
@@ -1658,7 +1669,7 @@ mod tests {
         assert!(odd.problem().is_some());
     }
 
-    fn terminal(address: &str, status: Value, argv0: &str) -> Value {
+    pub(crate) fn terminal(address: &str, status: Value, argv0: &str) -> Value {
         json!({
             "address": address, "name": null, "cwd": "/w", "state": "live", "argv": [argv0],
             "labels": {}, "created_ms": 1, "screen": "exact", "cols": 80, "rows": 24,
@@ -1977,7 +1988,7 @@ mod tests {
     }
 
     #[derive(Default, Clone)]
-    struct Seen {
+    pub(crate) struct Seen {
         /// Each attach's params.
         attaches: Vec<Value>,
         /// The kinds of the frames each client wrote after its attach.
@@ -1987,12 +1998,12 @@ mod tests {
         /// Attaches that ended.
         closed: usize,
         /// Line-mode calls, as `{method, params}`.
-        calls: Vec<Value>,
+        pub(crate) calls: Vec<Value>,
     }
 
     /// A core that answers every attach with a one-line paint, and every line-mode call with
     /// `answer` (else an error), recording what clients asked.
-    async fn fake_core(socket: &Path, answer: fn(&str) -> Value) -> Arc<Mutex<Seen>> {
+    pub(crate) async fn fake_core(socket: &Path, answer: fn(&str) -> Value) -> Arc<Mutex<Seen>> {
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
         let seen = Arc::new(Mutex::new(Seen::default()));
         let record = seen.clone();
@@ -2486,7 +2497,7 @@ mod tests {
         });
     }
 
-    fn git(dir: &Path, args: &[&str]) {
+    pub(crate) fn git(dir: &Path, args: &[&str]) {
         let out = std::process::Command::new("git")
             .current_dir(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -2498,7 +2509,7 @@ mod tests {
 
     /// A repository with a linked worktree under a canonical root: the root, the main
     /// checkout and the linked one.
-    fn worktree() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+    pub(crate) fn worktree() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let repo = root.join("repo");
@@ -2521,7 +2532,7 @@ mod tests {
     }
 
     /// An idle Codex started in `cwd` as t1, with `labels`.
-    fn codex_in(cwd: &Path, labels: Value) -> Value {
+    pub(crate) fn codex_in(cwd: &Path, labels: Value) -> Value {
         let mut t = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
         t["cwd"] = json!(cwd);
         t["foreground"]["cwd"] = json!(cwd);
@@ -2530,11 +2541,11 @@ mod tests {
     }
 
     /// The labels of a worktree task collied started in `checkout`.
-    fn worktree_task(checkout: &Path) -> Value {
+    pub(crate) fn worktree_task(checkout: &Path) -> Value {
         json!({"collie.kind": "codex", "collie.worktree": checkout})
     }
 
-    fn core_of(root: &Path, terminals: Value) -> Arc<Core> {
+    pub(crate) fn core_of(root: &Path, terminals: Value) -> Arc<Core> {
         let core = Core::new(root.join("core.sock"));
         core.lock().live = Some(live(10, terminals));
         Arc::new(core)
@@ -2563,7 +2574,7 @@ mod tests {
         drive.task_archive(archive_params(), &auth).await
     }
 
-    fn kill_and_rm(method: &str) -> Value {
+    pub(crate) fn kill_and_rm(method: &str) -> Value {
         match method {
             "terminal.kill" => json!({"address": "t1"}),
             "terminal.rm" => json!({"removed": "t1"}),
@@ -2571,7 +2582,7 @@ mod tests {
         }
     }
 
-    fn methods(seen: &Arc<Mutex<Seen>>) -> Vec<Value> {
+    pub(crate) fn methods(seen: &Arc<Mutex<Seen>>) -> Vec<Value> {
         (crate::lock(seen).calls.iter())
             .map(|c| c["method"].clone())
             .collect()
@@ -2914,6 +2925,99 @@ mod tests {
         assert!(message.contains("nothing was closed"), "{message}");
         assert!(checkout.exists());
         assert!(methods(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_closes_nothing_for_an_agent_not_seen_in_its_checkout() {
+        let (_dir, root, repo, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let core = core_of(&root, json!([codex_in(&repo, worktree_task(&checkout))]));
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(
+            message.contains("the agent is not seen in its checkout"),
+            "{message}"
+        );
+        assert!(checkout.exists());
+        assert!(methods(&seen).is_empty());
+    }
+
+    static SECOND: std::sync::OnceLock<(Arc<Core>, PathBuf)> = std::sync::OnceLock::new();
+    static UNFOLLOWED: std::sync::OnceLock<Arc<Core>> = std::sync::OnceLock::new();
+
+    #[tokio::test]
+    async fn archive_reads_the_checkout_again_before_removing_it() {
+        let (_dir, root, _, checkout) = worktree();
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        assert!(SECOND.set((core.clone(), checkout.clone())).is_ok());
+        // A shell moves into the checkout while the agent closes.
+        let seen = fake_core(&root.join("core.sock"), |method| {
+            if method == "terminal.rm" {
+                let (core, checkout) = SECOND.get().unwrap();
+                let mut shell = terminal("t2", Value::Null, "-zsh");
+                shell["foreground"]["cwd"] = json!(checkout);
+                core.lock().live.as_mut().unwrap().terminals.insert(
+                    "t2".into(),
+                    Held {
+                        terminal: serde_json::from_value(shell).unwrap(),
+                        seq: 11,
+                    },
+                );
+            }
+            kill_and_rm(method)
+        })
+        .await;
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(
+            message.contains("a terminal now works in this checkout"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("agent hc:{ID}:t1 was closed")),
+            "{message}"
+        );
+        assert!(checkout.exists());
+        assert_eq!(
+            methods(&seen),
+            [json!("terminal.kill"), json!("terminal.rm")]
+        );
+    }
+
+    #[tokio::test]
+    async fn archive_keeps_the_checkout_when_the_core_drops_while_it_closes() {
+        let (_dir, root, _, checkout) = worktree();
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout))]),
+        );
+        assert!(UNFOLLOWED.set(core.clone()).is_ok());
+        fake_core(&root.join("core.sock"), |method| {
+            if method == "terminal.rm" {
+                UNFOLLOWED.get().unwrap().lock().live = None;
+            }
+            kill_and_rm(method)
+        })
+        .await;
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(message.contains("not followed"), "{message}");
+        assert!(
+            message.contains("the checkout was left in place"),
+            "{message}"
+        );
+        assert!(checkout.exists());
+    }
+
+    #[test]
+    fn a_label_that_is_not_a_string_is_skipped() {
+        let mut t = terminal("t1", json!({"state": "idle", "app": "codex"}), "codex");
+        t["labels"] = json!({"collie.kind": "codex", "odd": 7, "list": ["a"]});
+        let t: Terminal = serde_json::from_value(t).unwrap();
+        assert_eq!(
+            t.labels,
+            BTreeMap::from([("collie.kind".to_owned(), "codex".to_owned())])
+        );
     }
 
     #[tokio::test]
