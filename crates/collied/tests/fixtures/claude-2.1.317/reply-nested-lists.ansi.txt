@@ -1,41 +1,41 @@
-[0m[38;2;255;255;255m⏺ [0mHere is the order for the three moves.
+[0m[38;2;255;255;255m⏺ [0mHere is the plan for the photo archive.
 
-  1. [0m[1mStaging first (#101)[0m, from [0m[38;2;177;185;249m/srv/example/apps/widget/infra[0m:
-  [0m[38;2;177;185;249mterraform state rm 'example_secret.widget_api'[0m
-  [0m[38;2;177;185;249mterraform apply -var-file=env/staging.tfvars -target=module.widget_vault [0m
-  [0m[38;2;177;185;249m-target=example_secret.storage_value[0m
-     Run the [0m[38;2;177;185;249mstate rm [0mfirst, otherwise the targeted apply fails with [0m[38;2;177;185;249mMoved resource [0m
-     [0m[38;2;177;185;249minstances excluded by targeting[0m. The apply should show 6 additions; then check the
-     vault type.
-     → I copy the 8 entries, run the smoke test (the 6 vault keys, plus [0m[38;2;177;185;249mstorage-value-name[0m
-     compared to the live Secret) and replan.
-     → You merge #101. The controller creates [0m[38;2;177;185;249mwidget-api-staging [0mand
-     [0m[38;2;177;185;249mwidget-client-staging[0m, the pods restart once, and I check them.
-  2. [0m[1mProduction, then staging moves (#102)[0m, from
-     [0m[38;2;177;185;249m/srv/example/checkouts/agent-0123456789abcdef/apps/widget/infra[0m:
-  [0m[38;2;177;185;249mterraform workspace select production[0m
-  [0m[38;2;177;185;249mterraform apply -var-file=env/production.tfvars -target=module.widget_vault[0m
-     The first two applies show 6 additions each; the staging one only moves state. Check
-     both vault types.
-     → I copy and smoke-test each vault, remove the [0m[38;2;177;185;249mmoved [0mblocks, replan all 3 workspaces
-     and force-push.
-  3. [0m[1mMerges:[0m
-     a. Merge #102. The controller creates the production applications on the cluster
-        right away.
-     b. Apply the set:
-        [0m[38;2;177;185;249mkubectl --context tools diff -f sets/widget.yml[0m
-        The production applications on the second cluster appear after this.
-     c. You start [0m[38;2;177;185;249mapi [production] [0mand [0m[38;2;177;185;249mclient [production][0m. Their [0m[38;2;177;185;249mdeploy [0mand [0m[38;2;177;185;249mdeploy-eu[0m
-        jobs each have their own environment approval, so you can still approve production
-        and hold the other one.
-
-  [0m[1mFreeze: [0mfrom the #101 merge until the widget change is merged, don't push to [0m[38;2;177;185;249mmain [0min
-  widget and don't start any widget deploy. The old workflows would push to the old path.
+  1. [0m[1mSort the scans first (#41)[0m, from [0m[38;2;177;185;249m/srv/archive/scans/inbox[0m:
+  [0m[38;2;177;185;249mexiftool -d '%Y/%m' '-Directory<DateTimeOriginal' -r .[0m
+  [0m[38;2;177;185;249mrsync -av --remove-source-files --exclude='*.tmp' ./ [0m
+  [0m[38;2;177;185;249m/srv/archive/photos/originals/by-date/[0m
+     Run the [0m[38;2;177;185;249mexiftool[0m pass first, otherwise rsync copies the files with [0m[38;2;177;185;249mno date taken [0m
+     [0m[38;2;177;185;249mrecorded yet[0m into the root folder. The pass should move 240 files; then count the
+     folders again.
+     → I check the 12 album folders, open a sample from each (the 9 film rolls, plus
+     [0m[38;2;177;185;249mcontact-sheet-index[0m compared to the printed sheet) and recount.
+     → You approve #41. The scheduler creates [0m[38;2;177;185;249mthumbs-small-nightly[0m and
+     [0m[38;2;177;185;249mthumbs-large-nightly[0m, the job reruns once, and I look at the output.
+  2. [0m[1mThumbnails, then captions (#42)[0m, from
+     [0m[38;2;177;185;249m/srv/archive/scratch/session-fedcba9876543210/tools/thumbs/bin[0m:
+  [0m[38;2;177;185;249mmagick mogrify -path thumbs -resize 320x320 originals/*.jpg[0m
+  [0m[38;2;177;185;249mmagick mogrify -path previews -resize 1600x1600 originals/*.jpg[0m
+     The thumbnail and preview runs write 240 files each; the caption pass only renames
+     them. Compare both folder counts.
+     → I spot-check each folder, delete the [0m[38;2;177;185;249mtmp [0mcopies, rebuild all 3 photo indexes and
+     publish them.
+  3. [0m[1mPublishing:[0m
+     a. Publish #42. The gallery picks up the new albums from the shared folder right
+        away.
+     b. Rebuild the index:
+        [0m[38;2;177;185;249mgallery-tool --profile family rebuild -f albums/family.toml[0m
+        The new albums on the second gallery appear after this.
+     c. You open [0m[38;2;177;185;249mfamily [private][0m and [0m[38;2;177;185;249mfriends [shared][0m. Their [0m[38;2;177;185;249mshare [0mand [0m[38;2;177;185;249mprint[0m links each
+        carry their own expiry date, so you can still revoke family and keep the other
+        one.
+ 
+  [0m[1mNote:[0m from the #41 approval until the captions are done, don't rename files in [0m[38;2;177;185;249moriginals[0m
+  and don't run any sync job. The old scripts would copy them to the old path.
 
 [0m[38;2;255;255;255m⏺ [0mNested lists:
-
+    
   1. The first item at the top level has enough words in it to wrap onto a second row
-     here.
+     here. 
      a. A nested item under the first one also has enough words to wrap onto a second row.
         i. A third level item under the nested one has enough words to wrap onto a second
            row.
