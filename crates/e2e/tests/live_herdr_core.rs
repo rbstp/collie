@@ -1282,7 +1282,12 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     let work = std::fs::canonicalize(&core.work).unwrap();
     git(&work, &["init", "-q", "-b", "main"]);
     git(&work, &["commit", "-q", "--allow-empty", "-m", "start"]);
-    let held = run(core, "collie-env", &work, "env > held; exec sleep 600");
+    let held = run(
+        core,
+        "collie-env",
+        &work,
+        "env > held.tmp && mv held.tmp held; exec sleep 600",
+    );
     let held_env = until("the core's environment", async || {
         std::fs::read_to_string(work.join("held")).ok()
     })
@@ -1426,6 +1431,18 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     })
     .await;
     eprintln!("foreground after cd: {}", moved["foreground"]);
+    // The archive reads the followed core's events, which may follow `hc get` a little later.
+    until("the followed shell's new folder", async || {
+        let occupants = followed.occupants()?;
+        occupants
+            .iter()
+            .any(|o| {
+                o.id.ends_with(&format!(":{shell}"))
+                    && o.foreground_cwd.as_deref() == checkout.to_str()
+            })
+            .then_some(())
+    })
+    .await;
     let refused = drive.task_archive(archive(&codex), &yes).await;
     let Err((_, message)) = refused else {
         panic!("archived under a shell in the checkout: {refused:?}");

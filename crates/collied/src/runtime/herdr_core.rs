@@ -68,7 +68,6 @@ const WORKTREE_LABEL: &str = "collie.worktree";
 /// A terminal the core holds, shell or agent, with the folders it works in.
 pub struct Occupant {
     pub id: String,
-    /// Started by collied as a task.
     pub task: bool,
     /// The checkout collied recorded for the worktree task it started there.
     pub worktree: Option<String>,
@@ -1125,7 +1124,6 @@ impl Core {
             .flatten()
     }
 
-    /// Whether `id` held a terminal that has finished: its program exited.
     pub fn finished(&self, id: &str) -> bool {
         self.terminal(id).is_ok_and(|(address, ..)| {
             let inner = self.lock();
@@ -1145,7 +1143,7 @@ impl Core {
         Some(
             (live.terminals.values())
                 .map(|h| &h.terminal)
-                .filter(|t| t.state == "live")
+                .filter(|t| t.state != "finished")
                 .map(|t| Occupant {
                     id: format!("{}:{}", live.group, t.address),
                     task: t.labels.contains_key(TASK_LABEL),
@@ -2799,6 +2797,60 @@ mod tests {
             methods(&seen),
             [json!("terminal.kill"), json!("terminal.rm")]
         );
+    }
+
+    #[tokio::test]
+    async fn archive_sees_a_shell_through_a_symlink_and_not_a_sibling_checkout() {
+        let (_dir, root, repo, checkout) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&checkout, &link).unwrap();
+        let mut shell = terminal("t2", Value::Null, "-zsh");
+        shell["cwd"] = json!(repo);
+        shell["foreground"]["cwd"] = json!(link);
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout)), shell.clone()]),
+        );
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(message.contains("collie did not start"), "{message}");
+        assert!(checkout.exists());
+        assert!(methods(&seen).is_empty());
+
+        // `feat-2` beside `feat` is another folder.
+        let sibling = repo.join(".worktree/feat-2");
+        std::fs::create_dir_all(&sibling).unwrap();
+        shell["foreground"]["cwd"] = json!(sibling);
+        let core = core_of(
+            &root,
+            json!([codex_in(&checkout, worktree_task(&checkout)), shell]),
+        );
+        let held = checkout.clone();
+        let reply = archive_while(&root, core, Arc::new(move || held.exists())).await;
+        assert!(
+            matches!(&reply, Ok(protocol::Response::TaskArchived { message })
+                if message.starts_with("Removed worktree checkout")),
+            "{reply:?}"
+        );
+        assert!(!checkout.exists() && sibling.exists());
+    }
+
+    #[tokio::test]
+    async fn archive_closes_nothing_when_git_fails_inside_a_repository() {
+        let (_dir, root, repo, _) = worktree();
+        let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+        let broken = repo.join(".worktree/broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join(".git"), "gitdir: /nonexistent/collie-test\n").unwrap();
+        let core = core_of(&root, json!([codex_in(&broken, worktree_task(&broken))]));
+        let (_, message) = archive(&root, core).await.unwrap_err();
+        assert!(
+            message.contains("Git could not read the checkout"),
+            "{message}"
+        );
+        assert!(message.ends_with("; nothing was closed"), "{message}");
+        assert!(broken.exists());
+        assert!(methods(&seen).is_empty());
     }
 
     #[tokio::test]

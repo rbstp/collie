@@ -188,17 +188,25 @@ pub fn shows_dialog(text: &str) -> bool {
         .any(|l| trust_wording(l) || option_line(l.trim_start().trim_start_matches('›')).is_some())
 }
 
-/// A startup dialog on a screen whose program reported no status yet: folder trust wording,
-/// Codex's update picker, or an option under a cursor (`❯` or `›`). A numbered list a resume
-/// repaints from history has no cursor, so it does not count.
+/// A startup dialog on a screen whose program reported no status yet: Codex's update picker,
+/// or an option under a cursor (`❯` or `›`) beside another option. Codex repaints a resumed
+/// session's prompts after `›`, so a prompt reading `1. ...` or naming folder trust, with no
+/// option beside it, does not count.
 pub fn startup_dialog(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
+    let option = |l: &str| option_line(l.strip_prefix('›').unwrap_or(l)).is_some();
+    let cursor = |l: &str| match l.strip_prefix('›') {
+        Some(rest) => option_line(rest).is_some(),
+        None => option_line(l).is_some_and(|(cursor, ..)| cursor),
+    };
     codex_update(text)
-        || text.lines().any(|l| {
-            let t = l.trim_start();
-            trust_wording(l)
-                || t.strip_prefix('›')
-                    .is_some_and(|rest| option_line(rest).is_some())
-                || option_line(t).is_some_and(|(cursor, ..)| cursor)
+        || (0..lines.len()).any(|i| {
+            cursor(lines[i])
+                && [i.checked_sub(1), Some(i + 1)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|j| lines.get(j))
+                    .any(|l| option(l))
         })
 }
 
@@ -1989,12 +1997,16 @@ mod tests {
     }
 
     #[test]
-    fn a_startup_dialog_before_any_status_needs_a_cursor_or_trust_wording() {
+    fn a_startup_dialog_before_any_status_is_a_cursor_beside_another_option() {
         let history = "› resume the plan\n\n1. Read the tests\n2. Fix the flake\n";
         assert!(shows_dialog(history));
         assert!(!startup_dialog(history));
-        assert!(startup_dialog("  Do you trust the files in this folder?\n"));
-        assert!(startup_dialog("› 1. Yes, continue\n  2. No, quit\n"));
+        assert!(!startup_dialog("› 1. Read the tests first\n\n• Reading.\n"));
+        assert!(!startup_dialog("› do you trust this folder now?\n"));
+        assert!(startup_dialog(
+            "  Do you trust the files in this folder?\n\n› 1. Yes, continue\n  2. No, quit\n"
+        ));
+        assert!(startup_dialog("  1. Yes, continue\n› 2. No, quit\n"));
         assert!(startup_dialog(" ❯ 1. Yes\n   2. No\n"));
         assert!(startup_dialog(
             "✨ Update available! 0.166.0 -> 0.167.0\n› 1. Update now\n  2. Skip\n"

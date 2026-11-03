@@ -122,7 +122,7 @@ So a herdr-core agent goes in a group of its own, never in a herdr workspace. Ph
 
 - `terminal.run {argv, cwd, name, labels, env: {TERM: "xterm-256color", COLORTERM: "truecolor"}, no_parent: true, no_notify: true}` starts an agent as `/usr/bin/env -u <name> ... <absolute CLI path> <args>`, with `-u` for each of a fixed list of names: `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_SOCKET_PATH`, `HERDR_TAB_ID`, `HERDR_WORKSPACE_ID`, `HERDR_BIN_PATH`, `CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_EFFORT` and `CLAUDE_PID`: herdr's and Claude Code's own session variables the spike's core held, sixteen names. Variables a Claude Code plugin's hook exports are not on the list: the core also held `CLAUDE_PLUGIN_DATA` and the Codex plugin's `CODEX_COMPANION_SESSION_ID` and `CODEX_COMPANION_TRANSCRIPT_PATH` (the latter pointing at the starting session's transcript), and such exports change with the user's plugins. They are named, not matched by pattern: `env -u` takes names, and a `CLAUDE_*` pattern would also strip variables the user chose, such as `CLAUDE_CONFIG_DIR`. What an inherited `CLAUDE_EFFORT` does to a started agent was not checked. The `env` field carries the terminal identity, as the schema asks clients to; the prototype passed these two, and the core's default without them was not checked. `terminal.run`'s `env` is set on top of the core's environment and cannot remove a variable, so stripping has to happen in argv ([Risks](#risks)). The CLI's path is absolute, never a bare name, since a name that matches a template starts the template with its body as the first message. Resume and ultracode keep their arguments; Codex keeps `--no-daemon` (hc requires it too, or Codex runs commands outside the terminal).
 - Worktree create, open and remove move into collied (`git worktree`), as do the checks it already runs around them; archiving a herdr-core task kills and removes its terminals, then the worktree.
-- When both run, New task starts in herdr, which gives the agent herdr's screen rules, focus and workspace. It starts in herdr-core only when herdr does not answer, so a machine moved to Herdr 2 needs no setting.
+- When both run, New task starts in herdr, which gives the agent herdr's screen rules, focus and workspace. It starts in herdr-core only when herdr is not running, so a machine moved to Herdr 2 needs no setting.
 - A terminal collied starts should show in Herdr.app's agent list, which per herdrdev/herdr#5700 lists every terminal that reports a status (read, not run), but in no Herdr UI tab: Herdr UI shows only the tabs it saved.
 
 ### The Claude Code hook and `HERDR_PANE_ID`
@@ -175,7 +175,7 @@ Phase 2 adds this to AGENTS.md beside the live-herdr rule. The spike broke it ([
 3. Screen (M to L): watch-only attach on demand, ANSI rendering with soft wraps, `agent.read`, `agent.watch`, grid previews, banner, notices and draft reads.
 4. Input and approvals (M): `terminal.send` (with `if` when the status seen is `idle` or `working`, without it for `done` and `error`) and `terminal.keys` behind the allowlist, read-only agents without OSC 7501, approvals gated on `kind`, decisions, typed answers, the slash mirror and notes through a same-size typing attach.
 5. Sessions (S to M): Claude Code's pid file, collied's Codex SessionStart hook, then Chat, costs, context, resume and the hook binding.
-6. Tasks (M): New task, resume, worktrees and archive in herdr-core when herdr does not answer, with the starter's variables stripped.
+6. Tasks (M): New task, resume, worktrees and archive in herdr-core when herdr is not running, with the starter's variables stripped.
 
 What a herdr-core agent cannot do that a herdr one can, after all phases: be focused on the desktop, sit in the herdr workspace Herdr UI shows it in, close with its whole group, and, when the CLI does not emit OSC 7501 (Copilot CLI, Devin CLI today), report a status or take prompts, typed answers and keys from the phone. Plain shells in herdr-core are not planned.
 
@@ -290,7 +290,7 @@ Claude Code's session from `~/.claude/sessions/<pid>.json` for the terminal's fo
 
 ### 6. Start, resume and archive tasks in herdr-core when herdr is not running
 
-New task, resume, worktree and pull request worktree tasks, and archive, through `terminal.run`, `git worktree` and `terminal.kill`, used only when herdr does not answer.
+New task, resume, worktree and pull request worktree tasks, and archive, through `terminal.run`, `git worktree` and `terminal.kill`, used only when herdr is not running.
 
 - [x] With herdr stopped, New task starts Claude Code and Codex in herdr-core, in a worktree when asked.
 - [x] Agents start through `/usr/bin/env -u` with every name in the plan's fixed list (the six `HERDR_*` variables, `CLAUDECODE`, the seven `CLAUDE_CODE_*` session variables, `CLAUDE_EFFORT` and `CLAUDE_PID`, sixteen names), so none reaches them from a core that holds them, and Claude Code saves its transcript.

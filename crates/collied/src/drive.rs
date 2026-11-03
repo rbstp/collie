@@ -2144,13 +2144,13 @@ impl Driver {
         checkout: &Cwd,
         auth: &Authorized,
     ) -> Result<String, Fail> {
+        let resolved =
+            |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
         let inside = |cwd: Option<&str>| {
-            cwd.filter(|c| !c.is_empty()).is_some_and(|cwd| {
-                std::fs::canonicalize(cwd)
-                    .unwrap_or_else(|_| PathBuf::from(cwd))
-                    .starts_with(checkout.as_str())
-            })
+            cwd.filter(|c| !c.is_empty())
+                .is_some_and(|cwd| resolved(cwd).starts_with(checkout.as_str()))
         };
+        let same = |path: &str| resolved(path) == Path::new(checkout.as_str());
         let refused = |why: &str| {
             fail(
                 ErrorCode::InvalidParams,
@@ -2171,9 +2171,7 @@ impl Driver {
             let Ok(listed) = self.runtime.worktree_list(checkout.as_str()).await else {
                 return refused("herdr did not list the worktrees");
             };
-            if (listed.worktrees.iter())
-                .any(|w| w.path == checkout.as_str() && w.open_workspace_id.is_some())
-            {
+            if (listed.worktrees.iter()).any(|w| w.open_workspace_id.is_some() && same(&w.path)) {
                 return refused("herdr has this checkout open in a workspace");
             }
         }
@@ -2182,12 +2180,14 @@ impl Driver {
         let Some(all) = self.runtime.core().and_then(|core| core.occupants()) else {
             return refused("herdr-core is not followed right now");
         };
-        if !all.iter().any(|o| o.id == terminal_id) {
-            return refused("the agent is no longer in herdr-core");
-        }
         let occupants: Vec<_> = (all.into_iter())
             .filter(|o| inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
             .collect();
+        // The archived agent itself must be seen in the checkout, so a folder spelled another
+        // way never removes it from under a running agent.
+        if !occupants.iter().any(|o| o.id == terminal_id) {
+            return refused("the agent is not seen in its checkout");
+        }
         if occupants.iter().any(|o| !o.task) {
             return refused("a terminal collie did not start works in this checkout");
         }

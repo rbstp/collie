@@ -18,7 +18,7 @@ Documentation: <https://collie.rbstp.dev>
 - A personal Tailscale account
 - An Apple Developer account to build the app, and an APNs key for push notifications
 
-Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, and on Linux only on Arch Linux with Omarchy. In Herdr 2, collie does what it does in herdr, except that it cannot bring an agent to the front on the desktop, it starts Claude Code and Codex tasks there (not Copilot CLI) only while herdr is not running, it does not archive those tasks by itself when their pull request merges, and it only reads agents that report no status there, such as Copilot CLI. [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
+Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, and on Linux only on Arch Linux with Omarchy. In Herdr 2, collie does what it does in herdr, except that it cannot bring an agent to the front on the desktop, it starts Claude Code and Codex tasks there (not Copilot CLI) only while herdr is not running, it does not archive those tasks by itself when their pull request merges, and agents that report no status there, such as Copilot CLI, are read-only. Codex's Chat in Herdr 2 needs [`collied`'s own hook](https://collie.rbstp.dev/agents/codex.html#herdr-2). [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
 
 ## Quick start
 
