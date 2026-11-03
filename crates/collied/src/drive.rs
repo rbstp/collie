@@ -1640,9 +1640,10 @@ impl Driver {
         }
         // One task per checkout, as herdr keeps one workspace per worktree: archiving one
         // would end the other and remove its checkout.
-        let occupied = (core.occupants().unwrap_or_default().iter())
-            .any(|o| o.worktree.as_deref() == Some(path.as_str()));
-        if occupied {
+        let Some(occupants) = core.occupants() else {
+            return Err(left(invalid("herdr-core is not followed right now")));
+        };
+        if (occupants.iter()).any(|o| o.worktree.as_deref() == Some(path.as_str())) {
             return Err(left(invalid("the worktree root pane is occupied")));
         }
         self.start_core_task(core, p, path, Some(path), auth)
@@ -2226,9 +2227,33 @@ impl Driver {
                 format!("Archive could not close agent {terminal_id} ({message})"),
             )));
         }
-        authorized(auth).map_err(|(code, message)| {
-            (code, format!("{message}; agent {terminal_id} was closed, the checkout was left in place and gh poi was skipped."))
-        })?;
+        let closed = |(code, message): Fail| {
+            (
+                code,
+                format!(
+                    "{message}; agent {terminal_id} was closed, the checkout was left in place and gh poi was skipped."
+                ),
+            )
+        };
+        authorized(auth).map_err(closed)?;
+        // Read again right before the removal: the core may have stopped being followed, or
+        // something may have started in the checkout meanwhile.
+        let Some(now) = self.runtime.core().and_then(|core| core.occupants()) else {
+            return fail(
+                ErrorCode::InvalidParams,
+                "herdr-core is not followed right now",
+            )
+            .map_err(closed);
+        };
+        if (now.iter()).any(|o| {
+            o.id != terminal_id && (inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
+        }) {
+            return fail(
+                ErrorCode::InvalidParams,
+                "a terminal now works in this checkout",
+            )
+            .map_err(closed);
+        }
         let removed = git_worktree(
             repo,
             &["remove", "--force", checkout.as_str()],

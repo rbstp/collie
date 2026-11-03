@@ -112,24 +112,26 @@ pub fn owns(id: &str) -> bool {
 
 /// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
 /// matches one. A path holding `=` would be read as a variable by `env`.
-pub fn cli(kind: &str) -> Option<PathBuf> {
+pub fn cli(kind: &str) -> Option<String> {
     if !TASK_KINDS.contains(&kind) {
         return None;
     }
     crate::usage::program(kind)
-        .filter(|p| p.is_absolute() && p.to_str().is_some_and(|s| !s.contains('=')))
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .filter(|p| !p.contains('='))
 }
 
 /// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since `terminal.run`'s
 /// `env` is set on top of the core's environment and cannot remove a variable.
-fn task_argv(cli: &Path, args: &[&str]) -> Option<Vec<String>> {
+fn task_argv(cli: &str, args: &[&str]) -> Vec<String> {
     let mut argv = vec!["/usr/bin/env".to_owned()];
     for name in STRIPPED {
         argv.extend(["-u".to_owned(), name.to_owned()]);
     }
-    argv.push(cli.to_str()?.to_owned());
+    argv.push(cli.to_owned());
     argv.extend(args.iter().map(|a| (*a).to_owned()));
-    Some(argv)
+    argv
 }
 
 /// Where `hc` would find the core, from `var` (collied's own environment): `HC_SOCKET`, else
@@ -1075,7 +1077,7 @@ impl Core {
         name: &str,
         kind: &str,
         worktree: Option<&str>,
-        cli: &Path,
+        cli: &str,
         args: &[&str],
     ) -> Result<String, Error> {
         #[derive(Deserialize)]
@@ -1085,8 +1087,7 @@ impl Core {
         let group = (self.lock().live.as_ref())
             .map(|live| live.group.clone())
             .ok_or(Error::Closed)?;
-        let argv = task_argv(cli, args)
-            .ok_or_else(|| Error::Unsupported("the agent's path is not UTF-8".to_owned()))?;
+        let argv = task_argv(cli, args);
         let mut labels = serde_json::Map::new();
         labels.insert(TASK_LABEL.to_owned(), json!(kind));
         if let Some(checkout) = worktree {
@@ -2402,7 +2403,7 @@ mod tests {
         })
         .await;
         let core = followed(socket);
-        let cli = Path::new("/opt/bin/codex");
+        let cli = "/opt/bin/codex";
         let args = super::super::herdr::agent_args("codex", Some(SESSION), false);
         assert_eq!(
             core.start("/w", "collie-0a1b2c3d", "codex", Some("/w"), cli, &args)

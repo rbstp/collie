@@ -1215,8 +1215,16 @@ fn live_herdr_core_tasks() {
         ("PATH", path.as_str()),
         ("HOME", home.as_str()),
     ];
-    if !in_child_with("live_herdr_core_tasks", &env) {
-        let _ = std::fs::remove_dir_all(&bin);
+    if std::env::var_os("COLLIE_E2E_BIN").is_none() {
+        // Removed even when the child fails.
+        struct Cleanup(String);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(bin.clone());
+        in_child_with("live_herdr_core_tasks", &env);
         return;
     }
     std::fs::create_dir_all(&home).unwrap();
@@ -1452,6 +1460,14 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     core.hc(&["kill", "--json", &shell]);
     until("the shell to end", async || {
         (core.hc(&["get", "--json", &shell])["state"] != "live").then_some(())
+    })
+    .await;
+    until("the followed core to drop the shell", async || {
+        let occupants = followed.occupants()?;
+        (!occupants
+            .iter()
+            .any(|o| o.id.ends_with(&format!(":{shell}"))))
+        .then_some(())
     })
     .await;
 
