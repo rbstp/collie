@@ -50,10 +50,11 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prompt = None;
             let body = s.strip_prefix(['⏺', '※']);
             prose = body.is_some();
-            prev = match body.map(|b| b.trim_start_matches([' ', '\u{a0}'])) {
-                Some(b) if !tool_header(b) => {
+            let lead = body.map(|b| b.strip_prefix([' ', '\u{a0}']).unwrap_or(b));
+            prev = match lead.map(|l| (l.trim_start_matches([' ', '\u{a0}']), l)) {
+                Some((b, lead)) if !tool_header(b) => {
                     item_above(&mut tail, &mut numbered, &mut items, b, 2)
-                        .unwrap_or_else(|| row_above(&mut tail, b, 2))
+                        .unwrap_or_else(|| row_above(&mut tail, lead, 2))
                 }
                 _ => Prev::Held,
             };
@@ -81,7 +82,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prose = false;
             continue;
         }
-        if s.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c)) {
+        if s.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c) || c == '▎') {
             prev = Prev::Start;
             continue;
         }
@@ -140,7 +141,13 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             {
                 row_above(&mut tail, s, ind)
             }
-            Prev::Start => row_above(&mut tail, s, ind),
+            Prev::Start => {
+                // Claude Code keeps a paragraph's leading spaces on its first row only.
+                if ind > 2 {
+                    numbered = Some((2, format!("{}{s}", " ".repeat(ind - 2))));
+                }
+                row_above(&mut tail, s, ind)
+            }
             Prev::Row(..) | Prev::Held => Prev::Held,
         };
     }
@@ -663,6 +670,26 @@ mod tests {
         assert_eq!(claude_rule_columns(reply, 93), Some(90));
         let rows = [5, 7, 8, 10, 12, 14, 18, 20, 23, 28, 29, 32, 37, 40, 45, 47];
         assert_eq!(soft_wraps(reply, 90), (rows.to_vec(), vec![]));
+    }
+
+    #[test]
+    fn captured_paragraphs_with_a_first_line_indent_join_and_quotes_keep_their_rows() {
+        let reply = include_str!("../tests/fixtures/claude-2.1.317/indented-paragraphs.ansi.txt");
+        assert_eq!(claude_rule_columns(reply, 93), Some(91));
+        let rows = [1, 4, 5, 16, 17, 18, 19, 28, 29];
+        assert_eq!(soft_wraps(reply, 91), (rows.to_vec(), vec![]));
+    }
+
+    #[test]
+    fn a_first_line_indent_counts_and_quote_rows_never_join() {
+        let rows = [
+            "⏺   Most teams find out how they work",
+            "  only when it breaks.",
+            "",
+            "  ▎ A quoted line that runs right up to",
+            "  ▎ the edge of the row.",
+        ];
+        assert_eq!(wraps(&rows, 40), [1]);
     }
 
     #[test]
