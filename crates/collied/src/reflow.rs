@@ -129,6 +129,9 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 }
                 row_above(&mut tail, s, ind)
             }
+            Prev::Row(hang) if separator(&tail, s, cols.saturating_sub(hang)) == "\n" => {
+                row_above(&mut tail, s, ind)
+            }
             Prev::Start => row_above(&mut tail, s, ind),
             Prev::Row(..) | Prev::Held => Prev::Held,
         };
@@ -537,13 +540,21 @@ fn wide_word_cut(tail: &str, next: &str, width: usize) -> bool {
     wide_cut(tail, next, width) && tail.width() + 1 == width && last + first > width
 }
 
-/// The byte length of a list marker such as `-`, `•` or `12.` that a space follows.
+/// The byte length of a list marker such as `-`, `•`, `12.`, `b.` or `iv.` that a space
+/// follows. Claude Code 2.1.317 numbers nested items with letters, then roman numerals.
 fn list_marker(s: &str) -> Option<usize> {
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+    let letters = s.bytes().take_while(u8::is_ascii_lowercase).count();
     let len = match s.chars().next()? {
         c @ ('-' | '*' | '•' | '+') => c.len_utf8(),
         _ if (1..=3).contains(&digits) && matches!(s.as_bytes().get(digits), Some(b'.' | b')')) => {
             digits + 1
+        }
+        _ if (letters == 1
+            || (1..=4).contains(&letters) && s[..letters].bytes().all(|b| b"ivx".contains(&b)))
+            && s.as_bytes().get(letters) == Some(&b'.') =>
+        {
+            letters + 1
         }
         _ => return None,
     };
@@ -633,6 +644,14 @@ mod tests {
             "  Next row at the number's indent.",
         ];
         assert_eq!(wraps(&rows, 40), [1, 5]);
+    }
+
+    #[test]
+    fn captured_paragraphs_after_a_code_block_and_nested_items_join() {
+        let reply = include_str!("../tests/fixtures/claude-2.1.317/reply-nested-lists.ansi.txt");
+        assert_eq!(claude_rule_columns(reply, 93), Some(90));
+        let rows = [5, 7, 8, 10, 12, 14, 18, 20, 23, 28, 29, 32, 37, 40, 45, 47];
+        assert_eq!(soft_wraps(reply, 90), (rows.to_vec(), vec![]));
     }
 
     #[test]

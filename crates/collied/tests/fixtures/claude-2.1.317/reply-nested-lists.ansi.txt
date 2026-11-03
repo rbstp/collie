@@ -1,0 +1,50 @@
+[0m[38;2;255;255;255m⏺ [0mHere is the order for the three moves.
+
+  1. [0m[1mStaging first (#101)[0m, from [0m[38;2;177;185;249m/srv/example/apps/widget/infra[0m:
+  [0m[38;2;177;185;249mterraform state rm 'example_secret.widget_api'[0m
+  [0m[38;2;177;185;249mterraform apply -var-file=env/staging.tfvars -target=module.widget_vault [0m
+  [0m[38;2;177;185;249m-target=example_secret.storage_value[0m
+     Run the [0m[38;2;177;185;249mstate rm [0mfirst, otherwise the targeted apply fails with [0m[38;2;177;185;249mMoved resource [0m
+     [0m[38;2;177;185;249minstances excluded by targeting[0m. The apply should show 6 additions; then check the
+     vault type.
+     → I copy the 8 entries, run the smoke test (the 6 vault keys, plus [0m[38;2;177;185;249mstorage-value-name[0m
+     compared to the live Secret) and replan.
+     → You merge #101. The controller creates [0m[38;2;177;185;249mwidget-api-staging [0mand
+     [0m[38;2;177;185;249mwidget-client-staging[0m, the pods restart once, and I check them.
+  2. [0m[1mProduction, then staging moves (#102)[0m, from
+     [0m[38;2;177;185;249m/srv/example/checkouts/agent-0123456789abcdef/apps/widget/infra[0m:
+  [0m[38;2;177;185;249mterraform workspace select production[0m
+  [0m[38;2;177;185;249mterraform apply -var-file=env/production.tfvars -target=module.widget_vault[0m
+     The first two applies show 6 additions each; the staging one only moves state. Check
+     both vault types.
+     → I copy and smoke-test each vault, remove the [0m[38;2;177;185;249mmoved [0mblocks, replan all 3 workspaces
+     and force-push.
+  3. [0m[1mMerges:[0m
+     a. Merge #102. The controller creates the production applications on the cluster
+        right away.
+     b. Apply the set:
+        [0m[38;2;177;185;249mkubectl --context tools diff -f sets/widget.yml[0m
+        The production applications on the second cluster appear after this.
+     c. You start [0m[38;2;177;185;249mapi [production] [0mand [0m[38;2;177;185;249mclient [production][0m. Their [0m[38;2;177;185;249mdeploy [0mand [0m[38;2;177;185;249mdeploy-eu[0m
+        jobs each have their own environment approval, so you can still approve production
+        and hold the other one.
+
+  [0m[1mFreeze: [0mfrom the #101 merge until the widget change is merged, don't push to [0m[38;2;177;185;249mmain [0min
+  widget and don't start any widget deploy. The old workflows would push to the old path.
+
+[0m[38;2;255;255;255m⏺ [0mNested lists:
+
+  1. The first item at the top level has enough words in it to wrap onto a second row
+     here.
+     a. A nested item under the first one also has enough words to wrap onto a second row.
+        i. A third level item under the nested one has enough words to wrap onto a second
+           row.
+        ii. Another third level item.
+     b. A second nested item.
+  2. The second top level item.
+     - A nested bullet under the second item that has enough words to wrap onto another
+       row.
+       - A deeper bullet under the nested bullet that has enough words to wrap onto
+         another row.
+
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────────────[0m
