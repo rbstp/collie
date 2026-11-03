@@ -227,6 +227,9 @@ pub struct WorktreeInfo {
     pub open_workspace_id: Option<String>,
     pub is_bare: bool,
     pub is_linked_worktree: bool,
+    /// From git only, for a herdr-core task; herdr's answer is not read for it.
+    #[serde(skip)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -546,6 +549,17 @@ pub async fn agent_start(
     ultracode: bool,
 ) -> Result<AgentInfo, Error> {
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
+    let args = agent_args(kind, resume, ultracode);
+    if !args.is_empty() {
+        params["args"] = json!(args);
+    }
+    let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
+    Ok(agent)
+}
+
+/// A task agent's arguments, in herdr and herdr-core alike. Codex always gets `--no-daemon`:
+/// under its shared app-server, its SessionStart hook reports the wrong terminal.
+pub fn agent_args<'a>(kind: &str, resume: Option<&'a str>, ultracode: bool) -> Vec<&'a str> {
     let mut args = match (kind, resume) {
         ("claude", Some(id)) => vec!["--resume", id],
         ("codex", Some(id)) => vec!["resume", id, "--no-daemon"],
@@ -555,11 +569,7 @@ pub async fn agent_start(
     if kind == "claude" && ultracode {
         args.extend(["--settings", r#"{"ultracode":true}"#]);
     }
-    if !args.is_empty() {
-        params["args"] = json!(args);
-    }
-    let AgentStartedResult::AgentStarted { agent } = call(socket, "agent.start", params).await?;
-    Ok(agent)
+    args
 }
 
 pub async fn workspace_create(

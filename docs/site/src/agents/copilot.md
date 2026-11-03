@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | Yes |
+| [New task](../app/new-task.md) | In herdr only; in [Herdr 2](../app/new-task.md#herdr-2), Copilot CLI reports no status, so collie only reads it |
 
 ## Set up
 

@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::drive::{Fail, resolve_cwd};
+use crate::runtime::herdr::{WorktreeInfo, WorktreeList, WorktreeSource};
 
 const OUTPUT_LIMIT: usize = 2 * 1024 * 1024;
 const FILE_LIMIT: u64 = 1024 * 1024;
@@ -226,6 +227,65 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
         }
     }
     Ok(list)
+}
+
+/// What herdr's `worktree.list` answers, for a herdr-core task: the main checkout is the
+/// first entry and the source, every other entry a linked worktree.
+pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
+    let (out, ok, truncated) = git_command(
+        cwd,
+        &["worktree", "list", "--porcelain", "-z"],
+        256 * 1024,
+        &[],
+    )
+    .await?;
+    if !ok || truncated {
+        return Err(error("Git could not list the worktrees"));
+    }
+    let lines: Vec<&[u8]> = out.split(|b| *b == 0).collect();
+    let mut worktrees: Vec<WorktreeInfo> = Vec::new();
+    for (index, record) in lines
+        .split(|line| line.is_empty())
+        .filter(|record| !record.is_empty())
+        .enumerate()
+    {
+        let mut path = None;
+        let mut branch = None;
+        let mut bare = false;
+        let mut locked = false;
+        for line in record {
+            if let Some(p) = line.strip_prefix(b"worktree ") {
+                path = std::str::from_utf8(p).ok().map(str::to_owned);
+            } else if let Some(name) = line.strip_prefix(b"branch refs/heads/") {
+                branch = std::str::from_utf8(name).ok().map(str::to_owned);
+            } else if *line == b"bare" {
+                bare = true;
+            } else if *line == b"locked" || line.starts_with(b"locked ") {
+                locked = true;
+            }
+        }
+        if let Some(path) = path {
+            worktrees.push(WorktreeInfo {
+                path,
+                branch,
+                open_workspace_id: None,
+                is_bare: bare,
+                is_linked_worktree: index > 0,
+                locked,
+            });
+        }
+    }
+    let source_checkout_path = worktrees
+        .first()
+        .ok_or_else(|| error("Git listed no worktree"))?
+        .path
+        .clone();
+    Ok(WorktreeList {
+        source: WorktreeSource {
+            source_checkout_path,
+        },
+        worktrees,
+    })
 }
 
 /// The phone may only pick a worktree collied itself listed for the agent's repository.
@@ -1176,6 +1236,71 @@ mod tests {
                 .success(),
             "{args:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn worktree_list_reads_the_main_checkout_first() {
+        let (_dir, cwd, roots) = repo();
+        let root = &roots[0];
+        run(root, &["commit", "-q", "--allow-empty", "-m", "start"]);
+        let feat = root.join("wt/feat branch");
+        let detached = root.join("wt/detached");
+        run(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat",
+                feat.to_str().unwrap(),
+            ],
+        );
+        run(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                detached.to_str().unwrap(),
+            ],
+        );
+        let list = worktree_list(&cwd).await.unwrap();
+        assert_eq!(list.source.source_checkout_path, cwd.as_str());
+        let seen: Vec<(String, Option<String>, bool, bool)> = (list.worktrees.into_iter())
+            .map(|w| (w.path, w.branch, w.is_linked_worktree, w.is_bare))
+            .collect();
+        let path = |p: &Path| p.to_str().unwrap().to_owned();
+        assert_eq!(
+            seen,
+            [
+                (path(root), Some("main".to_owned()), false, false),
+                (path(&detached), None, true, false),
+                (path(&feat), Some("feat".to_owned()), true, false),
+            ]
+        );
+
+        let bare = root.join("bare.git");
+        run(
+            root,
+            &["clone", "-q", "--bare", ".", bare.to_str().unwrap()],
+        );
+        let linked = root.join("from-bare");
+        run(
+            &bare,
+            &["worktree", "add", "-q", linked.to_str().unwrap(), "main"],
+        );
+        let list = worktree_list(&Cwd::new(linked.to_str().unwrap()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(list.source.source_checkout_path, path(&bare));
+        assert!(list.worktrees[0].is_bare && !list.worktrees[0].is_linked_worktree);
+        assert!(list.worktrees[1].is_linked_worktree && !list.worktrees[1].is_bare);
+
+        let plain = tempfile::tempdir().unwrap();
+        let plain = Cwd::new(plain.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
+        assert!(worktree_list(&plain).await.is_err());
     }
 
     fn repo() -> (tempfile::TempDir, Cwd, Vec<PathBuf>) {

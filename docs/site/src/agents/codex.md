@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | Monthly credits, for a credit-metered workspace |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) |
+| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session), in herdr or [Herdr 2](../app/new-task.md#herdr-2) |
 
 ## Set up
 
@@ -33,7 +33,7 @@ herdr's hook does nothing in Herdr 2 (herdr-core), so Chat, the context ring and
 { "hooks": [{ "type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5 }] }
 ```
 
-The next time Codex starts, it asks you to review the new hook: trust it. Run Codex with `--no-daemon` in Herdr 2 too; a Codex on the shared daemon reports every session from the terminal that started the daemon, so `collied` ignores those reports. A Codex that was already running reports its session at its next start, `/new` or resume. `collied doctor` checks the hook.
+The next time Codex starts, it asks you to review the new hook: trust it. Run Codex with `--no-daemon` in Herdr 2 too; a Codex on the shared daemon reports every session from the terminal that started the daemon, so `collied` ignores those reports. A Codex that was already running reports its session at its next start, `/new` or resume. `collied doctor` checks the hook. Codex tasks the phone starts in Herdr 2 run with `--no-daemon`.
 
 ## Why `--no-daemon`
 

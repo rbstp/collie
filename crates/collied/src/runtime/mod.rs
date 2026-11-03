@@ -110,6 +110,15 @@ pub fn herdr_session_label(session: Option<&str>) -> String {
     herdr::session_label(session, &herdr::SocketEnv::from_process())
 }
 
+/// herdr is not running at all: no socket, or nothing listening on it. Any other failure
+/// may be a herdr that is busy or restarting.
+pub fn not_running(e: &Error) -> bool {
+    matches!(e, Error::Io(io) if matches!(
+        io.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+    ))
+}
+
 pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
@@ -133,6 +142,20 @@ impl Runtime {
 
     pub fn core(&self) -> Option<&Arc<Core>> {
         self.core.as_ref()
+    }
+
+    /// Where a new task starts: herdr while it answers, which gives the agent herdr's screen
+    /// rules, focus and workspace; the followed core only when herdr is not running. A herdr
+    /// that runs but does not answer is an error, not a reason to start in the core.
+    pub async fn task_core(&self) -> Result<Option<Arc<Core>>, Error> {
+        let Some(core) = self.core.as_ref().filter(|c| c.following()) else {
+            return Ok(None);
+        };
+        match herdr::ping(&self.herdr).await {
+            Ok(_) => Ok(None),
+            Err(e) if not_running(&e) => Ok(Some(core.clone())),
+            Err(e) => Err(e),
+        }
     }
 
     fn followed(&self) -> Result<&Arc<Core>, Error> {
@@ -209,6 +232,11 @@ impl Runtime {
         } else {
             herdr::session_snapshot(&self.herdr).await
         }
+    }
+
+    /// herdr's own snapshot, without the core's agents, its error included.
+    pub async fn herdr_snapshot(&self) -> Result<SessionSnapshot, Error> {
+        herdr::session_snapshot(&self.herdr).await
     }
 
     pub async fn agent_manifests(&self) -> Result<Vec<String>, Error> {

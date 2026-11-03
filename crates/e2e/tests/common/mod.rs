@@ -440,6 +440,11 @@ pub struct CoreSession {
 
 impl CoreSession {
     pub fn start(tag: &str) -> Self {
+        Self::start_with(tag, &[])
+    }
+
+    /// With `env` added to the clean environment, which the core passes to every terminal.
+    pub fn start_with(tag: &str, env: &[(&str, &str)]) -> Self {
         let pid = std::process::id();
         let root = PathBuf::from(format!("/tmp/h{tag}-{pid}"));
         let _ = std::fs::remove_dir_all(&root);
@@ -456,7 +461,14 @@ impl CoreSession {
             name,
             running: true,
         };
-        let out = session.hc(&["server", "start", "--json"]);
+        let out = session
+            .command(&["server", "start", "--json"])
+            .envs(env.iter().copied())
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let out: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
         assert!(out["pid"].is_u64(), "hc server start: {out}");
         let deadline = Instant::now() + Duration::from_secs(20);
         while StdUnixStream::connect(&session.socket).is_err() {
