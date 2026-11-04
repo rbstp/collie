@@ -504,6 +504,7 @@ struct ConversationMarkdown: View {
     let text: String
     var query: String = ""
     @Environment(AgentModel.self) private var agent: AgentModel?
+    @State private var copied: Int?
 
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
@@ -572,17 +573,22 @@ struct ConversationMarkdown: View {
                     HStack(alignment: .top, spacing: 8) {
                         ScrollView(.horizontal) {
                             Text(Self.highlighted(AttributedString(block.text), query: query))
-                                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                .font(.system(.subheadline, design: .monospaced)).textSelection(.enabled)
                                 .padding(.vertical, 4)
                         }
-                        Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
-                            .labelStyle(.iconOnly).buttonStyle(.glass).tint(.primary).controlSize(.small)
+                        Button {
+                            copy(block.text, index)
+                        } label: {
+                            Label(copied == index ? "Copied" : "Copy code", systemImage: copied == index ? AgentActivityStatus(.done).symbol : "doc.on.doc")
+                                .foregroundStyle(copied == index ? AgentState.done.color : .primary)
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.glass).tint(.primary).controlSize(.small)
                     }
                     .padding(8)
                     .padding(.leading, 4)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .contextMenu {
-                        Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
+                        Button("Copy code", systemImage: "doc.on.doc") { copy(block.text, index) }
                         if let agent {
                             Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
                         }
@@ -600,5 +606,16 @@ struct ConversationMarkdown: View {
         .environment(\.openURL, OpenURLAction { url in
             MainActor.assumeIsolated { Self.open(url, agent: agent) }
         })
+        .task(id: copied) {
+            guard copied != nil else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            copied = nil
+        }
+    }
+
+    private func copy(_ code: String, _ index: Int) {
+        UIPasteboard.general.string = code
+        copied = index
     }
 }
