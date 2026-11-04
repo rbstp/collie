@@ -157,7 +157,7 @@ struct NewTaskSheet: View {
                                 }
                                 .tint(.primary)
                             }
-                            TextField("Folder name", text: $model.folderName)
+                            TextField("Folder name", text: $model.folderName, prompt: Text("Folder name").foregroundStyle(.metadata))
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                                 .font(.subheadline.monospaced())
@@ -171,7 +171,7 @@ struct NewTaskSheet: View {
                             }
                             .tint(.primary)
                         }
-                        TextField("owner/repo or URL", text: $model.repository)
+                        TextField("owner/repo or URL", text: $model.repository, prompt: Text("owner/repo or URL").foregroundStyle(.metadata))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
@@ -192,7 +192,7 @@ struct NewTaskSheet: View {
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
-                                TextField("Branch name (optional)", text: $model.branch)
+                                TextField("Branch name (optional)", text: $model.branch, prompt: Text("Branch name (optional)").foregroundStyle(.metadata))
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
                                 if let path = model.createPath {
@@ -200,7 +200,7 @@ struct NewTaskSheet: View {
                                         .font(.footnote)
                                 }
                             } else if model.worktreeAction == .pullRequest {
-                                TextField("Pull request number", text: $model.pullRequestNumber)
+                                TextField("Pull request number", text: $model.pullRequestNumber, prompt: Text("Pull request number").foregroundStyle(.metadata))
                                     .keyboardType(.numberPad)
                                 if let number = model.pullRequest {
                                     Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
@@ -309,7 +309,7 @@ struct NewTaskSheet: View {
                             ProgressView()
                         }
                     }
-                    TextField("Workspace label (optional)", text: $model.label)
+                    TextField("Workspace label (optional)", text: $model.label, prompt: Text("Workspace label (optional)").foregroundStyle(.metadata))
                 }
             }
             .listSectionSpacing(.compact)
@@ -422,7 +422,7 @@ struct NewTaskSheet: View {
             "Folder", text: path,
             prompt: missingFolder
                 ? Text("Choose a folder to start").font(.subheadline).foregroundStyle(ContextRing.tone(20))
-                : Text(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project")
+                : Text(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project").foregroundStyle(.metadata)
         )
         .textInputAutocapitalization(.never)
         .autocorrectionDisabled()
