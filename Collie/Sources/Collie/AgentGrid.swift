@@ -372,7 +372,7 @@ struct ChatPreview: View {
     }
 
     /// Blank lines and code fences would spend the preview's few lines on nothing.
-    static func compact(_ text: String) -> String {
+    nonisolated static func compact(_ text: String) -> String {
         text.split(separator: "\n").filter { !$0.allSatisfy(\.isWhitespace) && !$0.contains(/^\s*```\S*\s*$/) }.joined(separator: "\n")
     }
 }
