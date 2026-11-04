@@ -37,7 +37,7 @@ struct AgentGrid<Menu: View>: View {
                 if entries.isEmpty {
                     NoMachines()
                 }
-                LazyVStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(entries) { entry in
                         Section {
                             let agents = entry.gridAgents(starred: previews.starred, order: order)
@@ -48,7 +48,7 @@ struct AgentGrid<Menu: View>: View {
                             if !agents.rest.isEmpty {
                                 LazyVGrid(
                                     columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
-                                    alignment: .leading, spacing: 16
+                                    alignment: .leading, spacing: 12
                                 ) {
                                     let columns = typeSize.isAccessibilitySize ? 1 : max(1, Int((gridWidth + 12) / (150 + 12)))
                                     let axes: Axis.Set = columns == 1 ? .vertical : agents.rest.count <= columns ? .horizontal : [.horizontal, .vertical]
@@ -210,7 +210,7 @@ struct AgentCard: View {
 
     @ViewBuilder private var preview: some View {
         if let conversation {
-            ChatPreview(messages: conversation.suffix(starred ? 3 : 1), lines: starred ? 2 : 3)
+            ChatPreview(messages: conversation.suffix(starred ? 4 : 2), lines: starred ? 2 : 3)
         } else {
             TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 8)
                 .overlay(alignment: .top) {
@@ -228,7 +228,8 @@ struct AgentCard: View {
             preview
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
-                    : (starred ? 150 : 80))
+                    // Four one-line messages, the most a chat preview holds, fill about 110 pt; 150 left a blank band under them.
+                    : (starred ? (conversation != nil ? 110 : 150) : 80))
                 .accessibilityHidden(true)
                 .overlay(alignment: .top) {
                     if agent.status != .blocked, !agent.subagents.isEmpty {
@@ -258,21 +259,23 @@ struct AgentCard: View {
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    StatusIcon(state: agent.status).accessibilityHidden(true)
+                    StatusIcon(state: agent.status)
+                        .scaleEffect(0.8)
+                        .frame(width: 16, height: 16)
+                        .accessibilityHidden(true)
                     Text(agent.displayTitle)
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if let pullRequest = agent.pullRequest {
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
+                    }
                     if starred {
                         Image(systemName: "star.fill")
                             .font(.caption2)
                             .foregroundStyle(.yellow)
                             .accessibilityLabel("Starred")
                     }
-                    StatusAge(agent: agent, now: now)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
                 }
                 HStack(spacing: 6) {
                     // Under the status icon, so the metadata lines up with the title.
@@ -281,7 +284,7 @@ struct AgentCard: View {
                             AgentKindLabel(kind: kind, iconOnly: true)
                         }
                     }
-                    .frame(width: 20)
+                    .frame(width: 16)
                     HStack(spacing: 4) {
                         if followed {
                             Image(systemName: "pin.fill")
@@ -290,13 +293,12 @@ struct AgentCard: View {
                         }
                         if let workspace {
                             Text(workspace).layoutPriority(1)
+                            Text(verbatim: "·").fixedSize()
                         }
+                        StatusAge(agent: agent, now: now).fixedSize()
                         if agent.status == .blocked, !agent.subagents.isEmpty {
-                            if workspace != nil { Text(verbatim: "·").fixedSize() }
+                            Text(verbatim: "·").fixedSize()
                             Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
-                        }
-                        if let pullRequest = agent.pullRequest {
-                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
                         }
                     }
                     .font(.caption)
@@ -304,7 +306,7 @@ struct AgentCard: View {
                     .lineLimit(1)
                     Spacer(minLength: 0)
                     if let left = agent.contextLeft {
-                        ContextRing(left: left)
+                        ContextRing(left: left, font: .caption2)
                     }
                 }
             }

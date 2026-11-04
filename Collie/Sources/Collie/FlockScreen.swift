@@ -49,9 +49,12 @@ struct FlockScreen: View {
             .overlay(alignment: .top) {
                 GeometryReader { geometry in
                     let background = Color(.systemGroupedBackground)
-                    LinearGradient(stops: [.init(color: background, location: 0.75), .init(color: background.opacity(0), location: 1)],
+                    let height = geometry.safeAreaInsets.top + 12
+                    // Solid under the whole bar: content fading out beside its glass controls showed through as a ghost.
+                    LinearGradient(stops: [.init(color: background, location: geometry.safeAreaInsets.top / height),
+                                           .init(color: background.opacity(0), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
-                        .frame(height: geometry.safeAreaInsets.top + 12)
+                        .frame(height: height)
                         .offset(y: -geometry.safeAreaInsets.top)
                 }
                 .allowsHitTesting(false)
@@ -298,7 +301,7 @@ struct FlockScreen: View {
             }
         case .inbox:
             let items = InboxItem.items(in: entries).filter { !filtered || $0.matches(inboxQuery) }
-            let rows = InboxItem.rows(items, filter: filtered ? inboxFilter : .all, seen: seen, snoozed: snoozed, now: .now)
+            let rows = InboxItem.rows(items, filter: filtered ? inboxFilter : .all, snoozed: snoozed, now: .now)
             let asleep = filtered && !showsSnoozed ? [] : rows.asleep.map(\.0)
             return (InboxSection.allCases.flatMap { rows.active[$0] ?? [] } + asleep).map(\.route)
         case .list:
@@ -464,7 +467,7 @@ private struct AgentRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            if let left = agent.contextLeft { ContextRing(left: left) }
+            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
         }
     }
 }
@@ -528,15 +531,19 @@ struct StatusPill: View {
     var title: String? = nil
     // Resolved where it is drawn: Color.accentColor keeps the app's light variant under a forced dark scheme.
     @Environment(\.appAccent) private var appAccent
+    @Environment(\.colorScheme) private var colorScheme
+    @ScaledMetric(relativeTo: .caption) private var spinner: CGFloat = 14
 
     var body: some View {
         Label {
             Text(title ?? state.label.capitalized)
         } icon: {
             if state == .working {
+                // The spinner grows less than text with Dynamic Type; pinned at its 20 pt default, it scales with the label.
                 StatusIcon(state: state)
-                    .scaleEffect(0.7)
-                    .frame(width: 14, height: 14)
+                    .dynamicTypeSize(.large)
+                    .scaleEffect(spinner / 20)
+                    .frame(width: spinner, height: spinner)
                     .accessibilityHidden(true)
             } else {
                 Image(systemName: state == .done ? "checkmark.circle" : AgentActivityStatus(state).symbol)
@@ -549,6 +556,8 @@ struct StatusPill: View {
             .padding(.vertical, 4)
             .padding(2)
             .glassEffect(.regular, in: .capsule)
+            // Dark glass over a lighter surface such as the terminal turns gray; the dim keeps the label at 4.5:1 or more.
+            .background(colorScheme == .dark ? .black.opacity(0.75) : .clear, in: .capsule)
             .fixedSize()
     }
 }
@@ -595,13 +604,21 @@ struct StatusIcon: View {
 
 struct ContextRing: View {
     let left: UInt8
+    var font: Font = .caption
+
+    // Secondary gray is about 3.4:1 on white and 4.2:1 on the session bar over the terminal; both get a stronger gray, 4.5:1 or more.
+    private static let gray = Color(uiColor: UIColor {
+        $0.userInterfaceStyle == .dark
+            ? UIColor.secondaryLabel.resolvedColor(with: $0).withAlphaComponent(0.7)
+            : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+    })
 
     var body: some View {
         let left = min(left, 100)
         Label("\(left)%", systemImage: "memorychip")
             .labelStyle(KindLabelStyle())
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(left <= 20 ? Self.tone(left) : .secondary)
+            .font(font.monospacedDigit())
+            .foregroundStyle(left <= 20 ? Self.tone(left) : Self.gray)
             .fixedSize()
             .accessibilityElement()
             .accessibilityLabel("\(left)% of context left")

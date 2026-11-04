@@ -101,7 +101,7 @@ struct AgentInbox<Menu: View>: View {
 
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
-        let (groups, asleep) = InboxItem.rows(items, filter: filter, seen: seen, snoozed: snoozed, now: now)
+        let (groups, asleep) = InboxItem.rows(items, filter: filter, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
                 Section {
@@ -211,10 +211,10 @@ struct InboxItem: Identifiable, Equatable {
         }
     }
 
-    static func rows(_ items: [InboxItem], filter: InboxFilter, seen: SeenAgents, snoozed: SnoozedAgents, now: Date)
+    static func rows(_ items: [InboxItem], filter: InboxFilter, snoozed: SnoozedAgents, now: Date)
         -> (active: [InboxSection: [InboxItem]], asleep: [(InboxItem, Date)])
     {
-        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, seen: seen, now: now) }
+        let active = items.filter { snoozed.wake(of: $0.agent, route: $0.route, now: now) == nil && filter.includes($0, now: now) }
         let asleep = items.compactMap { item in snoozed.wake(of: item.agent, route: item.route, now: now).map { (item, $0) } }
             .sorted { ($0.1, $0.0.route.terminalId) < ($1.1, $1.0.route.terminalId) }
         return (InboxSection.grouped(active, now: now), asleep)
@@ -229,25 +229,22 @@ struct InboxItem: Identifiable, Equatable {
 }
 
 enum InboxFilter: CaseIterable {
-    case all, needsAttention, working, inactive
+    case all, needsYou, working, done, inactive
 
-    var title: String {
+    var section: InboxSection? {
         switch self {
-        case .all: "All"
-        case .needsAttention: "Needs you"
-        case .working: "Working"
-        case .inactive: "Inactive"
+        case .all: nil
+        case .needsYou: .needsYou
+        case .working: .working
+        case .done: .done
+        case .inactive: .inactive
         }
     }
 
-    func includes(_ item: InboxItem, seen: SeenAgents, now: Date) -> Bool {
-        switch self {
-        case .all: true
-        case .needsAttention:
-            item.agent.status == .blocked || (item.agent.status == .done && !seen.isSeen(item.agent, route: item.route))
-        case .working: InboxSection.of(item.agent, now: now) == .working
-        case .inactive: InboxSection.of(item.agent, now: now) == .inactive
-        }
+    var title: String { section?.title ?? "All" }
+
+    func includes(_ item: InboxItem, now: Date) -> Bool {
+        section.map { InboxSection.of(item.agent, now: now) == $0 } ?? true
     }
 }
 
@@ -302,7 +299,16 @@ private struct InboxRow: View {
             StatusIcon(state: agent.status)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 3) {
-                Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                    if unseen {
+                        Image(systemName: "circle.fill")
+                            .font(.caption2)
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Unseen completion")
+                    }
+                }
                 Group {
                     if let lastLine = agent.lastLine {
                         Text(lastLine)
@@ -356,16 +362,8 @@ private struct InboxRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            VStack(alignment: .trailing, spacing: 6) {
-                if unseen {
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.primary)
-                        .accessibilityLabel("Unseen completion")
-                }
-                if let left = agent.contextLeft {
-                    ContextRing(left: left)
-                }
+            if let left = agent.contextLeft {
+                ContextRing(left: left, font: .caption2)
             }
         }
     }
