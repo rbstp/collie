@@ -9,13 +9,13 @@
 
 ## Plan usage
 
-When the agent you pick has used 80% or more of a [plan limit](usage.md) on that machine, a line under the agent picker says so, such as "Claude 5-hour limit at 92%, resets at 3:40 PM", and turns orange at 100%.
+When the agent you pick has used 80% or more of a [plan limit](usage.md) on that machine, a line under the agent picker says so, such as "Claude 5-hour limit at 92%, resets at 3:40 PM". Like the Usage bars, the line is orange from 80% and red from 90%.
 
 ## Choose a folder
 
 Each machine can have a **base folder** (**Machines** > the machine > **Base folder**). Give its full path, such as `/Users/you/git`: collie does not expand `~`. It must be inside one of `collied`'s task roots (`[tasks] roots` in `collied.toml`, your home folder by default).
 
-Type a folder's name in the base, tap **Browse**, pick a recent folder or give an absolute path inside a task root. Until you choose one, **Start** stays dimmed, and once you write a prompt an orange line under the folder field reads "Choose a folder to start". A checkmark marks the recent folder you chose. **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
+Type a folder's name in the base, tap **Browse**, pick a recent folder or give an absolute path inside a task root. Until you choose one, **Start** stays dimmed, and once you write a prompt the empty folder field reads "Choose a folder to start" in orange. A checkmark marks the recent folder you chose. **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
 
 ## Clone a repository
 

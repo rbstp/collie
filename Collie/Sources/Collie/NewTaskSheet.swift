@@ -13,6 +13,7 @@ struct NewTaskSheet: View {
     @State private var dictationExpanded = false
     @State private var dictationShown = false
     @State private var selection: TextSelection?
+    @State private var now = Date.now
     @FocusState private var editingPrompt: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -158,7 +159,7 @@ struct NewTaskSheet: View {
                             TextField("Folder name", text: $model.folderName)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
-                                .font(.body.monospaced())
+                                .font(.subheadline.monospaced())
                         } else {
                             folderPicker($model.cwd, completions: model.completions)
                         }
@@ -173,7 +174,7 @@ struct NewTaskSheet: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
-                            .font(.body.monospaced())
+                            .font(.subheadline.monospaced())
                     } else if model.location == .resume {
                         folderPicker($model.cwd, completions: model.completions)
                     } else {
@@ -253,7 +254,7 @@ struct NewTaskSheet: View {
                         }
                         if let sessions = model.sessions {
                             if sessions.isEmpty {
-                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.secondary)
+                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.metadata)
                             }
                             ForEach(sessions, id: \.sessionId) { session in
                                 Button {
@@ -267,7 +268,7 @@ struct NewTaskSheet: View {
                                                 Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
                                             }
                                             .font(.footnote)
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(.metadata)
                                         }
                                         Spacer()
                                         if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark").foregroundStyle(.tint) }
@@ -292,6 +293,14 @@ struct NewTaskSheet: View {
                                 Text(model.agent.capitalized)
                             }
                             .tint(.primary)
+                            // A row rather than the footer: light orange is 4.1:1 on the grouped background, 4.5:1 on the row.
+                            // A TimelineView here would leave an empty row without a warning.
+                            if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: now) {
+                                Text(warning.text)
+                                    .font(.footnote)
+                                    .foregroundStyle(ContextRing.tone(100 - warning.used))
+                                    .accessibilityLabel(warning.spoken)
+                            }
                             if model.agent == "claude" {
                                 Toggle("Ultracode", isOn: $model.ultracode)
                             }
@@ -300,16 +309,6 @@ struct NewTaskSheet: View {
                         }
                     }
                     TextField("Workspace label (optional)", text: $model.label)
-                } footer: {
-                    if model.location != .resume, !model.agent.isEmpty {
-                        TimelineView(.everyMinute) { context in
-                            if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
-                                Text(warning.text)
-                                    .foregroundStyle(warning.reached ? Self.warningOrange : Color.secondary)
-                                    .accessibilityLabel(warning.spoken)
-                            }
-                        }
-                    }
                 }
             }
             .listSectionSpacing(.compact)
@@ -362,6 +361,12 @@ struct NewTaskSheet: View {
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    now = .now
+                }
+            }
             .task(id: model.location == .worktree ? "\(model.machineId ?? ""):\(model.worktreeAction.rawValue):\(model.base ?? ""):\(model.source)" : nil) {
                 guard model.location == .worktree, model.sourceFolder != nil else {
                     return
@@ -404,9 +409,6 @@ struct NewTaskSheet: View {
         }
     }
 
-    // Plain orange measures about 2:1 on the light grouped background; the high-contrast variant clears 4.5:1.
-    private static let warningOrange = Color(uiColor: UIColor { .systemOrange.resolvedColor(with: $0.modifyingTraits { $0.accessibilityContrast = .high }) })
-
     private var missingFolder: Bool {
         model.location == .folder && !model.newFolder && model.folder == nil
             && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
@@ -414,15 +416,16 @@ struct NewTaskSheet: View {
 
     @ViewBuilder
     private func folderPicker(_ path: Binding<String>, completions: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: path)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-            if missingFolder {
-                Text("Choose a folder to start").font(.footnote).foregroundStyle(Self.warningOrange)
-            }
-        }
+        // The hint takes the placeholder's place, so the form keeps its geometry when a folder is chosen.
+        TextField(
+            "Folder", text: path,
+            prompt: missingFolder
+                ? Text("Choose a folder to start").foregroundStyle(ContextRing.tone(20))
+                : Text(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project")
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .font(.subheadline.monospaced())
         if let folders = model.folders {
             ForEach(completions, id: \.self) { name in
                 Button {
@@ -445,9 +448,7 @@ struct NewTaskSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(URL(filePath: cwd).lastPathComponent)
-                        if path.wrappedValue != cwd {
-                            Text(cwd).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                        }
+                        Text(cwd).font(.caption.monospaced()).foregroundStyle(.metadata).lineLimit(1).truncationMode(.head)
                     }
                     Spacer()
                     if path.wrappedValue == cwd {

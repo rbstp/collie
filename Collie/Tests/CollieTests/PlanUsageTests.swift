@@ -115,14 +115,14 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(warning.text == "Claude 5-hour limit at 92%, \(resets(usage, "5h"))")
     #expect(warning.text.hasPrefix("Claude 5-hour limit at 92%, resets at "))
     #expect(warning.spoken == warning.text)
-    #expect(!warning.reached)
+    #expect(warning.used == 92)
     #expect(usage.warning(agent: "copilot", now: now) == nil)
     #expect(usage.warning(agent: "codex", now: now) == nil)
 
     usage.fiveHour?.usedPercent = 100
     warning = try #require(usage.warning(agent: "claude", now: now))
     #expect(warning.text == "Claude 5-hour limit reached, \(resets(usage, "5h"))")
-    #expect(warning.reached)
+    #expect(warning.used == 100)
 
     usage.fiveHour?.usedPercent = 79
     #expect(usage.warning(agent: "claude", now: now) == nil)
@@ -139,7 +139,7 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     usage.codex = CodexUsage(used: 2_000, limit: 2_000, resetsAtMs: now.unixMs + 9 * 86_400_000, recordedMs: now.unixMs - 20_000)
     warning = try #require(usage.warning(agent: "codex", now: now))
     #expect(warning.text == "Codex monthly limit reached, resets \(Date(unixMs: now.unixMs + 9 * 86_400_000).formatted(date: .abbreviated, time: .omitted))")
-    #expect(warning.reached)
+    #expect(warning.used == 100)
     #expect(usage.warning(agent: "copilot", now: now) == nil)
     usage.codex?.used = 1_600
     #expect(usage.warning(agent: "codex", now: now)?.text.hasPrefix("Codex monthly limit at 80%, resets ") == true)
@@ -180,7 +180,7 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(usage.copilot?.percent == 103)
     let warning = try #require(usage.warning(agent: "copilot", now: now))
     #expect(warning.text.hasPrefix("Copilot premium limit reached, resets "))
-    #expect(warning.reached)
+    #expect(warning.used == 100)
     usage.copilot?.recordedMs = nowMs - 11 * 60_000
     #expect(usage.warning(agent: "copilot", now: now)?.text.hasSuffix(", recorded 11m ago") == true)
     #expect(usage.age(now: now) == "11m ago")

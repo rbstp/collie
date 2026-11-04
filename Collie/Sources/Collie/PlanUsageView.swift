@@ -33,7 +33,7 @@ struct UsageSections: View {
                             if !usage.limits(now: context.date).isEmpty || codex != nil || copilot.map({ !$0.unlimited }) == true {
                                 Text("Ticks mark how much of each window has passed.")
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(.metadata)
                             }
                         }
                         .padding(.vertical, 4)
@@ -141,7 +141,7 @@ private struct UsageLimitRow: View {
             if let used {
                 UsageBar(used: used, elapsed: elapsed)
             }
-            Text(resets).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            Text(resets).font(.caption.monospacedDigit()).foregroundStyle(.metadata)
         }
     }
 }
@@ -164,7 +164,7 @@ private struct UsageHeader: View {
             Text(title).font(.headline)
             Spacer(minLength: 8)
             if let recordedMs {
-                Text("Updated \(PlanUsage.age(sinceMs: recordedMs, now: now))").font(.caption).foregroundStyle(.secondary)
+                Text("Updated \(PlanUsage.age(sinceMs: recordedMs, now: now))").font(.caption).foregroundStyle(.metadata)
             }
         }
     }

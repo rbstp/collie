@@ -337,7 +337,7 @@ extension PlanUsage {
         return PlanUsageWarning(
             text: head + resets + (stale ? ", recorded \(Self.age(sinceMs: sinceMs, now: now))" : ""),
             spoken: head + spokenResets + (stale ? ", \(Self.spokenAge(sinceMs: sinceMs, now: now))" : ""),
-            reached: used >= 100
+            used: used
         )
     }
 
@@ -385,7 +385,7 @@ extension AgentSummary {
 struct PlanUsageWarning: Equatable {
     let text: String
     let spoken: String
-    let reached: Bool
+    let used: UInt8
 }
 
 private func monthElapsed(resetsAtMs: UInt64, now: Date) -> Double {

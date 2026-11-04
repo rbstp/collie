@@ -114,12 +114,12 @@ struct UsageCostsCard: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tokens and cost").font(.headline)
-                    Text("All agents on this machine").font(.caption).foregroundStyle(.secondary)
+                    Text("All agents on this machine").font(.caption).foregroundStyle(.metadata)
                 }
                 Spacer()
                 if case .loaded(let costs) = model.phase, costs.scanning {
                     ProgressView().controlSize(.small)
-                    Text("Scanning").font(.caption).foregroundStyle(.secondary)
+                    Text("Scanning").font(.caption).foregroundStyle(.metadata)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -128,9 +128,9 @@ struct UsageCostsCard: View {
             case .loading:
                 ProgressView().frame(maxWidth: .infinity)
             case .outdated:
-                Text("Update collied on this machine to see tokens and cost.").font(.subheadline).foregroundStyle(.secondary)
+                Text("Update collied on this machine to see tokens and cost.").font(.subheadline).foregroundStyle(.metadata)
             case .failed(let message):
-                Text(message).font(.subheadline).foregroundStyle(.secondary)
+                Text(message).font(.subheadline).foregroundStyle(.metadata)
             case .loaded(let costs):
                 CostsDetail(costs: costs)
             }
@@ -163,7 +163,7 @@ private struct CostsDetail: View {
                 Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.semibold).monospacedDigit())
                 Text("\(costs.scanning ? "Partial estimate" : "Estimated") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.metadata)
             }
             .accessibilityElement(children: .combine)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
@@ -217,7 +217,7 @@ private struct CostsDetail: View {
                 .accessibilityLabel("Daily cost")
             }
             if costs.models.isEmpty, !costs.scanning {
-                Text("No tokens recorded in this range").font(.subheadline).foregroundStyle(.secondary)
+                Text("No tokens recorded in this range").font(.subheadline).foregroundStyle(.metadata)
             }
             ForEach(costs.models, id: \.self) { row in
                 VStack(alignment: .leading, spacing: 2) {
@@ -225,18 +225,18 @@ private struct CostsDetail: View {
                     layout {
                         Text(row.model).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).truncationMode(.middle)
                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                        Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .secondary : .primary)
+                        Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .metadata : Color.primary)
                     }
                     Text("\(row.agentName) · \(UsageCostsCard.tokens(row.tokens.total)) tokens")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.metadata)
                 }
                 .accessibilityElement(children: .combine)
             }
             if costs.models.contains(where: { $0.agent == "copilot" }) {
                 Text("Copilot bills premium requests; its cost is an API-equivalent estimate.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.metadata)
             }
         }
     }
@@ -249,7 +249,7 @@ private struct TokenFigure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(UsageCostsCard.tokens(value)).font(.subheadline.monospacedDigit())
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(.metadata)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
