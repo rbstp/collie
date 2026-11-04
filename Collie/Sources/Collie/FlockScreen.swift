@@ -441,6 +441,7 @@ private struct AgentRow: View {
     let workspace: String?
     let followed: Bool
     let now: Date
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -468,9 +469,11 @@ private struct AgentRow: View {
                 .lineLimit(1)
                 .font(.caption)
                 .foregroundStyle(.metadata)
+                // At accessibility sizes a trailing column cut the title and the workspace to a few letters.
+                if typeSize.isAccessibilitySize, let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
             }
             Spacer()
-            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2, aligned: true) }
+            if !typeSize.isAccessibilitySize, let left = agent.contextLeft { ContextRing(left: left, font: .caption2, aligned: true) }
         }
     }
 }
