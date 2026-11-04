@@ -52,6 +52,14 @@ struct AgentScreen: View {
         approvals?.items(machineId: model.route.machineId, terminalId: model.route.terminalId) ?? []
     }
 
+    private var reviewing: Binding<ApprovalItem?> {
+        Binding {
+            approvalItems.first { approvals?.expanded.contains($0.id) == true }
+        } set: { item in
+            if item == nil, let shown = reviewing.wrappedValue { approvals?.toggleExpanded(shown) }
+        }
+    }
+
     private var blocked: BlockedInput? {
         approvals?.blockedInput(machineId: model.route.machineId, terminalId: model.route.terminalId)
     }
@@ -160,11 +168,9 @@ struct AgentScreen: View {
                     // The approval cards share the header's surface, so the content runs under them as under the header.
                     if let approvals {
                         // Together the cards take at most 45% of the screen, keyboard or not, so the composer stays in
-                        // reach; 55% at accessibility sizes, where less left the command and the reason no line above
-                        // the stacked decisions; a quarter in landscape, where more leaves no room for the prompt above Approve.
-                        // Never more than the header and the composer leave them: a card fitted to more showed the reason cut
-                        // under its decisions.
-                        let share = verticalSizeClass == .compact ? 0.25 : typeSize.isAccessibilitySize ? 0.55 : 0.45
+                        // reach, and a quarter in landscape; never more than the header and the composer leave them.
+                        // A card that does not fit its share shows as a band, with the review sheet for the rest.
+                        let share = verticalSizeClass == .compact ? 0.25 : 0.45
                         let room = barsRoom - (typingInLandscape ? 0 : headerHeight) - composerHeight
                         let cap = height > 0 && barsRoom > 0 ? min(height * share, room) / CGFloat(max(items.count, 1)) : .infinity
                         Group {
@@ -187,7 +193,7 @@ struct AgentScreen: View {
                 if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty ? nil : model.blockedHint) {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.warning)
                         .composerNoteGlass()
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
@@ -307,6 +313,10 @@ struct AgentScreen: View {
         }
         .sheet(item: $model.fileLink) { link in
             FileViewer(agent: model, link: link)
+        }
+        // Presented here, not from the card: the band takes the dark scheme over the terminal, and the sheet follows the appearance.
+        .sheet(item: reviewing) { item in
+            if let approvals { ApprovalReview(model: approvals, item: item, sendAnswer: model.typeAnswer) }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in
@@ -443,7 +453,7 @@ private struct AgentHeader: View {
     @Binding var showingChat: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    // Landscape has the width for one row, and three left the session two lines of the screen.
+    // Landscape keeps the title in the bar: a header row more left the session two lines of the screen.
     private var stacked: Bool { typeSize.isAccessibilitySize && verticalSizeClass != .compact }
 
     var body: some View {
@@ -451,66 +461,14 @@ private struct AgentHeader: View {
             if stacked && !approving {
                 SessionTitle(title: title, inHeader: true).frame(maxWidth: .infinity, alignment: .leading)
             }
-            // One row, like the navigation bar it sits under; at accessibility sizes it pushed the screen past both
-            // edges, so the state and its time take a row of their own above the rest.
-            let row = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
-            row {
-                HStack(spacing: 8) {
-                    if let agent = model.agent {
-                        HStack(spacing: 6) {
-                            StatusPill(state: agent.status)
-                            TimelineView(.periodic(from: .now, by: 1)) { context in
-                                Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.primary)
-                            }
-                        }
-                        .fixedSize()
-                    }
-                    if let machineLabel {
-                        Text(verbatim: machineLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    if let agent = model.agent {
-                        if let pullRequest = agent.pullRequest {
-                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
-                                model.insert(PromptShortcut(text: text))
-                            }
-                        }
-                        HStack(spacing: 6) {
-                            if let kind = agent.kind {
-                                AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
-                            }
-                            if let left = agent.contextLeft {
-                                ContextRing(left: left)
-                            }
-                        }
-                        .fixedSize()
-                    } else {
-                        if model.isTerminal {
-                            AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
-                            Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .fixedSize()
-                        }
-                    }
-                    if stacked { Spacer(minLength: 0) }
-                    if !model.isTerminal {
-                        // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
-                        GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                    icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
-                            .controlSize(.small)
-                    }
-                }
-                .layoutPriority(1)
+            // One row, like the navigation bar it sits under, its text no larger than the largest standard size: at
+            // accessibility sizes the row pushed the screen past both edges, and two rows under the title took a third
+            // of the screen. Two rows only when even that does not fit (a pull request badge on a narrow phone).
+            ViewThatFits(in: .horizontal) {
+                statusRow(split: false)
+                statusRow(split: true)
             }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             if model.link == .connecting {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -520,13 +478,76 @@ private struct AgentHeader: View {
             } else if let link = model.link, link != .connected {
                 Text(model.linkError ?? link.label)
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.warning)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    private func statusRow(split: Bool) -> some View {
+        let row = split ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
+        return row {
+            HStack(spacing: 8) {
+                if let agent = model.agent {
+                    HStack(spacing: 6) {
+                        StatusPill(state: agent.status)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                    .fixedSize()
+                }
+                if let machineLabel {
+                    Text(verbatim: machineLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        // Truncated first, so the row never splits for it.
+                        .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                if let agent = model.agent {
+                    if let pullRequest = agent.pullRequest {
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
+                            model.insert(PromptShortcut(text: text))
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        if let kind = agent.kind {
+                            AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let left = agent.contextLeft {
+                            ContextRing(left: left)
+                        }
+                    }
+                    .fixedSize()
+                } else {
+                    if model.isTerminal {
+                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
+                        Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                            .fixedSize()
+                    }
+                }
+                if split { Spacer(minLength: 0) }
+                if !model.isTerminal {
+                    // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
+                    GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
+                        .controlSize(.small)
+                }
+            }
+            .layoutPriority(1)
+        }
     }
 }
 
@@ -782,14 +803,14 @@ private struct KeyStrip: View {
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
-                    // ⇧← answers a queued Codex question; other agents never take it.
+                    // shift-left answers a queued Codex question; other agents never take it.
                     ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
-                        StripChip { model.run(StripShortcut(key: key.name)) } label: { Text(key.symbol) }
+                        StripChip { model.run(StripShortcut(key: key.name)) } label: { Text(key.word) }
                             .accessibilityLabel(key.accessibilityName)
                             .disabled(!model.canTap(key))
                     }
                     ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
-                        StripChip { model.run(shortcut) } label: { Text(shortcut.label) }
+                        StripChip { model.run(shortcut) } label: { Text(shortcut.name.isEmpty ? shortcut.agentKey?.word ?? shortcut.text : shortcut.name) }
                             .disabled(!model.canRun(shortcut))
                     }
                     StripChip { editingShortcuts = true } label: { Image(systemName: "plus") }
@@ -994,6 +1015,19 @@ private struct JoystickSector: Shape {
 }
 
 extension AgentKey {
+    /// The key strip's chip label, in the main keys' words.
+    var word: String {
+        switch self {
+        case .shiftTab: "shift-tab"
+        case .ctrlEnter: "ctrl-return"
+        case .shiftLeft: "shift-left"
+        case .enter: "return"
+        case .backspace: "delete"
+        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "ctrl-" + name.dropFirst(5).uppercased()
+        case .esc, .up, .down, .left, .right, .tab: name
+        }
+    }
+
     /// The arrow a joystick dragged by `offset` points to; nil inside its dead zone.
     static func arrow(for offset: CGSize, deadZone: CGFloat = 12) -> AgentKey? {
         guard hypot(offset.width, offset.height) >= deadZone else { return nil }
@@ -1105,9 +1139,10 @@ private struct PromptBar: View {
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .bottom, spacing: 8) {
+                            let placeholder = model.answering ? "Type an answer" : "Prompt the agent"
                             TextField(
-                                model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: typed),
-                                selection: $selection, axis: .vertical
+                                placeholder, text: Binding(get: { model.draft }, set: typed),
+                                selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical
                             )
                                 .lineLimit(expanded || model.showsMacDraft ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)

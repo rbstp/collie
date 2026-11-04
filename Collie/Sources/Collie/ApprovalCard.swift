@@ -6,150 +6,195 @@ struct ApprovalCard: View {
     let item: ApprovalItem
     var maxHeight: CGFloat = .infinity
     let sendAnswer: (String) async throws -> Void
-    @State private var decisionsHeight: CGFloat = 0
-    @State private var shownHeight: CGFloat = .infinity
-    @State private var moreAbove = false
-    @State private var moreBelow = false
-    @State private var commandShown: CGFloat = 0
-    @State private var commandFull: CGFloat = 0
-    @State private var headerHeight: CGFloat = 0
-    @State private var commandBoxHeight: CGFloat = 0
-    @State private var reasonHeight: CGFloat = 0
-    @State private var outputHeight: CGFloat = 0
-    @State private var addNoteHeight: CGFloat = 0
     @FocusState private var field: String?
-    @ScaledMetric(relativeTo: .footnote) private var scaledCommandLine: CGFloat = 16
-    // Capped: at the largest sizes the fade covered the whole line of the reason above the decisions.
-    @ScaledMetric(relativeTo: .caption) private var scaledFade: CGFloat = 16
-    private var fade: CGFloat { min(scaledFade, 24) }
-    @ScaledMetric(relativeTo: .caption) private var scaledReasonLine: CGFloat = 16
-    // Measured once laid out: at accessibility sizes the scaled estimates fell short of the real lines by a fifth, and the
-    // command took a line the reason needed above the decisions.
-    @State private var measuredCommandLine: CGFloat = 0
-    @State private var measuredCaptionLine: CGFloat = 0
-    private var commandLine: CGFloat { measuredCommandLine > 0 ? measuredCommandLine : scaledCommandLine }
-    private var reasonLine: CGFloat { measuredCaptionLine > 0 ? measuredCaptionLine : scaledReasonLine }
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     private let padding: CGFloat = 10
-    private let spacing: CGFloat = 6
 
     private var approval: PendingApproval { item.approval }
-    private var expanded: Bool { model.expanded.contains(item.id) }
     private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
-    // Approve and Deny stay pinned under the scrolling prompt while the card's height leaves it two
-    // command lines; below that (tight landscape, the keyboard up) they scroll with it, so all stays
-    // reachable.
-    private var pinsDecisions: Bool {
-        offersDecisions && min(maxHeight - 2 * padding, shownHeight) - spacing - decisionsHeight >= 2 * commandLine
-    }
-    // The prompt's room above pinned decisions, measured against the card's cap, not its height, which follows the prompt.
-    private var room: CGFloat { maxHeight - 2 * padding - (pinsDecisions ? spacing + decisionsHeight : 0) }
-    // Collapsed with the decisions pinned, the prompt shows at rest only what fits whole, in this order: the tool's name,
-    // the command and Show full command, a line of the reason, the rest of the reason, Add note, the output. Expanded,
-    // everything shows and scrolls.
-    private var fitsAtRest: Bool { !expanded && pinsDecisions && maxHeight.isFinite }
-    private var reasonMinimum: CGFloat { approval.reason == nil ? 0 : spacing + 2 * 8 + reasonLine }
-    // When not even one command line fits with Show full command and a line of the reason, the command keeps one above
-    // pinned decisions (the largest text sizes), so they stay in view, and three when everything scrolls (landscape).
-    private var commandLines: Int {
-        guard maxHeight.isFinite else { return 3 }
-        let lines = Int((room - headerHeight - spacing - 2 * 8 - 4 - reasonLine - reasonMinimum) / commandLine)
-        return lines < 1 ? (pinsDecisions ? 1 : 3) : min(3, lines)
-    }
-    private var reasonLines: Int? {
-        guard fitsAtRest else { return nil }
-        return max(1, Int((room - headerHeight - spacing - commandBoxHeight - spacing - 2 * 8) / reasonLine))
-    }
-    // Without room for a line of it (landscape), the reason waits for the expanded card rather than sitting cut under the decisions.
-    private var showsReason: Bool { !fitsAtRest || room - headerHeight - spacing - commandBoxHeight - spacing - 2 * 8 >= reasonLine }
-    private var shownAtRest: CGFloat {
-        headerHeight + spacing + commandBoxHeight + (approval.reason == nil || !showsReason ? 0 : spacing + reasonHeight)
-    }
-    private var offersAddNote: Bool { approval.supportsNote && !model.noting.contains(item.id) }
-    private var showsAddNote: Bool { !fitsAtRest || shownAtRest + spacing + addNoteHeight <= room }
-    private var showsOutput: Bool {
-        !fitsAtRest || shownAtRest + (offersAddNote && showsAddNote ? spacing + addNoteHeight : 0) + spacing + outputHeight <= room
-    }
 
     var body: some View {
-        // Past its share when the measured name and command outgrow it (landscape), so neither sits cut under the decisions.
-        UpToContent(maxHeight: max(0, maxHeight - 2 * padding, fitsAtRest ? shownAtRest + spacing + decisionsHeight : 0)) {
-            VStack(alignment: .leading, spacing: spacing) {
-                ScrollViewReader { proxy in
-                    UpToContent {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: spacing) {
-                                details
-                                if offersDecisions, !pinsDecisions { decisions }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .scrollBounceBehavior(.basedOnSize)
-                        // A fade where the prompt goes on below: a hard cut at the edge read as a clipped snippet box.
-                        .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 1 } action: { moreBelow = $1 }
-                        .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.minY > 1 } action: { moreAbove = $1 }
-                        .mask {
-                            VStack(spacing: 0) {
-                                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: moreAbove ? fade : 0)
-                                Rectangle()
-                                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: moreBelow ? fade : 0)
-                            }
-                        }
-                    }
-                    .onChange(of: field) { _, field in
-                        if let field { withAnimation { proxy.scrollTo(field, anchor: .bottom) } }
-                    }
+        // The whole card when it fits its share of the screen. Otherwise (landscape, larger text) a band with the tool, a
+        // line of the command and Review, and the decisions when they fit too: Review opens the whole prompt in a sheet.
+        Capped(maxHeight: max(0, maxHeight - 2 * padding)) {
+            ViewThatFits(in: .vertical) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ApprovalDetails(model: model, item: item, whole: false, field: $field, sendAnswer: sendAnswer)
+                    if offersDecisions { DecisionButtons(model: model, item: item) }
                 }
-                if pinsDecisions { decisions }
+                if offersDecisions { band(decisions: true) }
+                band(decisions: false)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0 }
         .padding(.vertical, padding)
         .padding(.horizontal)
     }
 
-    private var decisions: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            DecisionButtons(model: model, item: item, expired: approval.expiresAtMs <= context.date.unixMs)
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { decisionsHeight = $0 }
-    }
-
-    private var details: some View {
-        VStack(alignment: .leading, spacing: spacing) {
-            Button {
-                withAnimation { model.toggleExpanded(item) }
-            } label: {
-                HStack(alignment: .center, spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(expanded ? 90 : 0))
-                    // The session header above already names the agent and its machine.
-                    Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
-                    Spacer()
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .padding(2)
-                            .glassEffect(.regular, in: .capsule)
-                            .fixedSize()
+    private func band(decisions: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let row = HStack(spacing: 8) {
+                toolName
+                command
+                reviewAndCountdown
+            }
+            // In landscape one row is all the band has room for, the command cut to fit; in portrait the command takes a
+            // row of its own when it does not fit whole beside the tool's name.
+            if verticalSizeClass == .compact {
+                row
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    row
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            toolName
+                            Spacer(minLength: 0)
+                            reviewAndCountdown
+                        }
+                        command
                     }
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
-            .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
+            if decisions { DecisionButtons(model: model, item: item) }
+        }
+    }
+
+    private var toolName: some View {
+        Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1).fixedSize()
+    }
+
+    @ViewBuilder private var command: some View {
+        if approval.toolName != nil, let command = approval.toolSummary {
+            Text(verbatim: command)
+                .font(.footnote.monospaced())
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var reviewAndCountdown: some View {
+        HStack(spacing: 8) {
+            ApprovalCountdown(approval: approval)
+            Button {
+                model.toggleExpanded(item)
+            } label: {
+                // The reason waits in the sheet; its shield says there is one.
+                Label {
+                    Text("Review")
+                } icon: {
+                    if approval.reason != nil { Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning) }
+                }
+                .labelStyle(.titleAndIcon)
+                .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.glass)
+            .tint(.primary)
+            .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
+        }
+        .fixedSize()
+    }
+}
+
+/// Proposes at most `maxHeight` to its one subview, so a `ViewThatFits` in it takes the first view that fits the card's share.
+private struct Capped: Layout {
+    let maxHeight: CGFloat
+
+    private func capped(_ proposal: ProposedViewSize, width: CGFloat?) -> ProposedViewSize {
+        ProposedViewSize(width: width, height: min(maxHeight, proposal.height ?? .infinity))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews[0].sizeThatFits(capped(proposal, width: proposal.width))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews[0].place(at: bounds.origin, proposal: capped(proposal, width: bounds.width))
+    }
+}
+
+/// The whole prompt with its decisions in reach, opened from the card.
+struct ApprovalReview: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+    let sendAnswer: (String) async throws -> Void
+    @FocusState private var field: String?
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
+                    .padding(.horizontal)
+                    .padding(.bottom)
+            }
+            // The soft edge left the prompt reading through the decisions' glass.
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
+            .safeAreaBar(edge: .bottom) {
+                if !item.approval.answeredInTerminal && !item.approval.options.isEmpty {
+                    DecisionButtons(model: model, item: item).padding()
+                }
+            }
+            .navigationTitle(item.approval.toolName ?? item.approval.agentLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }.tint(.primary)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    ApprovalCountdown(approval: item.approval)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        }
+        // At half height, stacked decisions left larger text no room for the reason.
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+    }
+}
+
+/// The prompt: in the card, the command and the output cut to three lines each; in the review sheet, whole.
+private struct ApprovalDetails: View {
+    let model: ApprovalsModel
+    let item: ApprovalItem
+    let whole: Bool
+    let field: FocusState<String?>.Binding
+    let sendAnswer: (String) async throws -> Void
+    @State private var commandShown: CGFloat = 0
+    @State private var commandFull: CGFloat = 0
+
+    private var approval: PendingApproval { item.approval }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !whole {
+                Button {
+                    model.toggleExpanded(item)
+                } label: {
+                    HStack(alignment: .center, spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        // The session header above already names the agent and its machine.
+                        Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
+                        Spacer()
+                        ApprovalCountdown(approval: approval)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Shows the whole prompt")
+            }
             if approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
                 // and a bare `--` stays with the argument after it.
                 let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: wrapped)
-                        .lineLimit(expanded ? nil : commandLines)
+                        .lineLimit(whole ? nil : 3)
                         .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandShown = $0 }
                         .background(alignment: .top) {
@@ -159,11 +204,10 @@ struct ApprovalCard: View {
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandFull = $0 }
                         }
                         .accessibilityLabel(command)
-                    if !expanded, commandFull > commandShown + 1 {
+                    if !whole, commandFull > commandShown + 1 {
                         Button {
-                            withAnimation { model.toggleExpanded(item) }
+                            model.toggleExpanded(item)
                         } label: {
-                            // A second line at the largest text sizes cost the reason its place above the decisions.
                             ViewThatFits(in: .horizontal) {
                                 Text("Show full command")
                                 Text("Full command")
@@ -180,19 +224,17 @@ struct ApprovalCard: View {
                 .padding(.vertical, 8)
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandBoxHeight = $0 }
             }
-            if let reason = approval.reason, showsReason {
-                ApprovalReason(reason: reason, lines: reasonLines)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reasonHeight = $0 }
+            if let reason = approval.reason {
+                ApprovalReason(reason: reason)
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty, showsOutput {
+            } else if !approval.snippet.isEmpty {
                 let lines = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false)
-                let more = expanded ? 0 : lines.count - 3
+                let more = whole ? 0 : lines.count - 3
                 VStack(alignment: .leading, spacing: 4) {
-                    if expanded {
+                    if whole {
                         Text(verbatim: approval.snippet)
                     } else {
                         // One line each, so the count below is every line not shown.
@@ -212,10 +254,9 @@ struct ApprovalCard: View {
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                 .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { outputHeight = $0 }
             }
             if approval.supportsNote, model.noting.contains(item.id) {
-                NoteField(model: model, item: item, field: $field)
+                NoteField(model: model, item: item, field: field)
             }
             if approval.answeredInTerminal {
                 Label("Use the terminal buttons or type an answer", systemImage: "terminal")
@@ -229,62 +270,54 @@ struct ApprovalCard: View {
             if item.unreachable {
                 Label("\(item.machine.label) is unreachable", systemImage: "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.warning)
             }
-            if offersAddNote, showsAddNote {
+            if approval.supportsNote, !model.noting.contains(item.id) {
                 Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
                     .font(.caption)
                     .disabled(model.steps[item.id] != nil)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { addNoteHeight = $0 }
             }
             if approval.takesFeedback {
-                FeedbackField(model: model, item: item, field: $field, sendAnswer: sendAnswer)
+                FeedbackField(model: model, item: item, field: field, sendAnswer: sendAnswer)
             }
-        }
-        .background {
-            VStack {
-                Text(verbatim: "x").font(.footnote.monospaced())
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredCommandLine = $0 }
-                Text(verbatim: "x").font(.caption)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredCaptionLine = $0 }
-            }
-            .hidden()
         }
     }
 }
 
-/// Its one subview's ideal height, at most `maxHeight` and what it is offered: unlike a frame's
-/// `maxHeight`, it never grows past the content, and a scroll view in it is as tall as its content.
-private struct UpToContent: Layout {
-    var maxHeight: CGFloat = .infinity
+private struct ApprovalCountdown: View {
+    let approval: PendingApproval
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let ideal = subviews[0].sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
-        return CGSize(width: proposal.width ?? ideal.width, height: min(ideal.height, maxHeight, proposal.height ?? .infinity))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2.weight(.semibold).monospacedDigit())
+                .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .padding(2)
+                .glassEffect(.regular, in: .capsule)
+                .fixedSize()
+        }
     }
 }
 
 struct ApprovalReason: View {
     let reason: String
-    var lines: Int?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
-            Text(verbatim: reason).lineLimit(lines)
+            Text(verbatim: reason)
         } icon: {
-            Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning)
         }
         .font(.caption)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Orange fill alone reads as muddy brown over dark glass; a faint fill inside an orange rim carries the warning,
-        // fainter in dark mode, where 10% still read brown.
-        .background(.orange.opacity(colorScheme == .dark ? 0.06 : 0.1), in: RoundedRectangle(cornerRadius: 12))
+        // An orange rim carries the warning. In dark mode the fill is the command panel's: even a faint orange fill read
+        // warm brown over dark glass.
+        .background(colorScheme == .dark ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.orange.opacity(0.1)), in: RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.4), lineWidth: 1) }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
@@ -360,21 +393,22 @@ private struct FeedbackField: View {
 private struct DecisionButtons: View {
     let model: ApprovalsModel
     let item: ApprovalItem
-    let expired: Bool
 
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            // Labels never shrink to fit: the decisions take two rows, then stack, when a row would cut a label.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { buttons(options) }
-                VStack(spacing: 8) {
-                    buttons(Array(options.prefix(1)))
-                    HStack(spacing: 8) { buttons(Array(options.dropFirst())) }
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            GlassEffectContainer(spacing: 8) {
+                // Labels never shrink to fit: the decisions take two rows, then stack, when a row would cut a label.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { buttons(options) }
+                    VStack(spacing: 8) {
+                        buttons(Array(options.prefix(1)))
+                        HStack(spacing: 8) { buttons(Array(options.dropFirst())) }
+                    }
+                    VStack(spacing: 8) { buttons(options) }
                 }
-                VStack(spacing: 8) { buttons(options) }
             }
+            .disabled(item.approval.expiresAtMs <= context.date.unixMs || item.unreachable || model.steps[item.id] != nil)
         }
-        .disabled(expired || item.unreachable || model.steps[item.id] != nil)
     }
 
     private var options: [ApprovalDecision] { item.approval.options }
@@ -487,8 +521,10 @@ private struct DecisionStyle: ViewModifier {
         switch decision {
         // System green under white text reads poorly; this deeper green keeps the label at 4.5:1 or more.
         case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.11, green: 0.5, blue: 0.22))
-        case .deny: content.buttonStyle(.glass).tint(AgentState.blocked.color)
-        default: content.buttonStyle(.glass).tint(.primary)
+        // Glass over the terminal came out lighter than over Chat, and the red label read 3.1:1 there; the dimming color
+        // behind the glass keeps it at 4.5:1 or more over either.
+        case .deny: content.buttonStyle(.glass).tint(AgentState.blocked.color).background(SessionBarDim(), in: .capsule)
+        default: content.buttonStyle(.glass).tint(.primary).background(SessionBarDim(), in: .capsule)
         }
     }
 }

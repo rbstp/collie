@@ -17,7 +17,7 @@ Once the agent moves on, `collied` tries to remove the notification.
 <img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Always allow and Deny buttons">
 </div>
 
-With larger text, the card keeps the command, the reason and the buttons in view and leaves out the output and **Add note** until you tap the tool's name to expand it.
+In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the whole prompt in a sheet, with the command, the reason, the output, **Add note** and the buttons; so do the tool's name and **Show full command** on the full card.
 
 ## Answering by hand
 

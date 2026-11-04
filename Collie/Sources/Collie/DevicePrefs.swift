@@ -111,9 +111,20 @@ extension View {
 private struct OnAccentFill: ViewModifier {
     @Environment(\.appAccent) private var accent
     @Environment(\.self) private var environment
+    @Environment(\.isEnabled) private var isEnabled
 
+    // Disabled, the fill is gray, not the accent: black on it read 1.9:1 in dark mode.
     func body(content: Content) -> some View {
-        if accent.resolve(in: environment).takesDarkLabel { content.foregroundStyle(.black) } else { content }
+        if isEnabled && accent.resolve(in: environment).takesDarkLabel { content.foregroundStyle(.black) } else { content }
+    }
+}
+
+extension ShapeStyle where Self == Color {
+    // System orange is about 2.3:1 as text on light backgrounds; light mode takes its high-contrast variant, 4.5:1 or more.
+    static var warning: Color {
+        Color(uiColor: UIColor { traits in
+            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
+        })
     }
 }
 

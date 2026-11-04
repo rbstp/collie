@@ -607,7 +607,7 @@ final class AgentModel {
             if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
         }
         if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
-            promptError = "Tap ⇧← to view and answer the pending question."
+            promptError = "Tap shift-left to view and answer the pending question."
         } else {
             promptError = Self.promptMessage(for: error)
         }

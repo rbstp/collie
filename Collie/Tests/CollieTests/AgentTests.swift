@@ -2109,7 +2109,7 @@ private func noticeShown(
     #expect(model.canSendPrompt)
     core.set(error: .AgentBlocked(message: ""))
     await model.sendPrompt()
-    #expect(model.promptError?.contains("⇧←") == true)
+    #expect(model.promptError?.contains("shift-left") == true)
     core.set()
     model.typed("")
     await model.tap(.shiftLeft)?.value
