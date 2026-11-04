@@ -671,26 +671,27 @@ extension ShapeStyle where Self == Color {
 struct ContextRing: View {
     let left: UInt8
     var font: Font = .caption
-    /// The figure takes the width of "100%", so the chip lines up down a column of rows.
+    /// Takes the width "100%" would, so a column of rows keeps one width; the chip stays beside its figure.
     var aligned = false
 
     var body: some View {
         let left = min(left, 100)
-        Label {
+        Group {
             if aligned {
-                Text(verbatim: "100%").hidden().overlay(alignment: .trailing) { Text("\(left)%") }
+                label("100%").hidden().overlay(alignment: .trailing) { label("\(left)%") }
             } else {
-                Text("\(left)%")
+                label("\(left)%")
             }
-        } icon: {
-            Image(systemName: "memorychip")
         }
-            .labelStyle(KindLabelStyle())
             .font(font.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
             .fixedSize()
             .accessibilityElement()
             .accessibilityLabel("\(left)% of context left")
+    }
+
+    private func label(_ figure: String) -> some View {
+        Label(figure, systemImage: "memorychip").labelStyle(KindLabelStyle())
     }
 
     /// The one warning rule for context and usage limits: accent, orange from 80% used, red from 90%.
