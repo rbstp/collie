@@ -210,12 +210,14 @@ struct AgentCard: View {
 
     @ViewBuilder private var preview: some View {
         if let conversation {
-            ChatPreview(messages: conversation.suffix(starred ? 3 : 1), lines: starred ? 3 : 4)
+            ChatPreview(messages: conversation.suffix(starred ? 3 : 1), lines: starred ? 2 : 3)
         } else {
-            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 7)
+            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 8)
                 .overlay(alignment: .top) {
-                    // Fades out the row cut at the top.
-                    LinearGradient(colors: [Color(uiColor: GhosttyTerminalUIView.backgroundColor), .clear], startPoint: .top, endPoint: .bottom)
+                    // Hides the row cut at the top: solid first, then a fade.
+                    let background = Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                    LinearGradient(stops: [.init(color: background, location: 0), .init(color: background, location: 0.4), .init(color: .clear, location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
                         .frame(height: starred ? 20 : 12)
                 }
         }
@@ -223,62 +225,6 @@ struct AgentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top, spacing: 6) {
-                    StatusIcon(state: agent.status).accessibilityHidden(true)
-                    Text(agent.displayTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if starred {
-                        Image(systemName: "star.fill")
-                            .font(.caption)
-                            .foregroundStyle(.yellow)
-                            .padding(.top, 3)
-                            .accessibilityLabel("Starred")
-                    }
-                }
-                HStack(spacing: 6) {
-                    // Under the status icon, so the metadata lines up with the title.
-                    Group {
-                        if let kind = agent.kind {
-                            AgentKindLabel(kind: kind, iconOnly: true)
-                        }
-                    }
-                    .frame(width: 20)
-                    HStack(spacing: 4) {
-                        if followed {
-                            Image(systemName: "pin.fill")
-                                .foregroundStyle(.tint)
-                                .accessibilityLabel("Followed")
-                        }
-                        if let workspace {
-                            Text(workspace).layoutPriority(1)
-                            Text(verbatim: "·").fixedSize()
-                        }
-                        StatusAge(agent: agent, now: now).fixedSize()
-                        if agent.status == .blocked, !agent.subagents.isEmpty {
-                            Text(verbatim: "·").fixedSize()
-                            Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
-                        }
-                        if let pullRequest = agent.pullRequest {
-                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if let left = agent.contextLeft {
-                        ContextRing(left: left)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
-            // Cards in a row share its height, with their previews along the bottom.
-            Spacer(minLength: 0)
             preview
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
@@ -310,8 +256,64 @@ struct AgentCard: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    StatusIcon(state: agent.status).accessibilityHidden(true)
+                    Text(agent.displayTitle)
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if starred {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .accessibilityLabel("Starred")
+                    }
+                    StatusAge(agent: agent, now: now)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                HStack(spacing: 6) {
+                    // Under the status icon, so the metadata lines up with the title.
+                    Group {
+                        if let kind = agent.kind {
+                            AgentKindLabel(kind: kind, iconOnly: true)
+                        }
+                    }
+                    .frame(width: 20)
+                    HStack(spacing: 4) {
+                        if followed {
+                            Image(systemName: "pin.fill")
+                                .foregroundStyle(.tint)
+                                .accessibilityLabel("Followed")
+                        }
+                        if let workspace {
+                            Text(workspace).layoutPriority(1)
+                        }
+                        if agent.status == .blocked, !agent.subagents.isEmpty {
+                            if workspace != nil { Text(verbatim: "·").fixedSize() }
+                            Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
+                        }
+                        if let pullRequest = agent.pullRequest {
+                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if let left = agent.contextLeft {
+                        ContextRing(left: left)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
         }
-        .frame(maxHeight: .infinity)
+        // Cards in a row share its height; any extra goes below the text, never between preview and title.
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(6)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
         .contentShape(Rectangle())

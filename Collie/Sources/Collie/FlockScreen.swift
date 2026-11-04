@@ -49,9 +49,9 @@ struct FlockScreen: View {
             .overlay(alignment: .top) {
                 GeometryReader { geometry in
                     let background = Color(.systemGroupedBackground)
-                    LinearGradient(stops: [.init(color: background, location: 0.5), .init(color: background.opacity(0), location: 1)],
+                    LinearGradient(stops: [.init(color: background, location: 0.75), .init(color: background.opacity(0), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
-                        .frame(height: geometry.safeAreaInsets.top)
+                        .frame(height: geometry.safeAreaInsets.top + 12)
                         .offset(y: -geometry.safeAreaInsets.top)
                 }
                 .allowsHitTesting(false)
@@ -277,7 +277,6 @@ struct FlockScreen: View {
                             } label: {
                                 MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting, now: context.date)
                                     .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
                                     .textCase(nil)
                             }
                             .buttonStyle(.plain)
@@ -599,12 +598,13 @@ struct ContextRing: View {
 
     var body: some View {
         let left = min(left, 100)
-        Text("\(left)% left")
+        Label("\(left)%", systemImage: "memorychip")
+            .labelStyle(KindLabelStyle())
             .font(.caption2.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .secondary)
             .fixedSize()
             .accessibilityElement()
-            .accessibilityLabel("Context \(left)% left")
+            .accessibilityLabel("\(left)% of context left")
     }
 
     static func tone(_ left: UInt8) -> Color {
@@ -612,7 +612,8 @@ struct ContextRing: View {
         case ..<60: .green
         // System yellow is too faint on white; light mode gets a deeper amber.
         case ..<80: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemYellow : UIColor(red: 0.8, green: 0.56, blue: 0, alpha: 1) })
-        case ..<90: .orange
+        // Likewise a deeper orange in light mode, readable as small text on white.
+        case ..<90: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemOrange : UIColor(red: 0.78, green: 0.33, blue: 0, alpha: 1) })
         default: .red
         }
     }

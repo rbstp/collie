@@ -32,6 +32,7 @@ struct AgentInbox<Menu: View>: View {
                 }
                 inbox(items.filter { $0.matches(query) }, now: context.date)
             }
+            .listSectionSpacing(.compact)
             .modifier(PagerListMargin(edge: .trailing, margin: margin))
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
@@ -106,7 +107,7 @@ struct AgentInbox<Menu: View>: View {
                 Section {
                     ForEach(rows) { row($0, wake: nil, now: now) }
                 } header: {
-                    Text(section.title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).textCase(nil)
+                    Text(section.title).font(.footnote.weight(.semibold)).textCase(nil)
                 }
             }
         }
@@ -127,7 +128,6 @@ struct AgentInbox<Menu: View>: View {
                             .accessibilityHidden(true)
                     }
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
                     .textCase(nil)
                     .contentShape(Rectangle())
                 }
