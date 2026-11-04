@@ -664,7 +664,11 @@ extension AgentState {
         switch self {
         case .working: .accentColor
         // System red is about 3.3:1 as small text on light glass, even its high-contrast variant 4.1:1; light mode gets a deeper red.
-        case .blocked: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemRed : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1) })
+        // On dark glass it is about 3.2:1 and its high-contrast variant 3.8:1; dark mode gets a lighter red, 4.5:1 or more.
+        case .blocked:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
+            })
         default: AgentActivityStatus(self).color
         }
     }
