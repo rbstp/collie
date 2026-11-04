@@ -23,6 +23,8 @@ final class KeyStripTests: XCTestCase {
         keys.tap()
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
         XCTAssertTrue(keys.isSelected, app.debugDescription)
+        XCTAssertTrue(app.buttons["Shift Tab"].exists, app.debugDescription)
+        XCTAssertFalse(app.buttons["Shift Left arrow"].exists, app.debugDescription)
         // Shortcuts are kept on the simulator, so an earlier failed run may have left some.
         removeShortcuts(app)
 
@@ -82,6 +84,30 @@ final class KeyStripTests: XCTestCase {
         keys.tap()
         XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
         XCTAssertFalse(keys.isSelected, app.debugDescription)
+    }
+
+    func testKeysFitAtLargerText() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo", ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityL"])
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+        let keys = app.buttons["Keys"]
+        XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
+        let escape = app.buttons["Escape"]
+        if !escape.exists { keys.tap() }
+        XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
+
+        let window = app.windows.firstMatch.frame
+        for name in ["Shift", "Control", "Escape", "Left arrow", "Up arrow", "Down arrow", "Right arrow", "Tab", "Backspace", "Return"] {
+            let key = app.buttons[name]
+            XCTAssertTrue(key.isHittable && window.contains(key.frame), app.debugDescription)
+        }
+        XCTAssertGreaterThan(app.buttons["Left arrow"].frame.minY, escape.frame.maxY, app.debugDescription)
     }
 
     private func removeShortcuts(_ app: XCUIApplication) {

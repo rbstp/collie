@@ -8,11 +8,13 @@ The key strip sends keys an iPhone keyboard lacks. The **Keys** button at the bo
 ⇧  ⌃  esc  ←  ↑  ↓  →  ⇥  ⌫  ⏎
 ```
 
-**esc** sends Escape. Tap ⇧ or ⌃, then a key, to send the pair: ⇧⇥, ⇧← or ⌃⏎. With ⌃ selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
+With larger text, the arrows move to a row of their own under the other keys.
 
-The second row scrolls: `⇧⇥ ⌃⏎ ⇧← ^C`, your key shortcuts, then **+** to add one.
+**esc** sends Escape. Tap ⇧ or ⌃, then a key, to send the pair: ⇧⇥, ⌃⏎ or, in Codex, ⇧←. With ⌃ selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
 
-The round joystick at the end of the second row moves the cursor: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With ⇧ selected, the first left arrow goes out as ⇧←.
+The second row scrolls: `⇧⇥ ⌃⏎ ^C`, with `⇧←` before `^C` in Codex sessions to answer a queued question, then your key shortcuts and **+** to add one.
+
+The round joystick at the end of the second row moves the cursor: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With ⇧ selected in Codex, the first left arrow goes out as ⇧←.
 
 ## Key shortcuts
 
