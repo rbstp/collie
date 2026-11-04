@@ -448,5 +448,6 @@ struct MachineName: View {
             }
             .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
         }
+        .labelStyle(KindLabelStyle())
     }
 }

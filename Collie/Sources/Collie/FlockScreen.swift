@@ -44,7 +44,7 @@ struct FlockScreen: View {
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
             .ignoresSafeArea(.container)
-            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            .scrollEdgeEffectHidden(true, for: .bottom)
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
@@ -200,7 +200,7 @@ struct FlockScreen: View {
             AgentGrid(
                 entries: model.entries, previews: previews, order: $gridOrder, notice: model.closeNotice,
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                closePane: { model.beginClose(.pane, route: $0) }, menu: menu, dragging: $dragging
+                closePane: { model.beginClose(.pane, route: $0) }, margin: listMargin, menu: menu, dragging: $dragging
             )
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
@@ -430,33 +430,28 @@ private struct AgentRow: View {
                 // Centered on the title's first line rather than sitting on its baseline.
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                HStack(spacing: 4) {
+                    if let kind = agent.kind {
+                        AgentKindLabel(kind: kind, iconOnly: true)
+                    }
                     if followed {
                         Image(systemName: "pin.fill")
-                            .font(.caption)
                             .foregroundStyle(.tint)
                             .accessibilityLabel("Followed")
                     }
-                    Text(agent.displayTitle).lineLimit(2)
-                }
-                if workspace != nil || agent.kind != nil {
-                    HStack(spacing: 4) {
-                        if let workspace { Text(workspace) }
-                        if let kind = agent.kind {
-                            if workspace != nil { Text(verbatim: "·") }
-                            AgentKindLabel(kind: kind).fixedSize()
-                        }
+                    if let workspace {
+                        Text(workspace)
+                        Text(verbatim: "·").fixedSize()
                     }
-                    .lineLimit(1)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    StatusAge(agent: agent, now: now).fixedSize()
                 }
+                .lineLimit(1)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             Spacer()
             if let left = agent.contextLeft { ContextRing(left: left) }
-            StatusAge(agent: agent, now: now)
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -506,7 +501,7 @@ struct AgentKindLabel: View {
     }
 }
 
-private struct KindLabelStyle: LabelStyle {
+struct KindLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) {
             configuration.icon
@@ -590,8 +585,7 @@ struct ContextRing: View {
 
     var body: some View {
         let left = min(left, 100)
-        Label("\(left)%", systemImage: "memorychip")
-            .labelStyle(KindLabelStyle())
+        Text("\(left)% left")
             .font(.caption2.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .secondary)
             .fixedSize()
@@ -602,7 +596,8 @@ struct ContextRing: View {
     static func tone(_ left: UInt8) -> Color {
         switch 100 - Int(min(left, 100)) {
         case ..<60: .green
-        case ..<80: .yellow
+        // System yellow is too faint on white; light mode gets a deeper amber.
+        case ..<80: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemYellow : UIColor(red: 0.8, green: 0.56, blue: 0, alpha: 1) })
         case ..<90: .orange
         default: .red
         }

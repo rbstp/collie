@@ -17,24 +17,24 @@ The layout button at the top switches between Grid, List and Inbox. List is a co
 
 ### Grid
 
-Each machine gets a section of cards. While **Settings > Sessions > Default view** is Chat (the default), a card previews the conversation: your last two messages and the agent's last two replies. Set to Terminal, it previews the agent's screen. A blocked agent's card always shows the whole screen, prompt included; other cards show [running subagents](#running-subagents) at the top.
+Each machine gets a section of cards, each led by the agent's status, title, workspace, time in its status and remaining context. While **Settings > Sessions > Default view** is Chat (the default), a card previews the latest message of the conversation, a starred card the last three. Set to Terminal, it previews the bottom of the agent's screen. A blocked agent's card always shows its screen, prompt included; other cards show [running subagents](#running-subagents) at the top.
 
 - **Star** a card: long-press it and choose **Star**. Starred cards lead their machine's section, full width with a taller preview. The machine keeps stars for all your phones until the pane closes or you remove the machine.
 - **Reorder** cards by dragging. Dropping a card among the starred cards stars it, and among the others unstars it; when one group is empty, drop on **Drop here to star** or **Drop here to unstar**. This phone keeps the order.
 
 ### Inbox
 
-One list of the agents on every machine, grouped by status: blocked agents under **Needs you** at the top, then **Working**, **Done** and **Inactive**. Each row leads with the agent's title, then its latest reply line. Search it, or filter it:
+One list of the agents on every machine, grouped by status: blocked agents under **Needs you** at the top, then **Working**, **Done** and **Inactive**. Each row leads with the agent's title, then one line: its latest reply, or else your last prompt. Search it, or filter it:
 
-- **Needs attention**: blocked agents and completions you have not opened.
-- **Working**: working and blocked agents.
+- **Needs you**: blocked agents and completions you have not opened.
+- **Working**: working agents.
 - **Inactive**: idle agents and completions older than 24 hours.
 
 To hide an agent that is not blocked, swipe its row right, choose **Snooze**, then **1 hour**, **4 hours**, the next 8:00 (**Today 8:00** or **Tomorrow 8:00**) or **Custom**. It waits in the collapsed **Snoozed** section until then, or until it blocks or finishes another turn; long-press it and choose **Wake now** to bring it back sooner. This phone keeps your snoozes.
 
 ## Remaining context
 
-A gauge and a percentage show how much context a Claude Code or Codex agent has left, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
+A percentage such as **38% left** shows how much context a Claude Code or Codex agent has left, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
 
 ## Running subagents
 

@@ -103,8 +103,10 @@ struct AgentInbox<Menu: View>: View {
         let (groups, asleep) = InboxItem.rows(items, filter: filter, seen: seen, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
-                Section(section.title) {
+                Section {
                     ForEach(rows) { row($0, wake: nil, now: now) }
+                } header: {
+                    Text(section.title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).textCase(nil)
                 }
             }
         }
@@ -124,6 +126,9 @@ struct AgentInbox<Menu: View>: View {
                             .rotationEffect(.degrees(showsSnoozed ? 90 : 0))
                             .accessibilityHidden(true)
                     }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(nil)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -229,7 +234,7 @@ enum InboxFilter: CaseIterable {
     var title: String {
         switch self {
         case .all: "All"
-        case .needsAttention: "Needs attention"
+        case .needsAttention: "Needs you"
         case .working: "Working"
         case .inactive: "Inactive"
         }
@@ -240,7 +245,7 @@ enum InboxFilter: CaseIterable {
         case .all: true
         case .needsAttention:
             item.agent.status == .blocked || (item.agent.status == .done && !seen.isSeen(item.agent, route: item.route))
-        case .working: [.needsYou, .working].contains(InboxSection.of(item.agent, now: now))
+        case .working: InboxSection.of(item.agent, now: now) == .working
         case .inactive: InboxSection.of(item.agent, now: now) == .inactive
         }
     }
@@ -297,50 +302,53 @@ private struct InboxRow: View {
             StatusIcon(state: agent.status)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if followed {
-                        Image(systemName: "pin.fill")
-                            .font(.caption)
-                            .foregroundStyle(.tint)
-                            .accessibilityLabel("Followed")
+                Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                Group {
+                    if let lastLine = agent.lastLine {
+                        Text(lastLine)
+                    } else if let line = agent.lastPromptOrigin?.wakeLine {
+                        Text("\(Image(systemName: "eye")) \(line)")
+                    } else if let prompt = agent.lastPrompt {
+                        Text("You: \(prompt)")
                     }
-                    Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
                 }
-                if let lastLine = agent.lastLine {
-                    Text(lastLine)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                if let line = agent.lastPromptOrigin?.wakeLine {
-                    Text("\(Image(systemName: "eye")) \(line)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let prompt = agent.lastPrompt {
-                    Text("You: \(prompt)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                HStack(spacing: 6) {
-                    if let workspace = item.workspace {
-                        Text(workspace)
-                            .font(.caption2.weight(.medium))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(.quaternary, in: Capsule())
-                            .layoutPriority(1)
-                    }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                HStack(spacing: 4) {
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true)
                     }
-                    if let pullRequest = agent.pullRequest {
-                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
+                    if followed {
+                        Image(systemName: "pin.fill")
+                            .foregroundStyle(.tint)
+                            .accessibilityLabel("Followed")
                     }
+                    if let workspace = item.workspace {
+                        Text(workspace).layoutPriority(1)
+                        Text(verbatim: "·").fixedSize()
+                    }
+                    if let wake {
+                        let format: Date.FormatStyle = Calendar.current.isDate(wake, inSameDayAs: now)
+                            ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute()
+                        Label(wake.formatted(format), systemImage: "moon.zzz")
+                            .labelStyle(KindLabelStyle())
+                            .monospacedDigit()
+                            .fixedSize()
+                            .accessibilityLabel("Snoozed until \(wake.formatted(date: .abbreviated, time: .shortened))")
+                    } else {
+                        Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
+                            .monospacedDigit()
+                            .fixedSize()
+                            .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
+                    }
+                    Text(verbatim: "·").fixedSize()
                     Text(item.machine)
                     if item.stale {
                         Text(item.linkDown ? "Offline · cached" : "Cached")
+                    }
+                    if let pullRequest = agent.pullRequest {
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
                 }
                 .lineLimit(1)
@@ -351,22 +359,9 @@ private struct InboxRow: View {
             VStack(alignment: .trailing, spacing: 6) {
                 if unseen {
                     Image(systemName: "circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.tint)
+                        .font(.system(size: 8))
+                        .foregroundStyle(.primary)
                         .accessibilityLabel("Unseen completion")
-                }
-                if let wake {
-                    let format: Date.FormatStyle = Calendar.current.isDate(wake, inSameDayAs: now)
-                        ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute()
-                    Text(wake.formatted(format))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Snoozed until \(wake.formatted(date: .abbreviated, time: .shortened))")
-                } else {
-                    Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
                 }
                 if let left = agent.contextLeft {
                     ContextRing(left: left)
