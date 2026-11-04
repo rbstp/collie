@@ -120,6 +120,7 @@ private struct Capped: Layout {
 struct ApprovalReview: View {
     let model: ApprovalsModel
     let item: ApprovalItem
+    let task: String
     let sendAnswer: (String) async throws -> Void
     @FocusState private var field: String?
     @Environment(\.dismiss) private var dismiss
@@ -128,15 +129,31 @@ struct ApprovalReview: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
-                    .padding(.horizontal)
-                    .padding(.bottom)
+                VStack(alignment: .leading, spacing: 10) {
+                    // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: task).font(.subheadline.weight(.semibold))
+                        Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.metadata)
+                    }
+                    .accessibilityElement(children: .combine)
+                    ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
+                }
+                .padding(.horizontal)
+                .padding(.bottom)
             }
             // The soft edge left the prompt reading through the decisions' glass.
             .scrollEdgeEffectStyle(.hard, for: .bottom)
             .safeAreaBar(edge: .bottom) {
-                if !item.approval.answeredInTerminal && !item.approval.options.isEmpty {
-                    DecisionButtons(model: model, item: item).padding()
+                let decides = !item.approval.answeredInTerminal && !item.approval.options.isEmpty
+                // The session's notice line sits behind the sheet: a failed or unconfirmed decision is reported here.
+                if decides || model.notice != nil {
+                    VStack(spacing: 8) {
+                        if let notice = model.notice {
+                            Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if decides { DecisionButtons(model: model, item: item) }
+                    }
+                    .padding()
                 }
             }
             .navigationTitle(item.approval.toolName ?? item.approval.agentLabel)
@@ -156,7 +173,7 @@ struct ApprovalReview: View {
     }
 }
 
-/// The prompt: in the card, the command and the output cut to three lines each; in the review sheet, whole.
+/// The prompt: in the card, the command cut to three lines and the output a link to the review sheet; in the sheet, whole.
 private struct ApprovalDetails: View {
     let model: ApprovalsModel
     let item: ApprovalItem
@@ -230,30 +247,31 @@ private struct ApprovalDetails: View {
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty {
-                let lines = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false)
-                let more = whole ? 0 : lines.count - 3
-                VStack(alignment: .leading, spacing: 4) {
-                    if whole {
-                        Text(verbatim: approval.snippet)
-                    } else {
-                        // One line each, so the count below is every line not shown.
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(lines.prefix(3).indices, id: \.self) { Text(verbatim: String(lines[$0])).lineLimit(1) }
-                        }
+            } else if !approval.snippet.isEmpty, !whole {
+                let count = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false).count
+                Button {
+                    model.toggleExpanded(item)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines")
+                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
                     }
-                    if more > 0 {
-                        Text(more == 1 ? "+1 line" : "+\(more) lines").font(.caption)
-                    }
+                    .contentShape(Rectangle())
                 }
-                .font(.caption2.monospaced())
-                // The metadata gray is 4.2:1 on a nested panel over the band's light tint; this is 5.3:1, and 5.5:1 in dark mode.
+                .font(.caption)
                 .foregroundStyle(.primary.opacity(0.6))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 10)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
-                .fixedSize(horizontal: false, vertical: true)
+                .buttonStyle(.plain)
+                .accessibilityHint("Shows the whole prompt")
+            } else if !approval.snippet.isEmpty {
+                Text(verbatim: approval.snippet)
+                    .font(.caption2.monospaced())
+                    // The metadata gray is 4.2:1 on a nested panel over the band's light tint; this is 5.3:1, and 5.5:1 in dark mode.
+                    .foregroundStyle(.primary.opacity(0.6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item, field: field)

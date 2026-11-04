@@ -281,8 +281,11 @@ private let reason = "Dangerous rm operation on statically-unresolvable target: 
     var long = approval("ap_1")
     long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
     long.reason = reason
-    #expect(height(card(long)) > 200, "the prompt overflows the cap")
+    #expect(height(card(long)) > 150, "the prompt overflows the cap")
     #expect(height(card(long, maxHeight: 150)) <= 150, "the band fits the cap")
+    var brief = long
+    brief.snippet = "test approvals::case_1 ... ok"
+    #expect(height(card(long)) == height(card(brief)), "the card shows only a link to the output, however long")
     let short = approval("ap_1")
     #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }

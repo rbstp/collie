@@ -24,6 +24,7 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
         XCTAssertTrue(keys.isSelected, app.debugDescription)
         XCTAssertTrue(app.buttons["Shift Tab"].exists, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(app.buttons["Shift Tab"].frame.height, 44, app.debugDescription)
         XCTAssertFalse(app.buttons["Shift Left arrow"].exists, app.debugDescription)
         // Shortcuts are kept on the simulator, so an earlier failed run may have left some.
         removeShortcuts(app)
