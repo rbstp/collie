@@ -44,6 +44,10 @@ struct AgentScreen: View {
         self.archived = archived
     }
 
+    private var approvalItems: [ApprovalItem] {
+        approvals?.items(machineId: model.route.machineId, terminalId: model.route.terminalId) ?? []
+    }
+
     private var blocked: BlockedInput? {
         approvals?.blockedInput(machineId: model.route.machineId, terminalId: model.route.terminalId)
     }
@@ -133,7 +137,7 @@ struct AgentScreen: View {
             .scrollEdgeEffectHidden(true, for: .top)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            let items = approvals?.items(machineId: model.route.machineId, terminalId: model.route.terminalId) ?? []
+            let items = approvalItems
             if !typingInLandscape || !items.isEmpty || approvals?.notice != nil {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
@@ -146,9 +150,9 @@ struct AgentScreen: View {
                     }
                     // The approval cards share the header's surface, so the content runs under them as under the header.
                     if let approvals {
-                        // Together the cards take at most about a fifth of the screen, keyboard or not, so the composer stays
-                        // in reach; a quarter in landscape, where a fifth leaves no room for the prompt above Approve.
-                        let share = verticalSizeClass == .compact ? 0.25 : 0.211
+                        // Together the cards take at most 45% of the screen, keyboard or not, so the composer stays in
+                        // reach; a quarter in landscape, where more leaves no room for the prompt above Approve.
+                        let share = verticalSizeClass == .compact ? 0.25 : 0.45
                         let cap = height > 0 ? height * share / CGFloat(max(items.count, 1)) : .infinity
                         Group {
                             ForEach(items) { item in
@@ -169,7 +173,8 @@ struct AgentScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 // Typing in landscape, the hint's row is what the keyboard's predictions bar leaves the approval card.
-                if let notice = model.notice ?? (typingInLandscape ? nil : model.blockedHint) {
+                // The approval cards already say how to answer.
+                if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty ? nil : model.blockedHint) {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
@@ -178,7 +183,7 @@ struct AgentScreen: View {
                         .padding(.horizontal)
                         .padding(.top, 6)
                 }
-                if showingChat && !model.isTerminal && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
+                if showingChat && !model.isTerminal && approvalItems.allSatisfy(\.approval.answeredInTerminal) && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
                         .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule).padding(.top, 6)
                 }
@@ -416,14 +421,7 @@ private struct AgentHeader: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 6) {
-                if let machineLabel {
-                    Text(verbatim: machineLabel)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .layoutPriority(1)
-                }
+            HStack(spacing: 8) {
                 if let agent = model.agent {
                     HStack(spacing: 6) {
                         StatusPill(state: agent.status)
@@ -434,20 +432,31 @@ private struct AgentHeader: View {
                         }
                     }
                     .fixedSize()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let machineLabel {
+                    Text(verbatim: machineLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                if let agent = model.agent {
                     if let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
                             model.insert(PromptShortcut(text: text))
                         }
                     }
-                    if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        if let kind = agent.kind {
+                            AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let left = agent.contextLeft {
+                            ContextRing(left: left)
+                        }
                     }
-                    if let left = agent.contextLeft {
-                        ContextRing(left: left)
-                    }
+                    .fixedSize()
                 } else {
-                    Spacer(minLength: 0)
                     if model.isTerminal {
                         AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
                         Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
@@ -459,7 +468,7 @@ private struct AgentHeader: View {
                 if !model.isTerminal {
                     // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                     GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
                         .controlSize(.small)
                 }
             }
@@ -484,10 +493,8 @@ private struct AgentHeader: View {
 
 private struct SessionBarGlass: View {
     var body: some View {
-        ZStack {
-            Rectangle().fill(SessionBarDim())
-            Color.clear.glassEffect(.clear, in: .rect)
-        }
+        // The glass rim along the bottom edge drew a hairline seam over the content; the clip cuts it off.
+        Color.clear.glassEffect(.regular, in: .rect).padding(.bottom, -8).clipped()
     }
 }
 
@@ -724,9 +731,9 @@ private struct KeyStrip: View {
                         .labelStyle(.iconOnly)
                         .frame(minHeight: 22)
                         .buttonStyle(.glass)
-                        .buttonBorderShape(.roundedRectangle(radius: 8))
+                        .buttonBorderShape(.roundedRectangle(radius: 12))
                         .controlSize(.small)
-                        .background(SessionBarDim(), in: .rect(cornerRadius: 8))
+                        .background(SessionBarDim(), in: .rect(cornerRadius: 12))
                         .disabled(!model.savesPreferences)
                 }
             }
@@ -760,14 +767,14 @@ private struct StripButton: View {
             Button(action: action) { label }
                 .buttonStyle(.glassProminent)
                 .onAccentFill()
-                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .buttonBorderShape(.roundedRectangle(radius: 12))
                 .controlSize(.small)
         } else {
             Button(action: action) { label }
                 .buttonStyle(.glass)
-                .buttonBorderShape(.roundedRectangle(radius: 8))
+                .buttonBorderShape(.roundedRectangle(radius: 12))
                 .controlSize(.small)
-                .background(SessionBarDim(), in: .rect(cornerRadius: 8))
+                .background(SessionBarDim(), in: .rect(cornerRadius: 12))
         }
     }
 }
@@ -864,8 +871,10 @@ private struct PromptBar: View {
                                 .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.glass)
+                        .tint(model.keysShown ? Color.accentColor : .primary)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .contentShape(.interaction, Circle().inset(by: -3))
                         .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Keys")
                         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
@@ -913,7 +922,7 @@ private struct PromptBar: View {
                                 Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
                                     .frame(width: 36, height: 36)
-                                    .contentShape(Rectangle())
+                                    .contentShape(Rectangle().inset(by: -4))
                             }
                             .buttonStyle(.plain)
                             .disabled(model.sendingPrompt || model.dictation.phase == .finishing)
@@ -947,8 +956,10 @@ private struct PromptBar: View {
                                 .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.glass)
+                        .tint(.primary)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
+                        .contentShape(.interaction, Circle().inset(by: -3))
                         .background(SessionBarDim(), in: .circle)
                         .accessibilityLabel("Hide keyboard")
                     }
@@ -975,6 +986,7 @@ private struct PromptBar: View {
                     .tint(model.retrying ? Color(.systemGray4) : appAccent)
                     .buttonBorderShape(.circle)
                     .controlSize(.small)
+                    .contentShape(.interaction, Circle().inset(by: -3))
                     .disabled(!model.canSendPrompt && !model.retrying)
                     .accessibilityLabel(model.retrying ? "Stop retrying" : model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
@@ -1131,8 +1143,10 @@ struct DictationButton: View {
             }
         }
         .buttonStyle(.glass)
+        .tint(.primary)
         .buttonBorderShape(.circle)
         .controlSize(.small)
+        .contentShape(.interaction, Circle().inset(by: -3))
         .disabled(disabled)
         .accessibilityLabel(dictation.isActive ? "Stop dictation" : "Dictate in \(dictation.language.label)")
     }
