@@ -84,19 +84,19 @@ struct FlockScreen: View {
                     }
                 }
                 .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .primaryAction) {
-                    Menu("Layout", systemImage: layout.icon) {
-                        Picker("Layout", selection: $layout) {
-                            ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
-                        }
-                        .tint(.primary)
-                    }
-                    .disabled(showsUsage)
-                }
-                if layout == .inbox {
+                if !showsUsage {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
-                            .disabled(showsUsage)
+                        Menu("Layout", systemImage: layout.icon) {
+                            Picker("Layout", selection: $layout) {
+                                ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
+                            }
+                            .tint(.primary)
+                        }
+                    }
+                    if layout == .inbox {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
+                        }
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
