@@ -37,20 +37,21 @@ private func entry(
     let inactive = agent("old", .idle, activity: nowMs - 25 * 3_600_000, kind: "codex")
     let olderDone = agent("older-done", .done, activity: nowMs - 20, since: nowMs - 26 * 3_600_000)
     let items = InboxItem.items(in: [entry("m1", [blocked]), entry("m2", [finished, inactive, olderDone], link: .offline)])
-    let seen = SeenAgents()
     #expect(items.first { $0.route.terminalId == "done" }?.stale == true)
     #expect(items.filter { $0.matches("review") }.map(\.route.terminalId) == ["done"])
     #expect(items.filter { $0.matches("build") }.map(\.route.terminalId) == ["blocked"])
     #expect(items.filter { $0.matches("collie") }.count == 4)
     #expect(items.filter { $0.matches("mac m2") }.count == 3)
     #expect(items.filter { $0.matches("CODEX") }.map(\.route.terminalId) == ["old"])
-    #expect(Set(items.filter { InboxFilter.needsAttention.includes($0, seen: seen, now: now) }.map(\.route.terminalId))
-            == Set(["blocked", "done", "older-done"]))
-    #expect(items.filter { InboxFilter.working.includes($0, seen: seen, now: now) }.isEmpty)
-    #expect(items.filter { InboxFilter.inactive.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
+    #expect(items.filter { InboxFilter.needsYou.includes($0, now: now) }.map(\.route.terminalId) == ["blocked"])
+    #expect(items.filter { InboxFilter.working.includes($0, now: now) }.isEmpty)
+    #expect(items.filter { InboxFilter.done.includes($0, now: now) }.map(\.route.terminalId) == ["done"])
+    #expect(items.filter { InboxFilter.inactive.includes($0, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
+    #expect(items.filter { InboxFilter.all.includes($0, now: now) }.count == 4)
+    #expect(InboxFilter.allCases.compactMap(\.section) == InboxSection.allCases)
 }
 
-@Test func seenCompletionSurvivesReloadAndNewCompletionNeedsAttention() throws {
+@Test func seenCompletionSurvivesReloadAndANewCompletionIsUnseen() throws {
     let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: file) }
     let route = AgentRoute(machineId: "m1", terminalId: "done")
@@ -60,7 +61,6 @@ private func entry(
     seen.save(to: file)
     seen = SeenAgents.load(from: file)
     #expect(seen.isSeen(first, route: route))
-    #expect(!InboxFilter.needsAttention.includes(InboxItem.items(in: [entry("m1", [first])])[0], seen: seen, now: now))
     let later = agent("done", .done, activity: 20, since: 15)
     #expect(!seen.isSeen(later, route: route))
     seen.markOpened(agent("done", .working, activity: 20, since: 15), route: route, nowMs: 150)
@@ -68,8 +68,6 @@ private func entry(
     seen.markOpened(later, route: route, nowMs: 200)
     seen.markUnseen(later, route: route)
     #expect(!seen.isSeen(later, route: route))
-    let blocked = agent("done", .blocked, activity: 30, since: 15)
-    #expect(InboxFilter.needsAttention.includes(InboxItem.items(in: [entry("m1", [blocked])])[0], seen: seen, now: now))
 }
 
 @Test func seenMarkersAreBoundedAndPrunedOnlyFromLoadedMachines() {
