@@ -29,7 +29,6 @@ struct AgentScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.neutralAccent) private var neutralAccent
 
     init(
@@ -75,10 +74,6 @@ struct AgentScreen: View {
 
     private var typingInLandscape: Bool { keyboardShown && verticalSizeClass == .compact }
 
-    private var barScheme: ColorScheme { showingChat && !model.isTerminal ? colorScheme : .dark }
-
-    private var headerScheme: ColorScheme { model.paneNotice != nil ? colorScheme : barScheme }
-
     var body: some View {
         VStack(spacing: 0) {
             if let notice = model.paneNotice {
@@ -112,7 +107,7 @@ struct AgentScreen: View {
                         .background { Color(uiColor: GhosttyTerminalUIView.backgroundColor).ignoresSafeArea() }
                         .overlay {
                             if model.ansi.isEmpty, !(model.isTerminal && model.terminalLocked) {
-                                ProgressView("Waiting for output…").tint(.white).foregroundStyle(.white)
+                                ProgressView("Waiting for output…")
                             }
                         }
                         .overlay(alignment: .bottom) {
@@ -140,8 +135,6 @@ struct AgentScreen: View {
                                 }
                             }
                         }
-                        // The terminal is always dark: a light-mode tint (None's black) would vanish on it.
-                        .environment(\.colorScheme, .dark)
                 }
             }
             .scrollEdgeEffectHidden(true, for: .top)
@@ -185,7 +178,6 @@ struct AgentScreen: View {
                     }
                 }
                 .background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
-                .environment(\.colorScheme, headerScheme)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -214,10 +206,8 @@ struct AgentScreen: View {
             }
             // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
             .contentShape(.rect)
-            .environment(\.colorScheme, barScheme)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
-        .toolbarColorScheme(headerScheme, for: .navigationBar)
         .background {
             // The whole screen, bars included: the keyboard must not shrink the cards' cap.
             Color.clear
@@ -680,7 +670,6 @@ private struct AgentTerminal: UIViewRepresentable {
         view.contentInsetAdjustmentBehavior = .never
         view.topEdgeEffect.isHidden = true
         let control = UIRefreshControl()
-        control.tintColor = .white
         let coordinator = context.coordinator
         control.addAction(
             UIAction { [weak control] _ in
