@@ -44,6 +44,15 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
+    /// Replaces the theme's background, resolved for the appearance; text keeps its minimum contrast against it.
+    public var themeBackground: UIColor? {
+        didSet {
+            backgroundColor = themeBackground ?? Self.backgroundColor
+            canvas.backgroundColor = backgroundColor
+            render()
+        }
+    }
+
     // Each gesture below is off while a selection is active, and while its callback is nil.
     public var onDoubleTap: (() -> Void)? {
         didSet { gesturesChanged() }
@@ -232,8 +241,12 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func render() {
         guard let snapshot, let screen else { return }
         renderDeferred = false
-        if theme != TerminalTheme(traitCollection) {
-            theme = TerminalTheme(traitCollection)
+        var current = TerminalTheme(traitCollection)
+        if let themeBackground {
+            current.background = TerminalRGB(themeBackground.resolvedColor(with: traitCollection))
+        }
+        if theme != current {
+            theme = current
             screen.setColors(theme)
             canvas.theme = theme
         }
@@ -1075,6 +1088,15 @@ private final class KeyInput: UIView, UIKeyInput {
 extension TerminalTheme {
     init(_ traits: UITraitCollection) {
         self = traits.userInterfaceStyle == .light ? .light : .dark
+    }
+}
+
+extension TerminalRGB {
+    init(_ color: UIColor) {
+        var (r, g, b, a): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func byte(_ v: CGFloat) -> UInt8 { UInt8((min(max(v, 0), 1) * 255).rounded()) }
+        self.init(byte(r), byte(g), byte(b))
     }
 }
 

@@ -215,7 +215,7 @@ struct AgentCard: View {
             TerminalPreview(ansi: screen ?? "", fontSize: starred ? 11 : 10)
                 .overlay(alignment: .top) {
                     // Hides the row cut at the top: solid first, then a fade.
-                    let background = Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                    let background = Color(uiColor: TerminalPreview.panel)
                     LinearGradient(stops: [.init(color: background, location: 0), .init(color: background, location: 0.4), .init(color: .clear, location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                         .frame(height: 12)
@@ -380,8 +380,19 @@ private struct TerminalPreview: UIViewRepresentable {
     let ansi: String
     let fontSize: CGFloat
 
+    /// The chat preview's tertiary fill over the card, opaque: the light terminal's own background vanished on a white card.
+    static let panel = UIColor { traits in
+        var fill: (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) = (0, 0, 0, 0)
+        var card: (r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat) = (0, 0, 0, 0)
+        UIColor.tertiarySystemFill.resolvedColor(with: traits).getRed(&fill.r, green: &fill.g, blue: &fill.b, alpha: &fill.a)
+        UIColor.secondarySystemGroupedBackground.resolvedColor(with: traits).getRed(&card.r, green: &card.g, blue: &card.b, alpha: &card.a)
+        return UIColor(red: card.r + (fill.r - card.r) * fill.a, green: card.g + (fill.g - card.g) * fill.a,
+                       blue: card.b + (fill.b - card.b) * fill.a, alpha: 1)
+    }
+
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
         let view = GhosttyTerminalUIView(fontSize: fontSize)
+        view.themeBackground = Self.panel
         view.wraps = true
         view.isUserInteractionEnabled = false
         view.showsVerticalScrollIndicator = false
