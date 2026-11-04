@@ -9,7 +9,10 @@ struct ApprovalCard: View {
     @State private var decisionsHeight: CGFloat = 0
     @State private var shownHeight: CGFloat = .infinity
     @State private var moreBelow = false
+    @State private var commandShown: CGFloat = 0
+    @State private var commandFull: CGFloat = 0
     @FocusState private var field: String?
+    @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
@@ -81,7 +84,7 @@ struct ApprovalCard: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
                             .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(AgentState.blocked.color)
+                            .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .padding(2)
@@ -94,13 +97,24 @@ struct ApprovalCard: View {
             .buttonStyle(.plain)
             .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
             if approval.toolName != nil, let command = approval.toolSummary {
-                // Collapsed, the command scrolls sideways rather than wrapping inside a flag.
-                Group {
-                    if expanded {
-                        Text(verbatim: command).fixedSize(horizontal: false, vertical: true)
-                    } else {
-                        ScrollView(.horizontal) { Text(verbatim: command).lineLimit(1) }
-                            .scrollIndicators(.hidden)
+                // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole.
+                let wrapped = command.replacingOccurrences(of: "-", with: "-\u{2060}")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: wrapped)
+                        .lineLimit(expanded ? nil : 3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandShown = $0 }
+                        .background(alignment: .top) {
+                            Text(verbatim: wrapped)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .hidden()
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandFull = $0 }
+                        }
+                        .accessibilityLabel(command)
+                    if !expanded, commandFull > commandShown + 1 {
+                        Button("Show full command") { withAnimation { model.toggleExpanded(item) } }
+                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.borderless)
                     }
                 }
                 .font(.caption.monospaced())
@@ -113,11 +127,12 @@ struct ApprovalCard: View {
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty {
+            } else if !approval.snippet.isEmpty, expanded || !typeSize.isAccessibilitySize {
+                // Collapsed at accessibility sizes, the card's share of the screen left the output a sliver.
                 Text(verbatim: approval.snippet)
                     .font(.caption2.monospaced())
                     .foregroundStyle(.secondary)
-                    .lineLimit(expanded ? nil : 8)
+                    .lineLimit(expanded ? nil : 3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))

@@ -5,10 +5,10 @@
 The key strip sends keys an iPhone keyboard lacks. The **Keys** button at the bottom of Terminal shows or hides it; it stays above the keyboard while you type.
 
 ```text
-⇧  ⌃  E  ←  ↑  ↓  →  ⇥  ⌫  ⏎
+⇧  ⌃  esc  ←  ↑  ↓  →  ⇥  ⌫  ⏎
 ```
 
-`E` sends Escape. Tap ⇧ or ⌃, then a key, to send the pair: ⇧⇥, ⇧← or ⌃⏎. With ⌃ selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
+**esc** sends Escape. Tap ⇧ or ⌃, then a key, to send the pair: ⇧⇥, ⇧← or ⌃⏎. With ⌃ selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
 
 The second row scrolls: `⇧⇥ ⌃⏎ ⇧← ^C`, your key shortcuts, then **+** to add one.
 

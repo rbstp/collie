@@ -148,9 +148,6 @@ struct AgentScreen: View {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
                         AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
-                            // One row of controls, like the navigation bar it sits under: larger, it pushed the whole
-                            // screen past both edges.
-                            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         if let subagents = model.agent?.subagents, !subagents.isEmpty {
                             SubagentList(subagents: subagents)
                                 .padding(.horizontal)
@@ -224,6 +221,7 @@ struct AgentScreen: View {
             ToolbarItem(placement: .primaryAction) {
                 if showingChat && !model.isTerminal {
                     Button("Search conversation", systemImage: "magnifyingglass") { searchingChat.toggle() }
+                        .tint(.primary)
                 } else {
                     // A button-style Toggle fills the bar item when on, and bar buttons pass only their title to accessibility.
                     Button { model.wrapLines.toggle() } label: {
@@ -427,59 +425,68 @@ private struct AgentHeader: View {
     let model: AgentModel
     let machineLabel: String?
     @Binding var showingChat: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                if let agent = model.agent {
-                    HStack(spacing: 6) {
-                        StatusPill(state: agent.status)
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.primary)
+            // One row, like the navigation bar it sits under; at accessibility sizes it pushed the screen past both
+            // edges, so the state and its time take a row of their own above the rest.
+            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
+            row {
+                HStack(spacing: 8) {
+                    if let agent = model.agent {
+                        HStack(spacing: 6) {
+                            StatusPill(state: agent.status)
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.primary)
+                            }
                         }
+                        .fixedSize()
                     }
-                    .fixedSize()
-                }
-                if let machineLabel {
-                    Text(verbatim: machineLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 0)
-                if let agent = model.agent {
-                    if let pullRequest = agent.pullRequest {
-                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
-                            model.insert(PromptShortcut(text: text))
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        if let kind = agent.kind {
-                            AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let left = agent.contextLeft {
-                            ContextRing(left: left)
-                        }
-                    }
-                    .fixedSize()
-                } else {
-                    if model.isTerminal {
-                        AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
-                        Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                    if let machineLabel {
+                        Text(verbatim: machineLabel)
                             .font(.caption)
-                            .foregroundStyle(.primary)
-                            .fixedSize()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
-                if !model.isTerminal {
-                    // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
-                    GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
-                        .controlSize(.small)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    if let agent = model.agent {
+                        if let pullRequest = agent.pullRequest {
+                            PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
+                                model.insert(PromptShortcut(text: text))
+                            }
+                        }
+                        HStack(spacing: 6) {
+                            if let kind = agent.kind {
+                                AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let left = agent.contextLeft {
+                                ContextRing(left: left)
+                            }
+                        }
+                        .fixedSize()
+                    } else {
+                        if model.isTerminal {
+                            AgentKindLabel(kind: "terminal").font(.caption).foregroundStyle(.primary).fixedSize()
+                            Label(model.terminalLocked ? "Locked" : "Unlocked", systemImage: model.terminalLocked ? "lock.fill" : "lock.open")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .fixedSize()
+                        }
+                    }
+                    if !model.isTerminal {
+                        // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
+                        GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
+                                    icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
+                            .controlSize(.small)
+                    }
                 }
+                .layoutPriority(1)
             }
             if model.link == .connecting {
                 HStack(spacing: 6) {
@@ -740,7 +747,8 @@ private struct KeyStrip: View {
                         .disabled(!model.acceptsKeys)
                 }
                 ForEach(AgentKey.strip, id: \.self) { key in
-                    StripButton(title: key.symbol) { model.press(key) }
+                    // Three letters do not fit an equal share of the row.
+                    StripButton(title: key.symbol, fill: key != .esc) { model.press(key) }
                         .accessibilityLabel(key.accessibilityName)
                         .disabled(!model.canPress(key))
                 }
@@ -779,6 +787,9 @@ private struct KeyStrip: View {
         }
         .padding(.horizontal)
         .padding(.top, 8)
+        // Ten keys share the first row and fit it only at the default size: larger, glyphs were cut, and at
+        // accessibility sizes the row pushed the whole screen past both edges.
+        .dynamicTypeSize(...DynamicTypeSize.large)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
         .onDisappear { model.modifier = nil }
         .sheet(isPresented: $editingShortcuts, onDismiss: { shortcuts = StripShortcuts.load(from: StripShortcuts.file) }) {
@@ -811,7 +822,8 @@ private struct CursorJoystick: View {
         .clipShape(.circle)
         .glassEffect(.regular.interactive(), in: .circle)
         .background(SessionBarDim(), in: .circle)
-        .contentShape(.circle)
+        // A 44-point target past the 36-point circle, still inside the gaps to its neighbors.
+        .contentShape(Circle().inset(by: -4))
         .opacity(model.acceptsKeys ? 1 : 0.4)
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -899,6 +911,7 @@ private struct StripButton: View {
             .font(.callout.monospaced())
             .lineLimit(1)
             .frame(maxWidth: fill ? .infinity : nil, minHeight: 22)
+            .fixedSize(horizontal: !fill, vertical: false)
         if selected {
             Button(action: action) { label }
                 .buttonStyle(.glassProminent)

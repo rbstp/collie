@@ -1268,7 +1268,7 @@ extension AgentKey {
 
     var symbol: String {
         switch self {
-        case .esc: "E"
+        case .esc: "esc"
         case .enter: "⏎"
         case .up: "↑"
         case .down: "↓"
