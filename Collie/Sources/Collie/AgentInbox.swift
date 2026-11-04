@@ -48,7 +48,7 @@ struct AgentInbox<Menu: View>: View {
                         HStack(spacing: 8) {
                             HStack {
                                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                                TextField("Search agents", text: $query)
+                                TextField("Search agents", text: $query, prompt: Text("Search agents").foregroundStyle(.metadata))
                                     .submitLabel(.search)
                                     .focused($searchFocused)
                                     .onAppear { searchFocused = searching }
@@ -172,10 +172,18 @@ struct AgentInbox<Menu: View>: View {
         let (groups, asleep) = InboxItem.rows(items, filter: filter, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
-                Section {
-                    ForEach(rows) { row($0, wake: nil, now: now) }
-                } header: {
-                    Text(section.title).font(.footnote.weight(.semibold)).textCase(nil)
+                let content = ForEach(rows) { row($0, wake: nil, now: now) }
+                // A filtered inbox shows one group, which the selected filter already names.
+                if filter == .all {
+                    Section {
+                        content
+                    } header: {
+                        Text(section.title).font(.footnote.weight(.semibold)).textCase(nil)
+                    }
+                } else {
+                    Section { content }
+                        // Without it, the header's room stayed as a blank band under the filters.
+                        .listSectionMargins(.top, 16)
                 }
             }
         }
