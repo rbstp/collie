@@ -243,7 +243,7 @@ struct FlockScreen: View {
                     if let notice = model.closeNotice {
                         Label(notice, systemImage: "exclamationmark.triangle")
                             .font(.footnote)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.warning)
                     }
                     if model.entries.isEmpty {
                         NoMachines()
@@ -698,10 +698,7 @@ struct ContextRing: View {
     static func tone(_ left: UInt8) -> Color {
         switch 100 - Int(min(left, 100)) {
         case ..<80: .accentColor
-        // System orange reads under 4.5:1 as small text on white; light mode takes its high-contrast variant.
-        case ..<90: Color(uiColor: UIColor { traits in
-            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
-        })
+        case ..<90: .warning
         default: AgentState.blocked.color
         }
     }
