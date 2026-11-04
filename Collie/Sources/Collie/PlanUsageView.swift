@@ -2,7 +2,7 @@ import CollieCore
 import SwiftUI
 
 /// The Agents tab's Usage view: one card per machine with the plan usage collied last recorded,
-/// then its tokens and estimated cost.
+/// then a card of its tokens and estimated cost.
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
     let core: (any FlockCore)?
@@ -14,8 +14,9 @@ struct UsageSections: View {
             NoMachines()
         }
         ForEach(entries) { entry in
+            let planUsage = entry.flock?.planUsage
             Section {
-                if let usage = entry.flock?.planUsage {
+                if let usage = planUsage {
                     TimelineView(.everyMinute) { context in
                         let codex = usage.codex.flatMap { $0.resetsAtMs > context.date.unixMs ? $0 : nil }
                         let copilot = usage.copilot.flatMap { $0.resetsAtMs > context.date.unixMs ? $0 : nil }
@@ -37,8 +38,9 @@ struct UsageSections: View {
                         }
                         .padding(.vertical, 4)
                     }
+                } else {
+                    UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
                 }
-                UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
             } header: {
                 TimelineView(.everyMinute) { context in
                     let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
@@ -52,7 +54,14 @@ struct UsageSections: View {
                     .accessibilityLabel("\(entry.machine.label), \(entry.flock?.planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
                 }
             }
+            .listSectionSpacing(.compact)
             .opacity(entry.linkDown ? 0.6 : 1)
+            if planUsage != nil {
+                Section {
+                    UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
+                }
+                .opacity(entry.linkDown ? 0.6 : 1)
+            }
         }
     }
 }

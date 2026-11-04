@@ -21,7 +21,7 @@ Each limit leads with its figure, then a bar and its reset time. A tick on each 
 
 ## Tokens and cost
 
-Each card also shows the tokens the machine's agents used **Today** or over **7 days** or **30 days**, and their cost at API prices, by token type and by model.
+A second card under each machine shows the tokens all of its agents used **Today** or over **7 days** or **30 days**, and their cost at API prices, by token type and by model. Over 7 or 30 days a chart shows the cost of each day: tap a bar to read that day's cost, and tap it again to clear it.
 
 `collied` counts tokens in the machine's Claude Code, Codex and Copilot CLI transcripts, subagents included. Days end at midnight where your phone is.
 

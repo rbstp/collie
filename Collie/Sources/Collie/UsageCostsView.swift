@@ -112,7 +112,10 @@ struct UsageCostsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Tokens and cost").font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tokens and cost").font(.headline)
+                    Text("All agents on this machine").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 if case .loaded(let costs) = model.phase, costs.scanning {
                     ProgressView().controlSize(.small)
@@ -151,6 +154,7 @@ private struct CostsRead: Equatable {
 
 private struct CostsDetail: View {
     let costs: UsageCosts
+    @State private var pickedDay: Date?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -173,9 +177,33 @@ private struct CostsDetail: View {
                 }
             }
             if costs.days.count > 1 {
-                Chart(costs.days.compactMap { day in day.day.map { (day: $0, cost: day.costUsd) } }, id: \.day) { bar in
-                    BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
-                        .foregroundStyle(.tint)
+                let bars = costs.days.compactMap { day in day.day.map { (day: $0, cost: day.costUsd) } }
+                let picked = pickedDay.flatMap { picked in bars.first { Calendar.current.isDate($0.day, inSameDayAs: picked) }?.day }
+                Chart {
+                    ForEach(bars, id: \.day) { bar in
+                        BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                            .foregroundStyle(.tint.opacity(picked == nil || picked == bar.day ? 1 : 0.35))
+                    }
+                    // Drawn after every bar, so the callout is not covered by the next one.
+                    if let bar = bars.first(where: { $0.day == picked }) {
+                        PointMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                            .symbolSize(0)
+                            .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                                Text("\(bar.day.formatted(.dateTime.month(.abbreviated).day())) · \(UsageCostsCard.dollars(bar.cost))")
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color(.tertiarySystemGroupedBackground), in: .capsule)
+                            }
+                    }
+                }
+                .chartXSelection(value: $pickedDay)
+                .chartGesture { proxy in
+                    SpatialTapGesture().onEnded { tap in
+                        let before = picked
+                        proxy.selectXValue(at: tap.location.x)
+                        if let before, let now = pickedDay, Calendar.current.isDate(before, inSameDayAs: now) { pickedDay = nil }
+                    }
                 }
                 .chartYAxis {
                     AxisMarks { value in
