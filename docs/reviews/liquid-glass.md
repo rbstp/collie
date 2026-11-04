@@ -4,7 +4,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 
 The app caps Dynamic Type at AccessibilityXL (`.dynamicTypeSize(...DynamicTypeSize.accessibility3)` at the root): every screen is checked to fit at that size on the iPhone 18 Pro Max, portrait and landscape, and the two larger accessibility sizes are not supported.
 
-- **Agent inbox:** segmented filters, then the search field on its own glass, in a top inset the rows scroll under. Rows, state badges and unread indicators stay content.
+- **Agent inbox:** segmented filters in a top inset the rows scroll under, across the full width, so all five fit on the iPhone 18 Pro Max and scroll only on narrower phones or with larger text. Search is a button in the toolbar capsule beside Layout and New task; it replaces the filters with the search field on its own glass and a close button. Rows, state badges and unread indicators stay content.
 - **Agent grid:** cards stay content, as terminal previews need a stable background; context menus use system styling. A preview's running subagents overlay is clear glass over the composer's dark dimming color, always dark, with white text.
 - **Every Agents page** (grid, list, inbox, Usage): navigation and tab bars keep system glass with no scroll edge effect or glass behind them, leaving only the picker, buttons and tab bar, each on its own glass. Content runs under the tab bar at full clarity; under the top bar it fades into the page background across the status bar band, because the native top edge effect follows the pager, not each page's own scroll view, and left content readable behind the clock.
 - **Approvals:** glass on decision buttons, green for Approve and a red label for Deny; commands, notes and question choices stay content.

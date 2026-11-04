@@ -26,6 +26,7 @@ struct FlockScreen: View {
     @State private var dragging: GridDrag?
     @State private var inboxQuery = ""
     @State private var inboxFilter = InboxFilter.all
+    @State private var inboxSearching = false
     @State private var showsSnoozed = false
     /// The order the layout showed when the session opened; nil follows the layout as it is now.
     @State private var swipeOrder: [AgentRoute]?
@@ -91,6 +92,12 @@ struct FlockScreen: View {
                         .tint(.primary)
                     }
                     .disabled(showsUsage)
+                }
+                if layout == .inbox {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
+                            .disabled(showsUsage)
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
@@ -189,6 +196,7 @@ struct FlockScreen: View {
             .onChange(of: layout) { _, layout in
                 inboxQuery = ""
                 inboxFilter = .all
+                inboxSearching = false
                 showsSnoozed = false
                 if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
@@ -227,7 +235,7 @@ struct FlockScreen: View {
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
-                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
+                query: $inboxQuery, searching: $inboxSearching, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
