@@ -32,14 +32,6 @@ struct SettingsView: View {
                     .tint(app.accent.color)
                     .id(app.accent)
                 }
-                Section("Tailnet") {
-                    LabeledContent("State", value: app.node.map { $0.backendState.label } ?? "unknown")
-                    LabeledContent("Device", value: app.node?.selfDnsName ?? "-")
-                    LabeledContent("Signed in as", value: app.node?.loginName ?? "-")
-                    if let error = app.nodeError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                }
                 Section {
                     LabeledContent("Push", value: app.pushStatus)
                     Toggle("Notify when an agent finishes", isOn: $doneAlerts)
@@ -90,30 +82,41 @@ struct SettingsView: View {
                             .navigationTitle("Machines")
                     }
                 }
-                Section("Cold start") {
-                    if let report {
-                        LabeledContent("Node created", value: "\(report.nodeCreatedMs) ms")
-                        LabeledContent("Started", value: "\(report.startedMs) ms")
-                        LabeledContent("Login URL or running", value: report.settledMs.map { "\($0) ms" } ?? "timeout")
-                        LabeledContent("Backend state", value: report.backendState.label)
-                        LabeledContent("Login URL issued", value: report.authUrlPresent ? "yes" : "no")
-                        LabeledContent("Status polls", value: "\(report.statusPolls)")
-                    } else {
-                        Text("Measured when the tailnet node first starts.").foregroundStyle(.secondary)
-                    }
-                }
-                Section("Build") {
-                    LabeledContent("Core", value: build.coreVersion)
-                    LabeledContent("Protocol", value: "\(protocolVersion())")
-                    LabeledContent("Go", value: build.go)
-                    LabeledContent("Rust", value: build.rustc)
-                    LabeledContent("Target", value: build.target)
-                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
-                }
                 Section {
                     Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
                 } footer: {
                     Text("Try simulated agents and approvals without signing in or connecting a machine.")
+                }
+                Section("Diagnostics") {
+                    DisclosureGroup {
+                        LabeledContent("Device", value: app.node?.selfDnsName ?? "-")
+                        LabeledContent("Signed in as", value: app.node?.loginName ?? "-")
+                    } label: {
+                        LabeledContent("Tailnet", value: app.node.map { $0.backendState.label } ?? "unknown")
+                    }
+                    if let error = app.nodeError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    DisclosureGroup("Cold start") {
+                        if let report {
+                            LabeledContent("Node created", value: "\(report.nodeCreatedMs) ms")
+                            LabeledContent("Started", value: "\(report.startedMs) ms")
+                            LabeledContent("Login URL or running", value: report.settledMs.map { "\($0) ms" } ?? "timeout")
+                            LabeledContent("Backend state", value: report.backendState.label)
+                            LabeledContent("Login URL issued", value: report.authUrlPresent ? "yes" : "no")
+                            LabeledContent("Status polls", value: "\(report.statusPolls)")
+                        } else {
+                            Text("Measured when the tailnet node first starts.").foregroundStyle(.secondary)
+                        }
+                    }
+                    DisclosureGroup("Build") {
+                        LabeledContent("Core", value: build.coreVersion)
+                        LabeledContent("Protocol", value: "\(protocolVersion())")
+                        LabeledContent("Go", value: build.go)
+                        LabeledContent("Rust", value: build.rustc)
+                        LabeledContent("Target", value: build.target)
+                    }
+                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 }
             }
             .navigationTitle("Settings")
