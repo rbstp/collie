@@ -479,6 +479,7 @@ private struct AgentHeader: View {
                                 .fixedSize()
                         }
                     }
+                    if typeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     if !model.isTerminal {
                         // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                         GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
@@ -738,25 +739,26 @@ private struct KeyStrip: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 4) {
-                ForEach(KeyModifier.allCases, id: \.self) { modifier in
-                    let selected = model.modifier == modifier
-                    StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
-                        .accessibilityLabel(modifier.accessibilityName)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                        .disabled(!model.acceptsKeys)
+            // Ten keys fit one row only up to about the default text size; larger, the arrows take a row of
+            // their own rather than cut a glyph.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 4) {
+                    modifierKeys
+                    keys(AgentKey.strip)
                 }
-                ForEach(AgentKey.strip, id: \.self) { key in
-                    // Three letters do not fit an equal share of the row.
-                    StripButton(title: key.symbol, fill: key != .esc) { model.press(key) }
-                        .accessibilityLabel(key.accessibilityName)
-                        .disabled(!model.canPress(key))
+                VStack(spacing: 6) {
+                    HStack(spacing: 4) {
+                        modifierKeys
+                        keys(AgentKey.strip.filter { !Self.arrows.contains($0) })
+                    }
+                    HStack(spacing: 4) { keys(Self.arrows) }
                 }
             }
             HStack(spacing: 8) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
-                        ForEach(AgentKey.combos, id: \.self) { key in
+                        // ⇧← answers a queued Codex question; other agents never take it.
+                        ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
                             StripButton(title: key.symbol, fill: false) { model.run(StripShortcut(key: key.name)) }
                                 .accessibilityLabel(key.accessibilityName)
                                 .disabled(!model.canTap(key))
@@ -787,15 +789,35 @@ private struct KeyStrip: View {
         }
         .padding(.horizontal)
         .padding(.top, 8)
-        // Ten keys share the first row and fit it only at the default size: larger, glyphs were cut, and at
-        // accessibility sizes the row pushed the whole screen past both edges.
-        .dynamicTypeSize(...DynamicTypeSize.large)
+        // At accessibility sizes even six keys to a row cut glyphs and pushed the screen past both edges.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
         .onDisappear { model.modifier = nil }
         .sheet(isPresented: $editingShortcuts, onDismiss: { shortcuts = StripShortcuts.load(from: StripShortcuts.file) }) {
             NavigationStack {
                 StripShortcutsView { editingShortcuts = false }
             }
+        }
+    }
+
+    private static let arrows: [AgentKey] = [.left, .up, .down, .right]
+
+    private var modifierKeys: some View {
+        ForEach(KeyModifier.allCases, id: \.self) { modifier in
+            let selected = model.modifier == modifier
+            StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
+                .accessibilityLabel(modifier.accessibilityName)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .disabled(!model.acceptsKeys)
+        }
+    }
+
+    private func keys(_ keys: [AgentKey]) -> some View {
+        ForEach(keys, id: \.self) { key in
+            // Three letters do not fit an equal share of the row.
+            StripButton(title: key.symbol, fill: key != .esc) { model.press(key) }
+                .accessibilityLabel(key.accessibilityName)
+                .disabled(!model.canPress(key))
         }
     }
 }
@@ -1062,6 +1084,7 @@ private struct PromptBar: View {
                                     }
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 17))
                                         .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
                                         .frame(width: 36, height: 36)
                                         .contentShape(Rectangle().inset(by: -4))
@@ -1115,7 +1138,7 @@ private struct PromptBar: View {
                             if model.sendingPrompt {
                                 ProgressView().tint(appAccent).frame(width: 28, height: 28)
                             } else {
-                                Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
+                                Image(systemName: "paperplane.fill").font(.system(size: 17)).frame(width: 28, height: 28)
                             }
                         }
                         .buttonStyle(.glassProminent)

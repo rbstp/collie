@@ -8,12 +8,15 @@ struct ApprovalCard: View {
     let sendAnswer: (String) async throws -> Void
     @State private var decisionsHeight: CGFloat = 0
     @State private var shownHeight: CGFloat = .infinity
+    @State private var moreAbove = false
     @State private var moreBelow = false
     @State private var commandShown: CGFloat = 0
     @State private var commandFull: CGFloat = 0
+    @State private var headerHeight: CGFloat = 0
     @FocusState private var field: String?
     @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
+    @ScaledMetric(relativeTo: .caption) private var fade: CGFloat = 16
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
 
@@ -25,6 +28,15 @@ struct ApprovalCard: View {
     // reachable.
     private var pinsDecisions: Bool {
         offersDecisions && min(maxHeight - 2 * padding, shownHeight) - spacing - decisionsHeight >= 2 * commandLine
+    }
+    // Collapsed, the command keeps to the lines that leave the tool's name and Show full command in view at rest
+    // (at accessibility sizes three lines pushed the button under the fade); when not even one would (landscape),
+    // it keeps three and scrolls. Measured against the card's cap, not its height, which follows the command.
+    private var commandLines: Int {
+        guard maxHeight.isFinite else { return 3 }
+        let room = maxHeight - 2 * padding - (pinsDecisions ? spacing + decisionsHeight : 0) - headerHeight - spacing - 2 * 8 - 4 - commandLine
+        let lines = Int(room / commandLine)
+        return lines < 1 ? 3 : min(3, lines)
     }
 
     var body: some View {
@@ -42,10 +54,12 @@ struct ApprovalCard: View {
                         .scrollBounceBehavior(.basedOnSize)
                         // A fade where the prompt goes on below: a hard cut at the edge read as a clipped snippet box.
                         .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 1 } action: { moreBelow = $1 }
+                        .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.minY > 1 } action: { moreAbove = $1 }
                         .mask {
                             VStack(spacing: 0) {
+                                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: moreAbove ? fade : 0)
                                 Rectangle()
-                                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: moreBelow ? 16 : 0)
+                                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: moreBelow ? fade : 0)
                             }
                         }
                     }
@@ -95,13 +109,14 @@ struct ApprovalCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
             if approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole.
                 let wrapped = command.replacingOccurrences(of: "-", with: "-\u{2060}")
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: wrapped)
-                        .lineLimit(expanded ? nil : 3)
+                        .lineLimit(expanded ? nil : commandLines)
                         .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandShown = $0 }
                         .background(alignment: .top) {
@@ -184,6 +199,7 @@ private struct UpToContent: Layout {
 
 struct ApprovalReason: View {
     let reason: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
@@ -194,7 +210,11 @@ struct ApprovalReason: View {
         .font(.caption)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+        // Orange fill alone reads as muddy brown over dark glass; there an orange rim carries the warning.
+        .background(.orange.opacity(colorScheme == .dark ? 0.1 : 0.14), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            if colorScheme == .dark { RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.5), lineWidth: 1) }
+        }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reason: \(reason)")
@@ -251,7 +271,7 @@ private struct FeedbackField: View {
                 if model.steps[item.id] == .typing {
                     ProgressView().frame(width: 20, height: 20)
                 } else {
-                    Image(systemName: "arrow.up").frame(width: 20, height: 20)
+                    Image(systemName: "arrow.up").font(.system(size: 17)).frame(width: 20, height: 20)
                 }
             }
             .buttonStyle(.glassProminent)
@@ -287,7 +307,9 @@ private struct DecisionButtons: View {
             Button(role: decision == .deny ? .destructive : nil) {
                 Task { await model.decide(item, decision) }
             } label: {
-                Group {
+                // Each label is as wide as the widest, so the row is measured at the equal widths it lays out with.
+                ZStack {
+                    ForEach(item.approval.options, id: \.self) { Text($0.title).lineLimit(1).hidden() }
                     if model.steps[item.id] == .sending(decision) {
                         ProgressView()
                     } else {
@@ -297,7 +319,7 @@ private struct DecisionButtons: View {
                 .frame(maxWidth: .infinity)
             }
             .modifier(DecisionStyle(decision: decision))
-            .font(.footnote.weight(decision == .approve ? .semibold : .regular))
+            .font(.footnote)
             .controlSize(.small)
             .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
         }
@@ -383,8 +405,8 @@ private struct DecisionStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         switch decision {
-        // System green under white text reads poorly; this deeper green keeps the label legible.
-        case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.13, green: 0.55, blue: 0.25))
+        // System green under white text reads poorly; this deeper green keeps the label at 4.5:1 or more.
+        case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.11, green: 0.5, blue: 0.22))
         case .deny: content.buttonStyle(.glass).tint(.red)
         default: content.buttonStyle(.glass).tint(.primary)
         }
