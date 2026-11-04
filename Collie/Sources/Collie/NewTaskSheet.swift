@@ -221,37 +221,6 @@ struct NewTaskSheet: View {
                     }
                 }
 
-                if model.location != .resume {
-                    Section {
-                        if let agents = model.options?.agents {
-                            Picker("Agent", selection: $model.agent) {
-                                ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
-                            }
-                            .tint(.primary)
-                            if model.agent == "claude" {
-                                Toggle("Ultracode", isOn: $model.ultracode)
-                            }
-                        } else if model.optionsError == nil {
-                            ProgressView()
-                        }
-                    } header: {
-                        Text("Agent")
-                    } footer: {
-                        if !model.agent.isEmpty {
-                            TimelineView(.everyMinute) { context in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
-                                        Text(warning.text)
-                                            .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
-                                            .accessibilityLabel(warning.spoken)
-                                    }
-                                    Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
-                                }
-                            }
-                        }
-                    }
-                }
-
                 Section(model.location == .resume ? "Prompt (optional)" : "Prompt") {
                     if let error = model.attachmentError {
                         Text(error).font(.footnote).foregroundStyle(.red)
@@ -289,7 +258,7 @@ struct NewTaskSheet: View {
                             }
                             HStack(alignment: .bottom, spacing: 8) {
                                 TextField("What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
-                                    .lineLimit(expandedPrompt ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
+                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 3...3))
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
                                 if expandedPrompt && !model.prompt.isEmpty {
@@ -334,6 +303,32 @@ struct NewTaskSheet: View {
                     .id(KeepsPromptVisible.id)
                 }
 
+                if model.location != .resume {
+                    Section {
+                        if let agents = model.options?.agents {
+                            Picker("Agent", selection: $model.agent) {
+                                ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
+                            }
+                            .tint(.primary)
+                            if model.agent == "claude" {
+                                Toggle("Ultracode", isOn: $model.ultracode)
+                            }
+                        } else if model.optionsError == nil {
+                            ProgressView()
+                        }
+                    } footer: {
+                        if !model.agent.isEmpty {
+                            TimelineView(.everyMinute) { context in
+                                if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
+                                    Text(warning.text)
+                                        .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
+                                        .accessibilityLabel(warning.spoken)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Section {
                     TextField("Label (optional)", text: $model.label)
                 } footer: {
@@ -341,24 +336,9 @@ struct NewTaskSheet: View {
                 }
 
                 Section {
-                    Button {
-                        startTask = Task {
-                            if let route = await model.start() {
-                                dismiss()
-                                onStarted(route)
-                            }
-                        }
-                    } label: {
-                        switch model.phase {
-                        case .editing, .startedNotVisible:
-                            Text("Start")
-                        case .starting:
-                            HStack { ProgressView(); Text("Starting the task…") }
-                        case .waitingForAgent:
-                            HStack { ProgressView(); Text("Waiting for the agent…") }
-                        }
+                    if model.phase == .starting || model.phase == .waitingForAgent {
+                        HStack { ProgressView(); Text(model.phase == .starting ? "Starting the task…" : "Waiting for the agent…") }
                     }
-                    .disabled(!model.canStart)
                     if let error = model.error {
                         Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
                     }
@@ -389,6 +369,18 @@ struct NewTaskSheet: View {
                         cancel()
                         dismiss()
                     }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Start") {
+                        startTask = Task {
+                            if let route = await model.start() {
+                                dismiss()
+                                onStarted(route)
+                            }
+                        }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .disabled(!model.canStart)
                 }
             }
             .task(id: model.machineId) { await model.loadOptions() }
@@ -460,7 +452,10 @@ struct NewTaskSheet: View {
                 path.wrappedValue = cwd
             } label: {
                 HStack {
-                    Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(URL(filePath: cwd).lastPathComponent)
+                        Text(cwd).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    }
                     Spacer()
                     if path.wrappedValue == cwd {
                         Image(systemName: "checkmark").foregroundStyle(.primary)

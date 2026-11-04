@@ -192,12 +192,12 @@ private func entry(
 @Test func inboxSectionsFollowStatusAndLastActivity() {
     let hour: UInt64 = 3_600_000
     #expect(InboxSection.of(agent("a", .working, activity: nil), now: now) == .working)
-    #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .working)
+    #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .needsYou)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - 25 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .done, activity: nowMs - 25 * hour, since: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .done, activity: nowMs - hour, since: nowMs - 24 * hour), now: now) == .inactive)
-    #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .working)
+    #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .needsYou)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - hour, since: nowMs - 15 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .inactive)
@@ -205,7 +205,7 @@ private func entry(
     #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .inactive)
 }
 
-@Test func inboxPutsBlockedFirstThenTheMostRecentAcrossMachines() {
+@Test func inboxPutsBlockedInItsOwnSectionThenTheMostRecentAcrossMachines() {
     let entries = [
         entry("m1", [agent("old", .working, activity: 10), agent("blocked", .blocked, activity: 1), agent("idle", .idle, activity: nil)]),
         entry("m2", [agent("new", .working, activity: 30), agent("since", .done, activity: nil, since: nowMs - 50),
@@ -215,16 +215,17 @@ private func entry(
     #expect(items.first { $0.route.terminalId == "new" }?.machine == "Mac m2")
     #expect(items.first { $0.route.terminalId == "old" }?.workspace == "collie")
     let groups = InboxSection.grouped(items, now: now)
-    #expect(groups[.working]?.map(\.route.terminalId) == ["blocked", "new", "old"])
+    #expect(groups[.needsYou]?.map(\.route.terminalId) == ["blocked"])
+    #expect(groups[.working]?.map(\.route.terminalId) == ["new", "old"])
     #expect(groups[.done]?.map(\.route.terminalId) == ["done", "since"])
     #expect(groups[.inactive]?.map(\.route) == [AgentRoute(machineId: "m1", terminalId: "idle")])
 }
 
 @MainActor
-@Test func contextRingTonesUseTheWatchUsageScale() {
-    let environment = EnvironmentValues()
-    for left: UInt8 in [100, 72, 40, 20, 10, 5, 0] {
-        #expect(ContextRing.tone(left).resolve(in: environment) == WatchUsage.usedColor(100 - left).resolve(in: environment))
+@Test func contextRingTonesUseSystemColorsByUsedShare() {
+    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (40, .yellow), (21, .yellow), (20, .orange), (11, .orange), (10, .red), (0, .red)]
+    for (left, color) in expected {
+        #expect(ContextRing.tone(left) == color)
     }
-    #expect(ContextRing.tone(255).resolve(in: environment) == ContextRing.tone(100).resolve(in: environment))
+    #expect(ContextRing.tone(255) == ContextRing.tone(100))
 }

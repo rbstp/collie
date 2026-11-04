@@ -10,7 +10,7 @@ extension WatchState {
     init(items: [ApprovalItem], entries: [MachineFlockEntry], allowed: Bool, live: Bool, now: Date) {
         let nowMs = now.unixMs
         let groups = InboxSection.grouped(InboxItem.items(in: entries), now: now)
-        let rows = (groups[.working] ?? []).map { ($0, false) } + (groups[.done] ?? []).map { ($0, true) }
+        let rows = ((groups[.needsYou] ?? []) + (groups[.working] ?? [])).map { ($0, false) } + (groups[.done] ?? []).map { ($0, true) }
         self.init(
             approvals: items.filter { $0.approval.expiresAtMs > nowMs }.prefix(Self.maxApprovals).map(WatchApproval.init),
             agents: rows.prefix(Self.maxAgents).map { WatchAgent(item: $0.0, done: $0.1) },

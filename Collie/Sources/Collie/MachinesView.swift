@@ -98,7 +98,14 @@ struct MachineRow<Destination: View>: View {
                             .tint(reachable ? nil : .secondary)
                         Spacer(minLength: 0)
                         if let link = flock?.link {
-                            StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+                            let state: AgentState = link == .connected ? .done : .idle
+                            HStack(spacing: 4) {
+                                Image(systemName: AgentActivityStatus(state).symbol).accessibilityHidden(true)
+                                Text(link.label)
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(state.color)
+                            .fixedSize()
                         }
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))
@@ -119,8 +126,8 @@ struct MachineRow<Destination: View>: View {
                 MachineConnectionDetails(message: message, error: flock.lastError ?? message)
             }
         }
-        .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 }
 
@@ -134,8 +141,7 @@ private struct MachineConnectionDetails: View {
             Text(message)
                 .font(.footnote)
                 .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button {
                 UIPasteboard.general.string = error
                 copiedAt = .now

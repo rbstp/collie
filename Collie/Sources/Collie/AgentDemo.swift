@@ -36,7 +36,7 @@ struct AgentDemo: View {
 
     var body: some View {
         TabView {
-            Tab("Agents", systemImage: "square.grid.2x2") {
+            Tab("Agents", systemImage: "sparkles.rectangle.stack") {
                 FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: approvals, follows: follows, opening: $opening)
             }
             Tab("Machines", systemImage: "desktopcomputer") {

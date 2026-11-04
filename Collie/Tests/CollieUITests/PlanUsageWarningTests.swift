@@ -11,8 +11,7 @@ final class PlanUsageWarningTests: XCTestCase {
         XCTAssertTrue(warning("Codex monthly limit at 92%, resets ", in: app).appears(within: 5), app.debugDescription)
         XCTAssertFalse(warning("Claude 5-hour limit", in: app).exists)
         pick("Copilot", in: app)
-        XCTAssertTrue(warning("Use the session's terminal buttons", in: app).appears(within: 5), app.debugDescription)
-        XCTAssertFalse(anyWarning(in: app).exists)
+        XCTAssertTrue(anyWarning(in: app).disappears(within: 5), app.debugDescription)
     }
 
     func testAtTheLimitWarnsWithoutBlockingStart() throws {
@@ -25,7 +24,7 @@ final class PlanUsageWarningTests: XCTestCase {
         XCTAssertTrue(warning("Codex monthly limit reached, resets ", in: app).appears(within: 5), app.debugDescription)
         pick("Claude", in: app)
         XCTAssertTrue(reached.appears(within: 5), app.debugDescription)
-        app.buttons["/Users/demo/collie"].tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "/Users/demo/collie")).firstMatch.tap()
         let prompt = app.textFields["What should the agent do?"]
         prompt.tap()
         _ = app.type("go", into: prompt)
@@ -39,11 +38,9 @@ final class PlanUsageWarningTests: XCTestCase {
         continueAfterFailure = false
         let app = try openNewTask(used: nil)
         defer { app.terminate() }
-        let hint = warning("Use the session's terminal buttons", in: app)
         for agent in ["Codex", "Claude"] {
             pick(agent, in: app)
-            XCTAssertTrue(hint.appears(within: 5), app.debugDescription)
-            XCTAssertFalse(anyWarning(in: app).exists)
+            XCTAssertFalse(anyWarning(in: app).exists, app.debugDescription)
         }
     }
 
