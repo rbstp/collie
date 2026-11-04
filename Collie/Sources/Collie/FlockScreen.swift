@@ -557,7 +557,7 @@ struct StatusPill: View {
                     .frame(width: spinner, height: spinner)
                     .accessibilityHidden(true)
             } else {
-                Image(systemName: state == .done ? "checkmark.circle" : AgentActivityStatus(state).symbol)
+                Image(systemName: StatusIcon.symbol(state))
             }
         }
             .labelStyle(KindLabelStyle())
@@ -605,16 +605,22 @@ struct StatusIcon: View {
                     Circle().stroke(appAccent, lineWidth: 1.5).padding(2.5)
                     ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6)
                 }
-            case .done: Image(systemName: "checkmark.circle").font(.system(size: 16)).foregroundStyle(state.color)
-            case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
-            case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
-            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16)).foregroundStyle(state.color)
             }
         }
-        .font(.system(size: 18))
         .frame(width: 20, height: 20)
         .accessibilityElement()
         .accessibilityLabel(state.label)
+    }
+
+    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest.
+    static func symbol(_ state: AgentState) -> String {
+        switch state {
+        case .blocked: "exclamationmark.circle.fill"
+        case .done: "checkmark.circle"
+        case .idle: "circle"
+        default: "questionmark.circle"
+        }
     }
 }
 
@@ -648,10 +654,7 @@ struct ContextRing: View {
     static func tone(_ left: UInt8) -> Color {
         switch 100 - Int(min(left, 100)) {
         case ..<80: .accentColor
-        // System orange reads under 4.5:1 as small text on white; light mode takes its high-contrast variant.
-        case ..<90: Color(uiColor: UIColor { traits in
-            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
-        })
+        case ..<90: .lightHighContrast(.systemOrange)
         default: AgentState.blocked.color
         }
     }
@@ -669,8 +672,20 @@ extension AgentState {
             Color(uiColor: UIColor {
                 $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
             })
-        default: AgentActivityStatus(self).color
+        case .done: .lightHighContrast(.systemGreen)
+        case .idle: .lightHighContrast(.systemGray)
+        case .unknown: AgentActivityStatus(self).color
         }
+    }
+}
+
+extension Color {
+    /// System orange, green and gray read under 4.5:1 as small text on white (green 2.2:1 as a status glyph);
+    /// light mode takes their high-contrast variant, dark mode keeps the standard one.
+    static func lightHighContrast(_ color: UIColor) -> Color {
+        Color(uiColor: UIColor { traits in
+            color.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
+        })
     }
 }
 

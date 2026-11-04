@@ -246,6 +246,27 @@ private func entry(
     #expect((0.2126 * Double(red.linearRed) + 0.7152 * Double(red.linearGreen) + 0.0722 * Double(red.linearBlue) + 0.05) / (0.047 + 0.05) >= 4.5)
 }
 
+@MainActor
+@Test func statusGlyphsAreOneFamilyAndReadInBothModes() {
+    #expect(StatusIcon.symbol(.blocked).hasSuffix(".fill"))
+    for state in [AgentState.done, .idle, .unknown] {
+        #expect(!StatusIcon.symbol(state).hasSuffix(".fill"))
+    }
+    var light = EnvironmentValues()
+    light.colorScheme = .light
+    var dark = EnvironmentValues()
+    dark.colorScheme = .dark
+    func luminance(_ c: Color.Resolved) -> Double {
+        0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue)
+    }
+    // Rows are white in light mode and #1C1C1E in dark mode.
+    let row = luminance(Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255).resolve(in: dark))
+    for state in [AgentState.blocked, .done, .idle] {
+        #expect(1.05 / (luminance(state.color.resolve(in: light)) + 0.05) >= 3)
+        #expect((luminance(state.color.resolve(in: dark)) + 0.05) / (row + 0.05) >= 3)
+    }
+}
+
 @Test func theFilterRowEndsBetweenLabels() {
     // Five segments with 14 pt of padding on each side of their labels, after a 16 pt inset.
     let segments: [CGFloat] = [50, 100, 90, 66, 95]
