@@ -39,6 +39,8 @@ struct FlockScreen: View {
                 agents.background(GridPageLock(locked: pagerLocked) { listMargin = $0 }).tag(false)
                 List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }
                     .modifier(PagerListMargin(edge: .leading, margin: listMargin))
+                    // Off screen, the Agents page is not laid out on a rotation, and Usage kept the other orientation's margin.
+                    .background(GridPageLock(locked: pagerLocked) { listMargin = $0 })
                     .tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
