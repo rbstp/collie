@@ -10,6 +10,7 @@ struct AgentInbox<Menu: View>: View {
     let snoozed: SnoozedAgents
     let snooze: (AgentSummary, AgentRoute, Date?) -> Void
     @Binding var query: String
+    @Binding var searching: Bool
     @Binding var filter: InboxFilter
     @Binding var showsSnoozed: Bool
     let margin: CGFloat?
@@ -17,7 +18,6 @@ struct AgentInbox<Menu: View>: View {
     @State private var snoozing: InboxItem?
     @State private var custom: InboxItem?
     @State private var customWake = Date.now
-    @State private var searching = false
     @FocusState private var searchFocused: Bool
     @ScaledMetric(relativeTo: .subheadline) private var filterFontSize = 15
     @State private var filterSpace: CGFloat = 0
@@ -42,31 +42,28 @@ struct AgentInbox<Menu: View>: View {
             .listSectionSpacing(.compact)
             .modifier(PagerListMargin(edge: .trailing, margin: margin))
             .safeAreaInset(edge: .top, spacing: 0) {
-                HStack(spacing: 8) {
+                Group {
                     if searching || !query.isEmpty {
                         // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
-                        HStack {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search agents", text: $query)
-                                .submitLabel(.search)
-                                .focused($searchFocused)
-                                .onAppear { searchFocused = searching }
+                        HStack(spacing: 8) {
+                            HStack {
+                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                                TextField("Search agents", text: $query)
+                                    .submitLabel(.search)
+                                    .focused($searchFocused)
+                                    .onAppear { searchFocused = searching }
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
+                            .glassEffect(.regular, in: .capsule)
+                            closeSearchButton
                         }
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .glassEffect(.regular, in: .capsule)
-                        .padding(.leading)
-                        searchButton("Close search", systemImage: "xmark") {
-                            query = ""
-                            searching = false
-                        }
+                        .padding(.horizontal)
                     } else {
                         filterRow
-                        searchButton("Search", systemImage: "magnifyingglass") { searching = true }
                     }
                 }
                 // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
-                .padding(.trailing)
                 .padding(.vertical, 8)
                 .onChange(of: searchFocused) { _, focused in
                     if !focused && query.isEmpty { searching = false }
@@ -155,14 +152,17 @@ struct AgentInbox<Menu: View>: View {
         filterPosition.scrollTo(edge: filterAtEnd ? .trailing : .leading)
     }
 
-    private func searchButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(title, systemImage: systemImage, action: action)
-            .labelStyle(.iconOnly)
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(.primary)
-            .frame(width: 38, height: 38)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .contentShape(Circle().inset(by: -3))
+    private var closeSearchButton: some View {
+        Button("Close search", systemImage: "xmark") {
+            query = ""
+            searching = false
+        }
+        .labelStyle(.iconOnly)
+        .font(.system(size: 16, weight: .medium))
+        .foregroundStyle(.primary)
+        .frame(width: 38, height: 38)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .contentShape(Circle().inset(by: -3))
     }
 
     @ViewBuilder
@@ -379,12 +379,13 @@ private struct InboxRow: View {
     let unseen: Bool
     let wake: Date?
     let now: Date
+    @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 5
 
     var body: some View {
         let agent = item.agent
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + lift }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)

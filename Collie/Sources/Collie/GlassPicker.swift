@@ -12,9 +12,10 @@ struct GlassPicker<Selection: Hashable>: View {
     let options: [(String, Selection)]
     var expands = false
     var icons: [UIImage?] = []
+    var toolbar = false
 
     var body: some View {
-        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands, icons: icons)
+        NativeSegmentedPicker(title: title, selection: $selection, options: options, expands: expands, icons: icons, toolbar: toolbar)
             .glassEffect(expands ? .regular : .identity)
     }
 }
@@ -34,6 +35,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     let options: [(String, Selection)]
     var expands = false
     var icons: [UIImage?] = []
+    var toolbar = false
     @ScaledMetric(relativeTo: .subheadline) private var fontSize = 15
     @Environment(\.controlSize) private var controlSize
 
@@ -51,9 +53,11 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
         }
         let font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
         // Keep the selected label's app accent explicit: native defaults lose it, and UIKit tint can change during actions.
-        let accent = UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
+        // In dark mode a picker in content draws a light selection lens, where gold measured 2.2:1; the toolbar's lens stays dark.
+        let selected = context.environment.colorScheme == .dark && !toolbar
+            ? UIColor.white : UIColor(Color(context.environment.appAccent.resolve(in: context.environment)))
         control.setTitleTextAttributes([.font: font], for: .normal)
-        control.setTitleTextAttributes([.font: font, .foregroundColor: accent], for: .selected)
+        control.setTitleTextAttributes([.font: font, .foregroundColor: selected], for: .selected)
         for index in options.indices {
             let label = String(localized: String.LocalizationValue(options[index].0), locale: context.environment.locale)
             if let icon = icons.indices.contains(index) ? icons[index] : nil {

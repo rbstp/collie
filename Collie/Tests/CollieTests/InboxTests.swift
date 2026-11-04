@@ -280,3 +280,10 @@ private func entry(
     #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: true) == 378)
     #expect(InboxFilter.rowWidth(segments: segments, available: 340, atEnd: true) == 281)
 }
+
+@Test func allFiveFiltersFitTheProMaxWithoutScrolling() {
+    let font = UIFont.systemFont(ofSize: 15, weight: .semibold)
+    let segments = InboxFilter.allCases.map { GlassSegment.width($0.title, font: font) }
+    // The iPhone 18 Pro Max is 440 points wide; narrower phones scroll the row.
+    #expect(segments.reduce(2 * InboxFilter.rowInset, +) <= 440)
+}

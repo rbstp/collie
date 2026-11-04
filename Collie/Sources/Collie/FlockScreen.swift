@@ -26,6 +26,7 @@ struct FlockScreen: View {
     @State private var dragging: GridDrag?
     @State private var inboxQuery = ""
     @State private var inboxFilter = InboxFilter.all
+    @State private var inboxSearching = false
     @State private var showsSnoozed = false
     /// The order the layout showed when the session opened; nil follows the layout as it is now.
     @State private var swipeOrder: [AgentRoute]?
@@ -91,6 +92,12 @@ struct FlockScreen: View {
                         .tint(.primary)
                     }
                     .disabled(showsUsage)
+                }
+                if layout == .inbox {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
+                            .disabled(showsUsage)
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
@@ -189,6 +196,7 @@ struct FlockScreen: View {
             .onChange(of: layout) { _, layout in
                 inboxQuery = ""
                 inboxFilter = .all
+                inboxSearching = false
                 showsSnoozed = false
                 if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
@@ -227,7 +235,7 @@ struct FlockScreen: View {
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
-                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
+                query: $inboxQuery, searching: $inboxSearching, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -381,7 +389,7 @@ struct ViewSwitch: View {
     @Binding var showsUsage: Bool
 
     var body: some View {
-        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)])
+        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)], toolbar: true)
     }
 }
 
@@ -403,24 +411,16 @@ struct MachineHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                MachineName(machine: entry.machine)
-                Spacer()
-                if approvalsCount > 0 {
-                    StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+            // With larger text the pills drop under the name rather than break it mid-word.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    MachineName(machine: entry.machine)
+                    Spacer()
+                    status
                 }
-                if showsLink, let link = entry.flock?.link {
-                    if link == .connecting {
-                        ProgressView().controlSize(.mini)
-                        Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
-                    } else if link == .connected {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.green)
-                            .accessibilityLabel(link.label)
-                    } else {
-                        StatusPill(state: .idle, title: link.label)
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    MachineName(machine: entry.machine)
+                    HStack { status }
                 }
             }
             if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
@@ -434,6 +434,26 @@ struct MachineHeader: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var status: some View {
+        if approvalsCount > 0 {
+            StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+        }
+        if showsLink, let link = entry.flock?.link {
+            if link == .connecting {
+                ProgressView().controlSize(.mini)
+                Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+            } else if link == .connected {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AgentState.done.color)
+                    .accessibilityLabel(link.label)
+            } else {
+                StatusPill(state: .idle, title: link.label)
+            }
+        }
+    }
 }
 
 private struct AgentRow: View {
@@ -442,13 +462,14 @@ private struct AgentRow: View {
     let followed: Bool
     let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 6
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
                 .accessibilityHidden(true)
                 // Centered on the title's first line rather than sitting on its baseline.
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + lift }
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
@@ -592,38 +613,45 @@ struct StatusAge: View {
 
 struct StatusIcon: View {
     let state: AgentState
+    var size: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var scale: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var appAccent
 
     var body: some View {
+        // Grows with the text beside it, up to half again its size, so a glyph never outweighs the title it marks.
+        let side = size * min(scale, 1.5)
+        let unit = side / 20
         Group {
             switch state {
             // Core Animation spins it; a SwiftUI repeatForever redraws the app every frame (battery).
             case .working where reduceMotion:
                 Circle()
                     .trim(from: 0, to: 0.7)
-                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .padding(2)
+                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5 * unit, lineCap: .round))
+                    .padding(2 * unit)
             // The ring keeps a steady silhouette, like Done's circle, while the spinner's spokes fade in turn.
             case .working:
                 ZStack {
-                    Circle().stroke(appAccent, lineWidth: 1.5).padding(2.5)
-                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6)
+                    Circle().stroke(appAccent, lineWidth: 1.5 * unit).padding(2.5 * unit)
+                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6 * unit)
                 }
-            default: Image(systemName: Self.symbol(state)).font(.system(size: 16)).foregroundStyle(state.color)
+            // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; its pill label keeps the full color.
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle ? 0.75 : 1))
             }
         }
-        .frame(width: 20, height: 20)
+        .frame(width: side, height: side)
         .accessibilityElement()
         .accessibilityLabel(state.label)
     }
 
-    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest.
+    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest,
+    /// and idle's is dashed, so it stays the quietest rather than reading as an unchecked Done.
     static func symbol(_ state: AgentState) -> String {
         switch state {
         case .blocked: "exclamationmark.circle.fill"
         case .done: "checkmark.circle"
-        case .idle: "circle"
+        case .idle: "circle.dashed"
         default: "questionmark.circle"
         }
     }
@@ -643,26 +671,27 @@ extension ShapeStyle where Self == Color {
 struct ContextRing: View {
     let left: UInt8
     var font: Font = .caption
-    /// The figure takes the width of "100%", so the chip lines up down a column of rows.
+    /// Takes the width "100%" would, so a column of rows keeps one width; the chip stays beside its figure.
     var aligned = false
 
     var body: some View {
         let left = min(left, 100)
-        Label {
+        Group {
             if aligned {
-                Text(verbatim: "100%").hidden().overlay(alignment: .trailing) { Text("\(left)%") }
+                label("100%").hidden().overlay(alignment: .trailing) { label("\(left)%") }
             } else {
-                Text("\(left)%")
+                label("\(left)%")
             }
-        } icon: {
-            Image(systemName: "memorychip")
         }
-            .labelStyle(KindLabelStyle())
             .font(font.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
             .fixedSize()
             .accessibilityElement()
             .accessibilityLabel("\(left)% of context left")
+    }
+
+    private func label(_ figure: String) -> some View {
+        Label(figure, systemImage: "memorychip").labelStyle(KindLabelStyle())
     }
 
     /// The one warning rule for context and usage limits: accent, orange from 80% used, red from 90%.

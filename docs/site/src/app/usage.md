@@ -1,6 +1,6 @@
 # Usage
 
-To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Each machine gets a card under its name, with how long ago it last recorded usage.
+To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Under each machine's name, with how long ago it last recorded usage, one card shows its plan usage and a second its tokens and cost.
 
 | Agent | Plan usage | Source |
 |---|---|---|
@@ -21,7 +21,7 @@ Each limit leads with its figure, then a bar and its reset time. The bar turns o
 
 ## Tokens and cost
 
-Below the plan usage, the card shows the tokens all of the machine's agents used **Today** or over **7 days** or **30 days**, and their cost at API prices, by token type and by model. Over 7 or 30 days a chart shows the cost of each day: tap a bar to read that day's cost, and tap it again to clear it.
+The **Tokens and cost** card, below the plan usage, shows the tokens all of the machine's agents used **Today** or over **7 days** or **30 days**, and their cost at API prices, by token type and by model. Over 7 or 30 days a chart shows the cost of each day: tap a bar to read that day's cost, and tap it again to clear it.
 
 `collied` counts tokens in the machine's Claude Code, Codex and Copilot CLI transcripts, subagents included. Days end at midnight where your phone is.
 
