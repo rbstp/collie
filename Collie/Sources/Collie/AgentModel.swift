@@ -1201,10 +1201,10 @@ struct CloseConfirmation: Equatable {
 enum KeyModifier: CaseIterable {
     case shift, control
 
-    var symbol: String {
+    var word: String {
         switch self {
-        case .shift: "⇧"
-        case .control: "⌃"
+        case .shift: "shift"
+        case .control: "ctrl"
         }
     }
 
@@ -1217,10 +1217,11 @@ enum KeyModifier: CaseIterable {
 }
 
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .backspace, .enter]
+    static let strip: [AgentKey] = [.esc, .tab, .backspace, .enter]
+    static let arrows: [AgentKey] = [.left, .up, .down, .right]
     static let combos: [AgentKey] = [.shiftTab, .ctrlEnter, .shiftLeft, .ctrlC]
     static let controlLetters: [AgentKey] = [.ctrlA, .ctrlB, .ctrlC, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW]
-    static let all: [AgentKey] = strip + combos.filter { $0 != .ctrlC } + controlLetters
+    static let all: [AgentKey] = strip + arrows + combos.filter { $0 != .ctrlC } + controlLetters
 
     /// The combination with a modifier; nil when collied has no such key.
     func with(_ modifier: KeyModifier) -> AgentKey? {

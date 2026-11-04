@@ -14,7 +14,7 @@ Approvals are read-only until you turn on **Settings > Apple Watch > Decide from
 
 - the watch must be unlocked and on your wrist;
 - you decide in the watch app, never from the alert;
-- you can approve, deny or pick a menu option, never Approve always.
+- you can approve, deny or pick a menu option, never Always allow.
 
 The iPhone rechecks the setting for each decision and sends only an answer it showed the watch.
 
