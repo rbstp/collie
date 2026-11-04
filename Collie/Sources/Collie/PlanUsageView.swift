@@ -130,7 +130,7 @@ private struct UsageLimitRow: View {
         VStack(alignment: .leading, spacing: 6) {
             let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
             layout {
-                Text(title).foregroundStyle(.secondary)
+                Text(title)
                 if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                 Text(figure).fontWeight(.semibold).monospacedDigit().layoutPriority(1)
             }

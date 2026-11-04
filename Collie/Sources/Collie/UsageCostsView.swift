@@ -175,7 +175,7 @@ private struct CostsDetail: View {
             if costs.days.count > 1 {
                 Chart(costs.days.compactMap { day in day.day.map { (day: $0, cost: day.costUsd) } }, id: \.day) { bar in
                     BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
-                        .foregroundStyle(Color.secondary)
+                        .foregroundStyle(.tint)
                 }
                 .chartYAxis {
                     AxisMarks { value in
