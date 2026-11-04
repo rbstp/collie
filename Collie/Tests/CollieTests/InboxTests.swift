@@ -242,3 +242,16 @@ private func entry(
     #expect(onWhite(.metadata) >= 4.5)
     #expect(onWhite(AgentState.blocked.color) >= 4.5)
 }
+
+@Test func theFilterRowEndsBetweenLabels() {
+    // Five segments with 14 pt of padding on each side of their labels, after a 16 pt inset.
+    let segments: [CGFloat] = [50, 100, 90, 66, 95]
+    #expect(InboxFilter.rowWidth(segments: segments, available: 500, atEnd: false) == 500)
+    // 378 falls inside the fifth label (336 to 403): the row ends where it starts.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: false) == 336)
+    // 330 falls in the padding between the fourth and fifth labels.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 330, atEnd: false) == 330)
+    // Scrolled to the end of 433 pt, a leading edge at 55 falls between the first two labels; one at 93 would cut the second (80 to 152), so the row starts after it: 433 - 152.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: true) == 378)
+    #expect(InboxFilter.rowWidth(segments: segments, available: 340, atEnd: true) == 281)
+}

@@ -19,6 +19,15 @@ struct GlassPicker<Selection: Hashable>: View {
     }
 }
 
+/// A segment of a picker that does not expand: its label with `padding` on each side.
+enum GlassSegment {
+    static let padding: CGFloat = 14
+
+    static func width(_ label: String, font: UIFont) -> CGFloat {
+        ceil((label as NSString).size(withAttributes: [.font: font]).width) + 2 * padding
+    }
+}
+
 private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
     let title: String
     @Binding var selection: Selection
@@ -54,7 +63,7 @@ private struct NativeSegmentedPicker<Selection: Hashable>: UIViewRepresentable {
                 control.setWidth(expands ? 0 : 44, forSegmentAt: index)
             } else {
                 control.setTitle(label, forSegmentAt: index)
-                control.setWidth(expands ? 0 : ceil((label as NSString).size(withAttributes: [.font: font]).width) + 28, forSegmentAt: index)
+                control.setWidth(expands ? 0 : GlassSegment.width(label, font: font), forSegmentAt: index)
             }
         }
         control.selectedSegmentIndex = options.firstIndex { $0.1 == selection } ?? UISegmentedControl.noSegment
