@@ -117,6 +117,8 @@ struct AgentInbox<Menu: View>: View {
         }
         .scrollIndicators(.hidden)
         .scrollPosition($filterPosition)
+        // A scroll before the segments have a size is lost, which left a filter chosen earlier past the fade.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.width } action: { _, _ in revealFilter() }
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 1 } action: { filterClips.leading = $1 }
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x + $0.containerSize.width < $0.contentSize.width - 1 } action: {
             filterClips.trailing = $1
@@ -135,6 +137,7 @@ struct AgentInbox<Menu: View>: View {
             filterSpace = $0
             revealFilter()
         }
+        .onChange(of: filter) { revealFilter() }
         .onAppear(perform: revealFilter)
     }
 
@@ -444,7 +447,7 @@ private struct InboxRow: View {
                     }
                     Spacer(minLength: 0)
                     if let left = agent.contextLeft {
-                        ContextRing(left: left, font: .caption2)
+                        ContextRing(left: left, font: .caption2, aligned: true)
                     }
                 }
                 .lineLimit(1)

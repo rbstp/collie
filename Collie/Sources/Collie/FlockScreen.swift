@@ -468,7 +468,7 @@ private struct AgentRow: View {
                 .foregroundStyle(.metadata)
             }
             Spacer()
-            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
+            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2, aligned: true) }
         }
     }
 }
@@ -557,7 +557,7 @@ struct StatusPill: View {
                     .frame(width: spinner, height: spinner)
                     .accessibilityHidden(true)
             } else {
-                Image(systemName: state == .done ? "checkmark.circle" : AgentActivityStatus(state).symbol)
+                Image(systemName: StatusIcon.symbol(state))
             }
         }
             .labelStyle(KindLabelStyle())
@@ -605,16 +605,22 @@ struct StatusIcon: View {
                     Circle().stroke(appAccent, lineWidth: 1.5).padding(2.5)
                     ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6)
                 }
-            case .done: Image(systemName: "checkmark.circle").font(.system(size: 16)).foregroundStyle(state.color)
-            case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
-            case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
-            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16)).foregroundStyle(state.color)
             }
         }
-        .font(.system(size: 18))
         .frame(width: 20, height: 20)
         .accessibilityElement()
         .accessibilityLabel(state.label)
+    }
+
+    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest.
+    static func symbol(_ state: AgentState) -> String {
+        switch state {
+        case .blocked: "exclamationmark.circle.fill"
+        case .done: "checkmark.circle"
+        case .idle: "circle"
+        default: "questionmark.circle"
+        }
     }
 }
 
@@ -632,10 +638,20 @@ extension ShapeStyle where Self == Color {
 struct ContextRing: View {
     let left: UInt8
     var font: Font = .caption
+    /// The figure takes the width of "100%", so the chip lines up down a column of rows.
+    var aligned = false
 
     var body: some View {
         let left = min(left, 100)
-        Label("\(left)%", systemImage: "memorychip")
+        Label {
+            if aligned {
+                Text(verbatim: "100%").hidden().overlay(alignment: .trailing) { Text("\(left)%") }
+            } else {
+                Text("\(left)%")
+            }
+        } icon: {
+            Image(systemName: "memorychip")
+        }
             .labelStyle(KindLabelStyle())
             .font(font.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
@@ -669,7 +685,15 @@ extension AgentState {
             Color(uiColor: UIColor {
                 $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
             })
-        default: AgentActivityStatus(self).color
+        // System green is about 2.2:1 on white and system gray 4.3:1 on the dark status pill; both read 4.5:1 or more
+        // as the pill's label on light and dark glass, and 3:1 or more as row glyphs.
+        case .done:
+            Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemGreen.resolvedColor(with: $0) : UIColor(red: 0, green: 0.47, blue: 0.18, alpha: 1) })
+        case .idle:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 0.6, green: 0.6, blue: 0.62, alpha: 1) : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+            })
+        case .unknown: AgentActivityStatus(self).color
         }
     }
 }
