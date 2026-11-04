@@ -444,7 +444,7 @@ private struct InboxRow: View {
                     }
                     Spacer(minLength: 0)
                     if let left = agent.contextLeft {
-                        ContextRing(left: left, font: .caption2)
+                        ContextRing(left: left, font: .caption2, aligned: true)
                     }
                 }
                 .lineLimit(1)

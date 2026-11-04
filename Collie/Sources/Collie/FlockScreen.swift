@@ -468,7 +468,7 @@ private struct AgentRow: View {
                 .foregroundStyle(.metadata)
             }
             Spacer()
-            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
+            if let left = agent.contextLeft { ContextRing(left: left, font: .caption2, aligned: true) }
         }
     }
 }
@@ -638,10 +638,20 @@ extension ShapeStyle where Self == Color {
 struct ContextRing: View {
     let left: UInt8
     var font: Font = .caption
+    /// The figure takes the width of "100%", so the chip lines up down a column of rows.
+    var aligned = false
 
     var body: some View {
         let left = min(left, 100)
-        Label("\(left)%", systemImage: "memorychip")
+        Label {
+            if aligned {
+                Text(verbatim: "100%").hidden().overlay(alignment: .trailing) { Text("\(left)%") }
+            } else {
+                Text("\(left)%")
+            }
+        } icon: {
+            Image(systemName: "memorychip")
+        }
             .labelStyle(KindLabelStyle())
             .font(font.monospacedDigit())
             .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
