@@ -47,7 +47,6 @@ struct UsageSections: View {
                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                         Text(entry.flock?.planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.footnote)
                     }
-                    .foregroundStyle(.secondary)
                     .textCase(nil)
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel("\(entry.machine.label), \(entry.flock?.planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
