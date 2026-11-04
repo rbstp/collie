@@ -59,7 +59,7 @@ struct AgentGrid<Menu: View>: View {
                                 dropShelf(starred: false, in: entry)
                             }
                             if !entry.terminals.isEmpty {
-                                Text("Terminals").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                                Text("Terminals").font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.horizontal, 20)
                                 LazyVGrid(
                                     columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
                                     alignment: .leading, spacing: 12
@@ -159,11 +159,11 @@ extension AgentGrid {
             HStack(spacing: 8) {
                 AgentKindLabel(kind: "terminal", iconOnly: true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(terminal.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(terminal.displayTitle).font(.footnote.weight(.semibold)).lineLimit(1)
                     if let workspace = terminal.workspaceLabel, workspace != terminal.displayTitle {
                         Text(workspace)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.metadata)
                             .lineLimit(1)
                     }
                 }
@@ -173,8 +173,8 @@ extension AgentGrid {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(terminal.locked ? "Locked" : "Unlocked")
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
             .frame(maxHeight: .infinity)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
             .contentShape(Rectangle())
@@ -212,13 +212,13 @@ struct AgentCard: View {
         if let conversation {
             ChatPreview(messages: conversation.suffix(starred ? 4 : 2), lines: starred ? 2 : 3)
         } else {
-            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 8)
+            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 11 : 10)
                 .overlay(alignment: .top) {
                     // Hides the row cut at the top: solid first, then a fade.
                     let background = Color(uiColor: GhosttyTerminalUIView.backgroundColor)
                     LinearGradient(stops: [.init(color: background, location: 0), .init(color: background, location: 0.4), .init(color: .clear, location: 1)],
                                    startPoint: .top, endPoint: .bottom)
-                        .frame(height: starred ? 20 : 12)
+                        .frame(height: 12)
                 }
         }
     }
@@ -229,7 +229,7 @@ struct AgentCard: View {
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
                     // Four one-line messages, the most a chat preview holds, fill about 110 pt; 150 left a blank band under them.
-                    : (starred ? (conversation != nil ? 110 : 150) : 80))
+                    : (starred ? (conversation != nil ? 110 : 150) : 84))
                 .accessibilityHidden(true)
                 .overlay(alignment: .top) {
                     if agent.status != .blocked, !agent.subagents.isEmpty {
@@ -285,7 +285,7 @@ struct AgentCard: View {
                         }
                     }
                     .frame(width: 16)
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         if followed {
                             Image(systemName: "pin.fill")
                                 .foregroundStyle(.tint)
@@ -301,8 +301,8 @@ struct AgentCard: View {
                             Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
                         }
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(.metadata)
                     .lineLimit(1)
                     Spacer(minLength: 0)
                     if let left = agent.contextLeft {
@@ -310,9 +310,9 @@ struct AgentCard: View {
                     }
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.top, 6)
-            .padding(.bottom, 2)
+            .padding(.horizontal, 6)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
         }
         // Cards in a row share its height; any extra goes below the text, never between preview and title.
         .frame(maxHeight: .infinity, alignment: .top)
@@ -342,7 +342,7 @@ private struct ChatPreview: View {
                         Text("\(Image(systemName: "eye")) \(line)").lineLimit(1)
                     } else {
                         Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text))
-                            .lineLimit(lines)
+                            .lineLimit(user ? 1 : lines)
                     }
                 }
                 .padding(user ? 6 : 0)

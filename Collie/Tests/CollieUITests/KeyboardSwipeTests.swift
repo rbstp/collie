@@ -54,6 +54,9 @@ final class KeyboardSwipeTests: XCTestCase {
         let layout = app.buttons["Layout"]
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         app.choose(app.buttons["Inbox"]) { layout.tap() }
+        let search = app.buttons["Search"]
+        XCTAssertTrue(search.appears(within: 5), app.debugDescription)
+        search.tap()
         typeAndSwipeDown(app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch, in: app)
     }
 

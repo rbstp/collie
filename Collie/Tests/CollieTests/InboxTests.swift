@@ -220,22 +220,25 @@ private func entry(
 }
 
 @MainActor
-@Test func contextRingTonesUseSystemColorsByUsedShare() {
-    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (10, .red), (0, .red)]
-    for (left, color) in expected {
-        #expect(ContextRing.tone(left) == color)
+@Test func contextRingTonesFollowTheOneWarningRule() {
+    for left: UInt8 in [100, 41, 21] {
+        #expect(ContextRing.tone(left) == .accentColor)
     }
     #expect(ContextRing.tone(255) == ContextRing.tone(100))
     var light = EnvironmentValues()
     light.colorScheme = .light
     var dark = EnvironmentValues()
     dark.colorScheme = .dark
-    for left: UInt8 in [40, 21] {
-        #expect(ContextRing.tone(left).resolve(in: dark) == Color.yellow.resolve(in: dark))
-        #expect(ContextRing.tone(left).resolve(in: light) != Color.yellow.resolve(in: light))
+    func onWhite(_ color: Color) -> Double {
+        let c = color.resolve(in: light)
+        return 1.05 / (0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) + 0.05)
     }
-    for left: UInt8 in [20, 11] {
-        #expect(ContextRing.tone(left).resolve(in: dark) == Color.orange.resolve(in: dark))
-        #expect(ContextRing.tone(left).resolve(in: light) != Color.orange.resolve(in: light))
+    for (lefts, system) in [([20, 11] as [UInt8], Color.orange), ([10, 0], .red)] {
+        for left in lefts {
+            #expect(ContextRing.tone(left).resolve(in: dark) == system.resolve(in: dark))
+            #expect(onWhite(ContextRing.tone(left)) >= 4.5)
+        }
     }
+    #expect(onWhite(.metadata) >= 4.5)
+    #expect(onWhite(AgentState.blocked.color) >= 4.5)
 }

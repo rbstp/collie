@@ -97,7 +97,7 @@ final class SubagentListTests: XCTestCase {
                             host.rootView = card(updated)
                             try await Task.sleep(for: .milliseconds(100))
                             host.view.layoutIfNeeded()
-                            XCTAssertEqual(terminal.bounds.height, starred ? 150 : 80, accuracy: 1)
+                            XCTAssertEqual(terminal.bounds.height, starred ? 150 : 84, accuracy: 1)
                             XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
                         }
                     }

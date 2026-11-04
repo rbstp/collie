@@ -286,6 +286,7 @@ struct FlockScreen: View {
                         }
                     }
                 }
+                .listSectionSpacing(.compact)
                 .modifier(PagerListMargin(edge: .trailing, margin: listMargin))
             }
         }
@@ -301,7 +302,7 @@ struct FlockScreen: View {
             }
         case .inbox:
             let items = InboxItem.items(in: entries).filter { !filtered || $0.matches(inboxQuery) }
-            let rows = InboxItem.rows(items, filter: filtered ? inboxFilter : .all, snoozed: snoozed, now: .now)
+            let rows = InboxItem.rows(items, filter: filtered && inboxQuery.isEmpty ? inboxFilter : .all, snoozed: snoozed, now: .now)
             let asleep = filtered && !showsSnoozed ? [] : rows.asleep.map(\.0)
             return (InboxSection.allCases.flatMap { rows.active[$0] ?? [] } + asleep).map(\.route)
         case .list:
@@ -446,7 +447,7 @@ private struct AgentRow: View {
                 // Centered on the title's first line rather than sitting on its baseline.
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             VStack(alignment: .leading, spacing: 2) {
-                Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
                         AgentKindLabel(kind: kind, iconOnly: true)
@@ -464,7 +465,7 @@ private struct AgentRow: View {
                 }
                 .lineLimit(1)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.metadata)
             }
             Spacer()
             if let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
@@ -481,7 +482,7 @@ private struct TerminalRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(terminal.displayTitle).lineLimit(1)
                 if let workspace = terminal.workspaceLabel {
-                    Text(workspace).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(workspace).font(.caption).foregroundStyle(.metadata).lineLimit(1)
                 }
             }
             Spacer()
@@ -602,36 +603,41 @@ struct StatusIcon: View {
     }
 }
 
+extension ShapeStyle where Self == Color {
+    // Secondary gray is about 3.4:1 on white and 4.2:1 on the session bar over the terminal; both get a stronger gray, 4.5:1 or more.
+    static var metadata: Color {
+        Color(uiColor: UIColor {
+            $0.userInterfaceStyle == .dark
+                ? UIColor.secondaryLabel.resolvedColor(with: $0).withAlphaComponent(0.7)
+                : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+        })
+    }
+}
+
 struct ContextRing: View {
     let left: UInt8
     var font: Font = .caption
-
-    // Secondary gray is about 3.4:1 on white and 4.2:1 on the session bar over the terminal; both get a stronger gray, 4.5:1 or more.
-    private static let gray = Color(uiColor: UIColor {
-        $0.userInterfaceStyle == .dark
-            ? UIColor.secondaryLabel.resolvedColor(with: $0).withAlphaComponent(0.7)
-            : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
-    })
 
     var body: some View {
         let left = min(left, 100)
         Label("\(left)%", systemImage: "memorychip")
             .labelStyle(KindLabelStyle())
             .font(font.monospacedDigit())
-            .foregroundStyle(left <= 20 ? Self.tone(left) : Self.gray)
+            .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
             .fixedSize()
             .accessibilityElement()
             .accessibilityLabel("\(left)% of context left")
     }
 
+    /// The one warning rule for context and usage limits: accent, orange from 80% used, red from 90%.
     static func tone(_ left: UInt8) -> Color {
         switch 100 - Int(min(left, 100)) {
-        case ..<60: .green
-        // System yellow is too faint on white; light mode gets a deeper amber.
-        case ..<80: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemYellow : UIColor(red: 0.8, green: 0.56, blue: 0, alpha: 1) })
-        // Likewise a deeper orange in light mode, readable as small text on white.
-        case ..<90: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemOrange : UIColor(red: 0.78, green: 0.33, blue: 0, alpha: 1) })
-        default: .red
+        case ..<80: .accentColor
+        // System orange reads under 4.5:1 as small text on white; light mode takes its high-contrast variant.
+        case ..<90: Color(uiColor: UIColor { traits in
+            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
+        })
+        default: AgentState.blocked.color
         }
     }
 }
@@ -639,7 +645,14 @@ struct ContextRing: View {
 extension AgentState {
     var label: String { AgentActivityStatus(self).label }
 
-    var color: Color { self == .working ? .accentColor : AgentActivityStatus(self).color }
+    var color: Color {
+        switch self {
+        case .working: .accentColor
+        // System red is about 3.3:1 as small text on light glass, even its high-contrast variant 4.1:1; light mode gets a deeper red.
+        case .blocked: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemRed : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1) })
+        default: AgentActivityStatus(self).color
+        }
+    }
 }
 
 extension LinkPhase {

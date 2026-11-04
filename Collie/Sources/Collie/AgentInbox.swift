@@ -17,6 +17,8 @@ struct AgentInbox<Menu: View>: View {
     @State private var snoozing: InboxItem?
     @State private var custom: InboxItem?
     @State private var customWake = Date.now
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         let items = InboxItem.items(in: entries)
@@ -35,31 +37,46 @@ struct AgentInbox<Menu: View>: View {
             .listSectionSpacing(.compact)
             .modifier(PagerListMargin(edge: .trailing, margin: margin))
             .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    ScrollView(.horizontal) {
-                        GlassPicker(title: "Filter", selection: $filter,
-                                    options: InboxFilter.allCases.map { ($0.title, $0) })
-                            .padding(.horizontal)
-                    }
-                    .scrollIndicators(.hidden)
-                    // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
-                    .padding(.vertical, 8)
-                    // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
-                    HStack {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search agents", text: $query)
-                            .submitLabel(.search)
-                        if !query.isEmpty {
-                            Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
-                                .labelStyle(.iconOnly)
-                                .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if searching || !query.isEmpty {
+                        // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
+                        HStack {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search agents", text: $query)
+                                .submitLabel(.search)
+                                .focused($searchFocused)
+                                .onAppear { searchFocused = searching }
                         }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .glassEffect(.regular, in: .capsule)
+                        .padding(.leading)
+                        searchButton("Close search", systemImage: "xmark") {
+                            query = ""
+                            searching = false
+                        }
+                    } else {
+                        ScrollView(.horizontal) {
+                            GlassPicker(title: "Filter", selection: $filter,
+                                        options: InboxFilter.allCases.map { ($0.title, $0) })
+                                .padding(.horizontal)
+                        }
+                        .scrollIndicators(.hidden)
+                        // A segment cut at the edge fades out, so the filters read as scrollable.
+                        .mask {
+                            HStack(spacing: 0) {
+                                Color.black
+                                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 16)
+                            }
+                        }
+                        searchButton("Search", systemImage: "magnifyingglass") { searching = true }
                     }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 44)
-                    .glassEffect(.regular, in: .capsule)
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
+                }
+                // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
+                .padding(.trailing)
+                .padding(.vertical, 8)
+                .onChange(of: searchFocused) { _, focused in
+                    if !focused && query.isEmpty { searching = false }
                 }
             }
         }
@@ -99,8 +116,20 @@ struct AgentInbox<Menu: View>: View {
         }
     }
 
+    private func searchButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(title, systemImage: systemImage, action: action)
+            .labelStyle(.iconOnly)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(.primary)
+            .frame(width: 38, height: 38)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .contentShape(Circle().inset(by: -3))
+    }
+
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
+        // The field covers the filter row, so a search looks through every section.
+        let filter = query.isEmpty ? self.filter : .all
         let (groups, asleep) = InboxItem.rows(items, filter: filter, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
@@ -148,6 +177,8 @@ struct AgentInbox<Menu: View>: View {
             InboxRow(item: item, followed: follows?.isFollowing(item.route) == true,
                      unseen: item.agent.status == .done && !isSeen, wake: wake, now: now)
         }
+        // No disclosure chevron, so the text keeps the width, as in Mail.
+        .navigationLinkIndicatorVisibility(.hidden)
         .contextMenu {
             if wake != nil {
                 Button("Wake now", systemImage: "alarm") { snooze(item.agent, item.route, nil) }
@@ -297,15 +328,32 @@ private struct InboxRow: View {
         let agent = item.agent
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
-            VStack(alignment: .leading, spacing: 3) {
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                    Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Group {
+                        if let wake {
+                            let format: Date.FormatStyle = Calendar.current.isDate(wake, inSameDayAs: now)
+                                ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute()
+                            Label(wake.formatted(format), systemImage: "moon.zzz")
+                                .labelStyle(KindLabelStyle())
+                                .accessibilityLabel("Snoozed until \(wake.formatted(date: .abbreviated, time: .shortened))")
+                        } else {
+                            Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
+                                .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
+                        }
+                    }
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.metadata)
+                    .fixedSize()
                     if unseen {
                         Image(systemName: "circle.fill")
-                            .font(.caption2)
-                            .imageScale(.small)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 8))
+                            .foregroundStyle(.primary)
+                            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                             .accessibilityLabel("Unseen completion")
                     }
                 }
@@ -318,8 +366,8 @@ private struct InboxRow: View {
                         Text("You: \(prompt)")
                     }
                 }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.footnote)
+                .foregroundStyle(.metadata)
                 .lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
@@ -334,21 +382,6 @@ private struct InboxRow: View {
                         Text(workspace).layoutPriority(1)
                         Text(verbatim: "·").fixedSize()
                     }
-                    if let wake {
-                        let format: Date.FormatStyle = Calendar.current.isDate(wake, inSameDayAs: now)
-                            ? .dateTime.hour().minute() : .dateTime.month(.abbreviated).day().hour().minute()
-                        Label(wake.formatted(format), systemImage: "moon.zzz")
-                            .labelStyle(KindLabelStyle())
-                            .monospacedDigit()
-                            .fixedSize()
-                            .accessibilityLabel("Snoozed until \(wake.formatted(date: .abbreviated, time: .shortened))")
-                    } else {
-                        Text(Elapsed.compact(sinceMs: item.agent.inboxActivityMs, now: now))
-                            .monospacedDigit()
-                            .fixedSize()
-                            .accessibilityLabel("\(Elapsed.spoken(sinceMs: item.agent.inboxActivityMs, now: now)) ago")
-                    }
-                    Text(verbatim: "·").fixedSize()
                     Text(item.machine)
                     if item.stale {
                         Text(item.linkDown ? "Offline · cached" : "Cached")
@@ -356,14 +389,14 @@ private struct InboxRow: View {
                     if let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
+                    Spacer(minLength: 0)
+                    if let left = agent.contextLeft {
+                        ContextRing(left: left, font: .caption2)
+                    }
                 }
                 .lineLimit(1)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if let left = agent.contextLeft {
-                ContextRing(left: left, font: .caption2)
+                .foregroundStyle(.metadata)
             }
         }
     }
