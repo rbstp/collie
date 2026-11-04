@@ -259,11 +259,12 @@ private func entry(
     func luminance(_ c: Color.Resolved) -> Double {
         0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue)
     }
-    // Rows are white in light mode and #1C1C1E in dark mode.
-    let row = luminance(Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255).resolve(in: dark))
+    // The status pill's glass, about #F5F5F5 in light mode and #2B2B2B in dark mode, where the color is the label's.
+    let lightPill = luminance(Color(white: 245 / 255).resolve(in: light))
+    let darkPill = luminance(Color(white: 43 / 255).resolve(in: dark))
     for state in [AgentState.blocked, .done, .idle] {
-        #expect(1.05 / (luminance(state.color.resolve(in: light)) + 0.05) >= 3)
-        #expect((luminance(state.color.resolve(in: dark)) + 0.05) / (row + 0.05) >= 3)
+        #expect((lightPill + 0.05) / (luminance(state.color.resolve(in: light)) + 0.05) >= 4.5)
+        #expect((luminance(state.color.resolve(in: dark)) + 0.05) / (darkPill + 0.05) >= 4.5)
     }
 }
 

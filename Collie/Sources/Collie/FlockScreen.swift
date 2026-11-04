@@ -664,7 +664,10 @@ struct ContextRing: View {
     static func tone(_ left: UInt8) -> Color {
         switch 100 - Int(min(left, 100)) {
         case ..<80: .accentColor
-        case ..<90: .lightHighContrast(.systemOrange)
+        // System orange reads under 4.5:1 as small text on white; light mode takes its high-contrast variant.
+        case ..<90: Color(uiColor: UIColor { traits in
+            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
+        })
         default: AgentState.blocked.color
         }
     }
@@ -682,20 +685,16 @@ extension AgentState {
             Color(uiColor: UIColor {
                 $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
             })
-        case .done: .lightHighContrast(.systemGreen)
-        case .idle: .lightHighContrast(.systemGray)
+        // System green is about 2.2:1 on white and system gray 4.3:1 on the dark status pill; both read 4.5:1 or more
+        // as the pill's label on light and dark glass, and 3:1 or more as row glyphs.
+        case .done:
+            Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemGreen.resolvedColor(with: $0) : UIColor(red: 0, green: 0.47, blue: 0.18, alpha: 1) })
+        case .idle:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 0.6, green: 0.6, blue: 0.62, alpha: 1) : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+            })
         case .unknown: AgentActivityStatus(self).color
         }
-    }
-}
-
-extension Color {
-    /// System orange, green and gray read under 4.5:1 as small text on white (green 2.2:1 as a status glyph);
-    /// light mode takes their high-contrast variant, dark mode keeps the standard one.
-    static func lightHighContrast(_ color: UIColor) -> Color {
-        Color(uiColor: UIColor { traits in
-            color.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
-        })
     }
 }
 
