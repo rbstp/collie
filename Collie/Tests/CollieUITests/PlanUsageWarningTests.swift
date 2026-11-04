@@ -52,12 +52,17 @@ final class PlanUsageWarningTests: XCTestCase {
         let newTask = app.buttons["New task"]
         XCTAssertTrue(newTask.appears(within: 10), app.debugDescription)
         newTask.tap()
-        XCTAssertTrue(app.buttons["Agent"].appears(within: 5), app.debugDescription)
+        XCTAssertTrue(agentPicker(in: app).appears(within: 5), app.debugDescription)
         return app
     }
 
     private func pick(_ agent: String, in app: XCUIApplication) {
-        app.choose(app.buttons[agent]) { app.buttons["Agent"].tap() }
+        app.choose(app.buttons[agent]) { agentPicker(in: app).tap() }
+    }
+
+    /// The picker's label carries its value, such as "Agent, Claude".
+    private func agentPicker(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Agent,")).firstMatch
     }
 
     private func warning(_ prefix: String, in app: XCUIApplication) -> XCUIElement {

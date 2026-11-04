@@ -51,6 +51,7 @@ struct AgentDemo: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    .background(Color(.systemGroupedBackground))
                     .navigationTitle("Machines")
                 }
             }
