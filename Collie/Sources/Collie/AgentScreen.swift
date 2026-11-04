@@ -701,43 +701,46 @@ private struct KeyStrip: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 4) {
-                ForEach(KeyModifier.allCases, id: \.self) { modifier in
-                    let selected = model.modifier == modifier
-                    StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
-                        .accessibilityLabel(modifier.accessibilityName)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                        .disabled(!model.acceptsKeys)
-                }
-                ForEach(AgentKey.strip, id: \.self) { key in
-                    StripButton(title: key.symbol) { model.press(key) }
-                        .accessibilityLabel(key.accessibilityName)
-                        .disabled(!model.canPress(key))
-                }
-            }
-            ScrollView(.horizontal) {
+        HStack(spacing: 8) {
+            VStack(spacing: 6) {
                 HStack(spacing: 4) {
-                    ForEach(AgentKey.combos, id: \.self) { key in
-                        StripButton(title: key.symbol, fill: false) { model.run(StripShortcut(key: key.name)) }
+                    ForEach(KeyModifier.allCases, id: \.self) { modifier in
+                        let selected = model.modifier == modifier
+                        StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
+                            .accessibilityLabel(modifier.accessibilityName)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                            .disabled(!model.acceptsKeys)
+                    }
+                    ForEach(AgentKey.strip, id: \.self) { key in
+                        StripButton(title: key.symbol) { model.press(key) }
                             .accessibilityLabel(key.accessibilityName)
-                            .disabled(!model.canTap(key))
+                            .disabled(!model.canPress(key))
                     }
-                    ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
-                        StripButton(title: shortcut.label, fill: false) { model.run(shortcut) }
-                            .disabled(!model.canRun(shortcut))
-                    }
-                    Button("Edit key shortcuts", systemImage: "plus") { editingShortcuts = true }
-                        .labelStyle(.iconOnly)
-                        .frame(minHeight: 22)
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.roundedRectangle(radius: 12))
-                        .controlSize(.small)
-                        .background(SessionBarDim(), in: .rect(cornerRadius: 12))
-                        .disabled(!model.savesPreferences)
                 }
+                ScrollView(.horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(AgentKey.combos, id: \.self) { key in
+                            StripButton(title: key.symbol, fill: false) { model.run(StripShortcut(key: key.name)) }
+                                .accessibilityLabel(key.accessibilityName)
+                                .disabled(!model.canTap(key))
+                        }
+                        ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
+                            StripButton(title: shortcut.label, fill: false) { model.run(shortcut) }
+                                .disabled(!model.canRun(shortcut))
+                        }
+                        Button("Edit key shortcuts", systemImage: "plus") { editingShortcuts = true }
+                            .labelStyle(.iconOnly)
+                            .frame(minHeight: 22)
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
+                            .controlSize(.small)
+                            .background(SessionBarDim(), in: .rect(cornerRadius: 12))
+                            .disabled(!model.savesPreferences)
+                    }
+                }
+                .scrollIndicators(.hidden)
             }
-            .scrollIndicators(.hidden)
+            CursorJoystick(model: model)
         }
         .padding(.horizontal)
         .padding(.top, 8)
@@ -748,6 +751,105 @@ private struct KeyStrip: View {
                 StripShortcutsView { editingShortcuts = false }
             }
         }
+    }
+}
+
+/// Dragged past its dead zone, sends that arrow, then repeats it while held.
+private struct CursorJoystick: View {
+    let model: AgentModel
+    @State private var direction: AgentKey?
+    @State private var pressed = false
+    @State private var repeating: Task<Void, Never>?
+
+    var body: some View {
+        ZStack {
+            if let direction {
+                JoystickSector(direction: direction).fill(.tint)
+            }
+            if pressed {
+                Circle().fill(.primary).frame(width: 12, height: 12)
+            } else {
+                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 26))
+            }
+        }
+        .frame(width: 52, height: 52)
+        .clipShape(.circle)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .background(SessionBarDim(), in: .circle)
+        .contentShape(.circle)
+        .opacity(model.acceptsKeys ? 1 : 0.4)
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    pressed = true
+                    let key = AgentKey.arrow(for: value.translation)
+                    guard key != direction else { return }
+                    direction = key
+                    repeating?.cancel()
+                    guard let key else { return }
+                    repeating = Task {
+                        var delay = Duration.milliseconds(300)
+                        while !Task.isCancelled {
+                            send(key)
+                            try? await Task.sleep(for: delay)
+                            delay = .milliseconds(83)
+                        }
+                    }
+                }
+                .onEnded { _ in stop() }
+        )
+        .disabled(!model.acceptsKeys)
+        .onDisappear(perform: stop)
+        .accessibilityElement()
+        .accessibilityLabel("Arrow joystick")
+        .accessibilityActions {
+            ForEach([AgentKey.up, .down, .left, .right], id: \.self) { key in
+                Button(key.accessibilityName) { send(key) }
+            }
+        }
+    }
+
+    private func send(_ key: AgentKey) {
+        if model.canPress(key) { model.press(key) }
+    }
+
+    private func stop() {
+        repeating?.cancel()
+        repeating = nil
+        direction = nil
+        pressed = false
+    }
+}
+
+private struct JoystickSector: Shape {
+    let direction: AgentKey
+
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        let angle: Double = switch direction {
+        case .right: 0
+        case .down: 90
+        case .left: 180
+        default: 270
+        }
+        var path = Path()
+        path.move(to: center)
+        for step in 0...12 {
+            let radians = (angle - 45 + Double(step) * 7.5) * .pi / 180
+            path.addLine(to: CGPoint(x: center.x + radius * cos(radians), y: center.y + radius * sin(radians)))
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+extension AgentKey {
+    /// The arrow a joystick dragged by `offset` points to; nil inside its dead zone.
+    static func arrow(for offset: CGSize, deadZone: CGFloat = 12) -> AgentKey? {
+        guard hypot(offset.width, offset.height) >= deadZone else { return nil }
+        if abs(offset.width) > abs(offset.height) { return offset.width > 0 ? .right : .left }
+        return offset.height > 0 ? .down : .up
     }
 }
 
@@ -871,7 +973,7 @@ private struct PromptBar: View {
                                 .frame(width: 28, height: 28)
                         }
                         .buttonStyle(.glass)
-                        .tint(model.keysShown ? Color.accentColor : .primary)
+                        .tint(model.keysShown ? appAccent : .primary)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
                         .contentShape(.interaction, Circle().inset(by: -3))
