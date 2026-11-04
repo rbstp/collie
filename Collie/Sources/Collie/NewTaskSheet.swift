@@ -233,18 +233,22 @@ struct NewTaskSheet: View {
                             "Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there."
                         } else if model.location == .clone, let parent {
                             "Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there."
-                        } else if model.location == .folder, !model.newFolder, model.folder == nil,
-                            !model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty
-                        {
-                            "Choose a folder to start."
                         } else {
                             nil
                         }
+                    let missingFolder =
+                        model.location == .folder && !model.newFolder && model.folder == nil
+                        && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
                     let errors = [model.optionsError, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
                     // An empty footer still takes room in a Form, which widened the gap to the next section.
-                    if note != nil || !errors.isEmpty {
+                    if note != nil || missingFolder || !errors.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             if let note { Text(note) }
+                            if missingFolder {
+                                // Plain orange measures about 2:1 on the light grouped background; the high-contrast variant clears 4.5:1.
+                                Text("Choose a folder to start.")
+                                    .foregroundStyle(Color(uiColor: UIColor { .systemOrange.resolvedColor(with: $0.modifyingTraits { $0.accessibilityContrast = .high }) }))
+                            }
                             ForEach(errors, id: \.self) { Text($0).foregroundStyle(.red) }
                         }
                     }
@@ -317,6 +321,7 @@ struct NewTaskSheet: View {
                 }
             }
             .listSectionSpacing(.compact)
+            .contentMargins(.top, 6, for: .scrollContent)
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
             .modifier(KeepsPromptVisible(editing: editingPrompt))
             .safeAreaInset(edge: .top) {
