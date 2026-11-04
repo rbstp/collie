@@ -20,6 +20,9 @@ struct AgentScreen: View {
     @State private var keyboardShown = false
     @State private var typing = false
     @State private var height: CGFloat = 0
+    @State private var barsRoom: CGFloat = 0
+    @State private var headerHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
     @State private var obscuredTop: CGFloat = 0
     @State private var obscuredBottom: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
@@ -148,23 +151,29 @@ struct AgentScreen: View {
             if !typingInLandscape || !items.isEmpty || approvals?.notice != nil {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
-                        AgentHeader(
-                            model: model, title: title, approving: !items.isEmpty, machineLabel: showsMachine ? machineLabel : nil,
-                            showingChat: $showingChat
-                        )
-                        if let subagents = model.agent?.subagents, !subagents.isEmpty {
-                            SubagentList(subagents: subagents)
-                                .padding(.horizontal)
-                                .padding(.bottom, 6)
+                        VStack(spacing: 0) {
+                            AgentHeader(
+                                model: model, title: title, approving: !items.isEmpty, machineLabel: showsMachine ? machineLabel : nil,
+                                showingChat: $showingChat
+                            )
+                            if let subagents = model.agent?.subagents, !subagents.isEmpty {
+                                SubagentList(subagents: subagents)
+                                    .padding(.horizontal)
+                                    .padding(.bottom, 6)
+                            }
                         }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
                     }
                     // The approval cards share the header's surface, so the content runs under them as under the header.
                     if let approvals {
                         // Together the cards take at most 45% of the screen, keyboard or not, so the composer stays in
                         // reach; 55% at accessibility sizes, where less left the command and the reason no line above
                         // the stacked decisions; a quarter in landscape, where more leaves no room for the prompt above Approve.
+                        // Never more than the header and the composer leave them: a card fitted to more showed the reason cut
+                        // under its decisions.
                         let share = verticalSizeClass == .compact ? 0.25 : typeSize.isAccessibilitySize ? 0.55 : 0.45
-                        let cap = height > 0 ? height * share / CGFloat(max(items.count, 1)) : .infinity
+                        let room = barsRoom - (typingInLandscape ? 0 : headerHeight) - composerHeight
+                        let cap = height > 0 && barsRoom > 0 ? min(height * share, room) / CGFloat(max(items.count, 1)) : .infinity
                         Group {
                             ForEach(items) { item in
                                 ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
@@ -206,6 +215,7 @@ struct AgentScreen: View {
             // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
             .contentShape(.rect)
             .environment(\.colorScheme, barScheme)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
         }
         .toolbarColorScheme(headerScheme, for: .navigationBar)
         .background {
@@ -215,6 +225,7 @@ struct AgentScreen: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height + $0.safeAreaInsets.top + $0.safeAreaInsets.bottom } action: {
                     height = $0
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { barsRoom = $0 }
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -224,7 +235,7 @@ struct AgentScreen: View {
             ToolbarItem(placement: .principal) {
                 // At accessibility sizes the title heads the session header instead, where it can outgrow the bar, unless
                 // approval cards show: there its lines left the command and the reason no room above the decisions.
-                if typeSize.isAccessibilitySize && approvalItems.isEmpty {
+                if typeSize.isAccessibilitySize && verticalSizeClass != .compact && approvalItems.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                 } else {
                     SessionTitle(title: title)
@@ -441,15 +452,18 @@ private struct AgentHeader: View {
     let machineLabel: String?
     @Binding var showingChat: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    // Landscape has the width for one row, and three left the session two lines of the screen.
+    private var stacked: Bool { typeSize.isAccessibilitySize && verticalSizeClass != .compact }
 
     var body: some View {
         VStack(spacing: 6) {
-            if typeSize.isAccessibilitySize && !approving {
+            if stacked && !approving {
                 SessionTitle(title: title, inHeader: true).frame(maxWidth: .infinity, alignment: .leading)
             }
             // One row, like the navigation bar it sits under; at accessibility sizes it pushed the screen past both
             // edges, so the state and its time take a row of their own above the rest.
-            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
+            let row = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
             row {
                 HStack(spacing: 8) {
                     if let agent = model.agent {
@@ -497,7 +511,7 @@ private struct AgentHeader: View {
                                 .fixedSize()
                         }
                     }
-                    if typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    if stacked { Spacer(minLength: 0) }
                     if !model.isTerminal {
                         // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                         GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],

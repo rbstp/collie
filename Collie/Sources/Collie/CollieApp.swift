@@ -7,19 +7,22 @@ struct CollieApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
-            if let demo = AgentDemo(arguments: CommandLine.arguments) {
-                demo
-            } else {
+            Group {
+                #if DEBUG
+                if let demo = AgentDemo(arguments: CommandLine.arguments) {
+                    demo
+                } else {
+                    RootView(app: delegate.app)
+                        .task { await delegate.app.launch() }
+                        .onOpenURL { delegate.app.open($0) }
+                }
+                #else
                 RootView(app: delegate.app)
                     .task { await delegate.app.launch() }
                     .onOpenURL { delegate.app.open($0) }
+                #endif
             }
-            #else
-            RootView(app: delegate.app)
-                .task { await delegate.app.launch() }
-                .onOpenURL { delegate.app.open($0) }
-            #endif
+            .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         }
         .onChange(of: scenePhase) { _, phase in
             #if DEBUG

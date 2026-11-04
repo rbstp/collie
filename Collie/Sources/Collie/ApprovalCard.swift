@@ -53,7 +53,11 @@ struct ApprovalCard: View {
         guard fitsAtRest else { return nil }
         return max(1, Int((room - headerHeight - spacing - commandBoxHeight - spacing - 2 * 8) / reasonLine))
     }
-    private var shownAtRest: CGFloat { headerHeight + spacing + commandBoxHeight + (approval.reason == nil ? 0 : spacing + reasonHeight) }
+    // Without room for a line of it (landscape), the reason waits for the expanded card rather than sitting cut under the decisions.
+    private var showsReason: Bool { !fitsAtRest || room - headerHeight - spacing - commandBoxHeight - spacing - 2 * 8 >= reasonLine }
+    private var shownAtRest: CGFloat {
+        headerHeight + spacing + commandBoxHeight + (approval.reason == nil || !showsReason ? 0 : spacing + reasonHeight)
+    }
     private var offersAddNote: Bool { approval.supportsNote && !model.noting.contains(item.id) }
     private var showsAddNote: Bool { !fitsAtRest || shownAtRest + spacing + addNoteHeight <= room }
     private var showsOutput: Bool {
@@ -61,7 +65,8 @@ struct ApprovalCard: View {
     }
 
     var body: some View {
-        UpToContent(maxHeight: max(0, maxHeight - 2 * padding)) {
+        // Past its share when the measured name and command outgrow it (landscape), so neither sits cut under the decisions.
+        UpToContent(maxHeight: max(0, maxHeight - 2 * padding, fitsAtRest ? shownAtRest + spacing + decisionsHeight : 0)) {
             VStack(alignment: .leading, spacing: spacing) {
                 ScrollViewReader { proxy in
                     UpToContent {
@@ -171,7 +176,7 @@ struct ApprovalCard: View {
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandBoxHeight = $0 }
             }
-            if let reason = approval.reason {
+            if let reason = approval.reason, showsReason {
                 ApprovalReason(reason: reason, lines: reasonLines)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reasonHeight = $0 }
             }
