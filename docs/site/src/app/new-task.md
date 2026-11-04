@@ -1,10 +1,10 @@
 # New task
 
-**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there.
+**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there. Choose where it runs, write what the agent should do, then tap **Start** at the top right.
 
 <div class="screenshots">
-<img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
-<img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
+<img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, prompt and agent picker">
+<img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, prompt and agent picker">
 </div>
 
 ## Plan usage
