@@ -450,7 +450,14 @@ struct NewTaskSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(URL(filePath: cwd).lastPathComponent)
-                        Text(cwd).font(.caption.monospaced()).foregroundStyle(.metadata).lineLimit(1).truncationMode(.head)
+                        // A long path drops whole leading folders rather than cutting one mid-word.
+                        ViewThatFits(in: .horizontal) {
+                            let parts = cwd.split(separator: "/")
+                            ForEach(0..<parts.count, id: \.self) { dropped in
+                                Text(verbatim: dropped == 0 ? cwd : "…/" + parts.dropFirst(dropped).joined(separator: "/"))
+                            }
+                        }
+                        .font(.caption.monospaced()).foregroundStyle(.metadata).lineLimit(1).truncationMode(.head)
                     }
                     Spacer()
                     if path.wrappedValue == cwd {
