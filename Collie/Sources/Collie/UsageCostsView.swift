@@ -206,11 +206,12 @@ private struct CostsDetail: View {
                         if let before, let now = pickedDay, Calendar.current.isDate(before, inSameDayAs: now) { pickedDay = nil }
                     }
                 }
-                .chartXAxis { AxisMarks { AxisValueLabel() } }
+                .chartXAxis { AxisMarks { AxisValueLabel().foregroundStyle(.metadata) } }
                 .chartYAxis {
                     AxisMarks { value in
                         AxisGridLine()
                         AxisValueLabel { value.as(Double.self).map { Text($0.formatted(.currency(code: "USD").precision(.fractionLength($0 == $0.rounded() ? 0 : 2)))) } }
+                            .foregroundStyle(.metadata)
                     }
                 }
                 .frame(height: 120)

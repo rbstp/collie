@@ -88,7 +88,8 @@ struct NewTaskSheet: View {
                                 .disabled(model.upload != nil || model.phase != .editing)
                             }
                             HStack(alignment: .bottom, spacing: 8) {
-                                TextField(model.location == .resume ? "Prompt (optional)" : "What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
+                                let placeholder = model.location == .resume ? "Prompt (optional)" : "What should the agent do?"
+                                TextField(placeholder, text: $model.prompt, selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical)
                                     .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
@@ -420,7 +421,7 @@ struct NewTaskSheet: View {
         TextField(
             "Folder", text: path,
             prompt: missingFolder
-                ? Text("Choose a folder to start").foregroundStyle(ContextRing.tone(20))
+                ? Text("Choose a folder to start").font(.subheadline).foregroundStyle(ContextRing.tone(20))
                 : Text(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project")
         )
         .textInputAutocapitalization(.never)
