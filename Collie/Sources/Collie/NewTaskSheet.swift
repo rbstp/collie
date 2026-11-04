@@ -290,8 +290,9 @@ struct NewTaskSheet: View {
                             } label: {
                                 Text("Agent")
                             } currentValueLabel: {
-                                // The menu's value drops the label's spacing, so the logo touched the name.
-                                Text(model.agent.capitalized)
+                                // The menu's value drops the label's spacing, so the logo touched the name; the title carries the space.
+                                Label(" \(model.agent.capitalized)", image: model.agent.capitalized)
+                                    .accessibilityLabel(model.agent.capitalized)
                             }
                             .tint(.primary)
                             // A row rather than the footer: light orange is 4.1:1 on the grouped background, 4.5:1 on the row.
