@@ -66,7 +66,7 @@ final class KeyStripTests: XCTestCase {
         app.buttons["Save"].tap()
         app.buttons["Done"].tap()
 
-        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "⇧⇥")).firstMatch
+        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "shift-tab")).firstMatch
         let effort = app.buttons["/effort high"]
         XCTAssertTrue(custom.appears(within: 5), app.debugDescription)
         XCTAssertTrue(effort.appears(within: 5), app.debugDescription)

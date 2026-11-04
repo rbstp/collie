@@ -126,7 +126,7 @@ struct ConversationView: View {
         VStack(spacing: 0) {
             if searching { searchBar }
             if let error = model.error {
-                Text(error).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
+                Text(error).font(.footnote).foregroundStyle(.warning).padding(.horizontal)
             }
             if model.available == false {
                 ContentUnavailableView {

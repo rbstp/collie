@@ -426,7 +426,7 @@ struct MachineHeader: View {
             if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
                 Text(message)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.warning)
             } else if showsLink, entry.flock?.link != .connecting, let reason = entry.flock?.reason {
                 Text(reason.label(machine: entry.machine.label, now: now))
                     .font(.footnote)

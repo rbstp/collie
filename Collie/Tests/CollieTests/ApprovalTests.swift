@@ -277,12 +277,12 @@ private let reason = "Dangerous rm operation on statically-unresolvable target: 
 }
 
 @MainActor
-@Test func aCappedCardScrollsItsPromptInsteadOfGrowing() {
+@Test func aCardOverItsShareShowsAsABand() {
     var long = approval("ap_1")
     long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
     long.reason = reason
     #expect(height(card(long)) > 200, "the prompt overflows the cap")
-    #expect(abs(height(card(long, maxHeight: 150)) - 150) < 1, "the prompt scrolls inside the cap")
+    #expect(height(card(long, maxHeight: 150)) <= 150, "the band fits the cap")
     let short = approval("ap_1")
     #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }
