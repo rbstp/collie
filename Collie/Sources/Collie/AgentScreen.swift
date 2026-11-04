@@ -18,6 +18,7 @@ struct AgentScreen: View {
     @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
     @State private var searchingChat = false
     @State private var keyboardShown = false
+    @State private var typing = false
     @State private var height: CGFloat = 0
     @State private var obscuredTop: CGFloat = 0
     @State private var obscuredBottom: CGFloat = 0
@@ -87,11 +88,16 @@ struct AgentScreen: View {
                     AgentTerminal(
                         ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
                         perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
-                        quote: model.isTerminal ? nil : model.quote,
+                        // The quote waits in the chat draft: typed into the terminal, its newlines would submit.
+                        quote: model.isTerminal ? nil : {
+                            model.quote($0)
+                            showingChat = true
+                        },
                         openFile: model.isTerminal ? nil : { model.fileLink = FileLink(path: $0) },
                         // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
-                        switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom
+                        switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom,
+                        typing: $typing, type: { model.type($0) }, deleteBackward: { model.tap(.backspace) }
                     ) { await model.refresh() }
                         // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
                         .ignoresSafeArea(edges: [.top, .bottom])
@@ -190,7 +196,7 @@ struct AgentScreen: View {
                 GlassEffectContainer(spacing: 4) {
                     VStack(spacing: 0) {
                         if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model) }
-                        PromptBar(model: model, keysAvailable: !showingChat || model.isTerminal)
+                        PromptBar(model: model, typesIntoTerminal: !showingChat || model.isTerminal, typing: $typing)
                     }
                 }
             }
@@ -312,6 +318,7 @@ struct AgentScreen: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
         .onAppear { model.reloadGestures() }
+        .onChange(of: showingChat) { typing = false }
         .onChange(of: scenePhase) { _, phase in
             model.dictation.scenePhaseChanged(to: phase)
             if phase != .active { model.saveDraft() }
@@ -326,7 +333,8 @@ struct AgentScreen: View {
     private func perform(_ action: GestureAction) {
         switch action {
         case .none: break
-        case .paste: if UIPasteboard.general.hasStrings { model.paste(UIPasteboard.general.string) }
+        // A paste never sends: its new lines are typed as spaces, not Return.
+        case .paste: if let text = UIPasteboard.general.string { model.type(text.split(whereSeparator: \.isNewline).joined(separator: " ")) }
         case .escape: model.tap(.esc)
         }
     }
@@ -601,6 +609,9 @@ private struct AgentTerminal: UIViewRepresentable {
     let switchAgent: (AgentRoute) -> Void
     let obscuredTop: CGFloat
     let obscuredBottom: CGFloat
+    @Binding var typing: Bool
+    let type: @MainActor (String) -> Void
+    let deleteBackward: @MainActor () -> Void
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
@@ -649,6 +660,16 @@ private struct AgentTerminal: UIViewRepresentable {
         }
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
+        }
+        let (typing, type, deleteBackward) = ($typing, type, deleteBackward)
+        view.onTap = { typing.wrappedValue = true }
+        view.onInsertText = { type($0) }
+        view.onDeleteBackward = { deleteBackward() }
+        // The state follows the keyboard, so one UIKit takes away is not asked for again.
+        view.onTypingChanged = { shown in Task { @MainActor in typing.wrappedValue = shown } }
+        if self.typing != view.typing {
+            let wanted = self.typing
+            Task { @MainActor in view.typing = wanted }
         }
     }
 
@@ -701,22 +722,22 @@ private struct KeyStrip: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(spacing: 6) {
-                HStack(spacing: 4) {
-                    ForEach(KeyModifier.allCases, id: \.self) { modifier in
-                        let selected = model.modifier == modifier
-                        StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
-                            .accessibilityLabel(modifier.accessibilityName)
-                            .accessibilityAddTraits(selected ? .isSelected : [])
-                            .disabled(!model.acceptsKeys)
-                    }
-                    ForEach(AgentKey.strip, id: \.self) { key in
-                        StripButton(title: key.symbol) { model.press(key) }
-                            .accessibilityLabel(key.accessibilityName)
-                            .disabled(!model.canPress(key))
-                    }
+        VStack(spacing: 6) {
+            HStack(spacing: 4) {
+                ForEach(KeyModifier.allCases, id: \.self) { modifier in
+                    let selected = model.modifier == modifier
+                    StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
+                        .accessibilityLabel(modifier.accessibilityName)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                        .disabled(!model.acceptsKeys)
                 }
+                ForEach(AgentKey.strip, id: \.self) { key in
+                    StripButton(title: key.symbol) { model.press(key) }
+                        .accessibilityLabel(key.accessibilityName)
+                        .disabled(!model.canPress(key))
+                }
+            }
+            HStack(spacing: 8) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
                         ForEach(AgentKey.combos, id: \.self) { key in
@@ -728,19 +749,25 @@ private struct KeyStrip: View {
                             StripButton(title: shortcut.label, fill: false) { model.run(shortcut) }
                                 .disabled(!model.canRun(shortcut))
                         }
-                        Button("Edit key shortcuts", systemImage: "plus") { editingShortcuts = true }
-                            .labelStyle(.iconOnly)
-                            .frame(minHeight: 22)
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.roundedRectangle(radius: 12))
-                            .controlSize(.small)
-                            .background(SessionBarDim(), in: .rect(cornerRadius: 12))
-                            .disabled(!model.savesPreferences)
+                        Button {
+                            editingShortcuts = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.callout)
+                                .frame(minHeight: 22)
+                        }
+                        .buttonStyle(.glass)
+                        .tint(.primary)
+                        .buttonBorderShape(.roundedRectangle(radius: 12))
+                        .controlSize(.small)
+                        .background(SessionBarDim(), in: .rect(cornerRadius: 12))
+                        .disabled(!model.savesPreferences)
+                        .accessibilityLabel("Edit key shortcuts")
                     }
                 }
                 .scrollIndicators(.hidden)
+                CursorJoystick(model: model)
             }
-            CursorJoystick(model: model)
         }
         .padding(.horizontal)
         .padding(.top, 8)
@@ -767,12 +794,12 @@ private struct CursorJoystick: View {
                 JoystickSector(direction: direction).fill(.tint)
             }
             if pressed {
-                Circle().fill(.primary).frame(width: 12, height: 12)
+                Circle().fill(.primary).frame(width: 8, height: 8)
             } else {
-                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 26))
+                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 20))
             }
         }
-        .frame(width: 52, height: 52)
+        .frame(width: 36, height: 36)
         .clipShape(.circle)
         .glassEffect(.regular.interactive(), in: .circle)
         .background(SessionBarDim(), in: .circle)
@@ -863,7 +890,6 @@ private struct StripButton: View {
         let label = Text(title)
             .font(.callout.monospaced())
             .lineLimit(1)
-            .minimumScaleFactor(0.7)
             .frame(maxWidth: fill ? .infinity : nil, minHeight: 22)
         if selected {
             Button(action: action) { label }
@@ -874,6 +900,7 @@ private struct StripButton: View {
         } else {
             Button(action: action) { label }
                 .buttonStyle(.glass)
+                .tint(.primary)
                 .buttonBorderShape(.roundedRectangle(radius: 12))
                 .controlSize(.small)
                 .background(SessionBarDim(), in: .rect(cornerRadius: 12))
@@ -883,9 +910,10 @@ private struct StripButton: View {
 
 private struct PromptBar: View {
     @Bindable var model: AgentModel
-    let keysAvailable: Bool
+    let typesIntoTerminal: Bool
+    @Binding var typing: Bool
     @FocusState private var editing: Bool
-    @State private var typingCommand = false
+    @State private var keptDraft: String?
     @State private var dictationExpanded = false
     @State private var dictationShown = false
     @State private var selection: TextSelection?
@@ -920,7 +948,7 @@ private struct PromptBar: View {
     }
 
     private var expanded: Bool {
-        editing || typingCommand || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
+        editing || model.dictation.isActive || dictationShown || !model.attachments.isEmpty || (dictationExpanded && !model.draft.isEmpty)
     }
 
     var body: some View {
@@ -937,7 +965,7 @@ private struct PromptBar: View {
             if let problem = model.dictation.problem {
                 DictationProblemRow(problem: problem).composerNoteGlass()
             }
-            if !model.attachments.isEmpty {
+            if !typesIntoTerminal && !model.attachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(model.attachments) { file in
@@ -948,47 +976,41 @@ private struct PromptBar: View {
                 .disabled(model.sendingPrompt)
                 .scrollIndicators(.hidden)
             }
-            PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
+            if typesIntoTerminal {
                 HStack(spacing: 8) {
-                    if !model.answering && !model.isTerminal {
-                        AttachmentMenu(
-                            savedPromptsEnabled: !model.dictation.isActive && !model.sendingPrompt,
-                            filesEnabled: model.attachmentSlots > 0
-                        ) { choice in
-                            switch choice {
-                            case .savedPrompts: pickingPrompt = true
-                            case .files: pickingFile = true
-                            case .photos: pickingPhoto = true
-                            }
+                    if !model.answering && !model.isTerminal { attachmentMenu }
+                    keysButton
+                    Spacer(minLength: 0)
+                    if !model.isTerminal {
+                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, shown: $dictationShown) {
+                            keptDraft = model.draft
+                            model.draft = ""
+                            if model.startDictation() == nil { restoreDraft() }
                         }
-                        .disabled(model.upload != nil || model.sendingPrompt || !model.savesPreferences)
-                        .background(SessionBarDim(), in: Circle().inset(by: AttachmentMenuButton.outset))
+                        .background(SessionBarDim(), in: .capsule)
                     }
-                    if keysAvailable {
-                        Button {
-                            model.keysShown.toggle()
-                        } label: {
-                            Image(systemName: model.keysShown ? "arrowkeys.fill" : "arrowkeys")
-                                .font(.system(size: 16))
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(.glass)
-                        .tint(model.keysShown ? appAccent : .primary)
-                        .buttonBorderShape(.circle)
-                        .controlSize(.small)
-                        .contentShape(.interaction, Circle().inset(by: -3))
-                        .background(SessionBarDim(), in: .circle)
-                        .accessibilityLabel("Keys")
-                        .accessibilityAddTraits(model.keysShown ? .isSelected : [])
+                    Button {
+                        typing.toggle()
+                    } label: {
+                        Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
+                            .font(.system(size: 18))
+                            .frame(width: 28, height: 28)
                     }
+                    .buttonStyle(.glass)
+                    .tint(.primary)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.small)
+                    .contentShape(.interaction, Circle().inset(by: -3))
+                    .background(SessionBarDim(), in: .circle)
+                    .accessibilityLabel(typing ? "Hide keyboard" : "Keyboard")
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .bottom, spacing: 8) {
-                        if model.isTerminal {
-                            CommandField(text: $model.draft, editing: $typingCommand, controlTyped: model.controlTyped(from:to:)) {
-                                Task { await model.sendPrompt() }
-                            }
-                        } else {
+            } else {
+                PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
+                    HStack(spacing: 8) {
+                        if !model.answering && !model.isTerminal { attachmentMenu }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .bottom, spacing: 8) {
                             TextField(
                                 model.answering ? "Type an answer" : "Prompt the agent", text: Binding(get: { model.draft }, set: typed),
                                 selection: $selection, axis: .vertical
@@ -1010,87 +1032,81 @@ private struct PromptBar: View {
                                     }
                                 }
                                 .accessibilityAction(named: "Copy prompt", copyPrompt)
-                        }
-                        if expanded && !model.draft.isEmpty {
-                            Button {
-                                if model.dictation.isActive {
-                                    model.dictation.clear()
-                                } else if model.isTerminal {
-                                    model.draft = ""
-                                } else {
-                                    model.typed("")
+                            if expanded && !model.draft.isEmpty {
+                                Button {
+                                    if model.dictation.isActive {
+                                        model.dictation.clear()
+                                    } else {
+                                        model.typed("")
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
+                                        .frame(width: 36, height: 36)
+                                        .contentShape(Rectangle().inset(by: -4))
                                 }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(model.dictation.clearArmed ? Color.red : Color.secondary)
-                                    .frame(width: 36, height: 36)
-                                    .contentShape(Rectangle().inset(by: -4))
+                                .buttonStyle(.plain)
+                                .disabled(model.sendingPrompt || model.dictation.phase == .finishing)
+                                .accessibilityLabel("Clear text")
+                                .accessibilityValue(model.dictation.clearArmed ? "Tap again to clear" : "")
                             }
-                            .buttonStyle(.plain)
-                            .disabled(model.sendingPrompt || model.dictation.phase == .finishing)
-                            .accessibilityLabel("Clear text")
-                            .accessibilityValue(model.dictation.clearArmed ? "Tap again to clear" : "")
                         }
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-                .background(SessionBarDim(), in: .rect(cornerRadius: 18))
-                ZStack {
-                    if !model.isTerminal {
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+                    .background(SessionBarDim(), in: .rect(cornerRadius: 18))
+                    ZStack {
                         DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }
                         .background(SessionBarDim(), in: .capsule)
                     }
-                }
-                HStack(spacing: 8) {
-                    if editing || typingCommand {
-                        Button {
-                            editing = false
-                            typingCommand = false
-                        } label: {
-                            Image(systemName: "keyboard.chevron.compact.down")
-                                .font(.system(size: 20))
-                                .frame(width: 28, height: 28)
+                    HStack(spacing: 8) {
+                        if editing {
+                            Button {
+                                editing = false
+                            } label: {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                                    .font(.system(size: 20))
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.glass)
+                            .tint(.primary)
+                            .buttonBorderShape(.circle)
+                            .controlSize(.small)
+                            .contentShape(.interaction, Circle().inset(by: -3))
+                            .background(SessionBarDim(), in: .circle)
+                            .accessibilityLabel("Hide keyboard")
                         }
-                        .buttonStyle(.glass)
-                        .tint(.primary)
+                        Button {
+                            if model.retrying {
+                                model.stopRetry()
+                                return
+                            }
+                            if !model.keepsKeyboard {
+                                editing = false
+                            }
+                            Task { await model.sendPrompt() }
+                        } label: {
+                            if model.sendingPrompt {
+                                ProgressView().tint(appAccent).frame(width: 28, height: 28)
+                            } else {
+                                Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
+                            }
+                        }
+                        .buttonStyle(.glassProminent)
+                        .onAccentFill()
+                        // Enabled only so a tap stops the retry, so it keeps the look of a send in progress.
+                        .tint(model.retrying ? Color(.systemGray4) : appAccent)
                         .buttonBorderShape(.circle)
                         .controlSize(.small)
                         .contentShape(.interaction, Circle().inset(by: -3))
-                        .background(SessionBarDim(), in: .circle)
-                        .accessibilityLabel("Hide keyboard")
+                        .disabled(!model.canSendPrompt && !model.retrying)
+                        .accessibilityLabel(model.retrying ? "Stop retrying" : model.answering ? "Send answer" : "Send")
                     }
-                    Button {
-                        if model.retrying {
-                            model.stopRetry()
-                            return
-                        }
-                        if !model.keepsKeyboard {
-                            editing = false
-                            typingCommand = false
-                        }
-                        Task { await model.sendPrompt() }
-                    } label: {
-                        if model.sendingPrompt {
-                            ProgressView().tint(appAccent).frame(width: 28, height: 28)
-                        } else {
-                            Image(systemName: "paperplane.fill").frame(width: 28, height: 28)
-                        }
-                    }
-                    .buttonStyle(.glassProminent)
-                    .onAccentFill()
-                    // Enabled only so a tap stops the retry, so it keeps the look of a send in progress.
-                    .tint(model.retrying ? Color(.systemGray4) : appAccent)
-                    .buttonBorderShape(.circle)
-                    .controlSize(.small)
-                    .contentShape(.interaction, Circle().inset(by: -3))
-                    .disabled(!model.canSendPrompt && !model.retrying)
-                    .accessibilityLabel(model.retrying ? "Stop retrying" : model.isTerminal ? "Run command" : model.answering ? "Send answer" : "Send")
                 }
             }
         }
@@ -1099,8 +1115,12 @@ private struct PromptBar: View {
         .sheet(isPresented: $pickingPrompt) {
             NavigationStack {
                 PromptShortcutsView { shortcut in
-                    model.insert(shortcut)
-                    editing = true
+                    if typesIntoTerminal {
+                        model.type(shortcut.text)
+                    } else {
+                        model.insert(shortcut)
+                        editing = true
+                    }
                 }
             }
         }
@@ -1123,9 +1143,60 @@ private struct PromptBar: View {
             if empty && !model.dictation.isActive { dictationExpanded = false }
         }
         .onChange(of: model.dictation.isActive) { _, active in
+            if !active { restoreDraft() }
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
+        // Each uploaded file's path is typed into the terminal rather than held for a prompt.
+        .onChange(of: model.attachments.map(\.id)) { old, _ in
+            guard typesIntoTerminal else { return }
+            for file in model.attachments where !old.contains(file.id) {
+                model.type(file.path + " ")
+                model.remove(file)
+            }
+        }
         .onDisappear { dictationExpanded = false }
+    }
+
+    private var attachmentMenu: some View {
+        AttachmentMenu(
+            savedPromptsEnabled: !model.dictation.isActive && !model.sendingPrompt,
+            filesEnabled: model.attachmentSlots > 0
+        ) { choice in
+            switch choice {
+            case .savedPrompts: pickingPrompt = true
+            case .files: pickingFile = true
+            case .photos: pickingPhoto = true
+            }
+        }
+        .disabled(model.upload != nil || model.sendingPrompt || !model.savesPreferences)
+        .background(SessionBarDim(), in: Circle().inset(by: AttachmentMenuButton.outset))
+    }
+
+    private var keysButton: some View {
+        Button {
+            model.keysShown.toggle()
+        } label: {
+            Image(systemName: model.keysShown ? "arrowkeys.fill" : "arrowkeys")
+                .font(.system(size: 16))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.glass)
+        .tint(model.keysShown ? appAccent : .primary)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .contentShape(.interaction, Circle().inset(by: -3))
+        .background(SessionBarDim(), in: .circle)
+        .accessibilityLabel("Keys")
+        .accessibilityAddTraits(model.keysShown ? .isSelected : [])
+    }
+
+    /// Dictation in the terminal view types what was said, then gives the chat draft back.
+    private func restoreDraft() {
+        guard let kept = keptDraft else { return }
+        keptDraft = nil
+        let said = model.draft
+        model.draft = kept
+        model.type(said)
     }
 }
 
@@ -1149,73 +1220,6 @@ private struct DraftReader: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         if view.text != text { view.text = text }
-    }
-}
-
-/// A shell command goes out exactly as typed: no autocorrection, capitals, smart quotes or
-/// dashes, which would change it (`--force` into a dash), and one line.
-private struct CommandField: UIViewRepresentable {
-    @Binding var text: String
-    @Binding var editing: Bool
-    let controlTyped: @MainActor (String, String) -> Bool
-    let submit: () -> Void
-
-    func makeUIView(context: Context) -> UITextField {
-        let field = UITextField()
-        field.placeholder = "Command"
-        field.autocorrectionType = .no
-        field.autocapitalizationType = .none
-        field.spellCheckingType = .no
-        field.smartQuotesType = .no
-        field.smartDashesType = .no
-        field.smartInsertDeleteType = .no
-        field.inlinePredictionType = .no
-        field.keyboardType = .asciiCapable
-        field.returnKeyType = .go
-        field.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: UIFont.labelFontSize, weight: .regular))
-        field.adjustsFontForContentSizeCategory = true
-        field.setContentHuggingPriority(.required, for: .vertical)
-        let coordinator = context.coordinator
-        field.delegate = coordinator
-        field.addAction(UIAction { [weak field] _ in
-            guard let field else { return }
-            if coordinator.parent.controlTyped(coordinator.parent.text, field.text ?? "") {
-                field.text = coordinator.parent.text
-            } else {
-                coordinator.parent.text = field.text ?? ""
-            }
-        }, for: .editingChanged)
-        return field
-    }
-
-    func updateUIView(_ field: UITextField, context: Context) {
-        context.coordinator.parent = self
-        if field.text != text { field.text = text }
-        if !editing, field.isFirstResponder { field.resignFirstResponder() }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
-    @MainActor
-    final class Coordinator: NSObject, UITextFieldDelegate {
-        var parent: CommandField
-
-        init(parent: CommandField) {
-            self.parent = parent
-        }
-
-        func textFieldDidBeginEditing(_ textField: UITextField) {
-            parent.editing = true
-        }
-
-        func textFieldDidEndEditing(_ textField: UITextField) {
-            parent.editing = false
-        }
-
-        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-            parent.submit()
-            return false
-        }
     }
 }
 

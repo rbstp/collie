@@ -57,6 +57,29 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet { gesturesChanged() }
     }
     public var onPinchEnded: (() -> Void)?
+    /// A single tap that clears no selection.
+    public var onTap: (() -> Void)?
+    /// Keystrokes while `typing`: text as typed, Return as "\n".
+    public var onInsertText: ((String) -> Void)? {
+        get { keyInput.insert }
+        set { keyInput.insert = newValue }
+    }
+    public var onDeleteBackward: (() -> Void)? {
+        get { keyInput.delete }
+        set { keyInput.delete = newValue }
+    }
+    /// Shows the keyboard for `onInsertText`. A hidden view takes it, so the terminal stays a
+    /// scroll view to accessibility rather than turning into a text view.
+    public var typing: Bool {
+        get { keyInput.isFirstResponder }
+        set { _ = newValue ? keyInput.becomeFirstResponder() : keyInput.resignFirstResponder() }
+    }
+    /// Whenever the keyboard comes or goes, by `typing` or by UIKit.
+    public var onTypingChanged: ((Bool) -> Void)? {
+        get { keyInput.changed }
+        set { keyInput.changed = newValue }
+    }
+    private let keyInput = KeyInput()
     /// Also off unless rows wrap: without wrapping, a sideways pan scrolls the terminal.
     public var onSwipe: ((TerminalSwipe) -> Void)? {
         didSet { gesturesChanged() }
@@ -179,6 +202,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
         menu.spacing = 8
         menu.isHidden = true
         addSubview(menu)
+        keyInput.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        keyInput.isAccessibilityElement = true
+        keyInput.accessibilityLabel = "Terminal input"
+        addSubview(keyInput)
     }
 
     required init?(coder: NSCoder) {
@@ -354,7 +381,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
     }
 
     @objc private func tapped() {
-        if selection != nil { selection = nil }
+        if selection != nil { selection = nil } else { onTap?() }
     }
 
     @objc private func doubleTapped() {
@@ -981,6 +1008,66 @@ private final class SelectionHandle: UIView {
 
     func barFrame(in view: UIView) -> CGRect {
         convert(bar.frame, to: view)
+    }
+}
+
+private final class KeyInput: UIView, UIKeyInput {
+    var insert: ((String) -> Void)?
+    var delete: (() -> Void)?
+    var changed: ((Bool) -> Void)?
+
+    override var canBecomeFirstResponder: Bool { insert != nil }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { changed?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { changed?(false) }
+        return resigned
+    }
+
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        insert?(text)
+    }
+
+    func deleteBackward() {
+        delete?()
+    }
+
+    // Keystrokes go out as typed: no correction, capitals or smart punctuation that would change a command.
+    var autocorrectionType: UITextAutocorrectionType {
+        get { .no }
+        set {}
+    }
+    var autocapitalizationType: UITextAutocapitalizationType {
+        get { .none }
+        set {}
+    }
+    var spellCheckingType: UITextSpellCheckingType {
+        get { .no }
+        set {}
+    }
+    var smartQuotesType: UITextSmartQuotesType {
+        get { .no }
+        set {}
+    }
+    var smartDashesType: UITextSmartDashesType {
+        get { .no }
+        set {}
+    }
+    var smartInsertDeleteType: UITextSmartInsertDeleteType {
+        get { .no }
+        set {}
+    }
+    var keyboardAppearance: UIKeyboardAppearance {
+        get { .dark }
+        set {}
     }
 }
 

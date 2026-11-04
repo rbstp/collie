@@ -199,7 +199,7 @@ enum GestureAction: String, Codable, CaseIterable {
     var label: String {
         switch self {
         case .none: "None"
-        case .paste: "Paste into prompt"
+        case .paste: "Paste into terminal"
         case .escape: "Send Esc"
         }
     }

@@ -87,6 +87,7 @@ final class AgentModel {
     private(set) var quotes = 0
     private enum Input {
         case key(AgentKey)
+        case text(String)
         case answer(String, CheckedContinuation<Void, any Error>)
     }
     private var queuedInput: [Input] = []
@@ -876,6 +877,33 @@ final class AgentModel {
         self.modifier = self.modifier == modifier ? nil : modifier
     }
 
+    /// Keystrokes from the terminal view's keyboard, typed into the pane in order with the strip's
+    /// keys: Return and Tab go as keys, and text queued behind a send goes out in one call. With
+    /// Control selected, a listed letter goes out as Control and that letter.
+    @discardableResult
+    func type(_ text: String) -> Task<Void, Never>? {
+        guard acceptsKeys else { return nil }
+        if let selected = modifier {
+            modifier = nil
+            if selected == .control, text.count == 1, let letter = text.first, let key = AgentKey.control(letter), canTap(key) {
+                return tap(key)
+            }
+        }
+        var task: Task<Void, Never>?
+        var run = ""
+        for character in text {
+            if character.isNewline || character == "\t" {
+                if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+                run = ""
+                task = tap(character == "\t" ? .tab : .enter) ?? task
+            } else if !character.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
+                run.append(character)
+            }
+        }
+        if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+        return task
+    }
+
     /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
     @discardableResult
     func press(_ key: AgentKey) -> Task<Void, Never>? {
@@ -961,6 +989,26 @@ final class AgentModel {
             }
             if !isTerminal {
                 await flushMirror()
+            }
+            if case .text? = queuedInput.first {
+                var text = ""
+                while case let .text(more)? = queuedInput.first {
+                    text += more
+                    queuedInput.removeFirst()
+                }
+                do {
+                    if isTerminal {
+                        try await core.terminalSendText(machineId: route.machineId, terminalId: route.terminalId, text: text)
+                    } else {
+                        try await core.sendText(machineId: route.machineId, terminalId: route.terminalId, text: text)
+                    }
+                    notice = nil
+                } catch {
+                    if case .TerminalLocked = error as? CoreError { terminalLocked = true }
+                    cancelInput(error)
+                    notice = Self.message(for: error)
+                }
+                continue
             }
             guard case .key? = queuedInput.first else { continue }
             let command = commandShown

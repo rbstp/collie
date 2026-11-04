@@ -2,7 +2,7 @@
 
 ## The key strip
 
-The key strip sends keys an iPhone keyboard lacks. The **Keys** button next to Terminal's prompt field shows or hides it.
+The key strip sends keys an iPhone keyboard lacks. The **Keys** button at the bottom of Terminal shows or hides it; it stays above the keyboard while you type.
 
 ```text
 ⇧  ⌃  E  ←  ↑  ↓  →  ⇥  ⌫  ⏎
@@ -12,7 +12,7 @@ The key strip sends keys an iPhone keyboard lacks. The **Keys** button next to T
 
 The second row scrolls: `⇧⇥ ⌃⏎ ⇧← ^C`, your key shortcuts, then **+** to add one.
 
-The round joystick beside the rows moves the cursor: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With ⇧ selected, the first left arrow goes out as ⇧←.
+The round joystick at the end of the second row moves the cursor: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With ⇧ selected, the first left arrow goes out as ⇧←.
 
 ## Key shortcuts
 
@@ -28,7 +28,7 @@ Set Terminal gestures in **Settings > Terminal > Gestures**:
 
 | Gesture | Action |
 |---|---|
-| Double-tap | Paste into the prompt field |
+| Double-tap | Paste: types the clipboard into the terminal, new lines as spaces, never Return |
 | Pinch | Change the font size |
 | Swipe sideways | Switch agents (while lines wrap) |
 | Triple-tap | Send Esc (off by default) |

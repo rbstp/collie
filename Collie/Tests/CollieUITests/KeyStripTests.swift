@@ -35,21 +35,20 @@ final class KeyStripTests: XCTestCase {
         XCTAssertFalse(shift.isSelected, app.debugDescription)
         XCTAssertTrue(app.buttons["Up arrow"].isEnabled, app.debugDescription)
 
-        let field = app.textFields.firstMatch
-        field.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
-        let clear = app.buttons["Clear text"]
-        if clear.exists { clear.tap() }
+        // The terminal view has no prompt field: the keyboard types straight into the terminal.
+        XCTAssertFalse(app.textFields.firstMatch.exists, app.debugDescription)
+        app.buttons["Keyboard"].tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         let control = app.buttons["Control"]
         control.tap()
         XCTAssertTrue(control.isSelected, app.debugDescription)
         app.typeText("c")
         XCTAssertFalse(control.isSelected, app.debugDescription)
         app.typeText("ok")
-        let typed = app.element(Match(.textField, NSPredicate(format: "value == %@", "ok")))
-        XCTAssertTrue(typed.appears(within: 10), app.debugDescription)
-        clear.tap()
+        XCTAssertTrue(app.buttons["Arrow joystick"].exists || app.otherElements["Arrow joystick"].exists, app.debugDescription)
         app.buttons["Hide keyboard"].tap()
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
 
         app.buttons["Edit key shortcuts"].tap()
         let addShortcut = app.buttons["Add shortcut"]

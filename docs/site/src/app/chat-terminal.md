@@ -39,11 +39,18 @@ Tap a file link in Chat, or select a path in Terminal and choose **Open**, to pr
 
 Terminal shows the last 200 lines of the agent's pane, or 500 or 1000 with **Settings > Terminal > Scrollback**.
 
+Terminal has no prompt field: you type straight into the pane, as in a terminal app.
+
+- Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys.
+- The [key strip](keys.md) stays above the keyboard for Escape, arrows and Control.
+- Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
+- Claude Code refuses Enter while its input box holds a slash command it is not asking about, so send slash commands from Chat.
+
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.
 - Long-press to select text, then copy it, quote it into the prompt or open a link. In an agent session, **Open** previews a selected file path.
 - Terminal slows to one update a second in Low Data Mode.
 
-## The prompt
+## The prompt in Chat
 
 - When a prompt cannot reach the machine, the send button spins while the phone retries, up to 5 tries in all, a minute apart or as soon as the connection is back. To stop, edit the prompt or tap the spinner.
 - **Quote** adds text to the end of the prompt as a code block, without sending it. A prompt holds up to 32 KiB.

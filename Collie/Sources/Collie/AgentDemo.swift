@@ -371,6 +371,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         if isSample { record(terminalId: terminalId, text: "Simulated terminal input: \(text)") }
     }
 
+    func sendText(machineId: String, terminalId: String, text: String) async throws {}
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {}
     func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws {}
@@ -495,6 +496,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     func terminalSendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
+        throw CoreError.TerminalsDisabled
+    }
+
+    func terminalSendText(machineId: String, terminalId: String, text: String) async throws {
         throw CoreError.TerminalsDisabled
     }
 

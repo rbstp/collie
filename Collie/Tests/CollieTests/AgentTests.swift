@@ -11,6 +11,7 @@ final class FakeCore: AgentCore {
     enum Input: Equatable {
         case keys([AgentKey])
         case text(String)
+        case typed(String)
     }
 
     struct State {
@@ -83,6 +84,7 @@ final class FakeCore: AgentCore {
         var shellWatches: [String] = []
         var commands: [String] = []
         var terminalKeys: [[AgentKey]] = []
+        var terminalTyped: [String] = []
         var machines: [Machine] = []
         var cachedFlock: MachineFlock?
         var flocks = 0
@@ -270,6 +272,9 @@ final class FakeCore: AgentCore {
             $0.input.append(.text(text))
         }
     }
+    func sendText(machineId: String, terminalId: String, text: String) async throws {
+        try await call { $0.input.append(.typed(text)) }
+    }
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {
         try await call { $0.scrolls.append(terminalId) }
@@ -399,6 +404,9 @@ final class FakeCore: AgentCore {
     }
     func terminalSendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
         try await call { $0.terminalKeys.append(keys) }
+    }
+    func terminalSendText(machineId: String, terminalId: String, text: String) async throws {
+        try await call { $0.terminalTyped.append(text) }
     }
     func flock(machineId: String) async throws -> MachineFlock {
         let (started, gitAgents) = state.withLock { s in
@@ -2297,6 +2305,35 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     #expect(model.mode == .agent)
     await poll { !core.snapshot.watches.isEmpty }
     #expect(core.snapshot.watches == ["term_1"], "back to the agent's watch")
+}
+
+@MainActor
+@Test func terminalKeystrokesGoOutInOrderWithReturnAndTabAsKeys() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    model.type("ab")
+    model.type("\n")
+    model.type("c\td\u{1b}")
+    await poll { core.snapshot.input.count == 5 }
+    #expect(core.snapshot.input == [.typed("ab"), .keys([.enter]), .typed("c"), .keys([.tab]), .typed("d")])
+
+    model.select(.control)
+    await model.type("c")?.value
+    #expect(core.snapshot.input.last == .keys([.ctrlC]))
+    #expect(model.modifier == nil)
+}
+
+@MainActor
+@Test func shellKeystrokesUnlockAndReachTheShell() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    model.type("ls")
+    await poll { !core.snapshot.terminalTyped.isEmpty }
+    #expect(core.snapshot.terminalTyped == ["ls"])
+    #expect(core.snapshot.grants.count == 1)
+    #expect(core.snapshot.input.isEmpty)
 }
 
 @MainActor

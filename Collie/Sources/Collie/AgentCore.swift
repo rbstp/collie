@@ -17,6 +17,7 @@ protocol AgentCore: AnyObject, Sendable {
     func resendPrompt(machineId: String, terminalId: String, text: String, expectedDraft: String?) async throws
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws
     func typeText(machineId: String, terminalId: String, text: String) async throws
+    func sendText(machineId: String, terminalId: String, text: String) async throws
     func focus(machineId: String, terminalId: String) async throws
     func scrollBottom(machineId: String, terminalId: String) async throws
     func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws
@@ -48,6 +49,7 @@ protocol AgentCore: AnyObject, Sendable {
     func watchTerminal(machineId: String, terminalId: String, lines: UInt16) async throws
     func terminalRun(machineId: String, terminalId: String, text: String) async throws
     func terminalSendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws
+    func terminalSendText(machineId: String, terminalId: String, text: String) async throws
 }
 
 extension CollieCore: AgentCore {}

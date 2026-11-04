@@ -46,13 +46,6 @@ final class KeyboardSwipeTests: XCTestCase {
         typed.tap()
         swipeDown(on: typed)
         XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
-
-        app.buttons["Terminal"].firstMatch.tap()
-        XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
-        typed.tap()
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        swipeDown(on: typed)
-        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
     }
 
     func testSwipeDownOnTheInboxSearchDismissesTheKeyboard() throws {

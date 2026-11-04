@@ -30,7 +30,7 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(shown([Match(.staticText, "MacBook Pro")], app), app.debugDescription)
     }
 
-    func testSessionKeepsDraftFocusAndLatestOutputAcrossRotation() throws {
+    func testSessionKeepsKeyboardAndLatestOutputAcrossRotation() throws {
         let app = try launchDemo()
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
@@ -45,18 +45,16 @@ final class LandscapeTests: XCTestCase {
         let keys = Match(.button, "Keys")
         XCTAssertTrue(shown([keys], app), app.debugDescription)
         if !app.element(keys).isSelected { app.element(keys).tap() }
-        let field = Match(.textField, NSPredicate(value: true))
-        XCTAssertTrue(shown([field], app), app.debugDescription)
-        app.element(field).tap()
+        let showKeyboard = Match(.button, "Keyboard")
+        XCTAssertTrue(shown([showKeyboard], app), app.debugDescription)
+        app.element(showKeyboard).tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        let draft = app.type("keep this draft", into: app.element(field))
         let escape = Match(.button, "Escape")
         let header = Match(.button, "Terminal")
         let controls = [
-            Match(.any, NSPredicate(format: "value == %@", "keep this draft")), Match(.button, "Send"), Match(.button, "Hide keyboard"),
-            Match(.button, "Attachments and saved prompts"), Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")),
-            escape, Match(.button, "Control Return")
+            Match(.button, "Hide keyboard"), Match(.button, "Attachments and saved prompts"),
+            Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")), escape, Match(.button, "Control Return")
         ]
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
             XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
@@ -68,7 +66,6 @@ final class LandscapeTests: XCTestCase {
         }
         app.withInteractionOptions(2) { app.buttons["Hide keyboard"].tap() }
         XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
-        XCTAssertTrue(draft.exists, app.debugDescription)
         app.withInteractionOptions(2) { app.buttons["Chat"].firstMatch.tap() }
         let latest = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Round 20:"))
         XCTAssertTrue(shown([latest], app), app.debugDescription)
@@ -76,7 +73,6 @@ final class LandscapeTests: XCTestCase {
             XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(shown([latest], app), "\(orientation.rawValue)\n\(app.debugDescription)")
         }
-        XCTAssertTrue(draft.exists, app.debugDescription)
     }
 
     func testSheetsKeepPromptAcrossRotation() throws {
@@ -120,9 +116,8 @@ final class LandscapeTests: XCTestCase {
         // Chat's scroll view takes accessibility hit tests under the header and the band.
         app.buttons["Terminal"].firstMatch.tap()
         XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
-        let field = Match(.textField, "Type an answer")
-        let send = Match(.button, "Send answer")
-        XCTAssertTrue(shown([field, send], app), app.debugDescription)
+        let showKeyboard = Match(.button, "Keyboard")
+        XCTAssertTrue(shown([showKeyboard], app), app.debugDescription)
         XCTAssertTrue(shown([approve], app), app.debugDescription)
         let header = Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Claude Code, "))
         let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
@@ -130,17 +125,18 @@ final class LandscapeTests: XCTestCase {
         for _ in 0..<5 where !shown([command], app, within: 0) { drag(prompt, by: -20) }
         XCTAssertTrue(shown([command], app), app.debugDescription)
         for _ in 0..<5 where !shown([header], app, within: 0) { drag(prompt, by: 30) }
-        app.element(field).tap()
+        app.element(showKeyboard).tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        XCTAssertTrue(shown([field, send], app) { _, frames in aboveKeyboard(frames, app) }, app.debugDescription)
+        let hideKeyboard = Match(.button, "Hide keyboard")
+        XCTAssertTrue(shown([hideKeyboard], app) { _, frames in aboveKeyboard(frames, app) }, app.debugDescription)
         // The keyboard's own frame starts below its top strip: the card's header and the composer
-        // field being hittable is what shows nothing went under it.
+        // controls being hittable is what shows nothing went under it.
         XCTAssertTrue(shown([header], app), app.debugDescription)
         let deny = Match(.button, "Deny")
         for _ in 0..<8 where !shown([approve, deny], app, within: 0) { drag(prompt, by: -30) }
         XCTAssertTrue(shown([approve, deny], app), app.debugDescription)
-        XCTAssertTrue(shown([field], app), app.debugDescription)
+        XCTAssertTrue(shown([hideKeyboard], app), app.debugDescription)
     }
 
     func testApprovalCardKeepsApproveInReachAtLargeText() throws {
@@ -154,7 +150,7 @@ final class LandscapeTests: XCTestCase {
         // The band caps its text below the accessibility sizes, so Approve stays pinned under the prompt. Not `shown`:
         // at this size the header and the band run a few points past the window's sides.
         XCTAssertTrue(eventually(within: 30) { approve.isHittable }, app.debugDescription)
-        XCTAssertTrue(shown([Match(.textField, "Type an answer")], app), app.debugDescription)
+        XCTAssertTrue(eventually(within: 30) { app.buttons["Keyboard"].isHittable }, app.debugDescription)
     }
 
     /// A press and drag: XCUITest's swipes left the approval card unscrolled in landscape.
