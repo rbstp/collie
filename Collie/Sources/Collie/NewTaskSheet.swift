@@ -47,24 +47,106 @@ struct NewTaskSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if machines.count > 1 {
-                    Picker("Machine", selection: $model.machineId) {
-                        ForEach(machines, id: \.id) { machine in
-                            Text(machine.label).tag(Optional(machine.id))
+                if let error = model.error {
+                    Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
+                }
+
+                Section {
+                    if let error = model.attachmentError {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                    }
+                    if let upload = model.upload {
+                        UploadChip(upload: upload) { model.cancelUpload() }
+                    }
+                    if let problem = model.dictation.problem {
+                        DictationProblemRow(problem: problem)
+                    }
+                    if !model.attachments.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 8) {
+                                ForEach(model.attachments) { file in
+                                    AttachmentThumbnail(file: file) { model.remove(file) }
+                                }
+                            }
+                        }
+                        .scrollIndicators(.hidden)
+                    }
+                    GlassEffectContainer(spacing: 4) {
+                        PromptInputLayout(expanded: verticalSizeClass != .compact || model.dictation.isActive || dictationShown) {
+                            ZStack {
+                                AttachmentMenu(
+                                    savedPromptsEnabled: !model.dictation.isActive,
+                                    filesEnabled: model.attachmentSlots > 0
+                                ) { choice in
+                                    switch choice {
+                                    case .savedPrompts: pickingPrompt = true
+                                    case .files: pickingFile = true
+                                    case .photos: pickingPhoto = true
+                                    }
+                                }
+                                .disabled(model.upload != nil || model.phase != .editing)
+                            }
+                            HStack(alignment: .bottom, spacing: 8) {
+                                TextField(model.location == .resume ? "Prompt (optional)" : "What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
+                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 3...3))
+                                    .focused($editingPrompt)
+                                    .disabled(model.dictation.isActive)
+                                if expandedPrompt && !model.prompt.isEmpty {
+                                    Button {
+                                        model.prompt = ""
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 36, height: 36)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(model.dictation.isActive || model.phase != .editing)
+                                    .accessibilityLabel("Clear text")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            DictationControl(dictation: model.dictation, disabled: model.phase != .editing, shown: $dictationShown) {
+                                dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
+                                editingPrompt = false
+                            }
+                            HStack(spacing: 8) {
+                                if editingPrompt {
+                                    Button {
+                                        editingPrompt = false
+                                    } label: {
+                                        Image(systemName: "keyboard.chevron.compact.down")
+                                            .font(.system(size: 20))
+                                            .frame(width: 28, height: 28)
+                                    }
+                                    .buttonStyle(.glass)
+                                    .tint(.primary)
+                                    .buttonBorderShape(.circle)
+                                    .controlSize(.small)
+                                    .accessibilityLabel("Hide keyboard")
+                                }
+                            }
+                        }
+                    }
+                    .id(KeepsPromptVisible.id)
+                }
+
+                Section {
+                    if machines.count > 1 {
+                        Picker("Machine", selection: $model.machineId) {
+                            ForEach(machines, id: \.id) { machine in
+                                Text(machine.label).tag(Optional(machine.id))
+                            }
+                        }
+                        .tint(.primary)
+                    }
+                    Picker("Location", selection: $model.location) {
+                        ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
+                            Text(location.rawValue).tag(location)
                         }
                     }
                     .tint(.primary)
-                }
-
-                Picker("Location", selection: $model.location) {
-                    ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
-                        Text(location.rawValue).tag(location)
-                    }
-                }
-                .tint(.primary)
-
-                if model.location == .folder {
-                    Section {
+                    if model.location == .folder {
                         Toggle("New folder", isOn: $model.newFolder)
                         if model.newFolder {
                             if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
@@ -80,24 +162,7 @@ struct NewTaskSheet: View {
                         } else {
                             folderPicker($model.cwd, completions: model.completions)
                         }
-                    } header: {
-                        Text("Folder")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if model.newFolder, let parent = model.newFolderParent {
-                                let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
-                            }
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                            if let error = model.foldersError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                } else if model.location == .clone {
-                    Section {
+                    } else if model.location == .clone {
                         if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
                             Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
                                 ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
@@ -109,66 +174,9 @@ struct NewTaskSheet: View {
                             .autocorrectionDisabled()
                             .keyboardType(.URL)
                             .font(.body.monospaced())
-                    } header: {
-                        Text("Repository")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let parent = model.newFolderParent {
-                                Text("Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there.")
-                            }
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                } else if model.location == .resume {
-                    Section {
+                    } else if model.location == .resume {
                         folderPicker($model.cwd, completions: model.completions)
-                    } header: {
-                        Text("Folder")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                            if let error = model.foldersError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                    Section("Session") {
-                        if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
-                            ProgressView("Finding sessions…")
-                        }
-                        if let sessions = model.sessions {
-                            if sessions.isEmpty {
-                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.secondary)
-                            }
-                            ForEach(sessions, id: \.sessionId) { session in
-                                Button {
-                                    model.session = session
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(session.firstPrompt.isEmpty ? "Prompt not shown" : session.firstPrompt).lineLimit(2)
-                                            HStack {
-                                                AgentKindLabel(kind: session.agent)
-                                                Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
-                                            }
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark") }
-                                    }
-                                }
-                                .foregroundStyle(.primary)
-                            }
-                        }
-                        if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
-                    }
-                } else {
-                    Section("Git worktree") {
+                    } else {
                         Picker("Action", selection: $model.worktreeAction) {
                             ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
                                 Text(action.rawValue).tag(action)
@@ -179,8 +187,6 @@ struct NewTaskSheet: View {
                         if model.worktrees == nil, model.worktreesError == nil, model.sourceFolder != nil {
                             ProgressView("Checking repository…")
                         }
-                        if let error = model.optionsError { Text(error).foregroundStyle(.red) }
-                        if let error = model.foldersError { Text(error).foregroundStyle(.red) }
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
@@ -210,7 +216,7 @@ struct NewTaskSheet: View {
                                             }
                                             Spacer()
                                             if checkout.open { Text("Open").font(.footnote) }
-                                            if model.checkoutPath == checkout.path { Image(systemName: "checkmark") }
+                                            if model.checkoutPath == checkout.path { Image(systemName: "checkmark").foregroundStyle(.tint) }
                                         }
                                     }
                                     .foregroundStyle(.primary)
@@ -219,95 +225,68 @@ struct NewTaskSheet: View {
                         }
                         if let error = model.worktreesError { Text(error).foregroundStyle(.red) }
                     }
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if model.location == .folder, model.newFolder, let parent = model.newFolderParent {
+                            let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
+                        }
+                        if model.location == .clone, let parent = model.newFolderParent {
+                            Text("Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there.")
+                        }
+                        if let error = model.optionsError {
+                            Text(error).foregroundStyle(.red)
+                        }
+                        if model.location != .clone, let error = model.foldersError {
+                            Text(error).foregroundStyle(.red)
+                        }
+                    }
                 }
 
-                Section(model.location == .resume ? "Prompt (optional)" : "Prompt") {
-                    if let error = model.attachmentError {
-                        Text(error).font(.footnote).foregroundStyle(.red)
-                    }
-                    if let upload = model.upload {
-                        UploadChip(upload: upload) { model.cancelUpload() }
-                    }
-                    if let problem = model.dictation.problem {
-                        DictationProblemRow(problem: problem)
-                    }
-                    if !model.attachments.isEmpty {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 8) {
-                                ForEach(model.attachments) { file in
-                                    AttachmentThumbnail(file: file) { model.remove(file) }
-                                }
-                            }
+                if model.location == .resume {
+                    Section("Session") {
+                        if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
+                            ProgressView("Finding sessions…")
                         }
-                        .scrollIndicators(.hidden)
-                    }
-                    GlassEffectContainer(spacing: 4) {
-                        PromptInputLayout(expanded: expandedPrompt && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
-                            ZStack {
-                                AttachmentMenu(
-                                    savedPromptsEnabled: !model.dictation.isActive,
-                                    filesEnabled: model.attachmentSlots > 0
-                                ) { choice in
-                                    switch choice {
-                                    case .savedPrompts: pickingPrompt = true
-                                    case .files: pickingFile = true
-                                    case .photos: pickingPhoto = true
-                                    }
-                                }
-                                .disabled(model.upload != nil || model.phase != .editing)
+                        if let sessions = model.sessions {
+                            if sessions.isEmpty {
+                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.secondary)
                             }
-                            HStack(alignment: .bottom, spacing: 8) {
-                                TextField("What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
-                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 3...3))
-                                    .focused($editingPrompt)
-                                    .disabled(model.dictation.isActive)
-                                if expandedPrompt && !model.prompt.isEmpty {
-                                    Button {
-                                        model.prompt = ""
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
+                            ForEach(sessions, id: \.sessionId) { session in
+                                Button {
+                                    model.session = session
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(session.firstPrompt.isEmpty ? "Prompt not shown" : session.firstPrompt).lineLimit(2)
+                                            HStack {
+                                                AgentKindLabel(kind: session.agent)
+                                                Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
+                                            }
+                                            .font(.footnote)
                                             .foregroundStyle(.secondary)
-                                            .frame(width: 36, height: 36)
-                                            .contentShape(Rectangle())
+                                        }
+                                        Spacer()
+                                        if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark").foregroundStyle(.tint) }
                                     }
-                                    .buttonStyle(.plain)
-                                    .disabled(model.dictation.isActive || model.phase != .editing)
-                                    .accessibilityLabel("Clear text")
                                 }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
-                            DictationControl(dictation: model.dictation, disabled: model.phase != .editing, shown: $dictationShown) {
-                                dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
-                                editingPrompt = false
-                            }
-                            HStack(spacing: 8) {
-                                if editingPrompt {
-                                    Button {
-                                        editingPrompt = false
-                                    } label: {
-                                        Image(systemName: "keyboard.chevron.compact.down")
-                                            .font(.system(size: 20))
-                                            .frame(width: 28, height: 28)
-                                    }
-                                    .buttonStyle(.glass)
-                                    .buttonBorderShape(.circle)
-                                    .controlSize(.small)
-                                    .accessibilityLabel("Hide keyboard")
-                                }
+                                .foregroundStyle(.primary)
                             }
                         }
+                        if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
                     }
-                    .id(KeepsPromptVisible.id)
                 }
 
-                if model.location != .resume {
-                    Section {
+                Section {
+                    if model.location != .resume {
                         if let agents = model.options?.agents {
-                            Picker("Agent", selection: $model.agent) {
+                            Picker(selection: $model.agent) {
                                 ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
+                            } label: {
+                                Text("Agent")
+                            } currentValueLabel: {
+                                // The menu's value drops the label's spacing, so the logo touched the name.
+                                Text(model.agent.capitalized)
                             }
                             .tint(.primary)
                             if model.agent == "claude" {
@@ -316,34 +295,21 @@ struct NewTaskSheet: View {
                         } else if model.optionsError == nil {
                             ProgressView()
                         }
-                    } footer: {
-                        if !model.agent.isEmpty {
-                            TimelineView(.everyMinute) { context in
-                                if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
-                                    Text(warning.text)
-                                        .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
-                                        .accessibilityLabel(warning.spoken)
-                                }
+                    }
+                    TextField("Workspace label (optional)", text: $model.label)
+                } footer: {
+                    if model.location != .resume, !model.agent.isEmpty {
+                        TimelineView(.everyMinute) { context in
+                            if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
+                                Text(warning.text)
+                                    .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
+                                    .accessibilityLabel(warning.spoken)
                             }
                         }
                     }
                 }
-
-                Section {
-                    TextField("Label (optional)", text: $model.label)
-                } footer: {
-                    Text("Names the new workspace in herdr.")
-                }
-
-                Section {
-                    if model.phase == .starting || model.phase == .waitingForAgent {
-                        HStack { ProgressView(); Text(model.phase == .starting ? "Starting the task…" : "Waiting for the agent…") }
-                    }
-                    if let error = model.error {
-                        Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
-                    }
-                }
             }
+            .listSectionSpacing(.compact)
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
             .modifier(KeepsPromptVisible(editing: editingPrompt))
             .safeAreaInset(edge: .top) {
@@ -362,6 +328,7 @@ struct NewTaskSheet: View {
                 }
             }
             .navigationTitle("New task")
+            .navigationSubtitle(model.phase == .starting ? "Starting the task…" : model.phase == .waitingForAgent ? "Waiting for the agent…" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -371,15 +338,22 @@ struct NewTaskSheet: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Start") {
+                    Button {
                         startTask = Task {
                             if let route = await model.start() {
                                 dismiss()
                                 onStarted(route)
                             }
                         }
+                    } label: {
+                        if model.phase == .starting || model.phase == .waitingForAgent {
+                            ProgressView()
+                        } else {
+                            Text("Start")
+                        }
                     }
                     .buttonStyle(.glassProminent)
+                    .accessibilityLabel("Start")
                     .disabled(!model.canStart)
                 }
             }
@@ -454,11 +428,13 @@ struct NewTaskSheet: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(URL(filePath: cwd).lastPathComponent)
-                        Text(cwd).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        if path.wrappedValue != cwd {
+                            Text(cwd).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        }
                     }
                     Spacer()
                     if path.wrappedValue == cwd {
-                        Image(systemName: "checkmark").foregroundStyle(.primary)
+                        Image(systemName: "checkmark").foregroundStyle(.tint)
                     }
                 }
             }
