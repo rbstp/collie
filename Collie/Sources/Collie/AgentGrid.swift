@@ -58,7 +58,7 @@ struct AgentGrid<Menu: View>: View {
                                 dropShelf(starred: false, in: entry)
                             }
                             if !entry.terminals.isEmpty {
-                                Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                Text("Terminals").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                                 LazyVGrid(
                                     columns: typeSize.isAccessibilitySize ? [GridItem(.flexible())] : [GridItem(.adaptive(minimum: 150), spacing: 12)],
                                     alignment: .leading, spacing: 12
@@ -72,7 +72,7 @@ struct AgentGrid<Menu: View>: View {
                                     reconnect(entry)
                                 } label: {
                                     MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink, now: context.date)
-                                        .font(.footnote)
+                                        .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.secondary)
                                 }
                                 .buttonStyle(.plain)
@@ -152,14 +152,16 @@ extension AgentGrid {
     private func terminalCard(_ terminal: TerminalSummary, in entry: MachineFlockEntry) -> some View {
         let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
         return NavigationLink(value: route) {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 AgentKindLabel(kind: "terminal", iconOnly: true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(terminal.displayTitle).font(.subheadline).lineLimit(1)
-                    Text([terminal.workspaceLabel, entry.machine.label].compactMap { $0 }.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    Text(terminal.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    if let workspace = terminal.workspaceLabel, workspace != terminal.displayTitle {
+                        Text(workspace)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
                 Image(systemName: terminal.locked ? "lock.fill" : "lock.open")
@@ -167,8 +169,8 @@ extension AgentGrid {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(terminal.locked ? "Locked" : "Unlocked")
             }
-            .padding(10)
-            .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 10))
+            .padding(12)
+            .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 18))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -204,16 +206,21 @@ struct AgentCard: View {
         if let conversation {
             ChatPreview(messages: conversation, lines: starred ? 6 : 3)
         } else {
-            TerminalPreview(ansi: screen ?? "")
+            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 7)
+                .overlay(alignment: .top) {
+                    // Fades out the row cut at the top.
+                    LinearGradient(colors: [Color(uiColor: GhosttyTerminalUIView.backgroundColor), .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 12)
+                }
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             preview
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
-                    : (starred ? 240 : 120))
+                    : (starred ? 150 : 120))
                 .accessibilityHidden(true)
                 .overlay(alignment: .top) {
                     if agent.status != .blocked, !agent.subagents.isEmpty {
@@ -234,43 +241,50 @@ struct AgentCard: View {
                         .foregroundStyle(.white)
                         .padding(6)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 10))
-                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 10))
+                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12))
+                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 12))
                         .environment(\.colorScheme, .dark)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
                 .allowsHitTesting(false)
-            HStack(alignment: .top, spacing: 6) {
-                StatusIcon(state: agent.status).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .top, spacing: 6) {
+                    StatusIcon(state: agent.status).accessibilityHidden(true)
+                    Text(agent.displayTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if starred {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                            .padding(.top, 3)
+                            .accessibilityLabel("Starred")
+                    }
+                }
+                HStack(spacing: 6) {
+                    // Under the status icon, so the metadata lines up with the title.
+                    Group {
                         if let kind = agent.kind {
                             AgentKindLabel(kind: kind, iconOnly: true)
                         }
-                        if starred {
-                            Image(systemName: "star.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.yellow)
-                                .accessibilityLabel("Starred")
-                        }
+                    }
+                    .frame(width: 20)
+                    HStack(spacing: 4) {
                         if followed {
                             Image(systemName: "pin.fill")
-                                .font(.caption2)
                                 .foregroundStyle(.tint)
                                 .accessibilityLabel("Followed")
                         }
-                        Text(agent.displayTitle).font(.subheadline).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
-                    }
-                    HStack(spacing: 4) {
                         if let workspace {
-                            Text(workspace)
+                            Text(workspace).layoutPriority(1)
                             Text(verbatim: "·")
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
                         if agent.status == .blocked, !agent.subagents.isEmpty {
                             Text(verbatim: "·")
-                            Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents").fixedSize()
+                            Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
                         }
                         if let pullRequest = agent.pullRequest {
                             PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
@@ -279,13 +293,18 @@ struct AgentCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                }
-                if let left = agent.contextLeft {
                     Spacer(minLength: 0)
-                    ContextRing(left: left).padding(.top, 3)
+                    if let left = agent.contextLeft {
+                        ContextRing(left: left)
+                    }
                 }
             }
+            .padding(.horizontal, 4)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
         }
+        .padding(6)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 18))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityActions {
@@ -316,7 +335,7 @@ private struct ChatPreview: View {
                 .padding(user ? 6 : 0)
                 .background {
                     if user {
-                        RoundedRectangle(cornerRadius: 8).fill(.tint.opacity(0.1))
+                        RoundedRectangle(cornerRadius: 12).fill(.fill.tertiary)
                     }
                 }
                 .padding(.leading, user ? 16 : 0)
@@ -327,6 +346,8 @@ private struct ChatPreview: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(6)
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+        // Fades out the line cut at the top.
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
         .background(.fill.tertiary)
     }
 }
@@ -334,9 +355,10 @@ private struct ChatPreview: View {
 /// Read-only: no scrolling, selection or gestures; it follows the bottom of the snapshot.
 private struct TerminalPreview: UIViewRepresentable {
     let ansi: String
+    let fontSize: CGFloat
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
-        let view = GhosttyTerminalUIView(fontSize: 5)
+        let view = GhosttyTerminalUIView(fontSize: fontSize)
         view.wraps = true
         view.isUserInteractionEnabled = false
         view.showsVerticalScrollIndicator = false
@@ -345,6 +367,7 @@ private struct TerminalPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ view: GhosttyTerminalUIView, context: Context) {
+        view.fontSize = fontSize
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)
         }

@@ -48,7 +48,7 @@ private struct SampleSession: View {
 
     private var tabs: some View {
         TabView {
-            Tab("Agents", systemImage: "square.grid.2x2") {
+            Tab("Agents", systemImage: "sparkles.rectangle.stack") {
                 FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: approvals, follows: nil, opening: $opening, persistsState: false)
             }
             Tab("Machines", systemImage: "desktopcomputer") {
