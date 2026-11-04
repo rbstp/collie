@@ -25,6 +25,8 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut prev = Prev::Start;
     let mut wrap = Wrap::default();
     let mut numbered = None;
+    let mut items = Vec::new();
+    let mut nested = false;
     let (mut plain, mut tail) = (String::new(), String::new());
     let rows: Vec<&str> = ansi.split('\n').collect();
     for (i, &row) in rows.iter().enumerate() {
@@ -35,10 +37,14 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
         if s.is_empty() {
+            nested |= matches!(prev, Prev::Held) || !items.is_empty();
             prev = Prev::Start;
+            items.clear();
             continue;
         }
         if ind == 0 {
+            items.clear();
+            nested = false;
             if let Some(text) = s.strip_prefix("❯ ").filter(|_| shaded_start(row)) {
                 (prose, prompt) = (false, Some(ends_in_space(row, false)));
                 prev = row_above(&mut tail, text, 2);
@@ -47,9 +53,12 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prompt = None;
             let body = s.strip_prefix(['⏺', '※']);
             prose = body.is_some();
-            prev = match body.map(|b| b.trim_start_matches([' ', '\u{a0}'])) {
-                Some(b) if !tool_header(b) => item_above(&mut tail, &mut numbered, b, 2)
-                    .unwrap_or_else(|| row_above(&mut tail, b, 2)),
+            let lead = body.map(|b| b.strip_prefix([' ', '\u{a0}']).unwrap_or(b));
+            prev = match lead.map(|l| (l.trim_start_matches([' ', '\u{a0}']), l)) {
+                Some((b, lead)) if !tool_header(b) => {
+                    item_above(&mut tail, &mut numbered, &mut items, b, 2)
+                        .unwrap_or_else(|| row_above(&mut tail, lead, 2))
+                }
                 _ => Prev::Held,
             };
             continue;
@@ -76,7 +85,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prose = false;
             continue;
         }
-        if s.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c)) {
+        if s.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c) || c == '▎') {
             prev = Prev::Start;
             continue;
         }
@@ -84,7 +93,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prev = Prev::Held;
             continue;
         }
-        if let Some(row) = item_above(&mut tail, &mut numbered, s, ind) {
+        if let Some(row) = item_above(&mut tail, &mut numbered, &mut items, s, ind) {
             prev = row;
             continue;
         }
@@ -102,7 +111,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                             plain_text(r, &mut text);
                             let body = text.trim_end().trim_start_matches(' ');
                             if text.trim_end().len() - body.len() == ind
-                                && list_marker(body).is_none()
+                                && list_marker(body, false).is_none()
                                 && !body.starts_with('⎿')
                                 && !body.starts_with(|c| ('\u{2500}'..='\u{257f}').contains(&c))
                                 && !tool_header(body)
@@ -129,7 +138,21 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 }
                 row_above(&mut tail, s, ind)
             }
-            Prev::Start => row_above(&mut tail, s, ind),
+            Prev::Row(hang)
+                if items.iter().any(|&(at, text)| at == ind || text == ind)
+                    && separator(&tail, s, cols.saturating_sub(hang)) == "\n" =>
+            {
+                row_above(&mut tail, s, ind)
+            }
+            Prev::Start => {
+                // Claude Code keeps a paragraph's leading spaces on its first row only. After a
+                // list or held rows, such as code, an indented row may belong to them instead.
+                if ind > 2 && !nested {
+                    numbered = Some((2, format!("{}{s}", " ".repeat(ind - 2))));
+                }
+                nested &= ind > 2;
+                row_above(&mut tail, s, ind)
+            }
             Prev::Row(..) | Prev::Held => Prev::Held,
         };
     }
@@ -303,7 +326,7 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             base = ind + 2;
             prose = tui_prose(body, kind);
             prev = if prose {
-                if let Some(len) = list_marker(body) {
+                if let Some(len) = list_marker(body, false) {
                     let rest = body[len..].trim_start_matches(' ');
                     row_above(
                         &mut tail,
@@ -320,7 +343,7 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if !prose && matches!(prev, Prev::Start) && ind == base {
-            let body = list_marker(s)
+            let body = list_marker(s, false)
                 .map(|len| &s[len..])
                 .unwrap_or(s)
                 .trim_start();
@@ -333,7 +356,7 @@ fn tui_wraps(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             prev = Prev::Held;
             continue;
         }
-        if let Some(len) = list_marker(s) {
+        if let Some(len) = list_marker(s, false) {
             let rest = s[len..].trim_start_matches(' ');
             prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
             prior_width = row_width;
@@ -481,22 +504,23 @@ fn row_above(tail: &mut String, text: &str, hang: usize) -> Prev {
     Prev::Row(hang)
 }
 
+/// `items` are the list items since the last blank or indent-0 row, as (marker indent, text
+/// indent); an item marked with a letter or roman numeral counts only at an item's text indent.
 fn item_above(
     tail: &mut String,
     numbered: &mut Option<(usize, String)>,
+    items: &mut Vec<(usize, usize)>,
     s: &str,
     ind: usize,
 ) -> Option<Prev> {
-    let len = list_marker(s)?;
+    let len = list_marker(s, items.iter().any(|&(_, text)| text == ind))?;
     let rest = s[len..].trim_start_matches(' ');
     *numbered = s
         .starts_with(|c: char| c.is_ascii_digit())
         .then(|| (ind, s.to_owned()));
-    Some(row_above(
-        tail,
-        rest,
-        ind + s[..s.len() - rest.len()].width(),
-    ))
+    let hang = ind + s[..s.len() - rest.len()].width();
+    items.push((ind, hang));
+    Some(row_above(tail, rest, hang))
 }
 
 /// The characters `draft::cells` reads from `row`, without CR, into `out`.
@@ -537,13 +561,23 @@ fn wide_word_cut(tail: &str, next: &str, width: usize) -> bool {
     wide_cut(tail, next, width) && tail.width() + 1 == width && last + first > width
 }
 
-/// The byte length of a list marker such as `-`, `•` or `12.` that a space follows.
-fn list_marker(s: &str) -> Option<usize> {
+/// The byte length of a list marker such as `-`, `•`, `12.`, `b.` or `iv.` that a space
+/// follows. Claude Code 2.1.317 numbers nested items with letters, then roman numerals.
+fn list_marker(s: &str, lettered: bool) -> Option<usize> {
     let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+    let letters = s.bytes().take_while(u8::is_ascii_lowercase).count();
     let len = match s.chars().next()? {
         c @ ('-' | '*' | '•' | '+') => c.len_utf8(),
         _ if (1..=3).contains(&digits) && matches!(s.as_bytes().get(digits), Some(b'.' | b')')) => {
             digits + 1
+        }
+        _ if lettered
+            && (letters == 1
+                || ((1..=4).contains(&letters)
+                    && s[..letters].bytes().all(|b| b"ivx".contains(&b))))
+            && s.as_bytes().get(letters) == Some(&b'.') =>
+        {
+            letters + 1
         }
         _ => return None,
     };
@@ -633,6 +667,105 @@ mod tests {
             "  Next row at the number's indent.",
         ];
         assert_eq!(wraps(&rows, 40), [1, 5]);
+    }
+
+    #[test]
+    fn captured_paragraphs_after_a_code_block_and_nested_items_join() {
+        let reply = include_str!("../tests/fixtures/claude-2.1.317/reply-nested-lists.ansi.txt");
+        assert_eq!(claude_rule_columns(reply, 93), Some(90));
+        let rows = [5, 7, 8, 10, 12, 14, 18, 20, 23, 28, 29, 32, 37, 40, 45, 47];
+        assert_eq!(soft_wraps(reply, 90), (rows.to_vec(), vec![]));
+    }
+
+    #[test]
+    fn captured_paragraphs_with_a_first_line_indent_join_and_quotes_keep_their_rows() {
+        let reply = include_str!("../tests/fixtures/claude-2.1.317/indented-paragraphs.ansi.txt");
+        assert_eq!(claude_rule_columns(reply, 93), Some(91));
+        let rows = [1, 4, 5, 16, 17, 18, 19];
+        assert_eq!(soft_wraps(reply, 91), (rows.to_vec(), vec![]));
+    }
+
+    #[test]
+    fn a_first_line_indent_counts_and_quote_rows_never_join() {
+        let rows = [
+            "⏺   Most teams find out how they work",
+            "  only when it breaks.",
+            "",
+            "  ▎ A quoted line that runs right up to",
+            "  ▎ the edge of the row.",
+        ];
+        assert_eq!(wraps(&rows, 40), [1]);
+    }
+
+    #[test]
+    fn an_indented_row_after_a_list_or_held_rows_keeps_its_own_indent() {
+        let rows = [
+            "⏺ Example:",
+            "",
+            "  def f():",
+            "      x = 1",
+            "",
+            "      return compute(argument_one, two)",
+            "  print(f())",
+        ];
+        assert_eq!(wraps(&rows, 40), [] as [u32; 0]);
+        let two_space = [
+            "⏺ Example:",
+            "",
+            "  def f():",
+            "    x = 1",
+            "",
+            "    return compute(argument_one, two, three)",
+            "  print(f())",
+        ];
+        assert_eq!(wraps(&two_space, 46), [] as [u32; 0]);
+        let rows = [
+            "⏺ Steps:",
+            "  1. Build it.",
+            "",
+            "     Then the second paragraph goes on until it",
+            "  npm run build",
+        ];
+        assert_eq!(wraps(&rows, 48), [] as [u32; 0]);
+    }
+
+    #[test]
+    fn only_a_list_items_indents_start_a_paragraph_without_a_blank_row() {
+        let rows = [
+            "⏺ Steps:",
+            "",
+            "  1. Add the handler:",
+            "  fn handle(req: Request) -> Response {",
+            "      let body = serde_json::to_string(&build_response(req.headers(), req.uri()))?;",
+            "      Response::new(body)",
+            "  }",
+            "     Then restart the daemon.",
+        ];
+        assert_eq!(wraps(&rows, 90), [] as [u32; 0]);
+        let rows = [
+            "⏺ Notes:",
+            "  - A short item",
+            "  averyveryveryverylongwordthatfills and",
+            "  more.",
+        ];
+        assert_eq!(wraps(&rows, 40), [] as [u32; 0]);
+    }
+
+    #[test]
+    fn a_lettered_marker_is_an_item_only_at_an_items_text_indent() {
+        let rows = [
+            "⏺ The case that matters most here is Roe",
+            "  v. Wade which the court cited again and",
+            "  again.",
+        ];
+        assert_eq!(wraps(&rows, 41), [1, 2]);
+        let rows = [
+            "⏺ Notes:",
+            "  1. The case that matters the most: Roe",
+            "     v. Wade which the court cited again",
+            "     and again.",
+        ];
+        assert_eq!(wraps(&rows, 41), [] as [u32; 0]);
     }
 
     #[test]

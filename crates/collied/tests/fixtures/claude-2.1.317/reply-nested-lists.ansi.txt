@@ -1,0 +1,50 @@
+[0m[38;2;255;255;255m⏺ [0mHere is the plan for the photo archive.
+
+  1. [0m[1mSort the scans first (#41)[0m, from [0m[38;2;177;185;249m/srv/archive/scans/inbox[0m:
+  [0m[38;2;177;185;249mexiftool -d '%Y/%m' '-Directory<DateTimeOriginal' -r .[0m
+  [0m[38;2;177;185;249mrsync -av --remove-source-files --exclude='*.tmp' ./ [0m
+  [0m[38;2;177;185;249m/srv/archive/photos/originals/by-date/[0m
+     Run the [0m[38;2;177;185;249mexiftool[0m pass first, otherwise rsync copies the files with [0m[38;2;177;185;249mno date taken [0m
+     [0m[38;2;177;185;249mrecorded yet[0m into the root folder. The pass should move 240 files; then count the
+     folders again.
+     → I check the 12 album folders, open a sample from each (the 9 film rolls, plus
+     [0m[38;2;177;185;249mcontact-sheet-index[0m compared to the printed sheet) and recount.
+     → You approve #41. The scheduler creates [0m[38;2;177;185;249mthumbs-small-nightly[0m and
+     [0m[38;2;177;185;249mthumbs-large-nightly[0m, the job reruns once, and I look at the output.
+  2. [0m[1mThumbnails, then captions (#42)[0m, from
+     [0m[38;2;177;185;249m/srv/archive/scratch/session-fedcba9876543210/tools/thumbs/bin[0m:
+  [0m[38;2;177;185;249mmagick mogrify -path thumbs -resize 320x320 originals/*.jpg[0m
+  [0m[38;2;177;185;249mmagick mogrify -path previews -resize 1600x1600 originals/*.jpg[0m
+     The thumbnail and preview runs write 240 files each; the caption pass only renames
+     them. Compare both folder counts.
+     → I spot-check each folder, delete the [0m[38;2;177;185;249mtmp [0mcopies, rebuild all 3 photo indexes and
+     publish them.
+  3. [0m[1mPublishing:[0m
+     a. Publish #42. The gallery picks up the new albums from the shared folder right
+        away.
+     b. Rebuild the index:
+        [0m[38;2;177;185;249mgallery-tool --profile family rebuild -f albums/family.toml[0m
+        The new albums on the second gallery appear after this.
+     c. You open [0m[38;2;177;185;249mfamily [private][0m and [0m[38;2;177;185;249mfriends [shared][0m. Their [0m[38;2;177;185;249mshare [0mand [0m[38;2;177;185;249mprint[0m links each
+        carry their own expiry date, so you can still revoke family and keep the other
+        one.
+ 
+  [0m[1mNote:[0m from the #41 approval until the captions are done, don't rename files in [0m[38;2;177;185;249moriginals[0m
+  and don't run any sync job. The old scripts would copy them to the old path.
+
+[0m[38;2;255;255;255m⏺ [0mNested lists:
+    
+  1. The first item at the top level has enough words in it to wrap onto a second row
+     here. 
+     a. A nested item under the first one also has enough words to wrap onto a second row.
+        i. A third level item under the nested one has enough words to wrap onto a second
+           row.
+        ii. Another third level item.
+     b. A second nested item.
+  2. The second top level item.
+     - A nested bullet under the second item that has enough words to wrap onto another
+       row.
+       - A deeper bullet under the nested bullet that has enough words to wrap onto
+         another row.
+
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────────────[0m
