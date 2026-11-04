@@ -25,6 +25,7 @@ struct AgentScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.neutralAccent) private var neutralAccent
 
@@ -157,8 +158,9 @@ struct AgentScreen: View {
                     // The approval cards share the header's surface, so the content runs under them as under the header.
                     if let approvals {
                         // Together the cards take at most 45% of the screen, keyboard or not, so the composer stays in
-                        // reach; a quarter in landscape, where more leaves no room for the prompt above Approve.
-                        let share = verticalSizeClass == .compact ? 0.25 : 0.45
+                        // reach; 55% at accessibility sizes, where less left the command and the reason no line above
+                        // the stacked decisions; a quarter in landscape, where more leaves no room for the prompt above Approve.
+                        let share = verticalSizeClass == .compact ? 0.25 : typeSize.isAccessibilitySize ? 0.55 : 0.45
                         let cap = height > 0 ? height * share / CGFloat(max(items.count, 1)) : .infinity
                         Group {
                             ForEach(items) { item in
@@ -509,10 +511,15 @@ private struct AgentHeader: View {
 }
 
 private struct SessionBarGlass: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         // The glass rim along the bottom edge drew a hairline seam over the content: it lies past the mask,
         // and the glass fades out over its last points rather than ending on a hard cut.
-        Color.clear.glassEffect(.regular, in: .rect).padding(.bottom, -8)
+        // Light glass over a white chat is nearly white itself: a faint gray tint gives the band a visible edge.
+        Color.clear.glassEffect(.regular, in: .rect)
+            .overlay(colorScheme == .light ? Color.black.opacity(0.04) : .clear)
+            .padding(.bottom, -8)
             .mask {
                 VStack(spacing: 0) {
                     Rectangle()
@@ -865,8 +872,8 @@ private struct StripChip<Label: View>: View {
                 .opacity(isEnabled ? 1 : 0.4)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
-        .background(SessionBarDim(), in: .rect(cornerRadius: 10))
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .background(SessionBarDim(), in: .capsule)
     }
 }
 

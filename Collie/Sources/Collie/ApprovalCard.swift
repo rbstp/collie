@@ -13,10 +13,14 @@ struct ApprovalCard: View {
     @State private var commandShown: CGFloat = 0
     @State private var commandFull: CGFloat = 0
     @State private var headerHeight: CGFloat = 0
+    @State private var commandBoxHeight: CGFloat = 0
+    @State private var reasonHeight: CGFloat = 0
+    @State private var outputHeight: CGFloat = 0
+    @State private var addNoteHeight: CGFloat = 0
     @FocusState private var field: String?
-    @Environment(\.dynamicTypeSize) private var typeSize
     @ScaledMetric(relativeTo: .footnote) private var commandLine: CGFloat = 16
     @ScaledMetric(relativeTo: .caption) private var fade: CGFloat = 16
+    @ScaledMetric(relativeTo: .caption) private var reasonLine: CGFloat = 16
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
 
@@ -29,14 +33,28 @@ struct ApprovalCard: View {
     private var pinsDecisions: Bool {
         offersDecisions && min(maxHeight - 2 * padding, shownHeight) - spacing - decisionsHeight >= 2 * commandLine
     }
-    // Collapsed, the command keeps to the lines that leave the tool's name and Show full command in view at rest
-    // (at accessibility sizes three lines pushed the button under the fade); when not even one would (landscape),
-    // it keeps three and scrolls. Measured against the card's cap, not its height, which follows the command.
+    // The prompt's room above pinned decisions, measured against the card's cap, not its height, which follows the prompt.
+    private var room: CGFloat { maxHeight - 2 * padding - (pinsDecisions ? spacing + decisionsHeight : 0) }
+    // Collapsed with the decisions pinned, the prompt shows at rest only what fits whole, in this order: the tool's name,
+    // the command and Show full command, a line of the reason, the rest of the reason, Add note, the output. Expanded,
+    // everything shows and scrolls.
+    private var fitsAtRest: Bool { !expanded && pinsDecisions && maxHeight.isFinite }
+    private var reasonMinimum: CGFloat { approval.reason == nil ? 0 : spacing + 2 * 8 + reasonLine }
+    // When not even one command line fits (landscape), the command keeps three and scrolls.
     private var commandLines: Int {
         guard maxHeight.isFinite else { return 3 }
-        let room = maxHeight - 2 * padding - (pinsDecisions ? spacing + decisionsHeight : 0) - headerHeight - spacing - 2 * 8 - 4 - commandLine
-        let lines = Int(room / commandLine)
+        let lines = Int((room - headerHeight - spacing - 2 * 8 - 4 - commandLine - reasonMinimum) / commandLine)
         return lines < 1 ? 3 : min(3, lines)
+    }
+    private var reasonLines: Int? {
+        guard fitsAtRest else { return nil }
+        return max(1, Int((room - headerHeight - spacing - commandBoxHeight - spacing - 2 * 8) / reasonLine))
+    }
+    private var shownAtRest: CGFloat { headerHeight + spacing + commandBoxHeight + (approval.reason == nil ? 0 : spacing + reasonHeight) }
+    private var offersAddNote: Bool { approval.supportsNote && !model.noting.contains(item.id) }
+    private var showsAddNote: Bool { !fitsAtRest || shownAtRest + spacing + addNoteHeight <= room }
+    private var showsOutput: Bool {
+        !fitsAtRest || shownAtRest + (offersAddNote && showsAddNote ? spacing + addNoteHeight : 0) + spacing + outputHeight <= room
     }
 
     var body: some View {
@@ -98,7 +116,7 @@ struct ApprovalCard: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
                             .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .secondary)
+                            .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .padding(2)
@@ -129,8 +147,9 @@ struct ApprovalCard: View {
                         .accessibilityLabel(command)
                     if !expanded, commandFull > commandShown + 1 {
                         Button("Show full command") { withAnimation { model.toggleExpanded(item) } }
-                            .font(.caption.weight(.semibold))
-                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .foregroundStyle(.primary.opacity(0.6))
+                            .buttonStyle(.plain)
                     }
                 }
                 .font(.footnote.monospaced())
@@ -138,14 +157,15 @@ struct ApprovalCard: View {
                 .padding(.vertical, 8)
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandBoxHeight = $0 }
             }
             if let reason = approval.reason {
-                ApprovalReason(reason: reason)
+                ApprovalReason(reason: reason, lines: reasonLines)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { reasonHeight = $0 }
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty, expanded || !typeSize.isAccessibilitySize {
-                // Collapsed at accessibility sizes, the card's share of the screen left the output a sliver.
+            } else if !approval.snippet.isEmpty, showsOutput {
                 let lines = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false)
                 let more = expanded ? 0 : lines.count - 3
                 VStack(alignment: .leading, spacing: 4) {
@@ -162,12 +182,14 @@ struct ApprovalCard: View {
                     }
                 }
                 .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
+                // The metadata gray is 4.2:1 on a nested panel over the band's light tint; this is 5.3:1, and 5.5:1 in dark mode.
+                .foregroundStyle(.primary.opacity(0.6))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                 .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { outputHeight = $0 }
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item, field: $field)
@@ -186,10 +208,11 @@ struct ApprovalCard: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            if approval.supportsNote, !model.noting.contains(item.id) {
+            if offersAddNote, showsAddNote {
                 Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
                     .font(.caption)
                     .disabled(model.steps[item.id] != nil)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { addNoteHeight = $0 }
             }
             if approval.takesFeedback {
                 FeedbackField(model: model, item: item, field: $field, sendAnswer: sendAnswer)
@@ -215,22 +238,20 @@ private struct UpToContent: Layout {
 
 struct ApprovalReason: View {
     let reason: String
-    @Environment(\.colorScheme) private var colorScheme
+    var lines: Int?
 
     var body: some View {
         Label {
-            Text(verbatim: reason)
+            Text(verbatim: reason).lineLimit(lines)
         } icon: {
             Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
         }
         .font(.caption)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Orange fill alone reads as muddy brown over dark glass; there an orange rim carries the warning.
-        .background(.orange.opacity(colorScheme == .dark ? 0.1 : 0.14), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            if colorScheme == .dark { RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.5), lineWidth: 1) }
-        }
+        // Orange fill alone reads as muddy brown over dark glass; a faint fill inside an orange rim carries the warning.
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.4), lineWidth: 1) }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reason: \(reason)")
@@ -324,6 +345,8 @@ private struct DecisionButtons: View {
 
     private var options: [ApprovalDecision] { item.approval.options }
 
+    private func weight(_ decision: ApprovalDecision) -> Font.Weight { decision == .approve ? .semibold : .regular }
+
     private func buttons(_ decisions: [ApprovalDecision]) -> some View {
         ForEach(decisions, id: \.self) { decision in
             Button(role: decision == .deny ? .destructive : nil) {
@@ -331,11 +354,11 @@ private struct DecisionButtons: View {
             } label: {
                 // Each label is as wide as the widest, so the row is measured at the equal widths it lays out with.
                 ZStack {
-                    ForEach(item.approval.options, id: \.self) { Text($0.title).lineLimit(1).hidden() }
+                    ForEach(item.approval.options, id: \.self) { Text($0.title).fontWeight(weight($0)).lineLimit(1).hidden() }
                     if model.steps[item.id] == .sending(decision) {
                         ProgressView()
                     } else {
-                        Text(decision.title).lineLimit(1)
+                        Text(decision.title).fontWeight(weight(decision)).lineLimit(1)
                     }
                 }
                 .padding(.horizontal, 8)
@@ -430,7 +453,7 @@ private struct DecisionStyle: ViewModifier {
         switch decision {
         // System green under white text reads poorly; this deeper green keeps the label at 4.5:1 or more.
         case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.11, green: 0.5, blue: 0.22))
-        case .deny: content.buttonStyle(.glass).tint(.red)
+        case .deny: content.buttonStyle(.glass).tint(AgentState.blocked.color)
         default: content.buttonStyle(.glass).tint(.primary)
         }
     }

@@ -17,6 +17,8 @@ Once the agent moves on, `collied` tries to remove the notification.
 <img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Always allow and Deny buttons">
 </div>
 
+With larger text, the card keeps the command, the reason and the buttons in view and leaves out the output and **Add note** until you tap the tool's name to expand it.
+
 ## Answering by hand
 
 You can also answer any agent's prompt with the terminal buttons or the composer. This needs no Face ID and is not tied to one approval: if the prompt changes, the new prompt gets your input.

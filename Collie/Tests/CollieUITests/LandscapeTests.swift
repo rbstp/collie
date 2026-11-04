@@ -150,6 +150,9 @@ final class LandscapeTests: XCTestCase {
         // The band's text grows with the accessibility size, and Approve stays within reach of its scrolling card.
         XCTAssertTrue(eventually(within: 30) { approve.isHittable }, app.debugDescription)
         XCTAssertTrue(eventually(within: 30) { app.buttons["Keyboard"].isHittable }, app.debugDescription)
+        // The reason stays in view at rest, whole above the decisions rather than a sliver under the fade.
+        let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: ")).firstMatch
+        XCTAssertTrue(eventually(within: 10) { reason.exists && reason.frame.maxY <= approve.frame.minY }, app.debugDescription)
     }
 
     /// A press and drag: XCUITest's swipes left the approval card unscrolled in landscape.
