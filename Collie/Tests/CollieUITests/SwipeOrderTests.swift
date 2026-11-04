@@ -39,6 +39,11 @@ final class SwipeOrderTests: XCTestCase {
         app.choose(app.buttons["Inbox"]) { layout.tap() }
         let inactive = app.segmentedControls["Filter"].buttons["Inactive"]
         XCTAssertTrue(inactive.appears(within: 5), app.debugDescription)
+        let header = app.collectionViews.firstMatch.collectionViews.staticTexts["Needs you"]
+        XCTAssertTrue(header.appears(within: 5), app.debugDescription)
+        app.segmentedControls["Filter"].buttons["Needs you"].tap()
+        // The selected filter names the one group, so its header hides.
+        XCTAssertTrue(eventually { !header.exists }, app.debugDescription)
         inactive.tap()
         // Most recent activity first, the reverse of the list's longest-idle-first order.
         let rows = ["The docs now describe the inbox and the context ring.", "triage issues", "The rate limiter is merged."]

@@ -23,10 +23,15 @@ final class PagerSwipeTests: XCTestCase {
                 app.swipeLeft()
             }
             XCTAssertTrue(eventually { view.buttons["Usage"].isSelected }, "\(name)\n\(app.debugDescription)")
+            // Usage has no layout or search, so their buttons hide rather than sit dimmed.
+            XCTAssertTrue(eventually { !layout.exists && !app.buttons["Search"].exists }, "\(name)\n\(app.debugDescription)")
+            XCTAssertTrue(app.buttons["New task"].exists, "\(name)\n\(app.debugDescription)")
             // On iPhone Pro Max the app's center lands on the Range picker, which keeps a drag that starts on it.
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.3))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 300, dy: 0)), withVelocity: .fast, thenHoldForDuration: 0)
             XCTAssertTrue(eventually { view.buttons["Agents"].isSelected }, "\(name)\n\(app.debugDescription)")
+            XCTAssertTrue(layout.appears(within: 5), "\(name)\n\(app.debugDescription)")
+            XCTAssertEqual(app.buttons["Search"].exists, name == "Inbox", "\(name)\n\(app.debugDescription)")
         }
     }
 

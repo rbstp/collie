@@ -71,4 +71,22 @@ private let light = TerminalTheme.light
     #expect(view.frameData?.runs.first?.style.foreground == light.ansi?[1])
     #expect(view.backgroundColor?.resolvedColor(with: view.traitCollection) == UIColor(light.background))
 }
+
+@MainActor @Test func themeBackgroundReplacesTheThemesAndKeepsTheContrast() throws {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+    window.overrideUserInterfaceStyle = .light
+    let view = GhosttyTerminalUIView(fontSize: 13)
+    view.frame = window.bounds
+    window.addSubview(view)
+    window.isHidden = false
+    view.updateTraitsIfNeeded()
+    let panel = TerminalRGB(239, 239, 240)
+    view.themeBackground = UIColor(panel)
+    view.show(ansiSnapshot: "\u{1B}[38;2;153;153;153mx")
+    #expect(view.frameData?.background == panel)
+    let run = try #require(view.frameData?.runs.first)
+    let color = light.textColor(run.style, on: try #require(view.frameData?.background))
+    #expect(color.contrast(with: panel) >= 4.5)
+    #expect(view.backgroundColor?.resolvedColor(with: view.traitCollection) == UIColor(panel))
+}
 #endif
