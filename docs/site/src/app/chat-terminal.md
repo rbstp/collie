@@ -44,7 +44,6 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys.
 - The [key strip](keys.md) stays above the keyboard for Escape, arrows and Control.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
-- Claude Code refuses Enter while its input box holds a slash command it is not asking about, so send slash commands from Chat.
 
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.
 - Long-press to select text, then copy it, quote it into the prompt or open a link. In an agent session, **Open** previews a selected file path.

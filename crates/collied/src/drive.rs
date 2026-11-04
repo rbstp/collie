@@ -12,7 +12,7 @@ use anyhow::Context;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
-    FolderName, Key, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
+    FolderName, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
     SendTextParams, SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions,
     TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams,
     TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
@@ -60,7 +60,6 @@ const BLOCKED: &str = "agent is blocked; answer it through an approval";
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
-const COMMAND_SHOWN: &str = "a slash command shows in the input box; send it as a prompt";
 const UNFOCUSED: &str =
     "a background task or agent below the input box is selected on the machine; nothing was sent";
 const CORE_KINDS: &str = "Herdr 2 starts Claude Code and Codex, and only once found on the machine";
@@ -401,7 +400,7 @@ impl Driver {
         Ok(protocol::jump_banner(&sanitize_ansi(&read.text)))
     }
 
-    async fn input_safeguards(&self, a: &AgentInfo, submits: bool) -> Result<(), Fail> {
+    async fn input_safeguards(&self, a: &AgentInfo) -> Result<(), Fail> {
         if a.agent.as_deref() != Some("claude")
             || flock::status(&a.agent_status) == AgentStatus::Blocked
         {
@@ -409,12 +408,6 @@ impl Driver {
         }
         if self.scrolled(&a.pane_id).await? {
             return fail(ErrorCode::AgentNotReady, SCROLLED);
-        }
-        if submits
-            && let Some(InputBox::Draft(d)) = self.input_box(&a.pane_id).await?
-            && d.text.starts_with('/')
-        {
-            return fail(ErrorCode::AgentNotReady, COMMAND_SHOWN);
         }
         Ok(())
     }
@@ -756,11 +749,7 @@ impl Driver {
             Err(e) => return (Err(e), None),
         };
         let blocked = flock::status(&a.agent_status) == AgentStatus::Blocked;
-        let submits = p
-            .keys
-            .iter()
-            .any(|k| matches!(k, Key::Enter | Key::CtrlEnter));
-        if let Err(e) = self.input_safeguards(&a, submits).await {
+        if let Err(e) = self.input_safeguards(&a).await {
             return (Err(e), None);
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
@@ -780,7 +769,7 @@ impl Driver {
     pub async fn type_text(&self, p: AgentTypeTextParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.writable_agent(&p.terminal_id).await?;
-        self.input_safeguards(&a, true).await?;
+        self.input_safeguards(&a).await?;
         authorized(auth)?;
         self.runtime
             .type_text(&a.pane_id, p.text.as_str(), &a.agent_status)
@@ -789,12 +778,11 @@ impl Driver {
         Ok(Response::Ok)
     }
 
-    /// Keystrokes typed as is, without Enter: they never submit, so a slash command in the box
-    /// does not refuse them.
+    /// Keystrokes typed as is, without Enter.
     pub async fn send_text(&self, p: SendTextParams, auth: &Authorized) -> Reply {
         let _box = self.box_writes.lock().await;
         let a = self.writable_agent(&p.terminal_id).await?;
-        self.input_safeguards(&a, false).await?;
+        self.input_safeguards(&a).await?;
         authorized(auth)?;
         self.runtime
             .pane_send_text(&a.pane_id, p.text.as_str())
@@ -3204,6 +3192,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::herdr_core::tests as core_tests;
+    use protocol::Key;
 
     const NAME: &str = "collie-0000aaaa";
     const DIALOG: &str = "\
