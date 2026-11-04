@@ -157,7 +157,7 @@ private struct CostsDetail: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.semibold).monospacedDigit())
-                Text("Estimated at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
+                Text("\(costs.scanning ? "Partial estimate" : "Estimated") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -179,7 +179,7 @@ private struct CostsDetail: View {
                 .chartYAxis {
                     AxisMarks { value in
                         AxisGridLine()
-                        AxisValueLabel { value.as(Double.self).map { Text(UsageCostsCard.dollars($0)) } }
+                        AxisValueLabel { value.as(Double.self).map { Text($0.formatted(.currency(code: "USD").precision(.fractionLength($0 == $0.rounded() ? 0 : 2)))) } }
                     }
                 }
                 .frame(height: 120)
@@ -220,6 +220,7 @@ private struct TokenFigure: View {
             Text(UsageCostsCard.tokens(value)).font(.subheadline.monospacedDigit())
             Text(title).font(.caption).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 }
