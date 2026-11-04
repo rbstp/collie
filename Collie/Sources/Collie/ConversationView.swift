@@ -117,6 +117,7 @@ struct ConversationView: View {
     @State private var submitted = ""
     @State private var visibleID: String?
     @State private var atBottom = true
+    @State private var viewport: CGFloat = 0
     @State private var selectedMatch: String?
     @FocusState private var searchFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -234,10 +235,13 @@ struct ConversationView: View {
                         ForEach(model.rows) { row in
                             ConversationRowView(row: row, query: submitted).id(row.id)
                         }
-                        Color.clear.frame(height: 1).id("bottom")
                     }
                     .scrollTargetLayout()
                     .padding()
+                    // Scrolled to a marker after the last row, a conversation shorter than the view sat low on the screen under
+                    // an empty band; at least the view's height, with the marker at its end, it starts under the header.
+                    .frame(minHeight: viewport, alignment: .top)
+                    .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id("bottom") }
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .scrollPosition(id: $visibleID, anchor: .top)
@@ -245,6 +249,7 @@ struct ConversationView: View {
                 .onScrollGeometryChange(for: ScrollEdge.self) { geo in
                     ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.contentInsets.top + geo.containerSize.height >= geo.contentSize.height - 60)
                 } action: { old, new in
+                    viewport = new.size.height
                     // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
                     // Not old.atBottom: a resize comes in several steps, and a step measured before a deferred scroll lands reads as scrolled up.
                     if atBottom && old.size != new.size && submitted.isEmpty {
@@ -323,9 +328,9 @@ private struct ConversationWake: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "eye").foregroundStyle(.secondary)
+                    Image(systemName: "eye").foregroundStyle(.metadata)
                     Text(verbatim: line).lineLimit(1)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.secondary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.metadata)
                 }
                 .font(.footnote)
             }
@@ -354,11 +359,12 @@ struct ConversationActivity: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
+                    // Secondary gray measured 2.9:1 on this glass over a light chat.
+                    Image(systemName: "wrench.and.screwdriver").foregroundStyle(.metadata)
                     Text(verbatim: ConversationActivity.title(tools))
                         + Text(" · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
-                            .foregroundStyle(.secondary)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.secondary)
+                            .foregroundStyle(.metadata)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.metadata)
                 }
                 .font(.footnote)
             }
@@ -533,6 +539,15 @@ struct ConversationMarkdown: View {
         return result
     }
 
+    /// Monospaced at body size, and even at callout, outsized the prose around it; subheadline matches code blocks.
+    static func inlineCode(_ text: AttributedString) -> AttributedString {
+        var result = text
+        for run in text.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            result[run.range].font = .system(.subheadline, design: .monospaced)
+        }
+        return result
+    }
+
     static func blocks(_ text: String) -> [(code: Bool, text: String)] {
         var result: [(Bool, String)] = []
         var code = false
@@ -556,7 +571,8 @@ struct ConversationMarkdown: View {
         let quote = trimmed.hasPrefix("> ")
         let bullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
-        let rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
+        var rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
+        if !heading { rendered = Self.inlineCode(rendered) }
         return Text(Self.highlighted(FileLinks.linked(rendered), query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)

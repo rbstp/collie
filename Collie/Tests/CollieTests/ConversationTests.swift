@@ -312,3 +312,11 @@ private func step(_ id: String, role: String = "assistant", tool: String? = nil,
     #expect(ConversationActivity.title([call("Update"), call("Bash")]) == "Update, Bash")
     #expect(ConversationActivity.title([call("Update"), call("Bash"), call("Read")]) == "Update and 2 more")
 }
+
+@Test func inlineCodeIsAStepSmallerThanTheProseAroundIt() throws {
+    let text = try AttributedString(markdown: "run `cargo test` now", options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+    let styled = ConversationMarkdown.inlineCode(text)
+    let fonts = styled.runs.map { (String(styled[$0.range].characters), $0.font) }
+    #expect(fonts.count == 3)
+    #expect(fonts.allSatisfy { $0.1 == ($0.0 == "cargo test" ? .system(.subheadline, design: .monospaced) : nil) })
+}

@@ -148,7 +148,10 @@ struct AgentScreen: View {
             if !typingInLandscape || !items.isEmpty || approvals?.notice != nil {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
-                        AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+                        AgentHeader(
+                            model: model, title: title, approving: !items.isEmpty, machineLabel: showsMachine ? machineLabel : nil,
+                            showingChat: $showingChat
+                        )
                         if let subagents = model.agent?.subagents, !subagents.isEmpty {
                             SubagentList(subagents: subagents)
                                 .padding(.horizontal)
@@ -218,7 +221,15 @@ struct AgentScreen: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar(typingInLandscape ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .principal) { SessionTitle(title: title) }
+            ToolbarItem(placement: .principal) {
+                // At accessibility sizes the title heads the session header instead, where it can outgrow the bar, unless
+                // approval cards show: there its lines left the command and the reason no room above the decisions.
+                if typeSize.isAccessibilitySize && approvalItems.isEmpty {
+                    Color.clear.frame(width: 1, height: 1)
+                } else {
+                    SessionTitle(title: title)
+                }
+            }
                 .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .primaryAction) {
                 if showingChat && !model.isTerminal {
@@ -425,12 +436,17 @@ private struct CloseDialogs: ViewModifier {
 
 private struct AgentHeader: View {
     let model: AgentModel
+    let title: String
+    let approving: Bool
     let machineLabel: String?
     @Binding var showingChat: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(spacing: 6) {
+            if typeSize.isAccessibilitySize && !approving {
+                SessionTitle(title: title, inHeader: true).frame(maxWidth: .infinity, alignment: .leading)
+            }
             // One row, like the navigation bar it sits under; at accessibility sizes it pushed the screen past both
             // edges, so the state and its time take a row of their own above the rest.
             let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
@@ -512,6 +528,8 @@ private struct AgentHeader: View {
 
 private struct SessionBarGlass: View {
     @Environment(\.colorScheme) private var colorScheme
+    // Grows with the text: a fixed 8 points cut large text running under the edge in half, blurred above and sharp below.
+    @ScaledMetric private var feather: CGFloat = 8
 
     var body: some View {
         // The glass rim along the bottom edge drew a hairline seam over the content: it lies past the mask,
@@ -519,11 +537,11 @@ private struct SessionBarGlass: View {
         // Light glass over a white chat is nearly white itself: a faint gray tint gives the band a visible edge.
         Color.clear.glassEffect(.regular, in: .rect)
             .overlay(colorScheme == .light ? Color.black.opacity(0.04) : .clear)
-            .padding(.bottom, -8)
+            .padding(.bottom, -feather)
             .mask {
                 VStack(spacing: 0) {
                     Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 8)
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: feather)
                 }
             }
     }
@@ -591,15 +609,20 @@ extension SubagentSummary {
 }
 
 /// The inline title on up to two lines, cut after the last character that fits rather than ending in an ellipsis.
+/// In the session header, at accessibility sizes, it leads and grows with the text past what the bar holds, at title 3
+/// size: subheadline and headline came out about as large as the status row's caption there.
 struct SessionTitle: UIViewRepresentable {
     let title: String
+    var inHeader = false
 
     func makeUIView(context: Context) -> UILabel {
         let label = UILabel()
         label.numberOfLines = 2
         label.lineBreakMode = .byWordWrapping
-        label.textAlignment = .center
-        label.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 15, weight: .bold), maximumPointSize: 19)
+        label.textAlignment = inHeader ? .natural : .center
+        label.font = inHeader
+            ? UIFontMetrics(forTextStyle: .title3).scaledFont(for: .systemFont(ofSize: 20, weight: .bold))
+            : UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 15, weight: .bold), maximumPointSize: 19)
         label.adjustsFontForContentSizeCategory = true
         label.accessibilityTraits = .header
         return label

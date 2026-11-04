@@ -352,7 +352,7 @@ struct NewTaskSheet: View {
                         if model.phase == .starting || model.phase == .waitingForAgent {
                             ProgressView()
                         } else {
-                            Text("Start")
+                            Text("Start").onAccentFill()
                         }
                     }
                     .buttonStyle(.glassProminent)

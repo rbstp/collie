@@ -104,16 +104,22 @@ struct AccentSwitch: ToggleStyle {
 }
 
 extension View {
-    /// None fills prominent buttons white in dark mode, where their white label would vanish.
+    /// A light accent fill (None and Dark Gold in dark mode, orange and green) takes a black label, where white falls under 3:1.
     func onAccentFill() -> some View { modifier(OnAccentFill()) }
 }
 
 private struct OnAccentFill: ViewModifier {
-    @Environment(\.neutralAccent) private var neutral
+    @Environment(\.appAccent) private var accent
+    @Environment(\.self) private var environment
 
     func body(content: Content) -> some View {
-        if neutral { content.foregroundStyle(Color(uiColor: .systemBackground)) } else { content }
+        if accent.resolve(in: environment).takesDarkLabel { content.foregroundStyle(.black) } else { content }
     }
+}
+
+extension Color.Resolved {
+    // White keeps 3:1 up to a relative luminance of 0.3; blue and red stay under it in both appearances.
+    var takesDarkLabel: Bool { 0.2126 * linearRed + 0.7152 * linearGreen + 0.0722 * linearBlue > 0.3 }
 }
 
 enum SessionView: String, Codable, CaseIterable {
