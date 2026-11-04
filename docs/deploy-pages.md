@@ -32,7 +32,7 @@ python3 -m http.server -d /tmp/collie-site 8080    # http://127.0.0.1:8080/
 
 ## Theme
 
-The palettes follow the app's Dark Gold accent (`AppAccent.gold` in `Collie/Sources/Collie/DevicePrefs.swift`), `#805C14` in light mode and `#C79E40` in dark mode, for links, the active sidebar item, callout edges and titles, and focus rings. mdBook's Light and Rust themes use the light palette, and Coal, Navy and Ayu the dark one; the theme menu offers only Auto (follows the system), Light and Coal.
+The palettes follow the app's Dark Gold accent (`AppAccent.gold` in `Collie/Sources/Shared/AgentActivity.swift`), `#805C14` in light mode and `#C79E40` in dark mode, for links, the active sidebar item, callout edges and titles, and focus rings. mdBook's Light and Rust themes use the light palette, and Coal, Navy and Ayu the dark one; the theme menu offers only Auto (follows the system), Light and Coal.
 
 Every text color passes WCAG AA (4.5:1) on its backgrounds. Recompute these ratios when a color in `collie.css` changes.
 

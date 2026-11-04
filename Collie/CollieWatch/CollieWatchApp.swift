@@ -336,9 +336,9 @@ extension WatchAgent.Status {
         }
     }
 
-    fileprivate var color: Color {
+    fileprivate func color(accent: Color.Resolved?) -> Color {
         switch self {
-        case .working: .blue
+        case .working: accent.map(Color.init) ?? .blue
         case .blocked: .red
         case .done: .green
         case .idle: .gray
@@ -397,8 +397,8 @@ private struct WatchHome: View {
                         }
                     }
                 }
-                AgentSection(title: "Working", agents: state.agents.filter { !$0.done })
-                AgentSection(title: "Done", agents: state.agents.filter(\.done))
+                AgentSection(title: "Working", agents: state.agents.filter { !$0.done }, accent: state.accent)
+                AgentSection(title: "Done", agents: state.agents.filter(\.done), accent: state.accent)
             }
             .navigationTitle("collie")
         } else if model.refreshing {
@@ -431,13 +431,14 @@ private struct OpenedApproval: View {
 private struct AgentSection: View {
     let title: String
     let agents: [WatchAgent]
+    let accent: Color.Resolved?
 
     var body: some View {
         if !agents.isEmpty {
             Section(title) {
                 ForEach(agents) { agent in
                     HStack(alignment: .firstTextBaseline) {
-                        Image(systemName: agent.status.symbol).foregroundStyle(agent.status.color)
+                        Image(systemName: agent.status.symbol).foregroundStyle(agent.status.color(accent: accent))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: agent.title).lineLimit(2)
                             Text(verbatim: [agent.workspace, agent.machine].compactMap { $0 }.joined(separator: " · "))

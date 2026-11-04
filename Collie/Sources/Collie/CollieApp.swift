@@ -75,7 +75,7 @@ struct RootView: View {
                     app.tab = tab
                 }
             ) {
-                Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
+                Tab("Agents", systemImage: "sparkles.rectangle.stack", value: AppTab.agents) {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
                         opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected,

@@ -241,7 +241,7 @@ struct FlockScreen: View {
                             }
                             .opacity(entry.linkDown ? 0.5 : 1)
                             if !entry.terminals.isEmpty {
-                                Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                Text("Terminals").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                                 ForEach(entry.terminals, id: \.terminalId) { terminal in
                                     let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
                                     NavigationLink(value: route) {
@@ -388,15 +388,19 @@ struct MachineHeader: View {
                 MachineName(machine: entry.machine)
                 Spacer()
                 if approvalsCount > 0 {
-                    Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
-                        .foregroundStyle(.red)
+                    StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
                 }
                 if showsLink, let link = entry.flock?.link {
                     if link == .connecting {
                         ProgressView().controlSize(.mini)
                         Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+                    } else if link == .connected {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.green)
+                            .accessibilityLabel(link.label)
                     } else {
-                        StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+                        StatusPill(state: .idle, title: link.label)
                     }
                 }
             }
@@ -449,14 +453,10 @@ private struct AgentRow: View {
                 }
             }
             Spacer()
+            if let left = agent.contextLeft { ContextRing(left: left) }
             StatusAge(agent: agent, now: now)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            // A fixed slot, so times line up whether or not a row has a ring.
-            ZStack {
-                if let left = agent.contextLeft { ContextRing(left: left) }
-            }
-            .frame(width: ContextRing.size)
         }
     }
 }
@@ -518,6 +518,8 @@ private struct KindLabelStyle: LabelStyle {
 struct StatusPill: View {
     let state: AgentState
     var title: String? = nil
+    // Resolved where it is drawn: Color.accentColor keeps the app's light variant under a forced dark scheme.
+    @Environment(\.appAccent) private var appAccent
 
     var body: some View {
         Label {
@@ -529,12 +531,12 @@ struct StatusPill: View {
                     .frame(width: 14, height: 14)
                     .accessibilityHidden(true)
             } else {
-                Image(systemName: AgentActivityStatus(state).symbol)
+                Image(systemName: state == .done ? "checkmark.circle" : AgentActivityStatus(state).symbol)
             }
         }
             .labelStyle(KindLabelStyle())
             .font(.caption.weight(.semibold))
-            .foregroundStyle(state.color)
+            .foregroundStyle(state == .working ? appAccent : state.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .padding(2)
@@ -558,6 +560,7 @@ struct StatusAge: View {
 struct StatusIcon: View {
     let state: AgentState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var appAccent
 
     var body: some View {
         Group {
@@ -566,10 +569,10 @@ struct StatusIcon: View {
             case .working where reduceMotion:
                 Circle()
                     .trim(from: 0, to: 0.7)
-                    .stroke(state.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .padding(2)
-            case .working: ProgressView().controlSize(.small).tint(state.color)
-            case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
+            case .working: ProgressView().controlSize(.small).tint(appAccent)
+            case .done: Image(systemName: "checkmark.circle").font(.system(size: 16)).foregroundStyle(state.color)
             case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
             case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
             case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
@@ -583,25 +586,27 @@ struct StatusIcon: View {
 }
 
 struct ContextRing: View {
-    static let size: CGFloat = 14
     let left: UInt8
 
     var body: some View {
-        let tone = Self.tone(left)
-        ZStack {
-            Circle().stroke(tone.opacity(0.2), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: Double(min(left, 100)) / 100)
-                .stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-        }
-        .padding(1)
-        .frame(width: Self.size, height: Self.size)
-        .accessibilityElement()
-        .accessibilityLabel("Context \(left)% left")
+        let left = min(left, 100)
+        Label("\(left)%", systemImage: "memorychip")
+            .labelStyle(KindLabelStyle())
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(left <= 20 ? Self.tone(left) : .secondary)
+            .fixedSize()
+            .accessibilityElement()
+            .accessibilityLabel("Context \(left)% left")
     }
 
-    static func tone(_ left: UInt8) -> Color { WatchUsage.usedColor(100 - min(left, 100)) }
+    static func tone(_ left: UInt8) -> Color {
+        switch 100 - Int(min(left, 100)) {
+        case ..<60: .green
+        case ..<80: .yellow
+        case ..<90: .orange
+        default: .red
+        }
+    }
 }
 
 extension AgentState {

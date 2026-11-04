@@ -240,13 +240,14 @@ enum InboxFilter: CaseIterable {
         case .all: true
         case .needsAttention:
             item.agent.status == .blocked || (item.agent.status == .done && !seen.isSeen(item.agent, route: item.route))
-        case .working: InboxSection.of(item.agent, now: now) == .working
+        case .working: [.needsYou, .working].contains(InboxSection.of(item.agent, now: now))
         case .inactive: InboxSection.of(item.agent, now: now) == .inactive
         }
     }
 }
 
 enum InboxSection: CaseIterable {
+    case needsYou
     case working
     case done
     case inactive
@@ -255,6 +256,7 @@ enum InboxSection: CaseIterable {
 
     var title: String {
         switch self {
+        case .needsYou: "Needs you"
         case .working: "Working"
         case .done: "Done"
         case .inactive: "Inactive"
@@ -263,7 +265,8 @@ enum InboxSection: CaseIterable {
 
     static func of(_ agent: AgentSummary, now: Date) -> InboxSection {
         switch agent.status {
-        case .working, .blocked: return .working
+        case .blocked: return .needsYou
+        case .working: return .working
         case .idle, .unknown: return .inactive
         case .done:
             let age = now.timeIntervalSince1970 - TimeInterval(agent.inboxActivityMs) / 1000
@@ -271,12 +274,11 @@ enum InboxSection: CaseIterable {
         }
     }
 
-    /// Blocked agents first, then the most recent activity first.
+    /// The most recent activity first.
     static func grouped(_ items: [InboxItem], now: Date) -> [InboxSection: [InboxItem]] {
         Dictionary(grouping: items) { of($0.agent, now: now) }.mapValues { rows in
             rows.sorted {
-                ($0.agent.status == .blocked ? 0 : 1, UInt64.max - $0.agent.inboxActivityMs, $0.route.terminalId)
-                    < ($1.agent.status == .blocked ? 0 : 1, UInt64.max - $1.agent.inboxActivityMs, $1.route.terminalId)
+                (UInt64.max - $0.agent.inboxActivityMs, $0.route.terminalId) < (UInt64.max - $1.agent.inboxActivityMs, $1.route.terminalId)
             }
         }
     }
@@ -302,7 +304,13 @@ private struct InboxRow: View {
                             .foregroundStyle(.tint)
                             .accessibilityLabel("Followed")
                     }
-                    Text(agent.lastLine ?? agent.displayTitle).lineLimit(2)
+                    Text(agent.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
+                }
+                if let lastLine = agent.lastLine {
+                    Text(lastLine)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 if let line = agent.lastPromptOrigin?.wakeLine {
                     Text("\(Image(systemName: "eye")) \(line)")
