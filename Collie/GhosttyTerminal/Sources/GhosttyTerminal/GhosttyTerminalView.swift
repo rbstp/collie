@@ -5,9 +5,7 @@ import UIKit
 /// Scrolls over the snapshot and draws only the visible cells, so a wide pane never needs a
 /// backing store larger than the screen.
 public final class GhosttyTerminalUIView: UIScrollView {
-    static let background = TerminalRGB(0x28, 0x2C, 0x34)
-    public static let backgroundColor = UIColor(background)
-    static let foreground = TerminalRGB(0xFF, 0xFF, 0xFF)
+    public static let backgroundColor = UIColor { UIColor(TerminalTheme($0).background) }
 
     public var fontSize: CGFloat {
         didSet {
@@ -91,7 +89,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var filePath: ((String) -> String?)?
     public var onOpenFile: ((String) -> Void)?
 
-    private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
+    private let screen = TerminalScreen(theme: .dark)
+    private var theme = TerminalTheme.dark
     private let canvas = TerminalCanvas()
     private var snapshot: String?
     private var renderDeferred = false
@@ -132,11 +131,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public init(fontSize: CGFloat) {
         self.fontSize = fontSize
         super.init(frame: .zero)
-        backgroundColor = UIColor(Self.background)
-        indicatorStyle = .white
+        backgroundColor = Self.backgroundColor
         alwaysBounceVertical = true
         canvas.metrics = CellMetrics(size: fontSize)
-        canvas.backgroundColor = UIColor(Self.background)
+        canvas.backgroundColor = Self.backgroundColor
         canvas.isUserInteractionEnabled = false
         addSubview(canvas)
 
@@ -206,6 +204,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         keyInput.isAccessibilityElement = true
         keyInput.accessibilityLabel = "Terminal input"
         addSubview(keyInput)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in self.render() }
     }
 
     required init?(coder: NSCoder) {
@@ -233,6 +232,11 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func render() {
         guard let snapshot, let screen else { return }
         renderDeferred = false
+        if theme != TerminalTheme(traitCollection) {
+            theme = TerminalTheme(traitCollection)
+            screen.setColors(theme)
+            canvas.theme = theme
+        }
         let columns = wrapColumns
         // Wait for a width: rendering at one column would flash a tall, narrow frame.
         if wraps && columns == nil { return }
@@ -775,6 +779,7 @@ private final class TerminalCanvas: UIView {
         }
     }
     var selection: TerminalSelection?
+    var theme = TerminalTheme.dark
     private var frameData: TerminalFrame?
     /// Built on first draw: most runs of a long history are never on screen.
     private var lines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
@@ -855,7 +860,7 @@ private final class TerminalCanvas: UIView {
         var rowCodepoints: [Int: [UInt32]] = [:]
         for index in visible {
             let run = frameData.runs[index]
-            let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
+            let color = UIColor(theme.textColor(run.style, on: run.style.background ?? frameData.background)).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
             if let (line, utf16) = ctLine(run) {
                 ctx.saveGState()
@@ -1065,9 +1070,11 @@ private final class KeyInput: UIView, UIKeyInput {
         get { .no }
         set {}
     }
-    var keyboardAppearance: UIKeyboardAppearance {
-        get { .dark }
-        set {}
+}
+
+extension TerminalTheme {
+    init(_ traits: UITraitCollection) {
+        self = traits.userInterfaceStyle == .light ? .light : .dark
     }
 }
 

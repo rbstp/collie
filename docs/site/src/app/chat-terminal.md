@@ -47,6 +47,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - The [key strip](keys.md) stays above the keyboard for Escape, Control and, with its joystick, the arrows.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 
+- Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.
 - Long-press to select text, then copy it, quote it into the prompt or open a link. In an agent session, **Open** previews a selected file path.
 - Terminal slows to one update a second in Low Data Mode.

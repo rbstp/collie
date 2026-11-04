@@ -64,7 +64,13 @@ final class TerminalScreen {
     private var columns = TerminalScreen.maxColumns
     private var rows: UInt16 = 1
 
-    init?(background: TerminalRGB, foreground: TerminalRGB) {
+    private var builtinPalette = [GhosttyColorRgb](repeating: GhosttyColorRgb(), count: 256)
+
+    convenience init?(background: TerminalRGB, foreground: TerminalRGB) {
+        self.init(theme: TerminalTheme(background: background, foreground: foreground))
+    }
+
+    init?(theme: TerminalTheme) {
         var terminal: OpaquePointer?
         var renderState: OpaquePointer?
         var rowIterator: OpaquePointer?
@@ -86,12 +92,22 @@ final class TerminalScreen {
         self.rowIterator = rowIterator
         self.rowCells = rowCells
 
-        var bg = GhosttyColorRgb(r: background.r, g: background.g, b: background.b)
-        var fg = GhosttyColorRgb(r: foreground.r, g: foreground.g, b: foreground.b)
         var noScrollback = 0
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &noScrollback)
+        ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, &builtinPalette)
+        setColors(theme)
+    }
+
+    func setColors(_ theme: TerminalTheme) {
+        var bg = GhosttyColorRgb(r: theme.background.r, g: theme.background.g, b: theme.background.b)
+        var fg = GhosttyColorRgb(r: theme.foreground.r, g: theme.foreground.g, b: theme.foreground.b)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg)
         ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg)
-        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &noScrollback)
+        var palette = builtinPalette
+        for (index, color) in (theme.ansi ?? []).enumerated() {
+            palette[index] = GhosttyColorRgb(r: color.r, g: color.g, b: color.b)
+        }
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, &palette)
     }
 
     deinit {
