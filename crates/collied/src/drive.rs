@@ -13,9 +13,9 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
     FolderName, Key, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
-    SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions, TaskSessionInfo,
-    TaskSessionsParams, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams, TerminalId,
-    TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
+    SendTextParams, SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions,
+    TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams,
+    TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::io::AsyncReadExt;
@@ -789,6 +789,20 @@ impl Driver {
         Ok(Response::Ok)
     }
 
+    /// Keystrokes typed as is, without Enter: they never submit, so a slash command in the box
+    /// does not refuse them.
+    pub async fn send_text(&self, p: SendTextParams, auth: &Authorized) -> Reply {
+        let _box = self.box_writes.lock().await;
+        let a = self.writable_agent(&p.terminal_id).await?;
+        self.input_safeguards(&a, false).await?;
+        authorized(auth)?;
+        self.runtime
+            .pane_send_text(&a.pane_id, p.text.as_str())
+            .await
+            .map_err(herdr_fail)?;
+        Ok(Response::Ok)
+    }
+
     /// One line, then Enter, into a pane that has no agent at this moment. herdr sends the
     /// text and the key in one ordered write, as `herdr pane run` does.
     pub async fn terminal_run(&self, p: TerminalRunParams, auth: &Authorized) -> Reply {
@@ -807,6 +821,16 @@ impl Driver {
         granted(auth)?;
         self.runtime
             .pane_send_keys(&pane.pane_id, &keys)
+            .await
+            .map_err(quiet_fail)?;
+        Ok(Response::Ok)
+    }
+
+    pub async fn terminal_send_text(&self, p: SendTextParams, auth: &Authorized) -> Reply {
+        let pane = self.shell_pane(&p.terminal_id).await?;
+        granted(auth)?;
+        self.runtime
+            .pane_send_text(&pane.pane_id, p.text.as_str())
             .await
             .map_err(quiet_fail)?;
         Ok(Response::Ok)

@@ -171,7 +171,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=30).contains(&self.version) {
+        if !(26..=31).contains(&self.version) {
             return false;
         }
         match request {
@@ -181,6 +181,8 @@ impl NegotiatedProtocol {
             | Request::TerminalRun(_)
             | Request::TerminalSendKeys(_)
             | Request::TerminalLock(_) => self.terminal_grants,
+            Request::TerminalSendText(_) => self.terminal_grants && self.version >= 31,
+            Request::AgentSendText(_) => self.version >= 31,
             Request::PushRegister(p) => {
                 self.encrypted_display && (p.relay_grant.is_none() || self.relay_grants)
             }
@@ -245,7 +247,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=30).contains(&self.version) {
+        if !(26..=31).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -360,7 +362,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(30)
+                offer["protocol_version"].as_u64().unwrap().min(31)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -383,7 +385,15 @@ mod tests {
     fn baseline_apps_validate_retained_daemon_results_and_selected_revisions() {
         let mut result: HelloResult =
             serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
-        for (maximum, selected) in [(26, 26), (27, 27), (28, 28), (29, 29), (30, 30), (31, 30)] {
+        for (maximum, selected) in [
+            (26, 26),
+            (27, 27),
+            (28, 28),
+            (29, 29),
+            (30, 30),
+            (31, 31),
+            (32, 31),
+        ] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
             assert_eq!(
@@ -515,7 +525,7 @@ mod tests {
         assert!(previous.server_frame(&reply).is_err());
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
-        assert_eq!(current.version(), 30);
+        assert_eq!(current.version(), 31);
         let encoded = current
             .client_frame(ClientFrame { id: 1, request })
             .unwrap();
@@ -580,6 +590,34 @@ mod tests {
             serde_json::from_str::<Value>(&encoded).unwrap(),
             json!({"id":1,"method":"file.open","params":{"terminal_id":"term_1","path":"src/main.rs"}})
         );
+    }
+
+    #[test]
+    fn typed_text_requires_revision_31() {
+        let params = crate::SendTextParams {
+            op_id: crate::OpId::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+            terminal_id: crate::TerminalId::new("term_1").unwrap(),
+            text: crate::TypedText::new("/mod").unwrap(),
+        };
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 30;
+        result.protocol_version = 30;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        for request in [
+            Request::AgentSendText(params.clone()),
+            Request::TerminalSendText(params.clone()),
+        ] {
+            assert!(!previous.allows_request(&request));
+            assert!(current.allows_request(&request));
+        }
+        let mut no_grants = fixture()["current_offer"].clone();
+        no_grants["capabilities"] = json!([]);
+        let no_grants = NegotiatedProtocol::negotiate(&offer(no_grants)).unwrap();
+        assert!(no_grants.allows_request(&Request::AgentSendText(params.clone())));
+        assert!(!no_grants.allows_request(&Request::TerminalSendText(params)));
     }
 
     #[test]

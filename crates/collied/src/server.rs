@@ -1641,6 +1641,14 @@ impl Session<'_> {
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))
             }
+            Request::AgentSendText(p) => {
+                let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (d.send_text(p, &auth).await, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
             Request::AgentFocus(p) => (drive.focus(&p.terminal_id, &auth).await, None),
             Request::AgentScrollBottom(p) => {
                 (drive.scroll_bottom(&p.terminal_id, &auth).await, None)
@@ -1907,6 +1915,20 @@ impl Session<'_> {
                 );
                 let op = self.audited(method, target.clone(), async move {
                     let reply = d.terminal_send_keys(p, &auth).await;
+                    state.drop_if_agent(&t, &reply);
+                    (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::TerminalSendText(p) => {
+                let (op_id, d, state) = (p.op_id.clone(), drive.clone(), self.state.clone());
+                let (t, auth) = (
+                    p.terminal_id.clone(),
+                    self.terminal_authorizer(&p.terminal_id),
+                );
+                let op = self.audited(method, target.clone(), async move {
+                    let reply = d.terminal_send_text(p, &auth).await;
                     state.drop_if_agent(&t, &reply);
                     (reply, None)
                 });
@@ -2494,6 +2516,7 @@ fn audit_target(request: &Request) -> Option<String> {
         Request::AgentDiff(p) => p.terminal_id.as_str(),
         Request::AgentSendKeys(p) => p.terminal_id.as_str(),
         Request::AgentTypeText(p) => p.terminal_id.as_str(),
+        Request::AgentSendText(p) | Request::TerminalSendText(p) => p.terminal_id.as_str(),
         Request::AgentFocus(p) => p.terminal_id.as_str(),
         Request::AgentScrollBottom(p) => p.terminal_id.as_str(),
         Request::AgentAnswerNotice(p) => {

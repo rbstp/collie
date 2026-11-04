@@ -20,7 +20,8 @@ use common::*;
 use protocol::{
     AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
     ApprovalOutcome, Decision, ErrorCode, Event, Key, OpId, PaneCloseParams, PromptText,
-    ReadParams, ReadSource, Response, TerminalId, WorkspaceCloseParams, WorkspaceId,
+    ReadParams, ReadSource, Response, SendTextParams, TerminalId, TypedText, WorkspaceCloseParams,
+    WorkspaceId,
 };
 use tokio::sync::{broadcast, watch};
 
@@ -1163,6 +1164,14 @@ async fn input_scenario(core: &CoreSession) {
     dumped(&expected).await;
     rt.pane_send_text(&d.pane_id, "/x").await.unwrap();
     expected.push_str("2f78");
+    dumped(&expected).await;
+    let typed = SendTextParams {
+        op_id: op('X'),
+        terminal_id: TerminalId::new(d.terminal_id.clone()).unwrap(),
+        text: TypedText::new("a b".to_owned()).unwrap(),
+    };
+    assert_eq!(drive.send_text(typed, &yes).await, Ok(Response::Ok));
+    expected.push_str("612062");
     dumped(&expected).await;
     assert_eq!(size(core, &dump), (70, 20));
     drop(desktop);

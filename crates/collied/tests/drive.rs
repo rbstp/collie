@@ -10,9 +10,9 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
     Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams, TaskSessionsParams,
-    TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId,
+    Response, SendTextParams, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams,
+    TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
+    TypedText, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -1860,6 +1860,36 @@ async fn enter_never_runs_a_slash_command_in_the_box() {
 }
 
 #[tokio::test]
+async fn typed_text_reaches_an_agent_box_without_enter() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    assert_eq!(
+        drive.send_text(sent(CLAUDE, "el"), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        vec![json!({"pane_id": "w6:p1", "text": "el"})]
+    );
+    assert_eq!(
+        code(drive.send_text(sent(CLAUDE, "x"), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(
+        code(drive.send_text(sent(SHELL, "x"), &yes()).await),
+        ErrorCode::NotFound
+    );
+    herdr.with(|h| h.text = drawn(SCROLLED));
+    assert_eq!(
+        code(drive.send_text(sent(CLAUDE, "x"), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
+}
+
+#[tokio::test]
 async fn idle_claude_scroll_safeguards_do_not_restrict_approval_keys() {
     let herdr = Mock::start();
     let (_d, base) = root();
@@ -3607,6 +3637,16 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         herdr.params("pane.send_keys"),
         vec![json!({"pane_id": "w7:p2", "keys": ["ctrl+c", "up", "enter"]})]
     );
+    assert_eq!(
+        drive
+            .terminal_send_text(sent(SHELL, "ls -la"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        vec![json!({"pane_id": "w7:p2", "text": "ls -la"})]
+    );
 
     let refused = |reply: Reply, want: ErrorCode, message: Option<&str>| {
         let (got, text) = reply.expect_err("refused");
@@ -3624,6 +3664,16 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         drive.terminal_send_keys(keys.clone(), &no()).await,
         ErrorCode::TerminalLocked,
         None,
+    );
+    refused(
+        drive.terminal_send_text(sent(SHELL, "x"), &no()).await,
+        ErrorCode::TerminalLocked,
+        None,
+    );
+    refused(
+        drive.terminal_send_text(sent(CLAUDE, "y"), &yes()).await,
+        ErrorCode::NotFound,
+        Some(collied::drive::HOSTS_AGENT),
     );
     refused(
         drive.terminal_run(run(CLAUDE, "y"), &yes()).await,
@@ -3646,7 +3696,10 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         ErrorCode::NotFound,
         Some(collied::drive::HOSTS_AGENT),
     );
-    assert_eq!(herdr.mutations(), ["pane.send_input", "pane.send_keys"]);
+    assert_eq!(
+        herdr.mutations(),
+        ["pane.send_input", "pane.send_keys", "pane.send_text"]
+    );
 
     herdr.fail_next("pane.send_input", &["pane_input_failed"]);
     herdr.with(|h| {
@@ -4124,6 +4177,14 @@ fn block(herdr: &Mock, text: &str) {
         h.text = text.into();
         h.rule = Some("live_blocked_form".into());
     });
+}
+
+fn sent(terminal: &str, text: &str) -> SendTextParams {
+    SendTextParams {
+        op_id: op('S'),
+        terminal_id: tid(terminal),
+        text: TypedText::new(text).unwrap(),
+    }
 }
 
 fn typed(terminal: &str, text: &str) -> AgentTypeTextParams {

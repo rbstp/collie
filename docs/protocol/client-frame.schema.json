@@ -908,6 +908,27 @@
       "pattern": "^v1\\.[A-Za-z0-9_-]{1,32}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
       "type": "string"
     },
+    "SendTextParams": {
+      "additionalProperties": false,
+      "description": "Keystrokes for `agent.send_text` and `terminal.send_text`, typed as is without Enter.",
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/TerminalId"
+        },
+        "text": {
+          "$ref": "#/$defs/TypedText"
+        }
+      },
+      "required": [
+        "op_id",
+        "terminal_id",
+        "text"
+      ],
+      "type": "object"
+    },
     "SessionId": {
       "pattern": "^[0-9a-f][0-9a-f-]{35}$",
       "type": "string"
@@ -1214,6 +1235,11 @@
         "terminal_id"
       ],
       "type": "object"
+    },
+    "TypedText": {
+      "maxLength": 32768,
+      "minLength": 1,
+      "type": "string"
     },
     "UploadId": {
       "pattern": "^[0-9a-f]{32}$",
@@ -1559,6 +1585,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentTypeTextParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.send_text",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/SendTextParams"
         }
       },
       "required": [
@@ -2007,6 +2049,22 @@
         },
         "params": {
           "$ref": "#/$defs/AgentSendKeysParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "terminal.send_text",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/SendTextParams"
         }
       },
       "required": [
