@@ -175,6 +175,7 @@ extension AgentGrid {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
+            .frame(maxHeight: .infinity)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
             .contentShape(Rectangle())
         }
@@ -276,6 +277,8 @@ struct AgentCard: View {
             .padding(.horizontal, 14)
             .padding(.top, 8)
             .padding(.bottom, 10)
+            // Cards in a row share its height, with their previews along the bottom.
+            Spacer(minLength: 0)
             preview
                 .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
                     ? subagentPreviewHeight * (starred ? 2 : 1)
@@ -308,6 +311,7 @@ struct AgentCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .allowsHitTesting(false)
         }
+        .frame(maxHeight: .infinity)
         .padding(6)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
         .contentShape(Rectangle())
@@ -326,7 +330,7 @@ private struct ChatPreview: View {
     let lines: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let content = VStack(alignment: .leading, spacing: 4) {
             ForEach(messages, id: \.id) { message in
                 let user = message.role == "user"
                 Group {
@@ -350,9 +354,13 @@ private struct ChatPreview: View {
         .font(.caption2)
         .fixedSize(horizontal: false, vertical: true)
         .padding(6)
-        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
-        // Fades out the line cut at the top.
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
+        ViewThatFits(in: .vertical) {
+            content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            content
+                .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+                // Fades out the line cut at the top.
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
+        }
         .background(.fill.tertiary)
     }
 }

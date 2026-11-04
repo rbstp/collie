@@ -44,7 +44,18 @@ struct FlockScreen: View {
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
             .ignoresSafeArea(.container)
-            .scrollEdgeEffectHidden(true, for: .bottom)
+            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            // UIKit's top scroll edge effect follows the pager, not the pages' own scroll views.
+            .overlay(alignment: .top) {
+                GeometryReader { geometry in
+                    let background = Color(.systemGroupedBackground)
+                    LinearGradient(stops: [.init(color: background, location: 0.5), .init(color: background.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: geometry.safeAreaInsets.top)
+                        .offset(y: -geometry.safeAreaInsets.top)
+                }
+                .allowsHitTesting(false)
+            }
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
@@ -265,6 +276,9 @@ struct FlockScreen: View {
                                 reconnect(entry)
                             } label: {
                                 MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting, now: context.date)
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .textCase(nil)
                             }
                             .buttonStyle(.plain)
                         }
