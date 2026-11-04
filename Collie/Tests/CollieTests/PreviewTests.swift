@@ -476,6 +476,34 @@ private func capture(_ name: String) throws -> [String] {
     await run.value
 }
 
+@Test func aBlockedCardEndsAtTheFirstChoiceSoTheCommandShows() throws {
+    let claude = "⏺ I need to run cargo test.\r\n\r\n Bash command\r\n\r\n   cargo test -p collied\r\n\r\n Do you want to proceed?\r\n"
+        + " ❯ 1. Yes\r\n   2. No\r\n\r\n Esc to cancel\r\n"
+    #expect(PreviewModel.blockedCard(claude)
+        == "⏺ I need to run cargo test.\r\n Bash command\r\n   cargo test -p collied\r\n Do you want to proceed?\r\n ❯ 1. Yes")
+    func rows(_ name: String) throws -> [String] {
+        PreviewModel.blockedCard(try capture(name).joined(separator: "\r\n")).replacing(#/\u{1B}\[[0-9;]*m/#, with: "")
+            .components(separatedBy: "\r\n")
+    }
+    let codex = try rows("codex-0.160.1/approval")
+    #expect(codex.contains { $0.contains("$ curl -sI https://example.com") })
+    #expect(codex.last?.hasPrefix("› 1. Yes, proceed (y)") == true)
+    #expect(!codex.contains { $0.allSatisfy(\.isWhitespace) })
+    let copilot = try rows("copilot-1.0.93-1/permission")
+    #expect(copilot.contains { $0.contains("│ │ sleep 10 && ls") })
+    #expect(copilot.last?.hasPrefix("│ ❯ 1. Yes") == true)
+    // A numbered list in the output is not a dialog, so a prompt below it stays on the card.
+    let list = "1. Fix the build\r\n2. Commit\r\n" + Array(repeating: "more output", count: 9).joined(separator: "\r\n")
+    #expect(PreviewModel.blockedCard(list) == list)
+    #expect(PreviewModel.blockedCard("Allow this?\r\n") == "Allow this?\r\n")
+}
+
+@Test func aChatPreviewSpendsNoLineOnBlankLinesOrFences() {
+    #expect(ChatPreview.compact("All 18 approval tests pass:\n\n```\n18 tests run: 18 passed\n```\n\nI'll commit.")
+        == "All 18 approval tests pass:\n18 tests run: 18 passed\nI'll commit.")
+    #expect(ChatPreview.compact("```swift\nlet a = 1\n  \n```") == "let a = 1")
+}
+
 @MainActor
 @Test func layoutIsGridByDefaultAndRememberedOnThisDevice() throws {
     let dir = try makeTemporaryDirectory()

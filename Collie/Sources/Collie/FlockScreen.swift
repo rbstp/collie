@@ -478,7 +478,7 @@ private struct TerminalRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AgentKindLabel(kind: "terminal", iconOnly: true).frame(width: 20)
+            AgentKindLabel(kind: "terminal", iconOnly: true).frame(minWidth: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(terminal.displayTitle).lineLimit(1)
                 if let workspace = terminal.workspaceLabel {
@@ -499,21 +499,31 @@ private struct TerminalRow: View {
 struct AgentKindLabel: View {
     let kind: String
     var iconOnly = false
+    // The logos are bitmaps of a fixed size; alone beside text they grow with it, as a symbol would.
+    @ScaledMetric(relativeTo: .caption) private var scale: CGFloat = 1
 
     var body: some View {
-        let label = Group {
-            switch kind {
-            case "claude": Label("Claude", image: "Claude")
-            case "codex": Label("Codex", image: "Codex")
-            case "copilot": Label("Copilot", image: "Copilot")
-            case "terminal": Label("Terminal", image: "Ghostty")
-            default: Label(kind, systemImage: "terminal")
-            }
+        switch (logo, iconOnly) {
+        case let ((title, image)?, true):
+            let size = UIImage(named: image)?.size ?? .zero
+            Image(image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size.width * scale, height: size.height * scale)
+                .accessibilityLabel(title)
+        case let ((title, image)?, false): Label(title, image: image).labelStyle(KindLabelStyle())
+        case (nil, true): Label(kind, systemImage: "terminal").labelStyle(.iconOnly)
+        case (nil, false): Label(kind, systemImage: "terminal").labelStyle(KindLabelStyle())
         }
-        if iconOnly {
-            label.labelStyle(.iconOnly)
-        } else {
-            label.labelStyle(KindLabelStyle())
+    }
+
+    private var logo: (String, String)? {
+        switch kind {
+        case "claude": ("Claude", "Claude")
+        case "codex": ("Codex", "Codex")
+        case "copilot": ("Copilot", "Copilot")
+        case "terminal": ("Terminal", "Ghostty")
+        default: nil
         }
     }
 }
@@ -589,7 +599,12 @@ struct StatusIcon: View {
                     .trim(from: 0, to: 0.7)
                     .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .padding(2)
-            case .working: ProgressView().controlSize(.small).tint(appAccent)
+            // The ring keeps a steady silhouette, like Done's circle, while the spinner's spokes fade in turn.
+            case .working:
+                ZStack {
+                    Circle().stroke(appAccent, lineWidth: 1.5).padding(2.5)
+                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6)
+                }
             case .done: Image(systemName: "checkmark.circle").font(.system(size: 16)).foregroundStyle(state.color)
             case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
             case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
@@ -649,7 +664,11 @@ extension AgentState {
         switch self {
         case .working: .accentColor
         // System red is about 3.3:1 as small text on light glass, even its high-contrast variant 4.1:1; light mode gets a deeper red.
-        case .blocked: Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemRed : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1) })
+        // On dark glass it is about 3.2:1 and its high-contrast variant 3.8:1; dark mode gets a lighter red, 4.5:1 or more.
+        case .blocked:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
+            })
         default: AgentActivityStatus(self).color
         }
     }

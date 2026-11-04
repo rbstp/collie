@@ -233,12 +233,28 @@ private func entry(
         let c = color.resolve(in: light)
         return 1.05 / (0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) + 0.05)
     }
-    for (lefts, system) in [([20, 11] as [UInt8], Color.orange), ([10, 0], .red)] {
+    for (lefts, tone) in [([20, 11] as [UInt8], Color.orange), ([10, 0], AgentState.blocked.color)] {
         for left in lefts {
-            #expect(ContextRing.tone(left).resolve(in: dark) == system.resolve(in: dark))
+            #expect(ContextRing.tone(left).resolve(in: dark) == tone.resolve(in: dark))
             #expect(onWhite(ContextRing.tone(left)) >= 4.5)
         }
     }
     #expect(onWhite(.metadata) >= 4.5)
     #expect(onWhite(AgentState.blocked.color) >= 4.5)
+    // Dark glass under the approval buttons, about #3D3D3D.
+    let red = AgentState.blocked.color.resolve(in: dark)
+    #expect((0.2126 * Double(red.linearRed) + 0.7152 * Double(red.linearGreen) + 0.0722 * Double(red.linearBlue) + 0.05) / (0.047 + 0.05) >= 4.5)
+}
+
+@Test func theFilterRowEndsBetweenLabels() {
+    // Five segments with 14 pt of padding on each side of their labels, after a 16 pt inset.
+    let segments: [CGFloat] = [50, 100, 90, 66, 95]
+    #expect(InboxFilter.rowWidth(segments: segments, available: 500, atEnd: false) == 500)
+    // 378 falls inside the fifth label (336 to 403): the row ends where it starts.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: false) == 336)
+    // 330 falls in the padding between the fourth and fifth labels.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 330, atEnd: false) == 330)
+    // Scrolled to the end of 433 pt, a leading edge at 55 falls between the first two labels; one at 93 would cut the second (80 to 152), so the row starts after it: 433 - 152.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: true) == 378)
+    #expect(InboxFilter.rowWidth(segments: segments, available: 340, atEnd: true) == 281)
 }

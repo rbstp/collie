@@ -549,6 +549,9 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     private static let screenshotPreviews = [
         "term_2": """
+            ⏺ Search(pattern: "settle", path: "crates/collied")
+              ⎿  Found 4 files
+
             ⏺ Update(crates/collied/tests/approvals.rs)
               ⎿  Added 3 tests
 

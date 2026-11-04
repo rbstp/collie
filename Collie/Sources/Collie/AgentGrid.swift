@@ -284,7 +284,7 @@ struct AgentCard: View {
                             AgentKindLabel(kind: kind, iconOnly: true)
                         }
                     }
-                    .frame(width: 16)
+                    .frame(width: typeSize.isAccessibilitySize ? nil : 16)
                     HStack(spacing: 3) {
                         if followed {
                             Image(systemName: "pin.fill")
@@ -329,7 +329,7 @@ struct AgentCard: View {
 }
 
 /// Read-only, like `TerminalPreview`: it follows the bottom of the conversation.
-private struct ChatPreview: View {
+struct ChatPreview: View {
     let messages: ArraySlice<HistoryMessage>
     let lines: Int
 
@@ -341,14 +341,17 @@ private struct ChatPreview: View {
                     if let line = message.origin?.wakeLine {
                         Text("\(Image(systemName: "eye")) \(line)").lineLimit(1)
                     } else {
-                        Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.text))
+                        let text = Self.compact(message.text)
+                        Text((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text))
                             .lineLimit(user ? 1 : lines)
                     }
                 }
+                .foregroundStyle(user ? AnyShapeStyle(.metadata) : AnyShapeStyle(.primary))
                 .padding(user ? 6 : 0)
                 .background {
                     if user {
-                        RoundedRectangle(cornerRadius: 12).fill(.fill.tertiary)
+                        // The card's own fill, on which `.metadata` reads at 4.5:1 or more; on the preview's gray it did not.
+                        RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemGroupedBackground))
                     }
                 }
                 .padding(.leading, user ? 16 : 0)
@@ -366,6 +369,11 @@ private struct ChatPreview: View {
                 .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
         }
         .background(.fill.tertiary)
+    }
+
+    /// Blank lines and code fences would spend the preview's few lines on nothing.
+    nonisolated static func compact(_ text: String) -> String {
+        text.split(separator: "\n").filter { !$0.allSatisfy(\.isWhitespace) && !$0.contains(/^\s*```\S*\s*$/) }.joined(separator: "\n")
     }
 }
 

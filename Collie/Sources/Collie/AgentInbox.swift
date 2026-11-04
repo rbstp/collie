@@ -19,6 +19,11 @@ struct AgentInbox<Menu: View>: View {
     @State private var customWake = Date.now
     @State private var searching = false
     @FocusState private var searchFocused: Bool
+    @ScaledMetric(relativeTo: .subheadline) private var filterFontSize = 15
+    @State private var filterSpace: CGFloat = 0
+    @State private var filterAtEnd = false
+    @State private var filterClips = (leading: false, trailing: false)
+    @State private var filterPosition = ScrollPosition(edge: .leading)
 
     var body: some View {
         let items = InboxItem.items(in: entries)
@@ -56,19 +61,7 @@ struct AgentInbox<Menu: View>: View {
                             searching = false
                         }
                     } else {
-                        ScrollView(.horizontal) {
-                            GlassPicker(title: "Filter", selection: $filter,
-                                        options: InboxFilter.allCases.map { ($0.title, $0) })
-                                .padding(.horizontal)
-                        }
-                        .scrollIndicators(.hidden)
-                        // A segment cut at the edge fades out, so the filters read as scrollable.
-                        .mask {
-                            HStack(spacing: 0) {
-                                Color.black
-                                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 16)
-                            }
-                        }
+                        filterRow
                         searchButton("Search", systemImage: "magnifyingglass") { searching = true }
                     }
                 }
@@ -116,6 +109,49 @@ struct AgentInbox<Menu: View>: View {
         }
     }
 
+    private var filterRow: some View {
+        let segments = filterSegments
+        return ScrollView(.horizontal) {
+            GlassPicker(title: "Filter", selection: $filter, options: InboxFilter.allCases.map { ($0.title, $0) })
+                .padding(.horizontal, InboxFilter.rowInset)
+        }
+        .scrollIndicators(.hidden)
+        .scrollPosition($filterPosition)
+        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x > 1 } action: { filterClips.leading = $1 }
+        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.x + $0.containerSize.width < $0.contentSize.width - 1 } action: {
+            filterClips.trailing = $1
+        }
+        // Past an edge with more filters, the track fades out; the row ends between two labels, never across one.
+        .mask {
+            HStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: filterClips.leading ? 18 : 0)
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: filterClips.trailing ? 18 : 0)
+            }
+        }
+        .frame(width: InboxFilter.rowWidth(segments: segments, available: filterSpace, atEnd: filterAtEnd))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+            filterSpace = $0
+            revealFilter()
+        }
+        .onAppear(perform: revealFilter)
+    }
+
+    private var filterSegments: [CGFloat] {
+        let font = UIFont.systemFont(ofSize: filterFontSize, weight: .semibold)
+        return InboxFilter.allCases.map { GlassSegment.width($0.title, font: font) }
+    }
+
+    /// A filter the row would hide, such as one chosen before a search, shows by scrolling the row to its end.
+    private func revealFilter() {
+        guard filterSpace > 0, let index = InboxFilter.allCases.firstIndex(of: filter) else { return }
+        let segments = filterSegments
+        let end = segments[...index].reduce(InboxFilter.rowInset, +) - GlassSegment.padding
+        filterAtEnd = end > InboxFilter.rowWidth(segments: segments, available: filterSpace, atEnd: false)
+        filterPosition.scrollTo(edge: filterAtEnd ? .trailing : .leading)
+    }
+
     private func searchButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
@@ -128,8 +164,8 @@ struct AgentInbox<Menu: View>: View {
 
     @ViewBuilder
     private func inbox(_ items: [InboxItem], now: Date) -> some View {
-        // The field covers the filter row, so a search looks through every section.
-        let filter = query.isEmpty ? self.filter : .all
+        // The field covers the filter row, so an open search looks through every section.
+        let filter = searching || !query.isEmpty ? .all : self.filter
         let (groups, asleep) = InboxItem.rows(items, filter: filter, snoozed: snoozed, now: now)
         ForEach(InboxSection.allCases, id: \.self) { section in
             if let rows = groups[section] {
@@ -273,6 +309,23 @@ enum InboxFilter: CaseIterable {
     }
 
     var title: String { section?.title ?? "All" }
+
+    static let rowInset: CGFloat = 16
+
+    /// The filter row's width in `available` points: if the filters overflow, it ends in the padding
+    /// before a label it would cut, or after one when scrolled to the end, so no label shows in part.
+    static func rowWidth(segments: [CGFloat], available: CGFloat, atEnd: Bool) -> CGFloat {
+        let content = segments.reduce(2 * rowInset, +)
+        guard content > available else { return available }
+        var x = rowInset
+        let labels = segments.map { width in
+            defer { x += width }
+            return (start: x + GlassSegment.padding, end: x + width - GlassSegment.padding)
+        }
+        let edge = atEnd ? content - available : available
+        guard let cut = labels.first(where: { $0.start < edge && edge < $0.end }) else { return available }
+        return atEnd ? content - cut.end : cut.start
+    }
 
     func includes(_ item: InboxItem, now: Date) -> Bool {
         section.map { InboxSection.of(item.agent, now: now) == $0 } ?? true

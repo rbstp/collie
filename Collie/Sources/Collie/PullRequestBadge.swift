@@ -104,19 +104,24 @@ struct PullRequestBadge: View {
 
     static func color(_ state: PullState) -> Color {
         switch state {
-        case .open: .green
-        case .draft, .unknown: .secondary
-        case .merged: .purple
-        case .closed: .red
+        case .open: deep(.systemGreen, light: UIColor(red: 0.08, green: 0.42, blue: 0.18, alpha: 1))
+        case .draft, .unknown: .metadata
+        case .merged: deep(.systemPurple, light: UIColor(red: 0.48, green: 0.22, blue: 0.62, alpha: 1))
+        case .closed: deep(.systemRed, light: UIColor(red: 0.7, green: 0, blue: 0.07, alpha: 1))
         }
+    }
+
+    // System green, purple and red are 2 to 3.5:1 as small text on the badge's pale fill in light mode; these are 4.5:1 or more.
+    private static func deep(_ dark: UIColor, light: UIColor) -> Color {
+        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? dark : light })
     }
 
     /// Checks only matter while the pull request can still change.
     static func check(_ pullRequest: PullRequestSummary) -> (symbol: String, color: Color, spoken: String)? {
         guard pullRequest.state == .open || pullRequest.state == .draft else { return nil }
         switch pullRequest.checks {
-        case .passing: return ("checkmark", .green, "checks passing")
-        case .failing: return ("xmark", .red, "checks failing")
+        case .passing: return ("checkmark", color(.open), "checks passing")
+        case .failing: return ("xmark", color(.closed), "checks failing")
         case .pending: return ("clock", .orange, "checks pending")
         case .noChecks, .unknown: return nil
         }
