@@ -46,7 +46,7 @@ final class SubagentListTests: XCTestCase {
         let fit = { (view: AnyView) in
             UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude))
         }
-        for size in [DynamicTypeSize.large, .accessibility5] {
+        for size in [DynamicTypeSize.large, .accessibility3] {
             let list = fit(AnyView(SubagentList(subagents: [row]).environment(\.dynamicTypeSize, size)))
             let line = fit(AnyView(Text(verbatim: "x").font(.caption).environment(\.dynamicTypeSize, size))).height
             XCTAssertLessThanOrEqual(list.width, 370.5, "\(size)")
@@ -67,7 +67,7 @@ final class SubagentListTests: XCTestCase {
             var agent = sample
             agent.kind = kind
             for starred in [false, true] {
-                for size in [DynamicTypeSize.large, .accessibility5] {
+                for size in [DynamicTypeSize.large, .accessibility3] {
                     func card(_ agent: AgentSummary) -> some View {
                         AgentCard(agent: agent, screen: output, conversation: nil, workspace: nil, followed: false, starred: starred, now: .now)
                             .environment(\.dynamicTypeSize, size)

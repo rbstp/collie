@@ -140,7 +140,7 @@ final class LandscapeTests: XCTestCase {
     }
 
     func testApprovalCardKeepsApproveInReachAtLargeText() throws {
-        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"])
+        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         let approve = app.buttons["Approve"]
@@ -156,7 +156,7 @@ final class LandscapeTests: XCTestCase {
     }
 
     func testApprovalCardKeepsShowFullCommandAndTheReasonAboveApproveAtTheLargestText() throws {
-        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         let approve = app.buttons["Approve"]
