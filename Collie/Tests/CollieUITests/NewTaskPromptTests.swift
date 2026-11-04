@@ -25,7 +25,7 @@ final class NewTaskPromptTests: XCTestCase {
         collapse.tap()
         XCTAssertTrue(app.keyboards.firstMatch.disappears(within: 5), app.debugDescription)
         XCTAssertTrue(preservedPrompt.appears(within: 5), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Choose a folder to start."].appears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Choose a folder to start"].appears(within: 5), app.debugDescription)
         preservedPrompt.tap()
         XCTAssertTrue(app.keyboards.firstMatch.appears(within: 5), app.debugDescription)
         XCTAssertTrue(preservedPrompt.exists, app.debugDescription)

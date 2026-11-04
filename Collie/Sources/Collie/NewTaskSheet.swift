@@ -236,19 +236,11 @@ struct NewTaskSheet: View {
                         } else {
                             nil
                         }
-                    let missingFolder =
-                        model.location == .folder && !model.newFolder && model.folder == nil
-                        && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
                     let errors = [model.optionsError, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
                     // An empty footer still takes room in a Form, which widened the gap to the next section.
-                    if note != nil || missingFolder || !errors.isEmpty {
+                    if note != nil || !errors.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             if let note { Text(note) }
-                            if missingFolder {
-                                // Plain orange measures about 2:1 on the light grouped background; the high-contrast variant clears 4.5:1.
-                                Text("Choose a folder to start.")
-                                    .foregroundStyle(Color(uiColor: UIColor { .systemOrange.resolvedColor(with: $0.modifyingTraits { $0.accessibilityContrast = .high }) }))
-                            }
                             ForEach(errors, id: \.self) { Text($0).foregroundStyle(.red) }
                         }
                     }
@@ -313,7 +305,7 @@ struct NewTaskSheet: View {
                         TimelineView(.everyMinute) { context in
                             if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
                                 Text(warning.text)
-                                    .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
+                                    .foregroundStyle(warning.reached ? Self.warningOrange : Color.secondary)
                                     .accessibilityLabel(warning.spoken)
                             }
                         }
@@ -412,12 +404,25 @@ struct NewTaskSheet: View {
         }
     }
 
+    // Plain orange measures about 2:1 on the light grouped background; the high-contrast variant clears 4.5:1.
+    private static let warningOrange = Color(uiColor: UIColor { .systemOrange.resolvedColor(with: $0.modifyingTraits { $0.accessibilityContrast = .high }) })
+
+    private var missingFolder: Bool {
+        model.location == .folder && !model.newFolder && model.folder == nil
+            && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
+    }
+
     @ViewBuilder
     private func folderPicker(_ path: Binding<String>, completions: [String]) -> some View {
-        TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: path)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .font(.body.monospaced())
+        VStack(alignment: .leading, spacing: 4) {
+            TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: path)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.body.monospaced())
+            if missingFolder {
+                Text("Choose a folder to start").font(.footnote).foregroundStyle(Self.warningOrange)
+            }
+        }
         if let folders = model.folders {
             ForEach(completions, id: \.self) { name in
                 Button {
@@ -441,7 +446,7 @@ struct NewTaskSheet: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(URL(filePath: cwd).lastPathComponent)
                         if path.wrappedValue != cwd {
-                            Text(cwd).font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                            Text(cwd).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                         }
                     }
                     Spacer()
