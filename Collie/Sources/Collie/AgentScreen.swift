@@ -148,6 +148,9 @@ struct AgentScreen: View {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
                         AgentHeader(model: model, machineLabel: showsMachine ? machineLabel : nil, showingChat: $showingChat)
+                            // One row of controls, like the navigation bar it sits under: larger, it pushed the whole
+                            // screen past both edges.
+                            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         if let subagents = model.agent?.subagents, !subagents.isEmpty {
                             SubagentList(subagents: subagents)
                                 .padding(.horizontal)
@@ -168,8 +171,6 @@ struct AgentScreen: View {
                                 Text(notice).font(.footnote).padding([.horizontal, .bottom]).frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        // Accessibility sizes left a fifth of the screen too small for the prompt and its decisions.
-                        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                     }
                 }
                 .background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
@@ -501,8 +502,15 @@ private struct AgentHeader: View {
 
 private struct SessionBarGlass: View {
     var body: some View {
-        // The glass rim along the bottom edge drew a hairline seam over the content; the clip cuts it off.
-        Color.clear.glassEffect(.regular, in: .rect).padding(.bottom, -8).clipped()
+        // The glass rim along the bottom edge drew a hairline seam over the content: it lies past the mask,
+        // and the glass fades out over its last points rather than ending on a hard cut.
+        Color.clear.glassEffect(.regular, in: .rect).padding(.bottom, -8)
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 8)
+                }
+            }
     }
 }
 

@@ -6,12 +6,12 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 - **Agent grid:** cards stay content, as terminal previews need a stable background; context menus use system styling. A preview's running subagents overlay is clear glass over the composer's dark dimming color, always dark, with white text.
 - **Every Agents page** (grid, list, inbox, Usage): navigation and tab bars keep system glass with no scroll edge effect, glass or dimming behind them, so content runs under both at full clarity, leaving only the picker, buttons and tab bar, each on its own glass.
 - **Approvals:** glass on decision buttons, green for Approve and a red label for Deny; commands, notes and question choices stay content.
-- **Conversation:** glass on search, copy and navigation actions and on the activity and wake rows, whose labels are secondary rather than accent; messages and code stay content. Your messages sit in neutral fill bubbles that hug short text at the trailing edge.
+- **Conversation:** glass on search, copy and navigation actions and on the activity and wake rows, never accent: tool names, wake lines and Copy are primary, icons, call counts and chevrons secondary; messages and code stay content, code blocks on the same tertiary fill as your message bubbles. Your messages sit in neutral fill bubbles that hug short text at the trailing edge.
 - **Git changes / diff review:** glass from #205, unchanged.
 - **New task:** glass on the composer and shared attachment, upload and dictation controls; folder choices and task settings stay form content.
 - **Saved prompts / editor:** plain row buttons (no blue tint dimming prompt text) and larger previews; rows and editor stay content.
 - **Plan usage:** content; bars, figures and reset times need stable backgrounds.
-- **Machines / machine settings / pairing:** system forms; machine details stay content.
+- **Machines / machine settings / pairing:** system forms; machine details stay content. A machine's link status is plain text with its symbol, not a glass pill inside the row; on Agents, a connected machine shows only a green dot, and other link states keep their pill.
 - **QR scanner:** system scanner UI and a native Cancel toolbar item.
 - **Settings / gestures:** system switches and a selectable accent color; diagnostic values stay list content.
 - **Onboarding:** glass on sign-in and auth-key actions; instructions and input stay form content.
@@ -23,7 +23,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 ## Agent session
 
 - The bold inline title wraps to two lines, cut without an ellipsis.
-- The header (under the navigation bar, with the subagent list) is full-width, edge-to-edge regular glass, with content running under it and no scroll edge effect under the navigation bar, so it reads as one glass area. Regular, not clear: clear glass over a dimming layer still let busy terminal text read through the title, status bar and controls; regular glass blurs it.
+- The header (under the navigation bar, with the subagent list) is full-width, edge-to-edge regular glass, with content running under it and no scroll edge effect under the navigation bar, so it reads as one glass area. Regular, not clear: clear glass over a dimming layer still let busy terminal text read through the title, status bar and controls; regular glass blurs it. Its bottom feathers out over 8 points instead of ending on a hard cut, and the glass rim, which drew a hairline seam there, lies past the mask.
 - The status row leads with the state pill and elapsed time, then the machine name in secondary caption, which truncates first. The pull request badge, provider, context and the Chat/Terminal switch group on the trailing side. All other header text, subagent time and tokens included, uses the primary color.
 - Over the always-dark terminal, the header, composer controls and navigation bar are dark (header and navigation bar only while the terminal runs under them).
 - The composer has no band; content shows around its glass controls. Its notice, error, retry and dictation problem lines each get their own regular glass, and each such control and line has a dimming color behind its glass (70% black in dark mode, 80% white in light), in its own shape (small glass alone left busy content hard to read in dark mode).
@@ -33,8 +33,9 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 ## In-session approvals
 
 - The cards form a full-width, edge-to-edge band at the bottom of the session header, sharing its one regular glass (two edge-to-edge glass layers show a seam). Like the header, it is dark over the terminal, following the appearance over Chat.
-- Text caps at xxLarge, one below the largest standard size, in compact footnote and caption styles with small decision buttons. Decision labels never shrink: the buttons stack when one row would cut a label. Approve is prominent green with a semibold label, Approve always neutral glass with a primary label, Deny glass with a red label.
-- Nested panels (output, reason, question choices) use a 12-point radius.
+- Text follows Dynamic Type with no cap, in compact footnote and caption styles with small decision buttons; at accessibility sizes the card scrolls inside its share of the screen. Decision labels never shrink: the buttons stack when one row would cut a label. Approve is prominent glass in a deeper green than the system's, so its white semibold label reads in both appearances; Approve always is neutral glass with a primary label, Deny glass with a red label.
+- A card's header is the tool's name (Bash) and the countdown; the session header above already names the agent and machine. The command sits in its own nested panel in primary monospaced text, scrolling sideways while collapsed so a flag never wraps in half; the output under it is secondary.
+- Nested panels (command, output, reason, question choices) use a 12-point radius.
 - While cards show, the composer drops its blocked hint, which the cards already answer, and Chat drops Continue in Terminal unless every card must be answered in the terminal.
 - Known limitation: in Chat, VoiceOver touch exploration under the header and the band lands on the conversation, so VoiceOver reaches Approve, Deny and the header's controls only by swiping.
 - The cards size to their content up to under half the whole screen's height, keyboard or not (45%, so a command and its output read without scrolling; a quarter in landscape, so the prompt fits above Approve). With the keyboard up, they give way to what is left above the composer.

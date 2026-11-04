@@ -303,3 +303,12 @@ private func step(_ id: String, role: String = "assistant", tool: String? = nil,
         return page([], before: nil)
     }
 }
+
+@Test func activityNamesUpToTwoToolsThenCountsTheRest() {
+    let call = { (name: String) in
+        ConversationTool(id: name, records: [HistoryMessage(id: name, role: "assistant", text: "", tool: name, callId: name, truncated: false, parentCallId: nil)])
+    }
+    #expect(ConversationActivity.title([call("Read"), call("Read")]) == "Read")
+    #expect(ConversationActivity.title([call("Update"), call("Bash")]) == "Update, Bash")
+    #expect(ConversationActivity.title([call("Update"), call("Bash"), call("Read")]) == "Update and 2 more")
+}

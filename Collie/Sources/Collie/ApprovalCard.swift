@@ -75,13 +75,8 @@ struct ApprovalCard: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(expanded ? 90 : 0))
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(verbatim: approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
-                        Text(verbatim: approval.workspaceLabel)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    // The session header above already names the agent and its machine.
+                    Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
                     Spacer()
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
@@ -98,11 +93,20 @@ struct ApprovalCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
-            if let tool = approval.toolName {
-                Text(verbatim: [tool, approval.toolSummary].compactMap { $0 }.joined(separator: ": "))
-                    .font(.caption.monospaced())
-                    .lineLimit(expanded ? nil : 3)
-                    .fixedSize(horizontal: false, vertical: true)
+            if approval.toolName != nil, let command = approval.toolSummary {
+                // Collapsed, the command scrolls sideways rather than wrapping inside a flag.
+                Group {
+                    if expanded {
+                        Text(verbatim: command).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ScrollView(.horizontal) { Text(verbatim: command).lineLimit(1) }
+                            .scrollIndicators(.hidden)
+                    }
+                }
+                .font(.caption.monospaced())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
             if let reason = approval.reason {
                 ApprovalReason(reason: reason)
@@ -364,7 +368,8 @@ private struct DecisionStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         switch decision {
-        case .approve: content.buttonStyle(.glassProminent).tint(.green)
+        // System green under white text reads poorly; this deeper green keeps the label legible.
+        case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.13, green: 0.55, blue: 0.25))
         case .deny: content.buttonStyle(.glass).tint(.red)
         default: content.buttonStyle(.glass).tint(.primary)
         }

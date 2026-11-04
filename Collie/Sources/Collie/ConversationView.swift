@@ -323,14 +323,14 @@ private struct ConversationWake: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "eye")
+                    Image(systemName: "eye").foregroundStyle(.secondary)
                     Text(verbatim: line).lineLimit(1)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.secondary)
                 }
                 .font(.footnote)
             }
             .buttonStyle(.glass)
-            .tint(.secondary)
+            .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 ConversationMarkdown(text: message.text, query: query)
@@ -343,7 +343,7 @@ private struct ConversationWake: View {
     }
 }
 
-private struct ConversationActivity: View {
+struct ConversationActivity: View {
     let tools: [ConversationTool]
     let steps: Int
     @State private var expanded = false
@@ -354,14 +354,16 @@ private struct ConversationActivity: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "wrench.and.screwdriver")
-                    Text("\(ConversationActivity.title(tools)) · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                    Image(systemName: "wrench.and.screwdriver").foregroundStyle(.secondary)
+                    Text(verbatim: ConversationActivity.title(tools))
+                        + Text(" · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
+                            .foregroundStyle(.secondary)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.secondary)
                 }
                 .font(.footnote)
             }
             .buttonStyle(.glass)
-            .tint(.secondary)
+            .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -401,12 +403,12 @@ private struct ConversationActivity: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// "Read", or "Read and 2 more" when the calls use several tools.
+    /// "Read", "Update, Bash", or "Update and 2 more" from three tools on.
     static func title(_ tools: [ConversationTool]) -> String {
         var names: [String] = []
         for tool in tools where !names.contains(tool.name) { names.append(tool.name) }
         guard let first = names.first else { return "Activity" }
-        return names.count == 1 ? first : "\(first) and \(names.count - 1) more"
+        return names.count <= 2 ? names.joined(separator: ", ") : "\(first) and \(names.count - 1) more"
     }
 }
 
@@ -574,11 +576,11 @@ struct ConversationMarkdown: View {
                                 .padding(.vertical, 4)
                         }
                         Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
-                            .labelStyle(.iconOnly).buttonStyle(.glass).tint(.secondary).controlSize(.small)
+                            .labelStyle(.iconOnly).buttonStyle(.glass).tint(.primary).controlSize(.small)
                     }
                     .padding(8)
                     .padding(.leading, 4)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .contextMenu {
                         Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
                         if let agent {

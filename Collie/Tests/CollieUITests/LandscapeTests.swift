@@ -119,9 +119,9 @@ final class LandscapeTests: XCTestCase {
         let showKeyboard = Match(.button, "Keyboard")
         XCTAssertTrue(shown([showKeyboard], app), app.debugDescription)
         XCTAssertTrue(shown([approve], app), app.debugDescription)
-        let header = Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Claude Code, "))
-        let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Claude Code, ")).firstMatch
-        let command = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Bash: "))
+        let header = Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Bash, "))
+        let prompt = app.scrollViews.containing(NSPredicate(format: "label BEGINSWITH %@", "Bash, ")).firstMatch
+        let command = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "cargo test"))
         for _ in 0..<5 where !shown([command], app, within: 0) { drag(prompt, by: -20) }
         XCTAssertTrue(shown([command], app), app.debugDescription)
         for _ in 0..<5 where !shown([header], app, within: 0) { drag(prompt, by: 30) }
