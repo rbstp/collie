@@ -24,7 +24,7 @@ Each machine gets a section of cards. A card leads with a preview, then one line
 
 ### Inbox
 
-One list of the agents on every machine, grouped by status: blocked agents under **Needs you** at the top, then **Working**, **Done** (finished in the last 24 hours) and **Inactive** (idle, or finished earlier). Each row leads with the agent's title, then one line: its latest reply, or else your last prompt. A dot after the title marks a finished agent you have not opened since. Search the list, or filter it to one of its groups.
+One list of the agents on every machine, grouped by status: blocked agents under **Needs you** at the top, then **Working**, **Done** (finished in the last 24 hours) and **Inactive** (idle, or finished earlier). Each row leads with the agent's title and time, then its latest reply, or else your last prompt, then its workspace, machine and remaining context. A dot after the time marks a finished agent you have not opened since. Filter the list to one of its groups, or tap the search button at the end of the filters to search every group by title, workspace, machine or agent; tap the close button to return to the filters.
 
 To hide an agent that is not blocked, swipe its row right, choose **Snooze**, then **1 hour**, **4 hours**, the next 8:00 (**Today 8:00** or **Tomorrow 8:00**) or **Custom**. It waits in the collapsed **Snoozed** section until then, or until it blocks or finishes another turn; long-press it and choose **Wake now** to bring it back sooner. This phone keeps your snoozes.
 
