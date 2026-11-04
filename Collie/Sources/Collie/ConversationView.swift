@@ -208,7 +208,7 @@ struct ConversationView: View {
                     .padding(.bottom, 6)
                 }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         if model.before != nil && submitted.isEmpty {
                             Button {
                                 Task { await model.fetch(older: true, load: load) }
@@ -330,6 +330,7 @@ private struct ConversationWake: View {
                 .font(.footnote)
             }
             .buttonStyle(.glass)
+            .tint(.secondary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 ConversationMarkdown(text: message.text, query: query)
@@ -354,12 +355,13 @@ private struct ConversationActivity: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "wrench.and.screwdriver")
-                    Text("Activity · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
+                    Text("\(ConversationActivity.title(tools)) · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
                     Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
                 }
                 .font(.footnote)
             }
             .buttonStyle(.glass)
+            .tint(.secondary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -398,6 +400,14 @@ private struct ConversationActivity: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// "Read", or "Read and 2 more" when the calls use several tools.
+    static func title(_ tools: [ConversationTool]) -> String {
+        var names: [String] = []
+        for tool in tools where !names.contains(tool.name) { names.append(tool.name) }
+        guard let first = names.first else { return "Activity" }
+        return names.count == 1 ? first : "\(first) and \(names.count - 1) more"
+    }
 }
 
 private struct ConversationMessage: View {
@@ -411,8 +421,8 @@ private struct ConversationMessage: View {
         HStack(alignment: .top) {
             if user { Spacer(minLength: 28) }
             VStack(alignment: .leading, spacing: 6) {
-                if user || message.parentCallId != nil {
-                    Text(user ? "You" : "Subagent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                if message.parentCallId != nil {
+                    Text("Subagent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 if message.tool != nil {
                     Text(verbatim: message.tool ?? "Tool").font(.callout.weight(.semibold))
@@ -422,11 +432,12 @@ private struct ConversationMessage: View {
                     ConversationTruncation(truncated: message.truncated)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(user ? 12 : 0)
+            .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
+            .padding(.horizontal, user ? 14 : 0)
+            .padding(.vertical, user ? 10 : 0)
             .background {
                 if user {
-                    RoundedRectangle(cornerRadius: 18).fill(.tint.opacity(0.1))
+                    RoundedRectangle(cornerRadius: 18).fill(.fill.tertiary)
                 }
             }
         }
@@ -436,6 +447,8 @@ private struct ConversationMessage: View {
                 Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }
             }
         }
+        // A user's turn sets off the conversation more than the activity between replies.
+        .padding(.vertical, user ? 8 : 0)
     }
 }
 
@@ -554,24 +567,24 @@ struct ConversationMarkdown: View {
             ForEach(blocks.indices, id: \.self) { index in
                 let block = blocks[index]
                 if block.code {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Code").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            if let agent {
-                                Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
-                                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
-                            }
-                            Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
-                                .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
-                        }
+                    HStack(alignment: .top, spacing: 8) {
                         ScrollView(.horizontal) {
                             Text(Self.highlighted(AttributedString(block.text), query: query))
                                 .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                .padding(.vertical, 4)
+                        }
+                        Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
+                            .labelStyle(.iconOnly).buttonStyle(.glass).tint(.secondary).controlSize(.small)
+                    }
+                    .padding(8)
+                    .padding(.leading, 4)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+                    .contextMenu {
+                        Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
+                        if let agent {
+                            Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
                         }
                     }
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                 } else {
                     let lines = block.text.components(separatedBy: "\n")
                     VStack(alignment: .leading, spacing: 4) {

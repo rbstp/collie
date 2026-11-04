@@ -11,8 +11,8 @@ A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the co
 
 ## Chat
 
-- Long-press a message to **Copy** or **Quote** it; tool records and code blocks have their own Quote and Copy buttons.
-- Consecutive tool calls collapse into one **Activity** row; expand it to see each call and its result.
+- Long-press a message or a code block to **Copy** or **Quote** it; code blocks also have a Copy button, and tool records their own Quote and Copy buttons.
+- Consecutive tool calls collapse into one row named after the tool, such as **Read · 1 call**, or **Read and 2 more · 4 calls** when the calls use several tools; expand it to see each call and its result.
 - A [PR watch](pull-requests.md#watch-a-pull-request) wake shows as one row with an eye; tap it to read the full prompt.
 - Tap **Load older messages** for more history, or the search button to find text in it.
 - Tap a file path the agent mentions to [open the file](#open-a-file).

@@ -115,8 +115,8 @@ struct ApprovalCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(expanded ? nil : 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
-                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(8)
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .fixedSize(horizontal: false, vertical: true)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
@@ -173,9 +173,9 @@ struct ApprovalReason: View {
             Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
         }
         .font(.caption)
-        .padding(6)
+        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
+        .background(.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Reason: \(reason)")
@@ -254,30 +254,34 @@ private struct DecisionButtons: View {
 
     var body: some View {
         GlassEffectContainer(spacing: 8) {
-            HStack(spacing: 8) {
-                ForEach(item.approval.options, id: \.self) { decision in
-                    Button(role: decision == .deny ? .destructive : nil) {
-                        Task { await model.decide(item, decision) }
-                    } label: {
-                        Group {
-                            if model.steps[item.id] == .sending(decision) {
-                                ProgressView()
-                            } else {
-                                Text(decision.title)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.6)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .modifier(DecisionStyle(prominent: decision == .approve))
-                    .font(.footnote)
-                    .controlSize(.small)
-                    .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
-                }
+            // Labels never shrink to fit: the decisions stack when one row would cut a label.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { buttons }
+                VStack(spacing: 8) { buttons }
             }
         }
         .disabled(expired || item.unreachable || model.steps[item.id] != nil)
+    }
+
+    private var buttons: some View {
+        ForEach(item.approval.options, id: \.self) { decision in
+            Button(role: decision == .deny ? .destructive : nil) {
+                Task { await model.decide(item, decision) }
+            } label: {
+                Group {
+                    if model.steps[item.id] == .sending(decision) {
+                        ProgressView()
+                    } else {
+                        Text(decision.title).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .modifier(DecisionStyle(decision: decision))
+            .font(.footnote.weight(decision == .approve ? .semibold : .regular))
+            .controlSize(.small)
+            .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
+        }
     }
 }
 
@@ -348,7 +352,7 @@ private struct ChoiceButtons: View {
             }
         }
         .background(.fill.tertiary)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .fixedSize(horizontal: false, vertical: true)
         .opacity(disabled ? 0.5 : 1)
         .disabled(disabled)
@@ -356,13 +360,13 @@ private struct ChoiceButtons: View {
 }
 
 private struct DecisionStyle: ViewModifier {
-    let prominent: Bool
+    let decision: ApprovalDecision
 
     func body(content: Content) -> some View {
-        if prominent {
-            content.buttonStyle(.glassProminent).tint(.green)
-        } else {
-            content.buttonStyle(.glass)
+        switch decision {
+        case .approve: content.buttonStyle(.glassProminent).tint(.green)
+        case .deny: content.buttonStyle(.glass).tint(.red)
+        default: content.buttonStyle(.glass).tint(.primary)
         }
     }
 }

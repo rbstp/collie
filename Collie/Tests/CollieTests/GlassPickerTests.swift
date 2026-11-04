@@ -76,7 +76,7 @@ final class GlassPickerTests: XCTestCase {
                 VStack(spacing: 24) {
                     GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
                     GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
                         .controlSize(.small)
                 }
                 .padding()
