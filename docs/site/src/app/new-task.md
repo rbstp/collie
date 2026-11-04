@@ -15,7 +15,7 @@ When the agent you pick has used 80% or more of a [plan limit](usage.md) on that
 
 Each machine can have a **base folder** (**Machines** > the machine > **Base folder**). Give its full path, such as `/Users/you/git`: collie does not expand `~`. It must be inside one of `collied`'s task roots (`[tasks] roots` in `collied.toml`, your home folder by default).
 
-Type a folder's name in the base, tap **Browse**, pick a recent folder or give an absolute path inside a task root. **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
+Type a folder's name in the base, tap **Browse**, pick a recent folder or give an absolute path inside a task root. Until you choose one, **Start** stays dimmed and the line under **Location** reads "Choose a folder to start." **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
 
 ## Clone a repository
 

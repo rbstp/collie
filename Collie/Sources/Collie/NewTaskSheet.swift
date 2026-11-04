@@ -88,7 +88,7 @@ struct NewTaskSheet: View {
                             }
                             HStack(alignment: .bottom, spacing: 8) {
                                 TextField(model.location == .resume ? "Prompt (optional)" : "What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
-                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 3...3))
+                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
                                 if expandedPrompt && !model.prompt.isEmpty {
@@ -226,19 +226,26 @@ struct NewTaskSheet: View {
                         if let error = model.worktreesError { Text(error).foregroundStyle(.red) }
                     }
                 } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if model.location == .folder, model.newFolder, let parent = model.newFolderParent {
-                            let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
+                    let parent = model.newFolderParent
+                    let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note: String? =
+                        if model.location == .folder, model.newFolder, let parent {
+                            "Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there."
+                        } else if model.location == .clone, let parent {
+                            "Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there."
+                        } else if model.location == .folder, !model.newFolder, model.folder == nil,
+                            !model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty
+                        {
+                            "Choose a folder to start."
+                        } else {
+                            nil
                         }
-                        if model.location == .clone, let parent = model.newFolderParent {
-                            Text("Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there.")
-                        }
-                        if let error = model.optionsError {
-                            Text(error).foregroundStyle(.red)
-                        }
-                        if model.location != .clone, let error = model.foldersError {
-                            Text(error).foregroundStyle(.red)
+                    let errors = [model.optionsError, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
+                    // An empty footer still takes room in a Form, which widened the gap to the next section.
+                    if note != nil || !errors.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let note { Text(note) }
+                            ForEach(errors, id: \.self) { Text($0).foregroundStyle(.red) }
                         }
                     }
                 }
