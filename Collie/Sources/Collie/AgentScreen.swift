@@ -738,54 +738,33 @@ private struct KeyStrip: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
-            // Ten keys fit one row only up to about the default text size; larger, the arrows take a row of
-            // their own rather than cut a glyph.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 4) {
-                    modifierKeys
-                    keys(AgentKey.strip)
-                }
-                VStack(spacing: 6) {
-                    HStack(spacing: 4) {
-                        modifierKeys
-                        keys(AgentKey.strip.filter { !Self.arrows.contains($0) })
-                    }
-                    HStack(spacing: 4) { keys(Self.arrows) }
-                }
-            }
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 4) {
-                        // ⇧← answers a queued Codex question; other agents never take it.
-                        ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
-                            StripButton(title: key.symbol, fill: false) { model.run(StripShortcut(key: key.name)) }
-                                .accessibilityLabel(key.accessibilityName)
-                                .disabled(!model.canTap(key))
-                        }
-                        ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
-                            StripButton(title: shortcut.label, fill: false) { model.run(shortcut) }
-                                .disabled(!model.canRun(shortcut))
-                        }
-                        Button {
-                            editingShortcuts = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.callout)
-                                .frame(minHeight: 22)
-                        }
-                        .buttonStyle(.glass)
-                        .tint(.primary)
-                        .buttonBorderShape(.roundedRectangle(radius: 12))
-                        .controlSize(.small)
-                        .background(SessionBarDim(), in: .rect(cornerRadius: 12))
-                        .disabled(!model.savesPreferences)
-                        .accessibilityLabel("Edit key shortcuts")
-                    }
+                // Words only when every cell fits the widest at an equal share; larger text falls back to glyphs.
+                ViewThatFits(in: .horizontal) {
+                    mainKeys(words: true)
+                    mainKeys(words: false)
                 }
-                .scrollIndicators(.hidden)
                 CursorJoystick(model: model)
             }
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    // ⇧← answers a queued Codex question; other agents never take it.
+                    ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
+                        StripChip { model.run(StripShortcut(key: key.name)) } label: { Text(key.symbol) }
+                            .accessibilityLabel(key.accessibilityName)
+                            .disabled(!model.canTap(key))
+                    }
+                    ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
+                        StripChip { model.run(shortcut) } label: { Text(shortcut.label) }
+                            .disabled(!model.canRun(shortcut))
+                    }
+                    StripChip { editingShortcuts = true } label: { Image(systemName: "plus") }
+                        .disabled(!model.savesPreferences)
+                        .accessibilityLabel("Edit key shortcuts")
+                }
+            }
+            .scrollIndicators(.hidden)
         }
         .padding(.horizontal)
         .padding(.top, 8)
@@ -800,25 +779,94 @@ private struct KeyStrip: View {
         }
     }
 
-    private static let arrows: [AgentKey] = [.left, .up, .down, .right]
-
-    private var modifierKeys: some View {
-        ForEach(KeyModifier.allCases, id: \.self) { modifier in
-            let selected = model.modifier == modifier
-            StripButton(title: modifier.symbol, selected: selected) { model.select(modifier) }
+    private func mainKeys(words: Bool) -> some View {
+        let widest = words ? [KeyModifier.shift.word, KeyModifier.control.word, "esc", "tab"] : []
+        return HStack(spacing: 0) {
+            ForEach([KeyModifier.control, .shift], id: \.self) { modifier in
+                let selected = model.modifier == modifier
+                KeyCap(selected: selected, widest: widest) { model.select(modifier) } label: {
+                    if words {
+                        Text(modifier.word)
+                    } else {
+                        Image(systemName: modifier == .control ? "control" : "shift")
+                    }
+                }
                 .accessibilityLabel(modifier.accessibilityName)
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .disabled(!model.acceptsKeys)
-        }
-    }
-
-    private func keys(_ keys: [AgentKey]) -> some View {
-        ForEach(keys, id: \.self) { key in
-            // Three letters do not fit an equal share of the row.
-            StripButton(title: key.symbol, fill: key != .esc) { model.press(key) }
+                Divider().frame(height: 18)
+            }
+            ForEach(AgentKey.strip, id: \.self) { key in
+                KeyCap(widest: widest) { model.press(key) } label: {
+                    switch key {
+                    case .tab:
+                        if words { Text("tab") } else { Image(systemName: "arrow.right.to.line") }
+                    case .backspace: Image(systemName: "delete.left").imageScale(.large)
+                    case .enter: Image(systemName: "return").imageScale(.large)
+                    default: Text(key.symbol)
+                    }
+                }
                 .accessibilityLabel(key.accessibilityName)
                 .disabled(!model.canPress(key))
+                if key != AgentKey.strip.last { Divider().frame(height: 18) }
+            }
         }
+        .padding(.horizontal, 4)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .background(SessionBarDim(), in: .capsule)
+    }
+}
+
+/// One key in the main keys' shared glass capsule.
+private struct KeyCap<Label: View>: View {
+    var selected = false
+    /// Every cell is as wide as the widest of these, so the row is measured at equal widths.
+    var widest: [String] = []
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.appAccent) private var appAccent
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                ForEach(widest, id: \.self) { Text($0).hidden() }
+                label
+            }
+            .font(.callout.weight(.medium))
+            .lineLimit(1)
+            .foregroundStyle(selected ? appAccent : .primary)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background {
+                if selected { Capsule().fill(appAccent.opacity(0.2)).padding(.vertical, 6) }
+            }
+            .contentShape(.rect)
+            .opacity(isEnabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A combination or saved shortcut in the strip's scrolling second row.
+private struct StripChip<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: Label
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .font(.footnote.monospaced().weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .frame(minHeight: 30)
+                .contentShape(.rect)
+                .opacity(isEnabled ? 1 : 0.4)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
+        .background(SessionBarDim(), in: .rect(cornerRadius: 10))
     }
 }
 
@@ -837,15 +885,14 @@ private struct CursorJoystick: View {
             if pressed {
                 Circle().fill(.primary).frame(width: 8, height: 8)
             } else {
-                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 20))
+                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 26))
             }
         }
-        .frame(width: 36, height: 36)
+        .frame(width: 44, height: 44)
         .clipShape(.circle)
         .glassEffect(.regular.interactive(), in: .circle)
         .background(SessionBarDim(), in: .circle)
-        // A 44-point target past the 36-point circle, still inside the gaps to its neighbors.
-        .contentShape(Circle().inset(by: -4))
+        .contentShape(.circle)
         .opacity(model.acceptsKeys ? 1 : 0.4)
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -919,35 +966,6 @@ extension AgentKey {
         guard hypot(offset.width, offset.height) >= deadZone else { return nil }
         if abs(offset.width) > abs(offset.height) { return offset.width > 0 ? .right : .left }
         return offset.height > 0 ? .down : .up
-    }
-}
-
-private struct StripButton: View {
-    let title: String
-    var selected = false
-    var fill = true
-    let action: () -> Void
-
-    var body: some View {
-        let label = Text(title)
-            .font(.callout.monospaced())
-            .lineLimit(1)
-            .frame(maxWidth: fill ? .infinity : nil, minHeight: 22)
-            .fixedSize(horizontal: !fill, vertical: false)
-        if selected {
-            Button(action: action) { label }
-                .buttonStyle(.glassProminent)
-                .onAccentFill()
-                .buttonBorderShape(.roundedRectangle(radius: 12))
-                .controlSize(.small)
-        } else {
-            Button(action: action) { label }
-                .buttonStyle(.glass)
-                .tint(.primary)
-                .buttonBorderShape(.roundedRectangle(radius: 12))
-                .controlSize(.small)
-                .background(SessionBarDim(), in: .rect(cornerRadius: 12))
-        }
     }
 }
 

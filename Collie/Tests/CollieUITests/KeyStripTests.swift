@@ -31,11 +31,11 @@ final class KeyStripTests: XCTestCase {
         let shift = app.buttons["Shift"]
         shift.tap()
         XCTAssertTrue(shift.isSelected, app.debugDescription)
-        XCTAssertFalse(app.buttons["Up arrow"].isEnabled, app.debugDescription)
+        XCTAssertFalse(app.buttons["Backspace"].isEnabled, app.debugDescription)
         XCTAssertTrue(app.buttons["Tab"].isEnabled, app.debugDescription)
         app.buttons["Tab"].tap()
         XCTAssertFalse(shift.isSelected, app.debugDescription)
-        XCTAssertTrue(app.buttons["Up arrow"].isEnabled, app.debugDescription)
+        XCTAssertTrue(app.buttons["Backspace"].isEnabled, app.debugDescription)
 
         // The terminal view has no prompt field: the keyboard types straight into the terminal.
         XCTAssertFalse(app.textFields.firstMatch.exists, app.debugDescription)
@@ -103,11 +103,12 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
 
         let window = app.windows.firstMatch.frame
-        for name in ["Shift", "Control", "Escape", "Left arrow", "Up arrow", "Down arrow", "Right arrow", "Tab", "Backspace", "Return"] {
-            let key = app.buttons[name]
+        for name in ["Shift", "Control", "Escape", "Tab", "Backspace", "Return", "Arrow joystick"] {
+            let key = app.descendants(matching: .any)[name].firstMatch
             XCTAssertTrue(key.isHittable && window.contains(key.frame), app.debugDescription)
         }
-        XCTAssertGreaterThan(app.buttons["Left arrow"].frame.minY, escape.frame.maxY, app.debugDescription)
+        let joystick = app.descendants(matching: .any)["Arrow joystick"].firstMatch
+        XCTAssertEqual(joystick.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
     }
 
     private func removeShortcuts(_ app: XCUIApplication) {
