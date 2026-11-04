@@ -411,24 +411,16 @@ struct MachineHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                MachineName(machine: entry.machine)
-                Spacer()
-                if approvalsCount > 0 {
-                    StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+            // With larger text the pills drop under the name rather than break it mid-word.
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    MachineName(machine: entry.machine)
+                    Spacer()
+                    status
                 }
-                if showsLink, let link = entry.flock?.link {
-                    if link == .connecting {
-                        ProgressView().controlSize(.mini)
-                        Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
-                    } else if link == .connected {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 8))
-                            .foregroundStyle(.green)
-                            .accessibilityLabel(link.label)
-                    } else {
-                        StatusPill(state: .idle, title: link.label)
-                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    MachineName(machine: entry.machine)
+                    HStack { status }
                 }
             }
             if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
@@ -439,6 +431,26 @@ struct MachineHeader: View {
                 Text(reason.label(machine: entry.machine.label, now: now))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if approvalsCount > 0 {
+            StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+        }
+        if showsLink, let link = entry.flock?.link {
+            if link == .connecting {
+                ProgressView().controlSize(.mini)
+                Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+            } else if link == .connected {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(AgentState.done.color)
+                    .accessibilityLabel(link.label)
+            } else {
+                StatusPill(state: .idle, title: link.label)
             }
         }
     }

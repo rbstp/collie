@@ -12,8 +12,8 @@ The app caps Dynamic Type at AccessibilityXL (`.dynamicTypeSize(...DynamicTypeSi
 - **Git changes / diff review:** glass from #205, unchanged.
 - **New task:** the prompt field is plain form content, with glass only on the attachment, upload, dictation and hide-keyboard controls; folder choices and task settings stay form content.
 - **Saved prompts / editor:** plain row buttons (no blue tint dimming prompt text) and larger previews; rows and editor stay content.
-- **Plan usage:** content; bars, figures and reset times need stable backgrounds.
-- **Machines / machine settings / pairing:** system forms; machine details stay content. A machine's link status is plain text with its symbol, not a glass pill inside the row; on Agents, a connected machine shows only a green dot, and other link states keep their pill.
+- **Plan usage:** content, two cards under each machine's name: plan usage, then tokens and cost; bars, figures and reset times need stable backgrounds.
+- **Machines / machine settings / pairing:** system forms; machine details stay content. A machine's link status is plain text with its symbol, not a glass pill inside the row; on Agents, a connected machine shows only a green dot, in Done's green (its deeper light-mode green, as system green measured 2:1 on the light page), and other link states keep their pill. With larger text, the pills and the dot drop under the machine's name rather than break it mid-word.
 - **QR scanner:** system scanner UI and a native Cancel toolbar item.
 - **Settings / gestures:** system switches and a selectable accent color; diagnostic values stay list content.
 - **Onboarding:** glass on sign-in and auth-key actions; instructions and input stay form content.
