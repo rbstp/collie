@@ -133,7 +133,8 @@ struct ApprovalReview: View {
                     // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: task).font(.subheadline.weight(.semibold))
-                        Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.metadata)
+                        // The metadata gray read 4.2:1 on the half-height sheet's light glass.
+                        Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
                     }
                     .accessibilityElement(children: .combine)
                     ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
