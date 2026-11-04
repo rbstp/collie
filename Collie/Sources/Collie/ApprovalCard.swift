@@ -18,11 +18,17 @@ struct ApprovalCard: View {
     @State private var outputHeight: CGFloat = 0
     @State private var addNoteHeight: CGFloat = 0
     @FocusState private var field: String?
-    @ScaledMetric(relativeTo: .footnote) private var commandLine: CGFloat = 16
+    @ScaledMetric(relativeTo: .footnote) private var scaledCommandLine: CGFloat = 16
     // Capped: at the largest sizes the fade covered the whole line of the reason above the decisions.
     @ScaledMetric(relativeTo: .caption) private var scaledFade: CGFloat = 16
     private var fade: CGFloat { min(scaledFade, 24) }
-    @ScaledMetric(relativeTo: .caption) private var reasonLine: CGFloat = 16
+    @ScaledMetric(relativeTo: .caption) private var scaledReasonLine: CGFloat = 16
+    // Measured once laid out: at accessibility sizes the scaled estimates fell short of the real lines by a fifth, and the
+    // command took a line the reason needed above the decisions.
+    @State private var measuredCommandLine: CGFloat = 0
+    @State private var measuredCaptionLine: CGFloat = 0
+    private var commandLine: CGFloat { measuredCommandLine > 0 ? measuredCommandLine : scaledCommandLine }
+    private var reasonLine: CGFloat { measuredCaptionLine > 0 ? measuredCaptionLine : scaledReasonLine }
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
 
@@ -46,7 +52,7 @@ struct ApprovalCard: View {
     // pinned decisions (the largest text sizes), so they stay in view, and three when everything scrolls (landscape).
     private var commandLines: Int {
         guard maxHeight.isFinite else { return 3 }
-        let lines = Int((room - headerHeight - spacing - 2 * 8 - 4 - commandLine - reasonMinimum) / commandLine)
+        let lines = Int((room - headerHeight - spacing - 2 * 8 - 4 - reasonLine - reasonMinimum) / commandLine)
         return lines < 1 ? (pinsDecisions ? 1 : 3) : min(3, lines)
     }
     private var reasonLines: Int? {
@@ -234,6 +240,15 @@ struct ApprovalCard: View {
             if approval.takesFeedback {
                 FeedbackField(model: model, item: item, field: $field, sendAnswer: sendAnswer)
             }
+        }
+        .background {
+            VStack {
+                Text(verbatim: "x").font(.footnote.monospaced())
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredCommandLine = $0 }
+                Text(verbatim: "x").font(.caption)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredCaptionLine = $0 }
+            }
+            .hidden()
         }
     }
 }
