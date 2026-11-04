@@ -259,9 +259,7 @@ struct AgentCard: View {
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    StatusIcon(state: agent.status)
-                        .scaleEffect(0.8)
-                        .frame(width: 16, height: 16)
+                    StatusIcon(state: agent.status, size: 16)
                         .accessibilityHidden(true)
                     Text(agent.displayTitle)
                         .font(.footnote.weight(.semibold))

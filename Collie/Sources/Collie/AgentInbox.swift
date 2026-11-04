@@ -379,12 +379,13 @@ private struct InboxRow: View {
     let unseen: Bool
     let wake: Date?
     let now: Date
+    @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 5
 
     var body: some View {
         let agent = item.agent
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 5 }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + lift }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)

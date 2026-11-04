@@ -450,13 +450,14 @@ private struct AgentRow: View {
     let followed: Bool
     let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 6
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
                 .accessibilityHidden(true)
                 // Centered on the title's first line rather than sitting on its baseline.
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + lift }
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
@@ -600,38 +601,45 @@ struct StatusAge: View {
 
 struct StatusIcon: View {
     let state: AgentState
+    var size: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var scale: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var appAccent
 
     var body: some View {
+        // Grows with the text beside it, up to half again its size, so a glyph never outweighs the title it marks.
+        let side = size * min(scale, 1.5)
+        let unit = side / 20
         Group {
             switch state {
             // Core Animation spins it; a SwiftUI repeatForever redraws the app every frame (battery).
             case .working where reduceMotion:
                 Circle()
                     .trim(from: 0, to: 0.7)
-                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .padding(2)
+                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5 * unit, lineCap: .round))
+                    .padding(2 * unit)
             // The ring keeps a steady silhouette, like Done's circle, while the spinner's spokes fade in turn.
             case .working:
                 ZStack {
-                    Circle().stroke(appAccent, lineWidth: 1.5).padding(2.5)
-                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6)
+                    Circle().stroke(appAccent, lineWidth: 1.5 * unit).padding(2.5 * unit)
+                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6 * unit)
                 }
-            default: Image(systemName: Self.symbol(state)).font(.system(size: 16)).foregroundStyle(state.color)
+            // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; its pill label keeps the full color.
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle ? 0.75 : 1))
             }
         }
-        .frame(width: 20, height: 20)
+        .frame(width: side, height: side)
         .accessibilityElement()
         .accessibilityLabel(state.label)
     }
 
-    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest.
+    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest,
+    /// and idle's is dashed, so it stays the quietest rather than reading as an unchecked Done.
     static func symbol(_ state: AgentState) -> String {
         switch state {
         case .blocked: "exclamationmark.circle.fill"
         case .done: "checkmark.circle"
-        case .idle: "circle"
+        case .idle: "circle.dashed"
         default: "questionmark.circle"
         }
     }
