@@ -12,6 +12,7 @@ struct WatchState: Codable, Equatable, Sendable {
     var usage: WatchUsage?
     var decisionsAllowed: Bool
     var live: Bool
+    var accent: Color.Resolved?
 }
 
 struct WatchApproval: Codable, Equatable, Identifiable, Sendable {

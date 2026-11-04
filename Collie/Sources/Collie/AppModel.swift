@@ -38,7 +38,11 @@ final class AppModel {
     let watch = WatchLink()
     var tab = AppTab.agents
     var accent = DevicePrefs.load(from: DevicePrefs.file).accent {
-        didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.accent = accent } }
+        didSet {
+            DevicePrefs.update(in: DevicePrefs.file) { $0.accent = accent }
+            AppAccent.shared = accent
+            publishWatchState()
+        }
     }
     var openingAgent: AgentRoute?
     var approvalOpenError: String?
@@ -91,6 +95,7 @@ final class AppModel {
             pathMonitor.start(queue: DispatchQueue(label: "dev.rbstp.collie.path"))
         }
         loadTerminalKey()
+        AppAccent.shared = accent
         #if DEBUG && targetEnvironment(simulator)
         if ProcessInfo.processInfo.environment["COLLIE_SIMULATOR_RELAY"] == "mock" {
             pushToken = Data(repeating: 0xaa, count: 32)
@@ -572,12 +577,15 @@ final class AppModel {
         guard let core, watch.ready, leaving || UIApplication.shared.applicationState != .background else { return }
         let entries = core.machines().map { MachineFlockEntry(machine: $0, flock: core.cachedFlock(machineId: $0.id)) }
         guard entries.allSatisfy({ $0.flock?.details != nil || $0.linkDown }) else { return }
-        watch.publish(
-            WatchState.published(
-                WatchLink.shown(), items: approvals.items, entries: entries,
-                allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, live: !leaving, now: .now
-            )
+        var state = WatchState.published(
+            WatchLink.shown(), items: approvals.items, entries: entries,
+            allowed: DevicePrefs.load(from: DevicePrefs.file).watchDecisions, live: !leaving, now: .now
         )
+        // The watch is always dark.
+        var dark = EnvironmentValues()
+        dark.colorScheme = .dark
+        state.accent = accent.color.resolve(in: dark)
+        watch.publish(state)
     }
 
     /// From the paired watch as it opens. Out of the foreground (locked, suspended or not

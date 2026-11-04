@@ -95,40 +95,6 @@ extension DevicePrefs {
     }
 }
 
-enum AppAccent: String, Codable, CaseIterable {
-    case neutral, blue, orange, green, red, gold
-
-    var label: String {
-        switch self {
-        case .neutral: "None"
-        case .blue: "Blue"
-        case .orange: "Orange"
-        case .green: "Green"
-        case .red: "Red"
-        case .gold: "Dark Gold"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .neutral: Color(uiColor: .label)
-        case .blue: .blue
-        case .orange: .orange
-        case .green: .green
-        case .red: .red
-        case .gold:
-            Color(uiColor: UIColor { traits in
-                traits.userInterfaceStyle == .dark
-                    ? UIColor(red: 0.78, green: 0.62, blue: 0.25, alpha: 1)
-                    : UIColor(red: 0.50, green: 0.36, blue: 0.08, alpha: 1)
-            })
-        }
-    }
-
-    /// A switch's white knob vanishes on a white track, so None keeps the system's switch color.
-    var switchTint: Color { self == .neutral ? .green : color }
-}
-
 struct AccentSwitch: ToggleStyle {
     let tint: Color
 

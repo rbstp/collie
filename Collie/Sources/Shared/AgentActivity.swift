@@ -190,7 +190,7 @@ enum AgentActivityStatus: String, Codable, Hashable, Sendable {
     var color: Color {
         switch self {
         case .blocked: .red
-        case .working: .blue
+        case .working: AppAccent.shared.color
         case .idle: .gray
         case .done: .green
         case .unknown: .secondary
@@ -205,6 +205,46 @@ enum AgentActivityStatus: String, Codable, Hashable, Sendable {
         case .done: "checkmark.circle.fill"
         case .unknown: "questionmark.circle.fill"
         }
+    }
+}
+
+enum AppAccent: String, Codable, CaseIterable {
+    case neutral, blue, orange, green, red, gold
+
+    var label: String {
+        switch self {
+        case .neutral: "None"
+        case .blue: "Blue"
+        case .orange: "Orange"
+        case .green: "Green"
+        case .red: "Red"
+        case .gold: "Dark Gold"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .neutral: Color(uiColor: .label)
+        case .blue: .blue
+        case .orange: .orange
+        case .green: .green
+        case .red: .red
+        case .gold:
+            Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor(red: 0.78, green: 0.62, blue: 0.25, alpha: 1)
+                    : UIColor(red: 0.50, green: 0.36, blue: 0.08, alpha: 1)
+            })
+        }
+    }
+
+    /// A switch's white knob vanishes on a white track, so None keeps the system's switch color.
+    var switchTint: Color { self == .neutral ? .green : color }
+
+    /// The app keeps the accent in its state dir; the Live Activity reads this copy in the App Group.
+    static var shared: AppAccent {
+        get { UserDefaults(suiteName: AppGroup.identifier)?.string(forKey: "accent").flatMap(Self.init) ?? .blue }
+        set { UserDefaults(suiteName: AppGroup.identifier)?.set(newValue.rawValue, forKey: "accent") }
     }
 }
 
