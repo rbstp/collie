@@ -213,13 +213,16 @@ final class PreviewModel {
     }
 
     private func show(_ ansi: String, for route: AgentRoute) {
-        // A blocked agent's card is never cropped, so it cannot hide a pending prompt.
         let ansi =
-            switch statuses[route]?.status == .blocked ? nil : kinds[route] {
-            case "claude": Self.card(ansi)
-            case "copilot": Self.copilotCard(ansi)
-            case "codex": Self.codexCard(ansi)
-            default: ansi
+            if statuses[route]?.status == .blocked {
+                Self.blockedCard(ansi)
+            } else {
+                switch kinds[route] {
+                case "claude": Self.card(ansi)
+                case "copilot": Self.copilotCard(ansi)
+                case "codex": Self.codexCard(ansi)
+                default: ansi
+                }
             }
         if screens[route] != ansi { screens[route] = ansi }
     }
@@ -292,6 +295,20 @@ final class PreviewModel {
             let last = plain[..<(prompt - 1)].lastIndex(where: { !blank($0) })
         else { return ansi }
         return String(ansi[..<lines[last].endIndex])
+    }
+
+    /// A blocked agent's card ends at the first choice of its dialog and drops blank rows, so the
+    /// command it asks about stays on the card above the question. The dialog is a "1." choice, then a
+    /// "2." one, with at most eight rows below it; a screen without one, such as a numbered list in the
+    /// output above a prompt, is kept whole so the card cannot hide what the agent waits for.
+    nonisolated static func blockedCard(_ ansi: String) -> String {
+        let lines = ansi.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let plain = lines.map(plainText)
+        guard let first = plain.lastIndex(where: { $0.contains(#/^\W*1\.\s/#) }),
+            plain[(first + 1)...].contains(where: { $0.contains(#/^\W*2\.\s/#) }),
+            plain[(first + 1)...].count(where: { !$0.allSatisfy(\.isWhitespace) }) <= 8
+        else { return ansi }
+        return lines[...first].indices.filter { !plain[$0].allSatisfy(\.isWhitespace) }.map { String(lines[$0]) }.joined(separator: "\r\n")
     }
 
     /// A numbered choice of a dialog, like "› 1. Yes" or "│ ❯ 2. No".
