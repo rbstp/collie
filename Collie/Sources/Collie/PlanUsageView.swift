@@ -30,7 +30,7 @@ struct UsageSections: View {
                                 CopilotSubscriptionUsage(usage: copilot, now: context.date)
                             }
                             if !usage.limits(now: context.date).isEmpty || codex != nil || copilot.map({ !$0.unlimited }) == true {
-                                Text("The tick on each bar marks how much of its window has passed.")
+                                Text("Ticks mark how much of each window has passed.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
