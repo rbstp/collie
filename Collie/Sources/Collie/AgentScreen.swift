@@ -183,7 +183,10 @@ struct AgentScreen: View {
                         }
                     }
                 }
-                .background { SessionBarGlass().ignoresSafeArea(edges: [.top, .horizontal]) }
+                .background {
+                    let page = showingChat && !model.isTerminal ? Color(.systemBackground) : Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                    SessionBarGlass(fade: items.isEmpty ? nil : page).ignoresSafeArea(edges: [.top, .horizontal])
+                }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -201,7 +204,10 @@ struct AgentScreen: View {
                 }
                 if showingChat && !model.isTerminal && approvalItems.allSatisfy(\.approval.answeredInTerminal) && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
-                        .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule).padding(.top, 6)
+                        .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.top, 6)
                 }
                 GlassEffectContainer(spacing: 4) {
                     VStack(spacing: 0) {
@@ -316,7 +322,7 @@ struct AgentScreen: View {
         }
         // Presented here, not from the card: the band takes the dark scheme over the terminal, and the sheet follows the appearance.
         .sheet(item: reviewing) { item in
-            if let approvals { ApprovalReview(model: approvals, item: item, sendAnswer: model.typeAnswer) }
+            if let approvals { ApprovalReview(model: approvals, item: item, task: title, sendAnswer: model.typeAnswer) }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in
@@ -552,6 +558,8 @@ private struct AgentHeader: View {
 }
 
 private struct SessionBarGlass: View {
+    /// The page under the approval band, which content fades into below its edge.
+    var fade: Color?
     @Environment(\.colorScheme) private var colorScheme
     // Grows with the text: a fixed 8 points cut large text running under the edge in half, blurred above and sharp below.
     @ScaledMetric private var feather: CGFloat = 8
@@ -567,6 +575,16 @@ private struct SessionBarGlass: View {
                 VStack(spacing: 0) {
                     Rectangle()
                     LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: feather)
+                }
+            }
+            // Under the taller band, a line of chat crossing its edge read cut in half, blurred above and sharp below.
+            .background(alignment: .bottom) {
+                if let fade {
+                    LinearGradient(stops: [.init(color: fade, location: 0), .init(color: fade, location: 0.4), .init(color: fade.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 3 * feather)
+                        .offset(y: 2 * feather)
+                        .allowsHitTesting(false)
                 }
             }
     }
@@ -792,7 +810,8 @@ private struct KeyStrip: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
+        // The chips' touch targets fill most of the gaps above and below them.
+        VStack(spacing: 1) {
             HStack(spacing: 8) {
                 // Words only when every cell fits the widest at an equal share; larger text falls back to glyphs.
                 ViewThatFits(in: .horizontal) {
@@ -810,8 +829,10 @@ private struct KeyStrip: View {
                             .disabled(!model.canTap(key))
                     }
                     ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
-                        StripChip { model.run(shortcut) } label: { Text(shortcut.name.isEmpty ? shortcut.agentKey?.word ?? shortcut.text : shortcut.name) }
-                            .disabled(!model.canRun(shortcut))
+                        StripChip(literal: shortcut.name.isEmpty && shortcut.agentKey == nil) { model.run(shortcut) } label: {
+                            Text(shortcut.name.isEmpty ? shortcut.agentKey?.word ?? shortcut.text : shortcut.name)
+                        }
+                        .disabled(!model.canRun(shortcut))
                     }
                     StripChip { editingShortcuts = true } label: { Image(systemName: "plus") }
                         .disabled(!model.savesPreferences)
@@ -822,6 +843,7 @@ private struct KeyStrip: View {
         }
         .padding(.horizontal)
         .padding(.top, 8)
+        .padding(.bottom, -7)
         // At accessibility sizes even six keys to a row cut glyphs and pushed the screen past both edges.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
@@ -904,6 +926,8 @@ private struct KeyCap<Label: View>: View {
 
 /// A combination or saved shortcut in the strip's scrolling second row.
 private struct StripChip<Label: View>: View {
+    /// Text typed as is, which reads as code; combinations and names take the main keys' font.
+    var literal = false
     let action: () -> Void
     @ViewBuilder let label: Label
     @Environment(\.isEnabled) private var isEnabled
@@ -911,16 +935,18 @@ private struct StripChip<Label: View>: View {
     var body: some View {
         Button(action: action) {
             label
-                .font(.footnote.monospaced().weight(.medium))
+                .font(literal ? .callout.monospaced().weight(.medium) : .callout.weight(.medium))
                 .lineLimit(1)
                 .padding(.horizontal, 11)
                 .frame(minHeight: 30)
-                .contentShape(.rect)
                 .opacity(isEnabled ? 1 : 0.4)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .background(SessionBarDim(), in: .capsule)
+                // A 44-point target around the compact capsule, inside the scroll view, which takes no touches past its bounds.
+                .padding(.vertical, 7)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .background(SessionBarDim(), in: .capsule)
     }
 }
 

@@ -155,16 +155,41 @@ final class LandscapeTests: XCTestCase {
         try review(app)
     }
 
-    /// Opens the review sheet from the band: the whole command, the reason and every decision in reach, then closes it.
-    /// The band stays under the sheet, so each is looked for among the elements a tap reaches.
+    func testReviewSheetReportsAFailedDecision() throws {
+        let app = try launchDemo(["--approval-demo"])
+        defer { app.terminate() }
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+        XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
+        // The card leaves the output to the sheet.
+        let output = app.buttons["Output, 8 lines"]
+        XCTAssertTrue(output.appears(within: 10), app.debugDescription)
+        XCTAssertFalse(app.staticTexts["test approvals::case_1 ... ok"].exists, app.debugDescription)
+        output.tap()
+        let close = app.buttons["Close"]
+        XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
+        // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
+        // only on the band behind it.
+        let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
+        try XCTUnwrap(approve, app.debugDescription).tap()
+        let cancel = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Cancel"]
+        if cancel.waitForExistence(timeout: 5) { cancel.tap() }
+        let notice = app.staticTexts.matching(NSPredicate(format: "label == %@", "Not authenticated. Nothing was sent."))
+        XCTAssertTrue(eventually(within: 10) { notice.allElementsBoundByIndex.contains { $0.isHittable } }, app.debugDescription)
+        close.tap()
+        XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
+    }
+
+    /// Opens the review sheet from the band: the task, the whole command, the reason and every decision in reach, then
+    /// closes it. The band stays under the sheet, so each is looked for among the elements a tap reaches.
     private func review(_ app: XCUIApplication) throws {
         app.buttons["Review"].tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
+        let task = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests, MacBook Pro"))
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
         let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
         let decisions = ["Approve", "Always allow", "Deny"].map { ($0, app.buttons.matching(identifier: $0)) }
-        for (name, query) in [("reason", reason), ("command", command)] + decisions {
+        for (name, query) in [("task", task), ("reason", reason), ("command", command)] + decisions {
             XCTAssertTrue(eventually(within: 10) { query.allElementsBoundByIndex.contains { $0.isHittable } }, "\(name)\n\(app.debugDescription)")
         }
         close.tap()
