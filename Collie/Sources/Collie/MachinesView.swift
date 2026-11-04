@@ -462,6 +462,7 @@ struct MachineName: View {
         } icon: {
             MachineLogo(machine: machine)
         }
+        .labelStyle(KindLabelStyle())
     }
 }
 

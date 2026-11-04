@@ -12,6 +12,7 @@ struct AgentGrid<Menu: View>: View {
     let showsLink: Bool
     let follows: FollowModel?
     let closePane: (AgentRoute) -> Void
+    let margin: CGFloat?
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -80,14 +81,17 @@ struct AgentGrid<Menu: View>: View {
                                     Text("No agents running").foregroundStyle(.secondary)
                                 }
                             }
+                            // The inset of a List section header, so headers line up across layouts and Usage.
+                            .padding(.horizontal, 20)
                             .padding(.top, 8)
                         }
                     }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
-                .padding(.horizontal)
+                .padding(.horizontal, margin ?? 16)
                 .padding(.bottom)
             }
+            .background(Color(.systemGroupedBackground))
         }
     }
 
@@ -169,8 +173,10 @@ extension AgentGrid {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(terminal.locked ? "Locked" : "Unlocked")
             }
-            .padding(12)
-            .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 18))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxHeight: .infinity)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -204,50 +210,19 @@ struct AgentCard: View {
 
     @ViewBuilder private var preview: some View {
         if let conversation {
-            ChatPreview(messages: conversation, lines: starred ? 6 : 3)
+            ChatPreview(messages: conversation.suffix(starred ? 3 : 1), lines: starred ? 3 : 4)
         } else {
             TerminalPreview(ansi: screen ?? "", fontSize: starred ? 9 : 7)
                 .overlay(alignment: .top) {
                     // Fades out the row cut at the top.
                     LinearGradient(colors: [Color(uiColor: GhosttyTerminalUIView.backgroundColor), .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 12)
+                        .frame(height: starred ? 20 : 12)
                 }
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            preview
-                .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
-                    ? subagentPreviewHeight * (starred ? 2 : 1)
-                    : (starred ? 150 : 120))
-                .accessibilityHidden(true)
-                .overlay(alignment: .top) {
-                    if agent.status != .blocked, !agent.subagents.isEmpty {
-                        let limit = starred ? 4 : 2
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(agent.subagents.prefix(limit).enumerated()), id: \.offset) { _, subagent in
-                                HStack(spacing: 4) {
-                                    Text(verbatim: subagent.title).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                    Text(verbatim: subagent.elapsed(now: now)).monospacedDigit().fixedSize()
-                                }
-                            }
-                            if agent.subagents.count > limit {
-                                Text("+\(agent.subagents.count - limit) more")
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12))
-                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 12))
-                        .environment(\.colorScheme, .dark)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 6) {
                     StatusIcon(state: agent.status).accessibilityHidden(true)
@@ -279,11 +254,11 @@ struct AgentCard: View {
                         }
                         if let workspace {
                             Text(workspace).layoutPriority(1)
-                            Text(verbatim: "·")
+                            Text(verbatim: "·").fixedSize()
                         }
                         StatusAge(agent: agent, now: now).fixedSize()
                         if agent.status == .blocked, !agent.subagents.isEmpty {
-                            Text(verbatim: "·")
+                            Text(verbatim: "·").fixedSize()
                             Text(agent.subagents.count == 1 ? "1 subagent" : "\(agent.subagents.count) subagents")
                         }
                         if let pullRequest = agent.pullRequest {
@@ -299,12 +274,46 @@ struct AgentCard: View {
                     }
                 }
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 14)
             .padding(.top, 8)
-            .padding(.bottom, 2)
+            .padding(.bottom, 10)
+            // Cards in a row share its height, with their previews along the bottom.
+            Spacer(minLength: 0)
+            preview
+                .frame(height: typeSize.isAccessibilitySize && agent.status != .blocked && !agent.subagents.isEmpty
+                    ? subagentPreviewHeight * (starred ? 2 : 1)
+                    : (starred ? 150 : 80))
+                .accessibilityHidden(true)
+                .overlay(alignment: .top) {
+                    if agent.status != .blocked, !agent.subagents.isEmpty {
+                        let limit = starred ? 4 : 1
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(agent.subagents.prefix(limit).enumerated()), id: \.offset) { _, subagent in
+                                HStack(spacing: 4) {
+                                    Text(verbatim: subagent.title).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    Text(verbatim: subagent.elapsed(now: now)).monospacedDigit().fixedSize()
+                                }
+                            }
+                            if agent.subagents.count > limit {
+                                Text("+\(agent.subagents.count - limit) more")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12))
+                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 12))
+                        .environment(\.colorScheme, .dark)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .allowsHitTesting(false)
         }
+        .frame(maxHeight: .infinity)
         .padding(6)
-        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityActions {
@@ -317,11 +326,11 @@ struct AgentCard: View {
 
 /// Read-only, like `TerminalPreview`: it follows the bottom of the conversation.
 private struct ChatPreview: View {
-    let messages: [HistoryMessage]
+    let messages: ArraySlice<HistoryMessage>
     let lines: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let content = VStack(alignment: .leading, spacing: 4) {
             ForEach(messages, id: \.id) { message in
                 let user = message.role == "user"
                 Group {
@@ -345,9 +354,13 @@ private struct ChatPreview: View {
         .font(.caption2)
         .fixedSize(horizontal: false, vertical: true)
         .padding(6)
-        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
-        // Fades out the line cut at the top.
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
+        ViewThatFits(in: .vertical) {
+            content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            content
+                .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottom)
+                // Fades out the line cut at the top.
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.15)], startPoint: .top, endPoint: .bottom))
+        }
         .background(.fill.tertiary)
     }
 }

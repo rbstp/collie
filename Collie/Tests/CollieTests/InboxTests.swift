@@ -46,7 +46,7 @@ private func entry(
     #expect(items.filter { $0.matches("CODEX") }.map(\.route.terminalId) == ["old"])
     #expect(Set(items.filter { InboxFilter.needsAttention.includes($0, seen: seen, now: now) }.map(\.route.terminalId))
             == Set(["blocked", "done", "older-done"]))
-    #expect(items.filter { InboxFilter.working.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["blocked"])
+    #expect(items.filter { InboxFilter.working.includes($0, seen: seen, now: now) }.isEmpty)
     #expect(items.filter { InboxFilter.inactive.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
 }
 
@@ -223,9 +223,17 @@ private func entry(
 
 @MainActor
 @Test func contextRingTonesUseSystemColorsByUsedShare() {
-    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (40, .yellow), (21, .yellow), (20, .orange), (11, .orange), (10, .red), (0, .red)]
+    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (20, .orange), (11, .orange), (10, .red), (0, .red)]
     for (left, color) in expected {
         #expect(ContextRing.tone(left) == color)
     }
     #expect(ContextRing.tone(255) == ContextRing.tone(100))
+    var light = EnvironmentValues()
+    light.colorScheme = .light
+    var dark = EnvironmentValues()
+    dark.colorScheme = .dark
+    for left: UInt8 in [40, 21] {
+        #expect(ContextRing.tone(left).resolve(in: dark) == Color.yellow.resolve(in: dark))
+        #expect(ContextRing.tone(left).resolve(in: light) != Color.yellow.resolve(in: light))
+    }
 }
