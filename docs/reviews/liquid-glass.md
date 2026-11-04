@@ -8,7 +8,7 @@ Issue #207 uses the iOS 26 and watchOS 26 glass APIs directly, with minimum vers
 - **Approvals:** glass on decision buttons, green for Approve and a red label for Deny; commands, notes and question choices stay content.
 - **Conversation:** glass on search, copy and navigation actions and on the activity and wake rows, never accent: tool names, wake lines and Copy are primary, icons, call counts and chevrons secondary; messages and code stay content, code blocks on the same tertiary fill as your message bubbles. Your messages sit in neutral fill bubbles that hug short text at the trailing edge.
 - **Git changes / diff review:** glass from #205, unchanged.
-- **New task:** glass on the composer and shared attachment, upload and dictation controls; folder choices and task settings stay form content.
+- **New task:** the prompt field is plain form content, with glass only on the attachment, upload, dictation and hide-keyboard controls; folder choices and task settings stay form content.
 - **Saved prompts / editor:** plain row buttons (no blue tint dimming prompt text) and larger previews; rows and editor stay content.
 - **Plan usage:** content; bars, figures and reset times need stable backgrounds.
 - **Machines / machine settings / pairing:** system forms; machine details stay content. A machine's link status is plain text with its symbol, not a glass pill inside the row; on Agents, a connected machine shows only a green dot, and other link states keep their pill.

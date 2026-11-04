@@ -147,8 +147,7 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
         // Chat's scroll view takes accessibility hit tests under the header and the band.
         app.buttons["Terminal"].firstMatch.tap()
-        // The band caps its text below the accessibility sizes, so Approve stays pinned under the prompt. Not `shown`:
-        // at this size the header and the band run a few points past the window's sides.
+        // The band's text grows with the accessibility size, and Approve stays within reach of its scrolling card.
         XCTAssertTrue(eventually(within: 30) { approve.isHittable }, app.debugDescription)
         XCTAssertTrue(eventually(within: 30) { app.buttons["Keyboard"].isHittable }, app.debugDescription)
     }
