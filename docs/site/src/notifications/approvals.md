@@ -13,8 +13,8 @@ Codex and Copilot CLI notifications have no Approve or Deny: answer in the sessi
 Once the agent moves on, `collied` tries to remove the notification.
 
 <div class="screenshots">
-<img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Approve always and Deny buttons">
-<img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Approve always and Deny buttons">
+<img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Always allow and Deny buttons">
+<img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, its output, why Claude asked, and Approve, Always allow and Deny buttons">
 </div>
 
 ## Answering by hand

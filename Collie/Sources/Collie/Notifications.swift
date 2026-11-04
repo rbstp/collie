@@ -178,7 +178,7 @@ extension ApprovalDecision {
     var title: String {
         switch self {
         case .approve: "Approve"
-        case .approveAlways: "Approve always"
+        case .approveAlways: "Always allow"
         case .deny: "Deny"
         case .choose(let choice): "Choose option \(Int(choice) + 1)"
         }
@@ -187,7 +187,7 @@ extension ApprovalDecision {
     var pastTense: String {
         switch self {
         case .approve: "Approved"
-        case .approveAlways: "Always approved"
+        case .approveAlways: "Always allowed"
         case .deny: "Denied"
         case .choose(let choice): "Chose option \(Int(choice) + 1)"
         }
@@ -209,7 +209,7 @@ extension ApprovalDecision {
     var progressive: String {
         switch self {
         case .approve: "Approving…"
-        case .approveAlways: "Always approving…"
+        case .approveAlways: "Always allowing…"
         case .deny: "Denying…"
         case .choose: "Choosing…"
         }

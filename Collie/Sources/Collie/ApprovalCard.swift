@@ -15,7 +15,7 @@ struct ApprovalCard: View {
     @State private var headerHeight: CGFloat = 0
     @FocusState private var field: String?
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .caption) private var commandLine: CGFloat = 15
+    @ScaledMetric(relativeTo: .footnote) private var commandLine: CGFloat = 16
     @ScaledMetric(relativeTo: .caption) private var fade: CGFloat = 16
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
@@ -112,8 +112,9 @@ struct ApprovalCard: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
             .accessibilityHint(expanded ? "Shows less of the prompt" : "Shows the whole prompt")
             if approval.toolName != nil, let command = approval.toolSummary {
-                // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole.
-                let wrapped = command.replacingOccurrences(of: "-", with: "-\u{2060}")
+                // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
+                // and a bare `--` stays with the argument after it.
+                let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: wrapped)
                         .lineLimit(expanded ? nil : commandLines)
@@ -132,9 +133,10 @@ struct ApprovalCard: View {
                             .buttonStyle(.borderless)
                     }
                 }
-                .font(.caption.monospaced())
+                .font(.footnote.monospaced())
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
             if let reason = approval.reason {
@@ -144,14 +146,28 @@ struct ApprovalCard: View {
                 QuestionText(snippet: approval.snippet)
             } else if !approval.snippet.isEmpty, expanded || !typeSize.isAccessibilitySize {
                 // Collapsed at accessibility sizes, the card's share of the screen left the output a sliver.
-                Text(verbatim: approval.snippet)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(expanded ? nil : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
-                    .fixedSize(horizontal: false, vertical: true)
+                let lines = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false)
+                let more = expanded ? 0 : lines.count - 3
+                VStack(alignment: .leading, spacing: 4) {
+                    if expanded {
+                        Text(verbatim: approval.snippet)
+                    } else {
+                        // One line each, so the count below is every line not shown.
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(lines.prefix(3).indices, id: \.self) { Text(verbatim: String(lines[$0])).lineLimit(1) }
+                        }
+                    }
+                    if more > 0 {
+                        Text(more == 1 ? "+1 line" : "+\(more) lines").font(.caption)
+                    }
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                .fixedSize(horizontal: false, vertical: true)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item, field: $field)
@@ -293,17 +309,23 @@ private struct DecisionButtons: View {
 
     var body: some View {
         GlassEffectContainer(spacing: 8) {
-            // Labels never shrink to fit: the decisions stack when one row would cut a label.
+            // Labels never shrink to fit: the decisions take two rows, then stack, when a row would cut a label.
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { buttons }
-                VStack(spacing: 8) { buttons }
+                HStack(spacing: 8) { buttons(options) }
+                VStack(spacing: 8) {
+                    buttons(Array(options.prefix(1)))
+                    HStack(spacing: 8) { buttons(Array(options.dropFirst())) }
+                }
+                VStack(spacing: 8) { buttons(options) }
             }
         }
         .disabled(expired || item.unreachable || model.steps[item.id] != nil)
     }
 
-    private var buttons: some View {
-        ForEach(item.approval.options, id: \.self) { decision in
+    private var options: [ApprovalDecision] { item.approval.options }
+
+    private func buttons(_ decisions: [ApprovalDecision]) -> some View {
+        ForEach(decisions, id: \.self) { decision in
             Button(role: decision == .deny ? .destructive : nil) {
                 Task { await model.decide(item, decision) }
             } label: {
@@ -316,11 +338,12 @@ private struct DecisionButtons: View {
                         Text(decision.title).lineLimit(1)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, minHeight: 22)
             }
             .modifier(DecisionStyle(decision: decision))
             .font(.footnote)
-            .controlSize(.small)
+            .controlSize(.regular)
             .disabled(model.note(for: item) != nil && !item.approval.takesNote(with: decision))
         }
     }
