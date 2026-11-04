@@ -19,7 +19,9 @@ struct ApprovalCard: View {
     @State private var addNoteHeight: CGFloat = 0
     @FocusState private var field: String?
     @ScaledMetric(relativeTo: .footnote) private var commandLine: CGFloat = 16
-    @ScaledMetric(relativeTo: .caption) private var fade: CGFloat = 16
+    // Capped: at the largest sizes the fade covered the whole line of the reason above the decisions.
+    @ScaledMetric(relativeTo: .caption) private var scaledFade: CGFloat = 16
+    private var fade: CGFloat { min(scaledFade, 24) }
     @ScaledMetric(relativeTo: .caption) private var reasonLine: CGFloat = 16
     private let padding: CGFloat = 10
     private let spacing: CGFloat = 6
@@ -40,11 +42,12 @@ struct ApprovalCard: View {
     // everything shows and scrolls.
     private var fitsAtRest: Bool { !expanded && pinsDecisions && maxHeight.isFinite }
     private var reasonMinimum: CGFloat { approval.reason == nil ? 0 : spacing + 2 * 8 + reasonLine }
-    // When not even one command line fits (landscape), the command keeps three and scrolls.
+    // When not even one command line fits with Show full command and a line of the reason, the command keeps one above
+    // pinned decisions (the largest text sizes), so they stay in view, and three when everything scrolls (landscape).
     private var commandLines: Int {
         guard maxHeight.isFinite else { return 3 }
         let lines = Int((room - headerHeight - spacing - 2 * 8 - 4 - commandLine - reasonMinimum) / commandLine)
-        return lines < 1 ? 3 : min(3, lines)
+        return lines < 1 ? (pinsDecisions ? 1 : 3) : min(3, lines)
     }
     private var reasonLines: Int? {
         guard fitsAtRest else { return nil }
@@ -146,10 +149,19 @@ struct ApprovalCard: View {
                         }
                         .accessibilityLabel(command)
                     if !expanded, commandFull > commandShown + 1 {
-                        Button("Show full command") { withAnimation { model.toggleExpanded(item) } }
-                            .font(.caption)
-                            .foregroundStyle(.primary.opacity(0.6))
-                            .buttonStyle(.plain)
+                        Button {
+                            withAnimation { model.toggleExpanded(item) }
+                        } label: {
+                            // A second line at the largest text sizes cost the reason its place above the decisions.
+                            ViewThatFits(in: .horizontal) {
+                                Text("Show full command")
+                                Text("Full command")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.primary.opacity(0.6))
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show full command")
                     }
                 }
                 .font(.footnote.monospaced())
@@ -239,6 +251,7 @@ private struct UpToContent: Layout {
 struct ApprovalReason: View {
     let reason: String
     var lines: Int?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Label {
@@ -249,8 +262,9 @@ struct ApprovalReason: View {
         .font(.caption)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Orange fill alone reads as muddy brown over dark glass; a faint fill inside an orange rim carries the warning.
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        // Orange fill alone reads as muddy brown over dark glass; a faint fill inside an orange rim carries the warning,
+        // fainter in dark mode, where 10% still read brown.
+        .background(.orange.opacity(colorScheme == .dark ? 0.06 : 0.1), in: RoundedRectangle(cornerRadius: 12))
         .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.4), lineWidth: 1) }
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)

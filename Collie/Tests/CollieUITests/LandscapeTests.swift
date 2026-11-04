@@ -155,6 +155,24 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(eventually(within: 10) { reason.exists && reason.frame.maxY <= approve.frame.minY }, app.debugDescription)
     }
 
+    func testApprovalCardKeepsShowFullCommandAndTheReasonAboveApproveAtTheLargestText() throws {
+        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        defer { app.terminate() }
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+        let approve = app.buttons["Approve"]
+        XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
+        // Chat's scroll view takes accessibility hit tests under the header and the band.
+        app.buttons["Terminal"].firstMatch.tap()
+        XCTAssertTrue(eventually(within: 30) { approve.isHittable }, app.debugDescription)
+        // Too tall for even one command line with them, the command keeps one line rather than three that pushed both out of view.
+        let show = app.buttons["Show full command"]
+        let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: ")).firstMatch
+        XCTAssertTrue(
+            eventually(within: 10) { show.exists && show.frame.maxY <= approve.frame.minY && reason.exists && reason.frame.minY < approve.frame.minY },
+            app.debugDescription
+        )
+    }
+
     /// A press and drag: XCUITest's swipes left the approval card unscrolled in landscape.
     private func drag(_ element: XCUIElement, by dy: CGFloat) {
         let start = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
