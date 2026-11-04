@@ -17,7 +17,7 @@ The layout button at the top switches between Grid, List and Inbox. List is a co
 
 ### Grid
 
-Each machine gets a section of cards, each led by the agent's status, title, workspace, time in its status and remaining context. While **Settings > Sessions > Default view** is Chat (the default), a card previews the latest message of the conversation, a starred card the last three. Set to Terminal, it previews the bottom of the agent's screen. A blocked agent's card always shows its screen, prompt included; other cards show [running subagents](#running-subagents) at the top.
+Each machine gets a section of cards. A card leads with a preview, then one line with the agent's status, title and time in its status, and one with its workspace and remaining context. While **Settings > Sessions > Default view** is Chat (the default), a card previews the latest message of the conversation, a starred card the last three. Set to Terminal, it previews the bottom of the agent's screen. A blocked agent's card always shows its screen, prompt included; other cards show [running subagents](#running-subagents) at the top.
 
 - **Star** a card: long-press it and choose **Star**. Starred cards lead their machine's section, full width with a taller preview. The machine keeps stars for all your phones until the pane closes or you remove the machine.
 - **Reorder** cards by dragging. Dropping a card among the starred cards stars it, and among the others unstars it; when one group is empty, drop on **Drop here to star** or **Drop here to unstar**. This phone keeps the order.
@@ -34,7 +34,7 @@ To hide an agent that is not blocked, swipe its row right, choose **Snooze**, th
 
 ## Remaining context
 
-A percentage such as **38% left** shows how much context a Claude Code or Codex agent has left, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
+A chip and a percentage such as **38%** show how much context a Claude Code or Codex agent has left, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
 
 ## Running subagents
 

@@ -223,7 +223,7 @@ private func entry(
 
 @MainActor
 @Test func contextRingTonesUseSystemColorsByUsedShare() {
-    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (20, .orange), (11, .orange), (10, .red), (0, .red)]
+    let expected: [(UInt8, Color)] = [(100, .green), (41, .green), (10, .red), (0, .red)]
     for (left, color) in expected {
         #expect(ContextRing.tone(left) == color)
     }
@@ -235,5 +235,9 @@ private func entry(
     for left: UInt8 in [40, 21] {
         #expect(ContextRing.tone(left).resolve(in: dark) == Color.yellow.resolve(in: dark))
         #expect(ContextRing.tone(left).resolve(in: light) != Color.yellow.resolve(in: light))
+    }
+    for left: UInt8 in [20, 11] {
+        #expect(ContextRing.tone(left).resolve(in: dark) == Color.orange.resolve(in: dark))
+        #expect(ContextRing.tone(left).resolve(in: light) != Color.orange.resolve(in: light))
     }
 }
