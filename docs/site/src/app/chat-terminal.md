@@ -2,7 +2,7 @@
 
 A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch with the toggle at the top of the session. **Settings > Sessions > Default view** picks the view that opens first (Chat by default) and what [grid cards](agents-tab.md#grid) preview. Plain terminals have only Terminal.
 
-With the largest text sizes (**Settings > Accessibility > Display & Text Size > Larger Text**), the session's title moves from the top bar to the top of the session header, so it grows with your text. While an approval waits, it stays in the top bar to leave the approval room.
+With the largest text sizes (**Settings > Accessibility > Display & Text Size > Larger Text**), in portrait, the session's title moves from the top bar to the top of the session header, so it grows with your text. While an approval waits, it stays in the top bar to leave the approval room.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/chat-light.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">

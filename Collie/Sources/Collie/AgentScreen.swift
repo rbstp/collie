@@ -224,7 +224,7 @@ struct AgentScreen: View {
             ToolbarItem(placement: .principal) {
                 // At accessibility sizes the title heads the session header instead, where it can outgrow the bar, unless
                 // approval cards show: there its lines left the command and the reason no room above the decisions.
-                if typeSize.isAccessibilitySize && approvalItems.isEmpty {
+                if typeSize.isAccessibilitySize && verticalSizeClass != .compact && approvalItems.isEmpty {
                     Color.clear.frame(width: 1, height: 1)
                 } else {
                     SessionTitle(title: title)
@@ -441,15 +441,18 @@ private struct AgentHeader: View {
     let machineLabel: String?
     @Binding var showingChat: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    // Landscape has the width for one row, and three left the session two lines of the screen.
+    private var stacked: Bool { typeSize.isAccessibilitySize && verticalSizeClass != .compact }
 
     var body: some View {
         VStack(spacing: 6) {
-            if typeSize.isAccessibilitySize && !approving {
+            if stacked && !approving {
                 SessionTitle(title: title, inHeader: true).frame(maxWidth: .infinity, alignment: .leading)
             }
             // One row, like the navigation bar it sits under; at accessibility sizes it pushed the screen past both
             // edges, so the state and its time take a row of their own above the rest.
-            let row = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
+            let row = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
             row {
                 HStack(spacing: 8) {
                     if let agent = model.agent {
@@ -497,7 +500,7 @@ private struct AgentHeader: View {
                                 .fixedSize()
                         }
                     }
-                    if typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    if stacked { Spacer(minLength: 0) }
                     if !model.isTerminal {
                         // No glass backing here: an extra glass layer beside other glass left keyboard animations unfinished after a picker closed.
                         GlassPicker(title: "Session view", selection: $showingChat, options: [("Chat", true), ("Terminal", false)],
