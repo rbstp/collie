@@ -2,7 +2,7 @@ import CollieCore
 import SwiftUI
 
 /// The Agents tab's Usage view: one card per machine with the plan usage collied last recorded,
-/// then a card of its tokens and estimated cost.
+/// then its tokens and estimated cost.
 struct UsageSections: View {
     let entries: [MachineFlockEntry]
     let core: (any FlockCore)?
@@ -38,9 +38,8 @@ struct UsageSections: View {
                         }
                         .padding(.vertical, 4)
                     }
-                } else {
-                    UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
                 }
+                UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
             } header: {
                 TimelineView(.everyMinute) { context in
                     let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
@@ -56,12 +55,6 @@ struct UsageSections: View {
             }
             .listSectionSpacing(.compact)
             .opacity(entry.linkDown ? 0.6 : 1)
-            if planUsage != nil {
-                Section {
-                    UsageCostsCard(core: core, machineId: entry.machine.id, link: entry.flock?.link, refresh: refresh)
-                }
-                .opacity(entry.linkDown ? 0.6 : 1)
-            }
         }
     }
 }
@@ -75,7 +68,7 @@ private struct CodexSubscriptionUsage: View {
         VStack(alignment: .leading, spacing: 10) {
             UsageHeader(image: "Codex", title: "Codex", recordedMs: usage.isStale(now: now) ? usage.recordedMs : nil, now: now)
             UsageLimitRow(
-                title: "Monthly usage limit", figure: "\(usage.used.formatted()) / \(usage.limit.formatted())",
+                title: "Monthly limit", figure: "\(usage.used.formatted()) / \(usage.limit.formatted())",
                 used: percent, elapsed: usage.elapsed(now: now), resets: "credits · \(usage.resetsLine)"
             )
             .accessibilityElement(children: .ignore)
@@ -142,6 +135,7 @@ private struct UsageLimitRow: View {
                 Text(title)
                 if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                 Text(figure).fontWeight(.semibold).monospacedDigit().layoutPriority(1)
+                    .foregroundStyle(used.map { $0 >= 80 ? ContextRing.tone(100 - $0) : .primary } ?? .primary)
             }
             .font(.subheadline)
             if let used {
@@ -176,7 +170,7 @@ private struct UsageHeader: View {
     }
 }
 
-/// Percent used, in the context ring's palette, with a tick where the window's elapsed share is.
+/// Percent used, in the accent until the context ring's warning tiers, with a tick where the window's elapsed share is.
 private struct UsageBar: View {
     let used: UInt8
     let elapsed: Double
@@ -186,7 +180,7 @@ private struct UsageBar: View {
             let width = geo.size.width
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary).frame(height: 4)
-                Capsule().fill(ContextRing.tone(100 - used)).frame(width: width * Double(used) / 100, height: 4)
+                Capsule().fill(used < 80 ? AnyShapeStyle(.tint) : AnyShapeStyle(ContextRing.tone(100 - used))).frame(width: width * Double(used) / 100, height: 4)
                 Capsule()
                     .fill(.secondary)
                     .frame(width: 2, height: 12)

@@ -19,7 +19,7 @@ final class LandscapeTests: XCTestCase {
         }
         let view = app.segmentedControls["View"]
         view.buttons["Usage"].tap()
-        let usage = Match(.staticText, "5-hour usage limit")
+        let usage = Match(.staticText, "5-hour limit")
         XCTAssertTrue(app.element(usage).appears(within: 10), app.debugDescription)
         for orientation: UIDeviceOrientation in [.landscapeRight, .portrait, .landscapeLeft] {
             XCTAssertTrue(app.rotate(to: orientation), app.debugDescription)

@@ -229,7 +229,7 @@ struct UsageLimit: Equatable {
 
     var left: UInt8 { 100 - used }
 
-    var title: String { label == "5h" ? "5-hour usage limit" : "Weekly usage limit" }
+    var title: String { label == "5h" ? "5-hour limit" : "Weekly limit" }
 
     /// The share of the window that has passed, from its reset time and its length.
     var elapsed: Double { min(1, max(0, 1 - Double(seconds) / Double(length))) }

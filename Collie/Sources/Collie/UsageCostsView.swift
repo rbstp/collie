@@ -183,6 +183,7 @@ private struct CostsDetail: View {
                     ForEach(bars, id: \.day) { bar in
                         BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
                             .foregroundStyle(.tint.opacity(picked == nil || picked == bar.day ? 1 : 0.35))
+                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4))
                     }
                     // Drawn after every bar, so the callout is not covered by the next one.
                     if let bar = bars.first(where: { $0.day == picked }) {
@@ -205,6 +206,7 @@ private struct CostsDetail: View {
                         if let before, let now = pickedDay, Calendar.current.isDate(before, inSameDayAs: now) { pickedDay = nil }
                     }
                 }
+                .chartXAxis { AxisMarks { AxisValueLabel() } }
                 .chartYAxis {
                     AxisMarks { value in
                         AxisGridLine()

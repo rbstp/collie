@@ -51,7 +51,7 @@ final class PagerSwipeTests: XCTestCase {
         // The lists' cells, not the pager's pages.
         let rows = app.collectionViews.firstMatch.collectionViews.cells
         let row = rows.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
-        let card = rows.containing(NSPredicate(format: "label == %@", "5-hour usage limit")).firstMatch
+        let card = rows.containing(NSPredicate(format: "label == %@", "5-hour limit")).firstMatch
         view.buttons["Usage"].tap()
         // Each rotation happens with Usage on screen. iPhone Duo's cover display does not rotate, so there every pass is portrait.
         for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait] {
