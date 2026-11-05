@@ -303,7 +303,7 @@ struct AgentCard: View {
                     .foregroundStyle(.metadata)
                     .lineLimit(1)
                     Spacer(minLength: 0)
-                    if let left = agent.contextLeft {
+                    if let left = agent.contextLeft, ContextRing.shows(left) {
                         ContextRing(left: left, font: .caption2)
                     }
                 }

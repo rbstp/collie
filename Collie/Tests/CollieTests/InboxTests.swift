@@ -220,6 +220,16 @@ private func entry(
 }
 
 @MainActor
+@Test func contextFigureShowsOnlyBelowSeventyPercentLeft() {
+    for left: UInt8 in [255, 100, 70] {
+        #expect(!ContextRing.shows(left))
+    }
+    for left: UInt8 in [69, 38, 12, 0] {
+        #expect(ContextRing.shows(left))
+    }
+}
+
+@MainActor
 @Test func contextRingTonesFollowTheOneWarningRule() {
     for left: UInt8 in [100, 41, 21] {
         #expect(ContextRing.tone(left) == .accentColor)

@@ -493,10 +493,10 @@ private struct AgentRow: View {
                 .font(.caption)
                 .foregroundStyle(.metadata)
                 // At accessibility sizes a trailing column cut the title and the workspace to a few letters.
-                if typeSize.isAccessibilitySize, let left = agent.contextLeft { ContextRing(left: left, font: .caption2) }
+                if typeSize.isAccessibilitySize, let left = agent.contextLeft, ContextRing.shows(left) { ContextRing(left: left, font: .caption2) }
             }
             Spacer()
-            if !typeSize.isAccessibilitySize, let left = agent.contextLeft { ContextRing(left: left, font: .caption2, aligned: true) }
+            if !typeSize.isAccessibilitySize, let left = agent.contextLeft, ContextRing.shows(left) { ContextRing(left: left, font: .caption2, aligned: true) }
         }
     }
 }
@@ -681,6 +681,9 @@ struct ContextRing: View {
     private func label(_ figure: String) -> some View {
         Label(figure, systemImage: "memorychip").labelStyle(KindLabelStyle())
     }
+
+    /// Owner decision: the figure shows only once less than 70% of the context is left.
+    static func shows(_ left: UInt8) -> Bool { left < 70 }
 
     /// The one warning rule for context and usage limits: accent, orange from 80% used, red from 90%.
     static func tone(_ left: UInt8) -> Color {

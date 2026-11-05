@@ -547,7 +547,7 @@ private struct AgentHeader: View {
                         if let kind = agent.kind {
                             AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
                         }
-                        if let left = agent.contextLeft {
+                        if let left = agent.contextLeft, ContextRing.shows(left) {
                             ContextRing(left: left)
                         }
                     }

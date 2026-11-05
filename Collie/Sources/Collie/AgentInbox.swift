@@ -463,7 +463,7 @@ private struct InboxRow: View {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
                     Spacer(minLength: 0)
-                    if let left = agent.contextLeft {
+                    if let left = agent.contextLeft, ContextRing.shows(left) {
                         ContextRing(left: left, font: .caption2, aligned: true)
                     }
                 }
