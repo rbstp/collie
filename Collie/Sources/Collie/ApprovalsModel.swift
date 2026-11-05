@@ -129,13 +129,12 @@ final class ApprovalsModel {
         .sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }
         swept = swept.filter { connected.contains($0.key) }
         guard next != items else { return }
-        let pending = next.map(\.approval)
-        if pending == items.filter({ $0.id != noticeSubject }).map(\.approval) {
-            if noticeSubject != nil {
+        if let subject = noticeSubject {
+            if !next.contains(where: { $0.id == subject }) {
                 noticeSubject = nil
                 expireNotice()
             }
-        } else if pending != items.map(\.approval) {
+        } else if next.map(\.approval) != items.map(\.approval) {
             show(nil)
         }
         items = next
