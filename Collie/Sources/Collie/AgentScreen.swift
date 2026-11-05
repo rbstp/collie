@@ -970,11 +970,12 @@ private struct CursorJoystick: View {
     @State private var direction: AgentKey?
     @State private var pressed = false
     @State private var repeating: Task<Void, Never>?
+    @Environment(\.appAccent) private var appAccent
 
     var body: some View {
         ZStack {
             if let direction {
-                JoystickSector(direction: direction).fill(.tint)
+                JoystickSector(direction: direction).fill(appAccent)
             }
             if pressed {
                 Circle().fill(.primary).frame(width: 8, height: 8)
@@ -1361,7 +1362,7 @@ private struct PromptBar: View {
         Button {
             model.keysShown.toggle()
         } label: {
-            Image(systemName: model.keysShown ? "keyboard.badge.ellipsis.fill" : "keyboard.badge.ellipsis")
+            Image(systemName: "command")
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
