@@ -158,6 +158,25 @@ final class KeyStripTests: XCTestCase {
         XCTAssertEqual(joysticks.count, 0, app.debugDescription)
     }
 
+    func testReturnHidesTheTerminalKeyboard() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+        app.buttons["Keyboard"].tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        app.typeText("ok")
+        XCTAssertFalse(keyboard.disappears(within: 2), app.debugDescription)
+        app.typeText("\n")
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+    }
+
     private func removeShortcuts(_ app: XCUIApplication) {
         app.buttons["Edit key shortcuts"].tap()
         XCTAssertTrue(app.buttons["Add shortcut"].appears(within: 10), app.debugDescription)

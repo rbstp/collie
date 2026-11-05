@@ -104,7 +104,10 @@ struct AgentScreen: View {
                         // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                         switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom,
-                        typing: $typing, type: { model.type($0) }, deleteBackward: { model.tap(.backspace) }
+                        typing: $typing, type: { text in
+                            model.type(text)
+                            if !model.keepsKeyboard(after: text) { typing = false }
+                        }, deleteBackward: { model.tap(.backspace) }
                     ) { await model.refresh() }
                         // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
                         .ignoresSafeArea(edges: [.top, .bottom])

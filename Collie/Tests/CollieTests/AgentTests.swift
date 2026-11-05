@@ -3233,6 +3233,17 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
+@Test func returnInTheTerminalHidesTheKeyboardUnlessKept() throws {
+    let prefs = try makeTemporaryDirectory().appending(path: "prefs.json")
+    let model = AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefs)
+    #expect(model.keepsKeyboard(after: "ok"))
+    #expect(!model.keepsKeyboard(after: "\n"))
+    #expect(!model.keepsKeyboard(after: "ok\r\n"))
+    DevicePrefs.update(in: prefs) { $0.keepKeyboard = true }
+    #expect(model.keepsKeyboard(after: "\n"))
+}
+
+@MainActor
 @Test func hidingTheKeysClearsTheModifierAndIsRemembered() throws {
     let prefs = try makeTemporaryDirectory().appending(path: "prefs.json")
     let model = AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefs)

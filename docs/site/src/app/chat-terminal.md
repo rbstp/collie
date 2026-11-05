@@ -43,7 +43,7 @@ Terminal shows the last 200 lines of the agent's pane, or 500 or 1000 with **Set
 
 Terminal has no prompt field: you type straight into the pane, as in a terminal app.
 
-- Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys.
+- Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys. Return also hides the keyboard, unless **Settings > Prompt > Keep keyboard open after sending** is on.
 - The [key strip](keys.md) stays above the keyboard for Escape and Control. Its joystick sends the arrows; with the strip hidden, the joystick sits beside the keyboard button.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 
