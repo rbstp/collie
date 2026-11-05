@@ -160,18 +160,22 @@ final class LandscapeTests: XCTestCase {
         defer { app.terminate() }
         app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
-        // The card leaves the output to the sheet.
-        let output = app.buttons["Output, 8 lines"]
-        XCTAssertTrue(output.appears(within: 10), app.debugDescription)
+        // The card leaves the output to the sheet, and Review is its one way in.
+        let review = app.buttons["Review"]
+        XCTAssertTrue(review.appears(within: 10), app.debugDescription)
         XCTAssertFalse(app.staticTexts["test approvals::case_1 ... ok"].exists, app.debugDescription)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Output")).firstMatch.exists, app.debugDescription)
         let addNote = app.buttons["Add note"]
         XCTAssertTrue(addNote.appears(within: 10), app.debugDescription)
-        XCTAssertGreaterThanOrEqual(output.frame.height, 44, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(review.frame.height, 44, app.debugDescription)
         XCTAssertGreaterThanOrEqual(addNote.frame.height, 44, app.debugDescription)
-        XCTAssertFalse(output.frame.intersects(addNote.frame), app.debugDescription)
-        output.tap()
+        review.tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
+        // A note goes with the decision: Add note sits right above the decisions.
+        let sheetNote = app.buttons.matching(identifier: "Add note").allElementsBoundByIndex.first { $0.isHittable }
+        let sheetApprove = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertLessThanOrEqual(try XCTUnwrap(sheetNote, app.debugDescription).frame.maxY, try XCTUnwrap(sheetApprove).frame.minY, app.debugDescription)
         // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
         // only on the band behind it.
         let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
@@ -193,8 +197,8 @@ final class LandscapeTests: XCTestCase {
         XCTAssertFalse(notice.firstMatch.exists, app.debugDescription)
     }
 
-    /// Opens the review sheet from the band: the task, the whole command, the reason and every decision in reach, then
-    /// closes it. The band stays under the sheet, so each is looked for among the elements a tap reaches.
+    /// Opens the review sheet from the band: the task, the whole command and every decision in reach, and the reason at
+    /// most a scroll away, then closes it. The band stays under the sheet, so each is looked for among the elements a tap reaches.
     private func review(_ app: XCUIApplication) throws {
         app.buttons["Review"].tap()
         let close = app.buttons["Close"]
@@ -203,9 +207,13 @@ final class LandscapeTests: XCTestCase {
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
         let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
         let decisions = ["Approve", "Always allow", "Deny"].map { ($0, app.buttons.matching(identifier: $0)) }
-        for (name, query) in [("task", task), ("reason", reason), ("command", command)] + decisions {
-            XCTAssertTrue(eventually(within: 10) { query.allElementsBoundByIndex.contains { $0.isHittable } }, "\(name)\n\(app.debugDescription)")
+        let hittable = { (query: XCUIElementQuery) in query.allElementsBoundByIndex.first { $0.isHittable } }
+        for (name, query) in [("task", task), ("command", command)] + decisions {
+            XCTAssertTrue(eventually(within: 10) { hittable(query) != nil }, "\(name)\n\(app.debugDescription)")
         }
+        // In landscape at accessibility sizes the sheet shows little more than the command over the decisions.
+        if !eventually(within: 2, { hittable(reason) != nil }) { try XCTUnwrap(hittable(command), app.debugDescription).swipeUp() }
+        XCTAssertTrue(eventually(within: 10) { hittable(reason) != nil }, "reason\n\(app.debugDescription)")
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
     }
