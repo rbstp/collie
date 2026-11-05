@@ -318,11 +318,19 @@ struct NewTaskSheet: View {
                     }
                 } footer: {
                     if !naming {
-                        Button("Name workspace") {
+                        Button {
                             naming = true
                             editingLabel = true
+                        } label: {
+                            Text("Name workspace")
+                                .padding(.top, 7)
+                                .frame(minHeight: 44, alignment: .top)
+                                .contentShape(Rectangle())
                         }
                         .font(.footnote)
+                        // The footer takes taps only inside its own bounds: a 44-point target fills it from the top, the
+                        // words where they were, which adds room only at the form's end.
+                        .padding(.vertical, -7)
                     }
                 }
             }

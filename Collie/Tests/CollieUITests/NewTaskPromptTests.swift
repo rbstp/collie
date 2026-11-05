@@ -72,7 +72,9 @@ final class NewTaskPromptTests: XCTestCase {
         XCTAssertTrue(name.appears(within: 5), app.debugDescription)
         let label = app.textFields["Workspace label"]
         XCTAssertFalse(label.exists, app.debugDescription)
-        name.tap()
+        XCTAssertGreaterThanOrEqual(name.frame.height, 44, app.debugDescription)
+        // Near the target's top edge, above the words.
+        name.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 30, dy: 3)).tap()
         XCTAssertTrue(label.appears(within: 5), app.debugDescription)
         XCTAssertTrue(name.disappears(within: 5), app.debugDescription)
         XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
