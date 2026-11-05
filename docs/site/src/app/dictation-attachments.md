@@ -8,4 +8,4 @@ To start over in an agent's prompt field without stopping, tap the clear button 
 
 ## Attachments
 
-Use the paperclip to attach up to 10 photos or files to a prompt; remove any before sending. They upload over the tailnet, and the agent receives their paths on the machine. In Terminal, each path is typed into the terminal as soon as its upload ends, and dictation types what you said when you stop. Each file can be up to 20 MiB, and a machine holds up to 200 MiB of attachments. `collied` stores them in a private folder and deletes them after 24 hours.
+In Chat, use the paperclip to attach up to 10 photos or files to a prompt; remove any before sending. They upload over the tailnet, and the agent receives their paths on the machine. Terminal has no paperclip; there, dictation types what you said when you stop. Each file can be up to 20 MiB, and a machine holds up to 200 MiB of attachments. `collied` stores them in a private folder and deletes them after 24 hours.

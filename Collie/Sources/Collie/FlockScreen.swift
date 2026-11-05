@@ -572,39 +572,15 @@ struct KindLabelStyle: LabelStyle {
 
 struct StatusPill: View {
     let state: AgentState
-    var title: String? = nil
-    // Resolved where it is drawn: Color.accentColor keeps the app's light variant under a forced dark scheme.
-    @Environment(\.appAccent) private var appAccent
+    let title: String
     @Environment(\.colorScheme) private var colorScheme
-    @ScaledMetric(relativeTo: .caption) private var spinner: CGFloat = 14
 
     var body: some View {
-        let words = title ?? state.label.capitalized
-        // A status shows only its icon, read as the word; a title such as an approval count shows.
-        let iconOnly = title == nil
-        Label {
-            if !iconOnly { Text(words) }
-        } icon: {
-            if state == .working {
-                // The spinner grows less than text with Dynamic Type; pinned at its 20 pt default, it scales with the label.
-                StatusIcon(state: state)
-                    .dynamicTypeSize(.large)
-                    .scaleEffect(spinner / 20)
-                    .frame(width: spinner, height: spinner)
-                    .accessibilityLabel(words)
-                    .accessibilityHidden(!iconOnly)
-            } else if iconOnly {
-                Image(systemName: StatusIcon.symbol(state))
-                    .frame(width: spinner, height: spinner)
-                    .accessibilityLabel(words)
-            } else {
-                Image(systemName: StatusIcon.symbol(state))
-            }
-        }
+        Label(title, systemImage: StatusIcon.symbol(state))
             .labelStyle(KindLabelStyle())
             .font(.caption.weight(.semibold))
-            .foregroundStyle(state == .working ? appAccent : state.color)
-            .padding(.horizontal, iconOnly ? 4 : 8)
+            .foregroundStyle(state.color)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .padding(2)
             .glassEffect(.regular, in: .capsule)
@@ -629,6 +605,7 @@ struct StatusAge: View {
 struct StatusIcon: View {
     let state: AgentState
     var size: CGFloat = 20
+    var dimsIdle = true
     @ScaledMetric(relativeTo: .subheadline) private var scale: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.appAccent) private var appAccent
@@ -651,8 +628,9 @@ struct StatusIcon: View {
                     Circle().stroke(appAccent, lineWidth: 1.5 * unit).padding(2.5 * unit)
                     ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6 * unit)
                 }
-            // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; its pill label keeps the full color.
-            default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle ? 0.75 : 1))
+            // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; the session header, over
+            // the terminal, keeps the full color.
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle && dimsIdle ? 0.75 : 1))
             }
         }
         .frame(width: side, height: side)

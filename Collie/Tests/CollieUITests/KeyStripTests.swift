@@ -15,8 +15,8 @@ final class KeyStripTests: XCTestCase {
 
         let keys = app.buttons["Keys"]
         XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
-        let attachment = app.buttons["Attachments and saved prompts"]
-        XCTAssertLessThan(attachment.frame.maxX, keys.frame.minX, app.debugDescription)
+        // Chat keeps the attachments; Terminal has no paperclip.
+        XCTAssertFalse(app.buttons["Attachments and saved prompts"].exists, app.debugDescription)
         if keys.isSelected { keys.tap() }
         let escape = app.buttons["Escape"]
         XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
