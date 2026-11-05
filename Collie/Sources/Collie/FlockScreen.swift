@@ -40,6 +40,7 @@ struct FlockScreen: View {
                 agents.background(GridPageLock(locked: pagerLocked) { listMargin = $0 }).tag(false)
                 List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }
                     .modifier(PagerListMargin(edge: .leading, margin: listMargin))
+                    .refreshable { await refresh() }
                     // Off screen, the Agents page is not laid out on a rotation, and Usage kept the other orientation's margin.
                     .background(GridPageLock(locked: pagerLocked) { listMargin = $0 })
                     .tag(true)
@@ -67,11 +68,6 @@ struct FlockScreen: View {
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(removing: .title)
-            .refreshable {
-                for machine in machines { try? core?.reconnect(machineId: machine.id) }
-                await model.refresh(core: core, machines: machines)
-                usageRefresh += 1
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if tailnetStarting {
@@ -227,6 +223,7 @@ struct FlockScreen: View {
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
                 closePane: { model.beginClose(.pane, route: $0) }, margin: listMargin, menu: menu, dragging: $dragging
             )
+            .refreshable { await refresh() }
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
                 previews.showChat(DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat)
@@ -236,7 +233,8 @@ struct FlockScreen: View {
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
-                query: $inboxQuery, searching: $inboxSearching, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
+                query: $inboxQuery, searching: $inboxSearching, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin,
+                refresh: refresh, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -300,6 +298,7 @@ struct FlockScreen: View {
                 .listSectionSpacing(.compact)
                 .modifier(PagerListMargin(edge: .trailing, margin: listMargin))
             }
+            .refreshable { await refresh() }
         }
     }
 
@@ -325,6 +324,13 @@ struct FlockScreen: View {
     private func snapshotOrder(opening route: AgentRoute) {
         let shown = layoutOrder(model.entries, starred: previews.starred, filtered: true)
         swipeOrder = shown.contains(route) ? shown : nil
+    }
+
+    // Each page takes its own refreshable: on the pager it reached every scroll view, the inbox's filter row too.
+    private func refresh() async {
+        for machine in machines { try? core?.reconnect(machineId: machine.id) }
+        await model.refresh(core: core, machines: machines)
+        usageRefresh += 1
     }
 
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
