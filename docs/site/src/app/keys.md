@@ -14,7 +14,7 @@ The main keys share one bar, with the joystick after it. With larger text, ctrl,
 
 The second row scrolls: **shift-tab**, **ctrl-return** and **ctrl-C**, with **shift-left** before **ctrl-C** in Codex sessions to answer a queued question, then your key shortcuts and **+** to add one.
 
-The round joystick sends the arrows: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
+The round joystick sends the arrows. With the strip hidden, it sits in the bottom row, beside the keyboard button. Press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
 
 ## Key shortcuts
 

@@ -44,7 +44,7 @@ Terminal shows the last 200 lines of the agent's pane, or 500 or 1000 with **Set
 Terminal has no prompt field: you type straight into the pane, as in a terminal app.
 
 - Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys.
-- The [key strip](keys.md) stays above the keyboard for Escape, Control and, with its joystick, the arrows.
+- The [key strip](keys.md) stays above the keyboard for Escape and Control. Its joystick sends the arrows; with the strip hidden, the joystick sits beside the keyboard button.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 
 - Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
@@ -57,7 +57,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - When a prompt cannot reach the machine, the send button spins while the phone retries, up to 5 tries in all, a minute apart or as soon as the connection is back. To stop, edit the prompt or tap the spinner.
 - **Quote** adds text to the end of the prompt as a code block, without sending it. A prompt holds up to 32 KiB.
 - To hide the keyboard, tap the hide-keyboard button or swipe down on the prompt field. **Settings > Prompt > Keep keyboard open after sending** keeps it up.
-- When a background task or agent below Claude Code's input box is selected on the machine, Claude Code would not send your prompt, so the phone keeps it and says so. Drag the key strip's joystick up, or press ↑ on the machine, to return to the input box, then send again.
+- When a background task or agent below Claude Code's input box is selected on the machine, Claude Code would not send your prompt, so the phone keeps it and says so. Drag the joystick up in Terminal, or press ↑ on the machine, to return to the input box, then send again.
 - An unsent prompt stays with its agent on this phone, and its attachments for up to 23 hours.
 
 See also [Key strip and gestures](keys.md), [Dictation and attachments](dictation-attachments.md), [Saved prompts](saved-prompts.md) and Claude Code's [draft sync](../agents/claude-code.md#draft-sync).

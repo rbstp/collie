@@ -112,6 +112,51 @@ final class KeyStripTests: XCTestCase {
         XCTAssertEqual(joystick.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
     }
 
+    func testJoystickWithoutTheStrip() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+
+        let keys = app.buttons["Keys"]
+        XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
+        let escape = app.buttons["Escape"]
+        if keys.isSelected { keys.tap() }
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+        let joysticks = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Arrow joystick"))
+        let joystick = joysticks.firstMatch
+        XCTAssertTrue(joystick.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 1, app.debugDescription)
+        XCTAssertTrue(joystick.isHittable, app.debugDescription)
+        let keyboardButton = app.buttons["Keyboard"]
+        XCTAssertEqual(joystick.frame.midY, keys.frame.midY, accuracy: 2, app.debugDescription)
+        XCTAssertEqual(joystick.frame.height, keyboardButton.frame.height, accuracy: 1, app.debugDescription)
+        XCTAssertLessThan(joystick.frame.maxX, keyboardButton.frame.minX, app.debugDescription)
+
+        keyboardButton.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(joystick.isHittable, app.debugDescription)
+        app.buttons["Hide keyboard"].tap()
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+
+        keys.tap()
+        XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 1, app.debugDescription)
+        XCTAssertEqual(joystick.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
+        keys.tap()
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+
+        app.buttons["Chat"].firstMatch.tap()
+        XCTAssertTrue(keys.disappears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 0, app.debugDescription)
+    }
+
     private func removeShortcuts(_ app: XCUIApplication) {
         app.buttons["Edit key shortcuts"].tap()
         XCTAssertTrue(app.buttons["Add shortcut"].appears(within: 10), app.debugDescription)

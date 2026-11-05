@@ -953,6 +953,7 @@ private struct StripChip<Label: View>: View {
 /// Dragged past its dead zone, sends that arrow, then repeats it while held.
 private struct CursorJoystick: View {
     let model: AgentModel
+    var diameter: CGFloat = 44
     @State private var direction: AgentKey?
     @State private var pressed = false
     @State private var repeating: Task<Void, Never>?
@@ -965,14 +966,14 @@ private struct CursorJoystick: View {
             if pressed {
                 Circle().fill(.primary).frame(width: 8, height: 8)
             } else {
-                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: 26))
+                Image(systemName: "dot.arrowtriangles.up.right.down.left.circle").font(.system(size: diameter - 18))
             }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: diameter, height: diameter)
         .clipShape(.circle)
         .glassEffect(.regular.interactive(), in: .circle)
         .background(SessionBarDim(), in: .circle)
-        .contentShape(.circle)
+        .contentShape(Circle().inset(by: (diameter - 44) / 2))
         .opacity(model.acceptsKeys ? 1 : 0.4)
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -1143,6 +1144,7 @@ private struct PromptBar: View {
                         }
                         .background(SessionBarDim(), in: .capsule)
                     }
+                    if !model.keysShown { CursorJoystick(model: model, diameter: 38) }
                     Button {
                         typing.toggle()
                     } label: {
