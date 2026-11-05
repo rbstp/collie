@@ -77,7 +77,10 @@ final class NewTaskPromptTests: XCTestCase {
         name.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 30, dy: 3)).tap()
         XCTAssertTrue(label.appears(within: 5), app.debugDescription)
         XCTAssertTrue(name.disappears(within: 5), app.debugDescription)
-        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        // The whole row clears the keyboard, not only the field's text.
+        XCTAssertTrue(eventually(within: 10) { (label.settledFrame()?.maxY ?? .infinity) + 8 <= keyboard.frame.minY }, "\(label.frame) \(keyboard.frame)")
         _ = app.type("docs", into: label)
     }
 

@@ -132,7 +132,7 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
-                    .id(KeepsPromptVisible.id)
+                    .id(KeepsFieldVisible.prompt)
                 }
 
                 Section {
@@ -315,6 +315,7 @@ struct NewTaskSheet: View {
                     if naming {
                         TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
                             .focused($editingLabel)
+                            .id(KeepsFieldVisible.label)
                     }
                 } footer: {
                     if !naming {
@@ -337,7 +338,7 @@ struct NewTaskSheet: View {
             .listSectionSpacing(.compact)
             .contentMargins(.top, 6, for: .scrollContent)
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
-            .modifier(KeepsPromptVisible(editing: editingPrompt))
+            .modifier(KeepsFieldVisible(row: editingPrompt ? KeepsFieldVisible.prompt : editingLabel ? KeepsFieldVisible.label : nil))
             .safeAreaInset(edge: .top) {
                 if let repository = model.cloning {
                     HStack(spacing: 10) {
@@ -491,26 +492,28 @@ struct NewTaskSheet: View {
     }
 }
 
-/// A rotation moves the keyboard without scrolling the focused prompt back above it.
-private struct KeepsPromptVisible: ViewModifier {
-    let editing: Bool
+/// A rotation moves the keyboard without scrolling the focused prompt back above it, and UIKit scrolls a revealed field
+/// only until its text clears the keyboard, leaving the row's bottom under it.
+private struct KeepsFieldVisible: ViewModifier {
+    let row: String?
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
-                if editing { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+                if let row { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
             // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
             // the prompt row where UIKit keeps only the field visible, under the predictive bar. Scrolling from inside this
             // callback was measured against the old layout, hence the next turn of the main queue.
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom] } action: { _, _ in
-                guard editing else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+                guard let row else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
         }
     }
 
-    static let id = "prompt"
+    static let prompt = "prompt"
+    static let label = "label"
 }
 
 private struct FolderBrowser: View {
