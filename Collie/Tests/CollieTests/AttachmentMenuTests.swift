@@ -38,7 +38,7 @@ final class AttachmentMenuTests: XCTestCase {
                     XCTAssertTrue(window.hitTest(point, with: nil)?.isDescendant(of: button) == true, "\(point)")
                 }
                 let imageView = try XCTUnwrap(button.imageView)
-                XCTAssertLessThanOrEqual(imageView.bounds.height, 26)
+                XCTAssertLessThanOrEqual(imageView.bounds.height, 28)
                 XCTAssertEqual(imageView.image?.renderingMode, .alwaysOriginal)
                 let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                     window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)

@@ -72,7 +72,8 @@ final class AttachmentMenuButton: UIButton {
         super.init(frame: .zero)
         var configuration = UIButton.Configuration.glass()
         configuration.image = UIImage(systemName: "paperclip")
-        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 16)
+        // Not the neighbors' 20: the diagonal paperclip at 20 measured 24 by 27 points and filled its circle; 17 matches them optically.
+        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 17)
         configuration.cornerStyle = .capsule
         configuration.buttonSize = .small
         configuration.background.backgroundInsets = NSDirectionalEdgeInsets(
