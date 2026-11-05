@@ -132,10 +132,12 @@ struct ApprovalReview: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let task: String
+    let showsMachine: Bool
     let sendAnswer: (String) async throws -> Void
     @FocusState private var field: String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var more = false
 
     var body: some View {
@@ -145,11 +147,14 @@ struct ApprovalReview: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
+                        // Full height, the sheet hides the session header: the task, and its machine when more than one is
+                        // paired, say who gets the answer.
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: task).font(.subheadline)
-                            // The metadata gray read 4.2:1 on the half-height sheet's light glass.
-                            Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                            if showsMachine {
+                                // The metadata gray read 4.2:1 on the half-height sheet's light glass.
+                                Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                            }
                         }
                         .accessibilityElement(children: .combine)
                         ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
@@ -174,9 +179,18 @@ struct ApprovalReview: View {
                             ApprovalNotice(notice: notice)
                         }
                         if decides {
-                            // A note goes with the decision, so it sits with the decisions.
-                            if item.approval.supportsNote { NoteField(model: model, item: item, field: $field) }
-                            DecisionButtons(model: model, item: item)
+                            // A note goes with the decision, so it sits with the decisions. In landscape Add note leads
+                            // their row: a row of its own left the output two lines.
+                            let note = item.approval.supportsNote
+                            if note, verticalSizeClass == .compact, !typeSize.isAccessibilitySize, !model.noting.contains(item.id) {
+                                HStack(spacing: 8) {
+                                    NoteField(model: model, item: item, field: $field).fixedSize()
+                                    DecisionButtons(model: model, item: item)
+                                }
+                            } else {
+                                if note { NoteField(model: model, item: item, field: $field) }
+                                DecisionButtons(model: model, item: item)
+                            }
                         }
                     }
                     .padding()
@@ -189,7 +203,7 @@ struct ApprovalReview: View {
                     Button(role: .close) { dismiss() }.tint(.primary)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    ApprovalCountdown(approval: item.approval)
+                    ApprovalCountdown(approval: item.approval).fixedSize()
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -241,10 +255,6 @@ private struct ApprovalDetails: View {
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // In the sheet the note sits with the decisions.
-            if approval.supportsNote, !whole {
-                NoteField(model: model, item: item, field: field)
-            }
             if approval.answeredInTerminal {
                 Label("Use the terminal buttons or type an answer", systemImage: "terminal")
                     .font(.caption)
@@ -273,16 +283,18 @@ private struct ApprovalCountdown: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
                 .labelStyle(.titleAndIcon)
-                .font(.caption2.weight(.semibold).monospacedDigit())
+                .font(.footnote.weight(.semibold).monospacedDigit())
                 .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .padding(2)
+                .fixedSize()
+                // As tall as Review's glass beside it on the card and the band.
+                .frame(maxHeight: .infinity)
                 // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
                 // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
                 .background(SessionBarDim(), in: .capsule)
                 .glassEffect(.regular, in: .capsule)
-                .fixedSize()
         }
     }
 }
@@ -351,22 +363,23 @@ private struct NoteField: View {
             .id("note")
             .disabled(model.steps[item.id] != nil)
         } else {
-            // Over the dark terminal the band's glass comes out lighter: the primary color at 60% read 4.2:1 there and the
-            // gold accent 3.8:1, so the label takes the primary color at 75% and only the symbol the accent.
+            // On the band's glass over the dark terminal the primary color at 60% read 4.2:1 and the gold accent 3.8:1, so
+            // the label takes the primary color at 75% and only the symbol the accent.
             Button { model.toggleNote(item) } label: {
                 Label {
                     Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
                 } icon: {
                     Image(systemName: "text.bubble").foregroundStyle(.tint)
                 }
-                .frame(minHeight: 44)
+                // The half-height sheet draws at 96%, where 44 points measured 42.2.
+                .frame(minHeight: 46)
                 .contentShape(Rectangle())
             }
             .font(.caption)
             .disabled(model.steps[item.id] != nil)
-            // The 44-point tap target reaches into the 6-point gaps around its row, which keeps the row compact.
+            // The tap target reaches 7 points into the 8-point gaps around its row, which keeps the row compact.
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, -6)
+            .padding(.vertical, -7)
         }
     }
 }

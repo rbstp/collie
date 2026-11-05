@@ -165,10 +165,9 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(review.appears(within: 10), app.debugDescription)
         XCTAssertFalse(app.staticTexts["test approvals::case_1 ... ok"].exists, app.debugDescription)
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Output")).firstMatch.exists, app.debugDescription)
-        let addNote = app.buttons["Add note"]
-        XCTAssertTrue(addNote.appears(within: 10), app.debugDescription)
+        // Add note lives in the sheet only.
+        XCTAssertFalse(app.buttons["Add note"].exists, app.debugDescription)
         XCTAssertGreaterThanOrEqual(review.frame.height, 44, app.debugDescription)
-        XCTAssertGreaterThanOrEqual(addNote.frame.height, 44, app.debugDescription)
         review.tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
@@ -176,6 +175,7 @@ final class LandscapeTests: XCTestCase {
         let sheetNote = app.buttons.matching(identifier: "Add note").allElementsBoundByIndex.first { $0.isHittable }
         let sheetApprove = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
         XCTAssertLessThanOrEqual(try XCTUnwrap(sheetNote, app.debugDescription).frame.maxY, try XCTUnwrap(sheetApprove).frame.minY, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(sheetNote).frame.height, 44, app.debugDescription)
         // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
         // only on the band behind it.
         let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
@@ -187,6 +187,16 @@ final class LandscapeTests: XCTestCase {
         // It stays until the next decision, past the six seconds it used to last.
         sleep(7)
         XCTAssertTrue(notice.allElementsBoundByIndex.contains { $0.isHittable }, app.debugDescription)
+        // The card's copy hides while the sheet shows its own, which it used to peek above.
+        XCTAssertEqual(notice.count, 1, app.debugDescription)
+        // In landscape Add note leads the decisions' row, which leaves the output more room.
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        XCTAssertTrue(eventually(within: 10) {
+            guard let note = app.buttons.matching(identifier: "Add note").allElementsBoundByIndex.first(where: { $0.isHittable }),
+                  let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first(where: { $0.isHittable }) else { return false }
+            return note.frame.maxX <= approve.frame.minX && abs(note.frame.midY - approve.frame.midY) < 1
+        }, app.debugDescription)
+        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
         XCTAssertTrue(notice.firstMatch.exists, app.debugDescription)
@@ -203,7 +213,7 @@ final class LandscapeTests: XCTestCase {
         app.buttons["Review"].tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
-        let task = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests, MacBook Pro"))
+        let task = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests"))
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
         let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
         let decisions = ["Approve", "Always allow", "Deny"].map { ($0, app.buttons.matching(identifier: $0)) }
