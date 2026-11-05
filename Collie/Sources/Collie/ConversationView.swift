@@ -274,7 +274,7 @@ struct ConversationView: View {
                 .onChange(of: model.messages.last?.id) { _, _ in
                     if atBottom && submitted.isEmpty { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .bottom) {
                     if !atBottom && submitted.isEmpty {
                         Button("Latest messages", systemImage: "arrow.down") { proxy.scrollTo("bottom", anchor: .bottom) }
                             .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
