@@ -5,7 +5,9 @@
 /// starting with `┃` for each Mac row, `╹▀`. The pane's cursor position is not on the wire, so a
 /// tap counts characters in the box instead: each Mac row after the first adds one for the space
 /// or newline it wrapped at, as Claude Code 2.1.318, Codex 0.166.0 and Copilot CLI 1.0.105 move
-/// Left across a wrapped row.
+/// Left across a wrapped row, except where Copilot CLI starts a row with the space after a full
+/// one. After a full row whose word may continue on the next, or a wide character at either side,
+/// the count is unknown, and later rows take no taps.
 struct TerminalInputBox {
     /// The rules, blank rows or borders above and below the box.
     var top: Int
@@ -15,10 +17,12 @@ struct TerminalInputBox {
     /// columns: a wide character counts once, centered on its two cells.
     private var rows: [Int: (before: Int, mids: [Double])] = [:]
     private var count = 0
+    private var lines = 0
     private var hint = false
 
-    /// `agent` is the pane's agent kind: "claude", "codex" or "copilot".
-    init?(_ frame: TerminalFrame, agent: String) {
+    /// `agent` is the pane's agent kind: "claude", "codex" or "copilot"; `snapshot` is what `frame`
+    /// was rendered from, where the rows drawn across the Mac pane keep their width.
+    init?(_ frame: TerminalFrame, agent: String, snapshot: String) {
         var cells = [[(cluster: Cluster, style: TerminalStyle)]](repeating: [], count: frame.rows)
         var shades = [Set<TerminalRGB>](repeating: [], count: frame.rows)
         for run in frame.runs where run.row < frame.rows {
@@ -71,12 +75,9 @@ struct TerminalInputBox {
         guard let (top, bottom) = found, !frame.wrapsUnknown else { return nil }
         self.top = top
         self.bottom = bottom
+        var macRows: [[(row: Int, cells: [(cluster: Cluster, style: TerminalStyle)])]] = []
         for row in top + 1..<bottom {
             let continues = row > top + 1 && frame.wrapContinuations.contains(row)
-            if row > top + 1 && !continues {
-                count += 1
-                text += " "
-            }
             var line = cells[row]
             if row == top + 1 {
                 line.removeFirst()
@@ -95,19 +96,88 @@ struct TerminalInputBox {
                 ($0.style.faint || agent != "claude" && $0.style.foreground != frame.foreground)
                     && !$0.cluster.text.allSatisfy(\.isWhitespace)
             }
-            rows[row] = (count, line.map { Double($0.cluster.column + $0.cluster.end) / 2 })
-            text += line.map(\.cluster.text).joined()
-            count += line.count
+            if continues {
+                macRows[macRows.count - 1].append((row, line))
+            } else {
+                macRows.append([(row, line)])
+            }
+        }
+        lines = macRows.count
+        let width = Self.wrapWidth(in: snapshot, agent: agent)
+        // Copilot CLI scrolls a box taller than about half its pane, without a sign, so a taller
+        // box may start above its first row shown.
+        var known = agent != "copilot" || lines < 8
+        for (i, macRow) in macRows.enumerated() {
+            if i > 0 {
+                let (above, below) = (macRows[i - 1].flatMap(\.cells).map(\.cluster), macRow.flatMap(\.cells).map(\.cluster))
+                let join = Self.join(above, below, width: width, agent: agent)
+                known = known && join != nil
+                count += join ?? 1
+                text += join == 0 ? "" : " "
+            }
+            for (row, line) in macRow {
+                if known { rows[row] = (count, line.map { Double($0.cluster.column + $0.cluster.end) / 2 }) }
+                text += line.map(\.cluster.text).joined()
+                count += line.count
+            }
         }
     }
 
     /// Where a tap at `column` (in cells, fractional) of `row` puts the cursor: the character
-    /// boundary nearest to it on that row, as `(index, count)` with `count` characters in the box.
-    /// Nil off the box's rows, and while it shows a placeholder, hint or suggestion, or a slash
-    /// command, whose menu Right would complete.
-    func cursor(row: Int, column: Double) -> (index: Int, count: Int)? {
+    /// boundary nearest to it on that row, as `(index, lines)` with `lines` Mac rows in the box.
+    /// Nil off the box's rows or past a row the count is unknown after, and while it shows a
+    /// placeholder, hint or suggestion, or a slash command, whose menu Right would complete.
+    func cursor(row: Int, column: Double) -> (index: Int, lines: Int)? {
         guard let line = rows[row], count > 0, !hint, !text.hasPrefix("/") else { return nil }
-        return (line.before + line.mids.count { $0 < column }, count)
+        return (line.before + line.mids.count { $0 < column }, lines)
+    }
+
+    /// The characters Left crosses from Mac row `below` into `above`: one for the space or newline
+    /// `above` ended at, none where Copilot CLI starts `below` with the space after a full row.
+    /// Nil where `above` is full and a word may continue on `below`, or a wide character ends or
+    /// starts them. Wider than `width`, `above` is a paragraph collied joined, which ends at a newline.
+    private static func join(_ above: [Cluster], _ below: [Cluster], width: Int?, agent: String) -> Int? {
+        func cells(_ clusters: some Sequence<Cluster>) -> Int { clusters.reduce(0) { $0 + $1.end - $1.column } }
+        let used = cells(above)
+        guard let width else { return nil }
+        guard let first = below.first else { return used == width ? nil : 1 }
+        if used > width || used + cells([first]) <= width { return 1 }
+        guard let last = above.last, cells([last]) == 1, cells([first]) == 1 else { return nil }
+        if first.text == " " { return agent == "copilot" ? 0 : nil }
+        // A word that fits a row is never split, so these two were not one word.
+        return cells(above.reversed().prefix { $0.text != " " }) + cells(below.prefix { $0.text != " " }) <= width ? 1 : nil
+    }
+
+    /// The columns the agent wraps its box's text at on the Mac, from rows the snapshot draws
+    /// across the pane: Claude Code's last rule less 4, the blank row above Codex's last `›` row
+    /// and Copilot CLI's last `╻▄` border less 3.
+    static func wrapWidth(in snapshot: String, agent: String) -> Int? {
+        let rows = snapshot.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let plain = rows.map { line in
+            var out = String.UnicodeScalarView()
+            var escape = false
+            for scalar in line.unicodeScalars {
+                if scalar == "\u{1B}" {
+                    escape = true
+                } else if escape {
+                    escape = scalar != "m"
+                } else {
+                    out.append(scalar)
+                }
+            }
+            return String(out).trimmingSuffix { $0 == " " }
+        }
+        switch agent {
+        case "claude":
+            return plain.last { !$0.isEmpty && $0.allSatisfy { $0 == "─" } }.map { $0.count - 4 }
+        case "codex":
+            guard let prompt = plain.lastIndex(where: { $0.hasPrefix("›") }), prompt > 0 else { return nil }
+            return rows[prompt - 1].filter { $0 == " " }.count - 3
+        case "copilot":
+            return plain.last { $0.hasPrefix("╻▄") }.map { $0.count - 3 }
+        default:
+            return nil
+        }
     }
 
     /// The scroll offset that shows content down to `rowBottom` above an obscured bottom of

@@ -878,14 +878,17 @@ final class AgentModel {
         return enqueue(.key(key))
     }
 
-    /// The cursor's position in an agent's input box is not on the wire: Left once per character
-    /// of the box reaches its start from anywhere (Left at the start does nothing), then Right
+    /// The cursor's position in an agent's input box is not on the wire: Control-A, then Left and
+    /// Control-A once per further row of the box's `lines`, reaches its start from anywhere, past
+    /// spaces typed at the end of a row that the screen does not show (Control-A goes to the start
+    /// of the line, or in Copilot CLI of the row, and Left at the start does nothing). Then Right
     /// steps to `index`, never past the text, where Right could accept a suggestion.
     @discardableResult
-    func placeCursor(at index: Int, of count: Int) -> Task<Void, Never>? {
-        guard canTap(.right), canTap(.left) else { return nil }
+    func placeCursor(at index: Int, lines: Int) -> Task<Void, Never>? {
+        guard canTap(.right), canTap(.left), canTap(.ctrlA) else { return nil }
         var task: Task<Void, Never>?
-        for key in Array(repeating: AgentKey.left, count: count) + Array(repeating: .right, count: index) {
+        let start = [AgentKey.ctrlA] + Array(repeating: [AgentKey.left, .ctrlA], count: max(lines - 1, 0)).flatMap(\.self)
+        for key in start + Array(repeating: .right, count: index) {
             task = tap(key) ?? task
         }
         return task
