@@ -15,6 +15,8 @@ struct NewTaskSheet: View {
     @State private var selection: TextSelection?
     @State private var now = Date.now
     @FocusState private var editingPrompt: Bool
+    @State private var naming = false
+    @FocusState private var editingLabel: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -310,7 +312,18 @@ struct NewTaskSheet: View {
                             ProgressView()
                         }
                     }
-                    TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
+                    if naming {
+                        TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
+                            .focused($editingLabel)
+                    }
+                } footer: {
+                    if !naming {
+                        Button("Name workspace") {
+                            naming = true
+                            editingLabel = true
+                        }
+                        .font(.footnote)
+                    }
                 }
             }
             .listSectionSpacing(.compact)

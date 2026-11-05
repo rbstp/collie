@@ -60,6 +60,25 @@ final class NewTaskPromptTests: XCTestCase {
         XCTAssertEqual(agent.frame.minY, agentY, "choosing a folder keeps the form's geometry")
     }
 
+    func testNameWorkspaceRevealsAFocusedLabelField() throws {
+        continueAfterFailure = false
+        let app = try demoApp("attachment-demo")
+        app.launch()
+        defer { app.terminate() }
+        let newTask = app.buttons["New task"]
+        XCTAssertTrue(newTask.appears(within: 10), app.debugDescription)
+        newTask.tap()
+        let name = app.buttons["Name workspace"]
+        XCTAssertTrue(name.appears(within: 5), app.debugDescription)
+        let label = app.textFields["Workspace label"]
+        XCTAssertFalse(label.exists, app.debugDescription)
+        name.tap()
+        XCTAssertTrue(label.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(name.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
+        _ = app.type("docs", into: label)
+    }
+
     private func folderHint(in app: XCUIApplication) -> XCUIElement {
         app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Choose a folder to start")).firstMatch
     }
