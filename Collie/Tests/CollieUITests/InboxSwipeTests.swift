@@ -50,6 +50,7 @@ final class InboxSwipeTests: XCTestCase {
         let before = search.frame
         XCTAssertLessThan(abs(before.midY - row.midY), 4, app.debugDescription)
         XCTAssertFalse(filter.exists, app.debugDescription)
+        XCTAssertFalse(app.navigationBars.buttons["Search"].exists, app.debugDescription)
         for _ in 0..<3 { app.swipeUp() }
         let last = app.staticTexts["The rate limiter is merged."]
         XCTAssertNotNil(last.settledFrame(), app.debugDescription)
@@ -58,5 +59,6 @@ final class InboxSwipeTests: XCTestCase {
         XCTAssertLessThanOrEqual(last.frame.maxY, keyboard.frame.minY, app.debugDescription)
         app.buttons["Close search"].tap()
         XCTAssertTrue(filter.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.navigationBars.buttons["Search"].appears(within: 5), app.debugDescription)
     }
 }

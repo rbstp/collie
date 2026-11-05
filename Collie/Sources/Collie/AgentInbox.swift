@@ -14,6 +14,7 @@ struct AgentInbox<Menu: View>: View {
     @Binding var filter: InboxFilter
     @Binding var showsSnoozed: Bool
     let margin: CGFloat?
+    let refresh: () async -> Void
     @ViewBuilder let menu: (AgentSummary, AgentRoute) -> Menu
     @State private var snoozing: InboxItem?
     @State private var custom: InboxItem?
@@ -41,33 +42,35 @@ struct AgentInbox<Menu: View>: View {
             }
             .listSectionSpacing(.compact)
             .modifier(PagerListMargin(edge: .trailing, margin: margin))
-            .safeAreaInset(edge: .top, spacing: 0) {
-                Group {
-                    if searching || !query.isEmpty {
-                        // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
-                        HStack(spacing: 8) {
-                            HStack {
-                                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                                TextField("Search agents", text: $query, prompt: Text("Search agents").foregroundStyle(.metadata))
-                                    .submitLabel(.search)
-                                    .focused($searchFocused)
-                                    .onAppear { searchFocused = searching }
-                            }
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 44)
-                            .glassEffect(.regular, in: .capsule)
-                            closeSearchButton
+        }
+        // Before the inset: the filter row's own scroll view would take a refresh control, and a drag beside the filters pulled the row down.
+        .refreshable { await refresh() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Group {
+                if searching || !query.isEmpty {
+                    // Not .searchable: its field moves over the rows and then into the navigation bar when focused.
+                    HStack(spacing: 8) {
+                        HStack {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search agents", text: $query, prompt: Text("Search agents").foregroundStyle(.metadata))
+                                .submitLabel(.search)
+                                .focused($searchFocused)
+                                .onAppear { searchFocused = searching }
                         }
-                        .padding(.horizontal)
-                    } else {
-                        filterRow
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .glassEffect(.regular, in: .capsule)
+                        closeSearchButton
                     }
+                    .padding(.horizontal)
+                } else {
+                    filterRow
                 }
-                // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
-                .padding(.vertical, 8)
-                .onChange(of: searchFocused) { _, focused in
-                    if !focused && query.isEmpty { searching = false }
-                }
+            }
+            // Outside the scroll view: one that touches the bar's safe area insets its content, and the segments again.
+            .padding(.vertical, 8)
+            .onChange(of: searchFocused) { _, focused in
+                if !focused && query.isEmpty { searching = false }
             }
         }
         .confirmationDialog("Snooze until", isPresented: Binding { snoozing != nil } set: { if !$0 { snoozing = nil } },

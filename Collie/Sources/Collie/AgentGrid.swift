@@ -358,7 +358,9 @@ struct ChatPreview: View {
         }
         .font(.caption2)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(6)
+        // Vertically 6: the 84-point preview fits a bubble and three lines.
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         ViewThatFits(in: .vertical) {
             content.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             content
