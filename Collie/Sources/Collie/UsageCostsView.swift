@@ -112,10 +112,7 @@ struct UsageCostsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Tokens and cost").font(.headline)
-                    Text("All agents on this machine").font(.caption).foregroundStyle(.metadata)
-                }
+                Text("Tokens and cost").font(.headline)
                 Spacer()
                 if case .loaded(let costs) = model.phase, costs.scanning {
                     ProgressView().controlSize(.small)

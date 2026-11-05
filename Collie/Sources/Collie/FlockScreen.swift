@@ -451,12 +451,7 @@ struct MachineHeader: View {
             if link == .connecting {
                 ProgressView().controlSize(.mini)
                 Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
-            } else if link == .connected {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 8))
-                    .foregroundStyle(AgentState.done.color)
-                    .accessibilityLabel(link.label)
-            } else {
+            } else if link != .connected {
                 StatusPill(state: .idle, title: link.label)
             }
         }
