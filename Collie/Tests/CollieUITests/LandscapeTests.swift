@@ -221,6 +221,28 @@ final class LandscapeTests: XCTestCase {
         XCTAssertFalse(notice.firstMatch.exists, app.debugDescription)
     }
 
+    func testHalfHeightReviewKeepsACommandTheCardCuts() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo", ["--approval-demo"])
+        let long = "cargo test -p collied --test approvals --features herdr-core,notifications -- --nocapture --test-threads 1 "
+            + "approvals::decide approvals::expire approvals::note"
+        app.launchEnvironment["COLLIE_DEMO_APPROVAL_COMMAND"] = long
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+        let review = app.buttons["Review"]
+        XCTAssertTrue(review.appears(within: 10), app.debugDescription)
+        review.tap()
+        let close = app.buttons["Close"]
+        XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
+        // The card cuts the command after three lines, so the half-height sheet shows it whole, with the reason.
+        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", long))
+        XCTAssertTrue(eventually(within: 10) { command.count == 2 }, app.debugDescription)
+        let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
+        XCTAssertTrue(reason.allElementsBoundByIndex.contains { $0.frame.minY > close.frame.maxY }, app.debugDescription)
+    }
+
     func testAddNoteFocusesTheNoteFieldAboveTheKeyboard() throws {
         let app = try launchDemo(["--approval-demo"])
         defer { app.terminate() }
