@@ -16,7 +16,7 @@ The second row scrolls, in symbols too: shift-tab (⇧⇥), control-return (⌃�
 
 The round joystick sends the arrows. With the strip hidden, it sits in the bottom row, beside the keyboard button, and a return key follows the keyboard button at the right edge, so you can send Return after dictation without opening the keyboard or the strip. Press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
 
-In a Claude Code, Codex or Copilot CLI session, you can also tap a spot in the input box to move the cursor there; the phone sends the keys for you.
+In a Claude Code, Codex or Copilot CLI session, you can also tap a spot in the input box to move the cursor there; the phone sends the keys for you. In a prompt of several lines, this works on the first line and on a line after a full one ([Terminal](chat-terminal.md#terminal) says why).
 
 ## Key shortcuts
 

@@ -3,11 +3,12 @@
 /// the others that start a Mac row indented by two. Codex shades its box: a blank row, `›` and
 /// rows indented by two, a blank row. Copilot CLI frames its box with half blocks: `╻▄`, a row
 /// starting with `┃` for each Mac row, `╹▀`. The pane's cursor position is not on the wire, so a
-/// tap counts characters in the box instead: each Mac row after the first adds one for the space
-/// or newline it wrapped at, as Claude Code 2.1.318, Codex 0.166.0 and Copilot CLI 1.0.105 move
-/// Left across a wrapped row, except where Copilot CLI starts a row with the space after a full
-/// one. After a full row whose word may continue on the next, or a wide character at either side,
-/// the count is unknown, and later rows take no taps.
+/// tap counts characters in the box instead: a Mac row after a full one adds one for the space
+/// it wrapped at, as Claude Code 2.1.318, Codex 0.166.0 and Copilot CLI 1.0.105 move Left across
+/// a wrapped row, except where Copilot CLI starts a row with the space after a full one. After a
+/// row that is not full, whose spaces typed at the end or before a newline do not show, a full
+/// row whose word may continue on the next, or a wide character at either side, the count is
+/// unknown, and later rows take no taps.
 struct TerminalInputBox {
     /// The rules, blank rows or borders above and below the box.
     var top: Int
@@ -132,17 +133,14 @@ struct TerminalInputBox {
         return (line.before + line.mids.count { $0 < column }, lines)
     }
 
-    /// The characters Left crosses from Mac row `below` into `above`: one for the space or newline
-    /// `above` ended at, none where Copilot CLI starts `below` with the space after a full row.
-    /// Nil where `above` is full and a word may continue on `below`, or a wide character ends or
-    /// starts them. Wider than `width`, `above` is a paragraph collied joined, which ends at a newline.
+    /// The characters Left crosses from Mac row `below` into the full row `above`: one for the
+    /// space `above` ended at, none where Copilot CLI starts `below` with the space after a full
+    /// row. Nil where `above` is not full, since spaces typed at its end or before a newline do not
+    /// show, where a word may continue on `below`, or where a wide character ends or starts them.
     private static func join(_ above: [Cluster], _ below: [Cluster], width: Int?, agent: String) -> Int? {
         func cells(_ clusters: some Sequence<Cluster>) -> Int { clusters.reduce(0) { $0 + $1.end - $1.column } }
-        let used = cells(above)
-        guard let width else { return nil }
-        guard let first = below.first else { return used == width ? nil : 1 }
-        if used > width || used + cells([first]) <= width { return 1 }
-        guard let last = above.last, cells([last]) == 1, cells([first]) == 1 else { return nil }
+        guard let width, cells(above) == width, let first = below.first, let last = above.last, cells([last]) == 1, cells([first]) == 1
+        else { return nil }
         if first.text == " " { return agent == "copilot" ? 0 : nil }
         // A word that fits a row is never split, so these two were not one word.
         return cells(above.reversed().prefix { $0.text != " " }) + cells(below.prefix { $0.text != " " }) <= width ? 1 : nil

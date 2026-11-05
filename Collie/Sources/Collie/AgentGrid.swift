@@ -73,14 +73,18 @@ struct AgentGrid<Menu: View>: View {
                                     entry: entry, showsName: entries.count > 1, approvalsCount: approvalsCount(entry), showsLink: showsLink, now: context.date
                                 )
                                 if !header.isEmpty {
-                                    Button {
-                                        reconnect(entry)
-                                    } label: {
-                                        header
-                                            .font(.footnote.weight(.semibold))
-                                            .foregroundStyle(.secondary)
+                                    let label = header.font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                                    // Reconnecting a connected machine shows nothing: alone, the approvals pill is plain status.
+                                    if entries.count > 1 || entry.flock?.link != .connected {
+                                        Button {
+                                            reconnect(entry)
+                                        } label: {
+                                            label
+                                        }
+                                        .buttonStyle(.plain)
+                                    } else {
+                                        label
                                     }
-                                    .buttonStyle(.plain)
                                 }
                                 if entry.flock?.details != nil && entry.agents.isEmpty {
                                     Text("No agents running").foregroundStyle(.secondary)

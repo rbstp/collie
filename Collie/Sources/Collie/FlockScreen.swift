@@ -289,14 +289,18 @@ struct FlockScreen: View {
                                 showsLink: !tailnetStarting, now: context.date
                             )
                             if !header.isEmpty {
-                                Button {
-                                    reconnect(entry)
-                                } label: {
-                                    header
-                                        .font(.footnote.weight(.semibold))
-                                        .textCase(nil)
+                                let label = header.font(.footnote.weight(.semibold)).textCase(nil)
+                                // Reconnecting a connected machine shows nothing: alone, the approvals pill is plain status.
+                                if model.entries.count > 1 || entry.flock?.link != .connected {
+                                    Button {
+                                        reconnect(entry)
+                                    } label: {
+                                        label
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    label
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                     }

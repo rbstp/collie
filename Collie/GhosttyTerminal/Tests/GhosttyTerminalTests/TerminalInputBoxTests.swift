@@ -42,26 +42,25 @@ private func index(of word: String, in draft: String) throws -> Int {
     #expect(box.cursor(row: 0, column: 3) == nil)
 }
 
-@Test func aRowTheMacWrappedCountsItsSpace() throws {
+@Test func aRowTheMacDidNotFillEndsTheTappableRows() throws {
     let draft = "would it be possible to select where the cursor is to modify earlier parts"
     let rows = ["\u{276F}\u{A0}would it be possible to select where the", "  cursor is to modify earlier parts"]
     let box = try #require(try inputBox(claude(rows), agent: "claude"))
     #expect(box.text == draft)
-    let count = draft.count
-    #expect(box.cursor(row: 4, column: 2)! == (try index(of: "cursor", in: draft), 2))
-    #expect(box.cursor(row: 4, column: 0)! == (try index(of: "cursor", in: draft), 2))
     // Past the end of the first row: before the space Claude Code wrapped at.
     #expect(box.cursor(row: 3, column: 55)! == (try index(of: " cursor", in: draft), 2))
-    #expect(box.cursor(row: 4, column: 60)! == (count, 2))
+    // Spaces typed at the end of the first row would not show: the second row's count is unknown.
+    #expect(box.cursor(row: 4, column: 2) == nil)
+    #expect(box.cursor(row: 4, column: 60) == nil)
 }
 
 @Test func rowsThePhoneWrapsKeepTheirOrder() throws {
-    let draft = "would it be possible to select where the cursor is to modify earlier oarts of a prompt"
-    let screen = claude(["\u{276F}\u{A0}would it be possible to select where the", "  cursor is to modify earlier oarts of a prompt"])
+    let draft = "would it be possible to selcet where the cursor is to modify earlier parts of a prompt"
+    let screen = claude(["\u{276F}\u{A0}would it be possible to selcet where the", "  cursor is to modify earlier parts of a prompt"])
     #expect(!(try render(screen, wrapColumns: 24)).wrapContinuations.isEmpty)
     let box = try #require(try inputBox(screen, agent: "claude", wrapColumns: 24))
     #expect(box.text == draft)
-    let typo = try index(of: "oarts", in: draft)
+    let typo = try index(of: "selcet", in: draft)
     let rows = (box.top + 1..<box.bottom).compactMap { row in
         (0..<24).lazy.compactMap { box.cursor(row: row, column: Double($0) + 0.2)?.index }.first { $0 == typo }.map { _ in row }
     }
@@ -71,7 +70,7 @@ private func index(of word: String, in draft: String) throws -> Int {
     // The last phone row of the first Mac row ends before the space the Mac wrapped at.
     let firstMacRowEnd = try index(of: " cursor", in: draft)
     #expect((box.top + 1..<box.bottom).contains { box.cursor(row: $0, column: 30)?.index == firstMacRowEnd })
-    #expect(box.cursor(row: box.bottom - 1, column: 30)! == (draft.count, 2))
+    #expect(box.cursor(row: box.bottom - 1, column: 30) == nil)
 }
 
 @Test func aWideCharacterIsOneCharacterAcrossTwoCells() throws {
@@ -151,18 +150,19 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
     let lines = try #require(try inputBox(try fixture("codex-0.160.1/draft-multiline"), agent: "codex"))
     let joined = draft + " and mention the return type."
     #expect(lines.text == joined)
-    #expect(lines.cursor(row: 56, column: 2)! == (try index(of: "and", in: joined), 2))
-    // A blank line between two lines is a newline of its own.
+    #expect(lines.cursor(row: 55, column: 100)! == (draft.count, 2))
+    // Spaces typed before the newline would not show.
+    #expect(lines.cursor(row: 56, column: 2) == nil)
     let blank = try #require(try inputBox(try fixture("codex-0.160.1/draft-blank-line"), agent: "codex"))
-    #expect(blank.cursor(row: 54, column: 2)! == ("first line of a draft".count + 2, 3))
+    #expect(blank.cursor(row: 54, column: 2) == nil)
     let working = try #require(try inputBox(try fixture("codex-0.160.1/working-draft"), agent: "codex"))
     #expect(working.text == "then list the files")
     let wrapped = try #require(try inputBox(try fixture("codex-0.160.1/draft-multiline"), agent: "codex", wrapColumns: 24))
     #expect(wrapped.text == joined)
-    for word in ["calc.py", "sentence", "and", "return", "type."] {
+    for word in ["calc.py", "sentence"] {
         #expect(reaches(wrapped, try index(of: word, in: joined), columns: 24), "\(word)")
     }
-    #expect(reaches(wrapped, joined.count, columns: 24))
+    #expect(!reaches(wrapped, try index(of: "return", in: joined), columns: 24))
 }
 
 @Test func copilotsBoxCountsItsRowsAsLeftCrossesThem() throws {
@@ -177,15 +177,15 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
         + "It keeps going for a while longer."
     let long = try #require(try inputBox(try fixture("copilot-1.0.93-1/draft-long"), agent: "copilot"))
     #expect(long.text == draft)
-    #expect(long.cursor(row: 57, column: 2)! == (try index(of: "pane.", in: draft), 2))
     // Past the end of the first row: before the space Copilot CLI wrapped at.
     #expect(long.cursor(row: 56, column: 219)! == (try index(of: " pane.", in: draft), 2))
+    #expect(long.cursor(row: 57, column: 2) == nil)
     let wrapped = try #require(try inputBox(try fixture("copilot-1.0.93-1/draft-long"), agent: "copilot", wrapColumns: 30))
     #expect(wrapped.text == draft)
-    for word in ["typing", "input", "wrap", "wide", "pane.", "longer."] {
+    for word in ["typing", "input", "wrap", "wide"] {
         #expect(reaches(wrapped, try index(of: word, in: draft), columns: 30), "\(word)")
     }
-    #expect(reaches(wrapped, draft.count, columns: 30))
+    #expect(!reaches(wrapped, try index(of: "longer.", in: draft), columns: 30))
     let empty = try #require(try inputBox(try fixture("copilot-1.0.93-1/idle"), agent: "copilot"))
     #expect(empty.cursor(row: 57, column: 2) == nil)
 }
@@ -258,9 +258,27 @@ private let agents = ["claude", "codex", "copilot"]
     // A word that fits a row is never split: this row ended at a space.
     let fits = try #require(try inputBox(screen(agent, [full, "ok go"]), agent: agent))
     #expect(fits.cursor(row: 4, column: 2.2)! == (width + 1, 2))
-    // One column short of full, the next word did not fit: the row ended at its space.
+    // One column short of full, the row may end at its space or at more spaces than show.
     let short = try #require(try inputBox(screen(agent, ["see " + String(repeating: "a", count: width - 5), "ok go"]), agent: agent))
-    #expect(short.cursor(row: 4, column: 2.2)! == (width, 2))
+    #expect(short.cursor(row: 3, column: 2.2)! == (0, 2))
+    #expect(short.cursor(row: 4, column: 2.2) == nil)
+}
+
+@Test(arguments: agents) func spacesTheScreenDoesNotShowEndTheTappableRows(agent: String) throws {
+    // `hello   ` and a newline: before `world` is index 9, but the screen shows `hello` alone.
+    let newline = try #require(try inputBox(screen(agent, ["hello   ", "world"]), agent: agent))
+    #expect(newline.cursor(row: 3, column: 2.2)! == (0, 2))
+    #expect(newline.cursor(row: 3, column: 40)! == (5, 2))
+    #expect(newline.cursor(row: 4, column: 2.2) == nil)
+    #expect(newline.cursor(row: 4, column: 40) == nil)
+    // Two spaces where the agent wrapped look like one.
+    let width = agent == "claude" ? 56 : 57
+    let wrapped = try #require(try inputBox(screen(agent, ["see " + String(repeating: "a", count: width - 10), String(repeating: "b", count: 10)]), agent: agent))
+    #expect(wrapped.cursor(row: 3, column: 2.2)! == (0, 2))
+    #expect(wrapped.cursor(row: 4, column: 2.2) == nil)
+    // A full row leaves no room for a space that does not show.
+    let full = try #require(try inputBox(screen(agent, ["see " + String(repeating: "a", count: width - 4), "ok go"]), agent: agent))
+    #expect(full.cursor(row: 4, column: 2.2)! == (width + 1, 2))
 }
 
 @Test func copilotStartsTheRowAfterAFullOneWithItsSpace() throws {
@@ -286,7 +304,7 @@ private let agents = ["claude", "codex", "copilot"]
 
 @Test func copilotsBoxOfEightRowsOrMoreMayBeScrolled() throws {
     let seven = try #require(try inputBox(copilot(Array(repeating: "word", count: 7)), agent: "copilot"))
-    #expect(seven.cursor(row: 9, column: 2.2)! == (30, 7))
+    #expect(seven.cursor(row: 3, column: 4.2)! == (2, 7))
     let eight = try #require(try inputBox(copilot(Array(repeating: "word", count: 8)), agent: "copilot"))
     #expect(eight.cursor(row: 3, column: 2.2) == nil)
 }

@@ -69,16 +69,18 @@ struct ApprovalCard: View {
     }
 
     @ViewBuilder private var command: some View {
+        // The band leaves out the reason, and may cut the command.
         if approval.toolName != nil, let command = approval.toolSummary {
             Text(verbatim: command)
-                .font(.footnote.monospaced())
                 .lineLimit(1)
+                .modifier(CutReport(text: command) { model.setCut(item, $0 || approval.reason != nil) })
+                .font(.footnote.monospaced())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
         } else {
-            Spacer(minLength: 0)
+            Spacer(minLength: 0).onAppear { model.setCut(item, approval.reason != nil) }
         }
     }
 
@@ -137,6 +139,27 @@ private struct Capped: Layout {
     }
 }
 
+/// Calls `action` with whether the text it modifies, held to its line limit, leaves out lines of `text`.
+private struct CutReport: ViewModifier {
+    let text: String
+    let action: (Bool) -> Void
+    @State private var shown: CGFloat = 0
+    @State private var whole: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
+            .background {
+                Text(verbatim: text)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { whole = $0 }
+            }
+            .onChange(of: whole > shown + 1, initial: true) { action($1) }
+    }
+}
+
 /// The whole prompt with its decisions in reach, opened from the card.
 struct ApprovalReview: View {
     let model: ApprovalsModel
@@ -150,12 +173,36 @@ struct ApprovalReview: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var more = false
     @State private var detent = PresentationDetent.medium
+    @State private var fit: CGFloat?
+    @State private var medium: CGFloat?
+    @State private var bar: CGFloat = 0
+    @State private var page: CGFloat = 0
+    @State private var prompt: CGFloat = 0
+    @State private var footer: CGFloat = 0
+
+    /// Landscape and accessibility sizes always show the whole sheet, and so does the keyboard, which lifts the sheet over
+    /// the card while the detent still reads half.
+    private var half: Bool {
+        detent != .large && verticalSizeClass != .compact && !typeSize.isAccessibilitySize && field == nil
+    }
+
+    /// As tall as the content at half height, and never taller than the medium detent: at medium a short output left
+    /// about 150 points of the sheet empty. A custom detent reading a measured height from the environment never followed it.
+    private var halfDetent: PresentationDetent {
+        if let fit, let medium, fit < medium - 1 { .height(fit) } else { .medium }
+    }
+
+    /// The navigation bar, the prompt and the decisions at half height; the medium detent's height while the sheet is on it.
+    private func measure() {
+        guard half else { return }
+        if detent == .medium, bar > 0, page > 0 { medium = bar + page }
+        fit = bar + prompt + footer
+    }
 
     var body: some View {
-        // At half height the card above, dimmed, still shows the task, the command and the reason: the sheet leaves them to
-        // it and gives the output the room. Landscape and accessibility sizes always show the whole sheet, and so does the
-        // keyboard, which lifts the sheet over the card while the detent still reads half.
-        let half = detent == .medium && verticalSizeClass != .compact && !typeSize.isAccessibilitySize && field == nil
+        // At half height the card above, dimmed, still shows the task, and the command and the reason unless it cut them:
+        // the sheet leaves to it what it shows whole.
+        let leaves = half && !model.cut.contains(item.id)
         NavigationStack {
             // The decisions sit under the prompt, not over it: a bar over the scroll view, even over a hard edge, let the
             // prompt read through.
@@ -164,7 +211,7 @@ struct ApprovalReview: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // Full height, the sheet hides the session header: the task, and its machine when more than one is
                         // paired, say who gets the answer.
-                        if !half {
+                        if !leaves {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: task).font(.subheadline)
                                 if showsMachine {
@@ -174,12 +221,16 @@ struct ApprovalReview: View {
                             }
                             .accessibilityElement(children: .combine)
                         }
-                        ApprovalDetails(model: model, item: item, whole: true, commandAndReason: !half, field: $field, sendAnswer: sendAnswer)
+                        ApprovalDetails(model: model, item: item, whole: true, commandAndReason: !leaves, field: $field, sendAnswer: sendAnswer)
                     }
                     .padding(.horizontal)
                     .padding(.bottom)
                 }
                 .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 1 } action: { more = $1 }
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: {
+                    prompt = $1
+                    measure()
+                }
                 // A row cut by the sheet's edge read as the end of the prompt: a fade on the scroll view's own edge says more follows.
                 .mask {
                     VStack(spacing: 0) {
@@ -211,6 +262,20 @@ struct ApprovalReview: View {
                         }
                     }
                     .padding()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        footer = $0
+                        measure()
+                    }
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                page = $0
+                measure()
+            }
+            .background {
+                Color.clear.ignoresSafeArea().onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.top } action: {
+                    bar = $0
+                    measure()
                 }
             }
             .navigationTitle(item.approval.toolName ?? item.approval.agentLabel)
@@ -219,14 +284,20 @@ struct ApprovalReview: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(role: .close) { dismiss() }.tint(.primary)
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    ApprovalCountdown(approval: item.approval).fixedSize()
+                // At half height the card above shows the countdown.
+                if !half {
+                    ToolbarItem(placement: .primaryAction) {
+                        ApprovalCountdown(approval: item.approval).fixedSize()
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                 }
-                .sharedBackgroundVisibility(.hidden)
             }
         }
         // At half height, stacked decisions left larger text no room for the reason.
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large], selection: $detent)
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [halfDetent, .large], selection: $detent)
+        .onChange(of: halfDetent) { old, new in
+            if detent == old { detent = new }
+        }
     }
 }
 
@@ -250,6 +321,7 @@ private struct ApprovalDetails: View {
                 Text(verbatim: wrapped)
                     .lineLimit(whole ? nil : 3)
                     .fixedSize(horizontal: false, vertical: true)
+                    .modifier(CutReport(text: wrapped) { if !whole { model.setCut(item, $0) } })
                     .accessibilityLabel(command)
                     .font(.footnote.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -316,10 +388,10 @@ private struct ApprovalCountdown: View {
             .fixedSize()
             // As tall as Review's glass beside it on the card and the band.
             .frame(maxHeight: .infinity)
-            // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
-            // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
-            .background(SessionBarDim(), in: .capsule)
+            // The dimming color behind the glass, as on Review: the glass alone left the digits at 3.7:1 over the dark
+            // terminal, and the last minute's red reads 4.6:1 there on the landscape band, its lowest.
             .glassEffect(.regular, in: .capsule)
+            .background(SessionBarDim(), in: .capsule)
     }
 }
 
@@ -376,10 +448,10 @@ private struct NoteField: View {
             HStack(spacing: 8) {
                 let placeholder = "Note for \(item.approval.agentLabel)"
                 TextField(placeholder, text: model.draft(item), prompt: Text(placeholder).foregroundStyle(.metadata))
-                    .textFieldStyle(.roundedBorder)
                     .font(.footnote)
                     .submitLabel(.done)
                     .focused(field, equals: "note")
+                    .panelField()
                 Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
@@ -412,6 +484,15 @@ private struct NoteField: View {
     }
 }
 
+extension View {
+    /// The command and output panels' fill and shape: the rounded border style drew a black box on the dark sheet.
+    fileprivate func panelField() -> some View {
+        padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
@@ -420,11 +501,11 @@ private struct FeedbackField: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Answer this prompt", text: model.draft(item))
-                .textFieldStyle(.roundedBorder)
+            TextField("Answer this prompt", text: model.draft(item), prompt: Text("Answer this prompt").foregroundStyle(.metadata))
                 .font(.footnote)
                 .submitLabel(.send)
                 .focused(field, equals: "answer")
+                .panelField()
                 .onSubmit { Task { await model.sendFeedback(item, send: sendAnswer) } }
             Button {
                 Task { await model.sendFeedback(item, send: sendAnswer) }
