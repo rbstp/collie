@@ -67,9 +67,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     /// A single tap that clears no selection.
     public var onTap: (() -> Void)?
     /// Turns on the input box of `inputAgent`: a single tap in it goes here instead of `onTap`, with
-    /// the cursor index it points to and the box's character count, and while typing the box stays
+    /// the cursor index it points to and the box's Mac row count, and while typing the box stays
     /// in view above the keyboard until the user scrolls away from it.
-    public var onTapInput: ((_ index: Int, _ count: Int) -> Void)? {
+    public var onTapInput: ((_ index: Int, _ lines: Int) -> Void)? {
         didSet {
             if (oldValue == nil) != (onTapInput == nil) { prepare() }
         }
@@ -282,7 +282,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if bounds.height > 0 {
             followsBottom = atFollowed
         }
-        let box = onTapInput == nil ? nil : inputAgent.flatMap { TerminalInputBox(frameData, agent: $0) }
+        let box = onTapInput == nil ? nil : inputAgent.flatMap { TerminalInputBox(frameData, agent: $0, snapshot: snapshot ?? "") }
         // Typing changes the box, which brings it back into view.
         if let box, box.text != inputBox?.text, typing {
             (followsBottom, followsInput) = (true, true)
@@ -430,7 +430,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         } else if let onTapInput,
             let cursor = inputBox?.cursor(row: Int(((point.y - m.inset) / m.height).rounded(.down)), column: (point.x - m.inset) / m.width)
         {
-            onTapInput(cursor.index, cursor.count)
+            onTapInput(cursor.index, cursor.lines)
         } else {
             onTap?()
         }

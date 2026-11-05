@@ -108,7 +108,7 @@ struct AgentScreen: View {
                             model.type(text)
                             if !model.keepsKeyboard(after: text) { typing = false }
                         }, deleteBackward: { model.tap(.backspace) },
-                        inputAgent: model.agent?.kind, tapInput: { model.placeCursor(at: $0, of: $1) }
+                        inputAgent: model.agent?.kind, tapInput: { model.placeCursor(at: $0, lines: $1) }
                     ) { await model.refresh() }
                         // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
                         .ignoresSafeArea(edges: [.top, .bottom])
