@@ -77,6 +77,18 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs + 5_000).age(now: now) == "just now")
 }
 
+@Test func planUsageAgeShowsOnlyOnceNoReadingIsCurrent() {
+    var plan = PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs - 6 * 60_000)
+    #expect(plan.readingsStale(now: now))
+    plan.codex = CodexUsage(used: 1, limit: 100, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 9 * 60_000)
+    #expect(!plan.readingsStale(now: now))
+    plan.codex?.recordedMs = nowMs - 11 * 60_000
+    plan.copilot = CopilotUsage(used: 1, limit: 300, unlimited: false, tokenBasedBilling: false, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 11 * 60_000)
+    #expect(plan.readingsStale(now: now))
+    plan.recordedMs = nowMs - 4 * 60_000
+    #expect(!plan.readingsStale(now: now))
+}
+
 @Test func planUsageSpellsOutDurationsForVoiceOver() {
     #expect(PlanUsage.spoken(seconds: 7_980) == "2 hours, 13 minutes")
     #expect(PlanUsage.spoken(seconds: 277_200) == "3 days, 5 hours")

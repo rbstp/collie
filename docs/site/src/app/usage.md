@@ -1,6 +1,6 @@
 # Usage
 
-To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Under each machine's name, with how long ago it last recorded usage, one card shows its plan usage and a second its tokens and cost.
+To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Under each machine's name, one card shows its plan usage and a second its tokens and cost. Once none of its readings is current, the name also says how long ago the machine last recorded usage, or that it has recorded none.
 
 | Agent | Plan usage | Source |
 |---|---|---|

@@ -285,6 +285,11 @@ extension PlanUsage {
         }
     }
 
+    /// No reading is current: each is past its own agent's limit.
+    func readingsStale(now: Date) -> Bool {
+        isStale(now: now) && codex?.isStale(now: now) != false && copilot?.isStale(now: now) != false
+    }
+
     func age(now: Date) -> String {
         Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
     }
