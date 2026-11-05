@@ -360,7 +360,6 @@ struct ConversationActivity: View {
             } label: {
                 HStack(spacing: 8) {
                     // Secondary gray measured 2.9:1 on this glass over a light chat.
-                    Image(systemName: "wrench.and.screwdriver").foregroundStyle(.metadata)
                     Text(verbatim: ConversationActivity.title(tools))
                         + Text("\(tools.count == 1 ? "" : " · \(tools.count) calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
                             .foregroundStyle(.metadata)

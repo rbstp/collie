@@ -38,6 +38,7 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 ## Options
 
 - **Ultracode** (Claude Code only, off by default) turns on Claude Code's Ultracode setting; if it stays off, the task fails without sending the prompt.
+- **Name workspace**, under the agent, shows a field for the herdr workspace's label.
 - Codex tasks start with `--no-daemon`: see [Codex](../agents/codex.md).
 
 ## Archive
