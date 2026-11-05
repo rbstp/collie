@@ -215,7 +215,7 @@ struct AgentScreen: View {
                 }
                 GlassEffectContainer(spacing: 4) {
                     VStack(spacing: 0) {
-                        if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model) }
+                        if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model, typing: $typing) }
                         PromptBar(model: model, typesIntoTerminal: !showingChat || model.isTerminal, typing: $typing)
                     }
                 }
@@ -813,11 +813,13 @@ private struct PaneCard: View {
 
 private struct KeyStrip: View {
     let model: AgentModel
+    @Binding var typing: Bool
     @State private var shortcuts: StripShortcuts
     @State private var editingShortcuts = false
 
-    init(model: AgentModel) {
+    init(model: AgentModel, typing: Binding<Bool>) {
         self.model = model
+        _typing = typing
         _shortcuts = State(initialValue: StripShortcuts.load(from: model.savesPreferences ? StripShortcuts.file : nil))
     }
 
@@ -881,7 +883,10 @@ private struct KeyStrip: View {
                 Divider().frame(height: 18)
             }
             ForEach(AgentKey.strip, id: \.self) { key in
-                KeyCap { model.press(key) } label: { KeyGlyphs(key: key) }
+                KeyCap {
+                    guard model.press(key) != nil, key == .enter, !model.keepsKeyboard(after: "\n") else { return }
+                    typing = false
+                } label: { KeyGlyphs(key: key) }
                 .accessibilityLabel(key.accessibilityName)
                 .disabled(!model.canPress(key))
                 if key != AgentKey.strip.last { Divider().frame(height: 18) }
