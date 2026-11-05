@@ -30,7 +30,7 @@ To hide an agent that is not blocked, swipe its row right, choose **Snooze**, th
 
 ## Remaining context
 
-A chip and a percentage such as **38%** show how much context a Claude Code or Codex agent has left, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
+Once a Claude Code or Codex agent has less than 70% of its context left, a chip and a percentage such as **38%** show how much remains, in orange from 20% and red from 10%; Codex needs [herdr's hook](../agents/codex.md#set-up). For Claude Code, the percentage counts down to auto-compact, like Claude Code's own "until auto-compact" indicator, or to the full context window when auto-compact is off in `/config`.
 
 ## Running subagents
 

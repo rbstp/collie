@@ -27,12 +27,12 @@ struct AgentGrid<Menu: View>: View {
                 if let notice {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.warning)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                 }
                 if let moveError {
-                    Text(moveError).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
+                    Text(moveError).font(.footnote).foregroundStyle(.warning).padding(.horizontal)
                 }
                 if entries.isEmpty {
                     NoMachines()
@@ -303,7 +303,7 @@ struct AgentCard: View {
                     .foregroundStyle(.metadata)
                     .lineLimit(1)
                     Spacer(minLength: 0)
-                    if let left = agent.contextLeft {
+                    if let left = agent.contextLeft, ContextRing.shows(left) {
                         ContextRing(left: left, font: .caption2)
                     }
                 }

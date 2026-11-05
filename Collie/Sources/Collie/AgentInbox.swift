@@ -33,7 +33,7 @@ struct AgentInbox<Menu: View>: View {
                 if let notice {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.warning)
                 }
                 if entries.isEmpty {
                     NoMachines()
@@ -463,7 +463,7 @@ private struct InboxRow: View {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }
                     Spacer(minLength: 0)
-                    if let left = agent.contextLeft {
+                    if let left = agent.contextLeft, ContextRing.shows(left) {
                         ContextRing(left: left, font: .caption2, aligned: true)
                     }
                 }

@@ -547,7 +547,7 @@ private struct AgentHeader: View {
                         if let kind = agent.kind {
                             AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
                         }
-                        if let left = agent.contextLeft {
+                        if let left = agent.contextLeft, ContextRing.shows(left) {
                             ContextRing(left: left)
                         }
                     }
@@ -725,6 +725,10 @@ private struct AgentTerminal: UIViewRepresentable {
         let view = GhosttyTerminalUIView(fontSize: fontSize)
         // obscuredTop and obscuredBottom already include the bars and the device's safe area.
         view.contentInsetAdjustmentBehavior = .never
+        // With the canvas's own 8, text starts at the chrome's 16-point gutter; grid previews keep 8.
+        view.contentInset.left = 8
+        view.contentInset.right = 8
+        view.contentOffset.x = -8
         view.topEdgeEffect.isHidden = true
         let control = UIRefreshControl()
         let coordinator = context.coordinator
