@@ -360,6 +360,11 @@ extension DecisionOutcome {
 }
 
 enum Countdown {
+    /// Only the last 2 minutes: until then the approval's time left is no call to act.
+    static func shows(untilMs: UInt64, now: Date) -> Bool {
+        untilMs < now.unixMs + 120_000
+    }
+
     static func string(untilMs: UInt64, now: Date) -> String {
         let seconds = Int(untilMs / 1000) - Int(now.timeIntervalSince1970)
         guard seconds > 0 else { return "expired" }

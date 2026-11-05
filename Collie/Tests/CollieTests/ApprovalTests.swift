@@ -159,6 +159,9 @@ import UserNotifications
     #expect(Countdown.string(untilMs: 1_700_000_000_000 + 600_000, now: now) == "10:00")
     #expect(Countdown.string(untilMs: 1_700_000_000_000, now: now) == "expired")
     #expect(Countdown.string(untilMs: 0, now: now) == "expired")
+    #expect(!Countdown.shows(untilMs: 1_700_000_000_000 + 125_000, now: now))
+    #expect(Countdown.shows(untilMs: 1_700_000_000_000 + 119_000, now: now))
+    #expect(Countdown.shows(untilMs: 1_700_000_000_000, now: now))
 }
 
 final class FakeApprovalCore: ApprovalCore {

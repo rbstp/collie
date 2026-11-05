@@ -38,14 +38,18 @@ struct UsageSections: View {
                 } header: {
                     TimelineView(.everyMinute) { context in
                         let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                        // The age shows only once no reading is current.
+                        let fresh = planUsage.map { !$0.readingsStale(now: context.date) } ?? false
                         layout {
                             MachineName(machine: entry.machine).font(.footnote.weight(.semibold))
                             if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                            Text(entry.flock?.planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.footnote)
+                            if !fresh {
+                                Text(planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.footnote)
+                            }
                         }
                         .textCase(nil)
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("\(entry.machine.label), \(entry.flock?.planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
+                        .accessibilityLabel(fresh ? entry.machine.label : "\(entry.machine.label), \(planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
                     }
                 }
                 Section {

@@ -1,6 +1,6 @@
 # Usage
 
-To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Under each machine's name, with how long ago it last recorded usage, one card shows its plan usage and a second its tokens and cost.
+To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe left. Under each machine's name, one card shows its plan usage and a second its tokens and cost. Once none of its readings is current, the name also says how long ago the machine last recorded usage, or that it has recorded none.
 
 | Agent | Plan usage | Source |
 |---|---|---|
@@ -25,4 +25,4 @@ The **Tokens and cost** card, below the plan usage, shows the tokens all of the 
 
 `collied` counts tokens in the machine's Claude Code, Codex and Copilot CLI transcripts, subagents included. Days end at midnight where your phone is.
 
-While `collied` is still counting, the total reads **Partial estimate** and grows as it goes. The cost is an estimate, not your bill: a subscription charges differently, and Copilot bills premium requests. Prices come from LiteLLM's price table, as shipped with `collied`. [Update collied](../operate/updating.md#collied) for newer prices, or when the card asks because the machine's release is too old to count tokens.
+Under the total, **Est. at API prices** says how it was priced. While `collied` is still counting, it reads **Partial est.** and the total grows as it goes. The cost is an estimate, not your bill: a subscription charges differently, and Copilot bills premium requests. Prices come from LiteLLM's price table, as shipped with `collied`. [Update collied](../operate/updating.md#collied) for newer prices, or when the card asks because the machine's release is too old to count tokens.

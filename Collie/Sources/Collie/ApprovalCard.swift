@@ -83,28 +83,38 @@ struct ApprovalCard: View {
     }
 
     private var reviewAndCountdown: some View {
-        HStack(spacing: 8) {
-            ApprovalCountdown(approval: approval)
-            Button {
-                model.toggleExpanded(item)
-            } label: {
-                // The band leaves the reason to the sheet; the shield says there is one.
-                Label {
-                    Text("Review")
-                } icon: {
-                    if approval.reason != nil { Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning) }
+        // Left out of the row until it shows: hidden inside its own view, it still took the row's spacing.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 8) {
+                if Countdown.shows(untilMs: approval.expiresAtMs, now: context.date) {
+                    ApprovalCountdown(approval: approval)
                 }
-                .labelStyle(.titleAndIcon)
-                .font(.footnote.weight(.semibold))
+                review
             }
-            .buttonStyle(.glass)
-            .tint(.primary)
-            // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
-            // the band, they sit in front and take the tap.
-            .contentShape(.interaction, Rectangle().inset(by: -7.5))
-            .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
+            .fixedSize()
         }
-        .fixedSize()
+    }
+
+    private var review: some View {
+        Button {
+            model.toggleExpanded(item)
+        } label: {
+            // The band leaves the reason to the sheet; the shield says there is one.
+            Label {
+                Text("Review")
+            } icon: {
+                if approval.reason != nil { Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning) }
+            }
+            .labelStyle(.titleAndIcon)
+            .font(.footnote.weight(.semibold))
+        }
+        .buttonStyle(.glass)
+        .tint(.primary)
+        .background(SessionBarDim(), in: .capsule)
+        // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
+        // the band, they sit in front and take the tap.
+        .contentShape(.interaction, Rectangle().inset(by: -7.5))
+        .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
     }
 }
 
@@ -139,8 +149,13 @@ struct ApprovalReview: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var more = false
+    @State private var detent = PresentationDetent.medium
 
     var body: some View {
+        // At half height the card above, dimmed, still shows the task, the command and the reason: the sheet leaves them to
+        // it and gives the output the room. Landscape and accessibility sizes always show the whole sheet, and so does the
+        // keyboard, which lifts the sheet over the card while the detent still reads half.
+        let half = detent == .medium && verticalSizeClass != .compact && !typeSize.isAccessibilitySize && field == nil
         NavigationStack {
             // The decisions sit under the prompt, not over it: a bar over the scroll view, even over a hard edge, let the
             // prompt read through.
@@ -149,15 +164,17 @@ struct ApprovalReview: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // Full height, the sheet hides the session header: the task, and its machine when more than one is
                         // paired, say who gets the answer.
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: task).font(.subheadline)
-                            if showsMachine {
-                                // The metadata gray read 4.2:1 on the half-height sheet's light glass.
-                                Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                        if !half {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: task).font(.subheadline)
+                                if showsMachine {
+                                    // The metadata gray read 4.2:1 on the half-height sheet's light glass.
+                                    Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                                }
                             }
+                            .accessibilityElement(children: .combine)
                         }
-                        .accessibilityElement(children: .combine)
-                        ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
+                        ApprovalDetails(model: model, item: item, whole: true, commandAndReason: !half, field: $field, sendAnswer: sendAnswer)
                     }
                     .padding(.horizontal)
                     .padding(.bottom)
@@ -209,7 +226,7 @@ struct ApprovalReview: View {
             }
         }
         // At half height, stacked decisions left larger text no room for the reason.
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large], selection: $detent)
     }
 }
 
@@ -218,6 +235,7 @@ private struct ApprovalDetails: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let whole: Bool
+    var commandAndReason = true
     let field: FocusState<String?>.Binding
     let sendAnswer: (String) async throws -> Void
 
@@ -225,7 +243,7 @@ private struct ApprovalDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if approval.toolName != nil, let command = approval.toolSummary {
+            if commandAndReason, approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
                 // and a bare `--` stays with the argument after it.
                 let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
@@ -239,7 +257,7 @@ private struct ApprovalDetails: View {
                     .padding(.horizontal, 10)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
-            if let reason = approval.reason {
+            if commandAndReason, let reason = approval.reason {
                 ApprovalReason(reason: reason)
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
@@ -281,21 +299,27 @@ private struct ApprovalCountdown: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
-                .labelStyle(.titleAndIcon)
-                .font(.footnote.weight(.semibold).monospacedDigit())
-                .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .padding(2)
-                .fixedSize()
-                // As tall as Review's glass beside it on the card and the band.
-                .frame(maxHeight: .infinity)
-                // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
-                // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
-                .background(SessionBarDim(), in: .capsule)
-                .glassEffect(.regular, in: .capsule)
+            if Countdown.shows(untilMs: approval.expiresAtMs, now: context.date) {
+                countdown(now: context.date)
+            }
         }
+    }
+
+    private func countdown(now: Date) -> some View {
+        Label(Countdown.string(untilMs: approval.expiresAtMs, now: now), systemImage: "timer")
+            .labelStyle(.titleAndIcon)
+            .font(.footnote.weight(.semibold).monospacedDigit())
+            .foregroundStyle(approval.expiresAtMs < now.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .padding(2)
+            .fixedSize()
+            // As tall as Review's glass beside it on the card and the band.
+            .frame(maxHeight: .infinity)
+            // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
+            // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
+            .background(SessionBarDim(), in: .capsule)
+            .glassEffect(.regular, in: .capsule)
     }
 }
 
@@ -350,7 +374,8 @@ private struct NoteField: View {
     var body: some View {
         if model.noting.contains(item.id) {
             HStack(spacing: 8) {
-                TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
+                let placeholder = "Note for \(item.approval.agentLabel)"
+                TextField(placeholder, text: model.draft(item), prompt: Text(placeholder).foregroundStyle(.metadata))
                     .textFieldStyle(.roundedBorder)
                     .font(.footnote)
                     .submitLabel(.done)
@@ -365,7 +390,10 @@ private struct NoteField: View {
         } else {
             // On the band's glass over the dark terminal the primary color at 60% read 4.2:1 and the gold accent 3.8:1, so
             // the label takes the primary color at 75% and only the symbol the accent.
-            Button { model.toggleNote(item) } label: {
+            Button {
+                model.toggleNote(item)
+                field.wrappedValue = "note"
+            } label: {
                 Label {
                     Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
                 } icon: {
