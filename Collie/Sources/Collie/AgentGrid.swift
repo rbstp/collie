@@ -69,14 +69,19 @@ struct AgentGrid<Menu: View>: View {
                             }
                         } header: {
                             VStack(alignment: .leading, spacing: 6) {
-                                Button {
-                                    reconnect(entry)
-                                } label: {
-                                    MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: showsLink, now: context.date)
-                                        .font(.footnote.weight(.semibold))
-                                        .foregroundStyle(.secondary)
+                                let header = MachineHeader(
+                                    entry: entry, showsName: entries.count > 1, approvalsCount: approvalsCount(entry), showsLink: showsLink, now: context.date
+                                )
+                                if !header.isEmpty {
+                                    Button {
+                                        reconnect(entry)
+                                    } label: {
+                                        header
+                                            .font(.footnote.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                                 if entry.flock?.details != nil && entry.agents.isEmpty {
                                     Text("No agents running").foregroundStyle(.secondary)
                                 }

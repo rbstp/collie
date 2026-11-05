@@ -284,14 +284,20 @@ struct FlockScreen: View {
                                 .opacity(entry.linkDown ? 0.5 : 1)
                             }
                         } header: {
-                            Button {
-                                reconnect(entry)
-                            } label: {
-                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting, now: context.date)
-                                    .font(.footnote.weight(.semibold))
-                                    .textCase(nil)
+                            let header = MachineHeader(
+                                entry: entry, showsName: model.entries.count > 1, approvalsCount: approvalsCount(entry),
+                                showsLink: !tailnetStarting, now: context.date
+                            )
+                            if !header.isEmpty {
+                                Button {
+                                    reconnect(entry)
+                                } label: {
+                                    header
+                                        .font(.footnote.weight(.semibold))
+                                        .textCase(nil)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -412,23 +418,34 @@ struct NoMachines: View {
 
 struct MachineHeader: View {
     let entry: MachineFlockEntry
+    /// With one machine paired its name says nothing, as on inbox rows: the header keeps only its pills and messages.
+    let showsName: Bool
     let approvalsCount: Int
     let showsLink: Bool
     let now: Date
 
+    var isEmpty: Bool {
+        guard !showsName, approvalsCount == 0, showsLink, let flock = entry.flock else { return !showsName && approvalsCount == 0 }
+        return flock.link == .connected && !(flock.versionMismatch && flock.lastError != nil) && flock.reason == nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // With larger text the pills drop under the name rather than break it mid-word.
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    MachineName(machine: entry.machine)
-                    Spacer()
-                    status
+            if showsName {
+                // With larger text the pills drop under the name rather than break it mid-word.
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        MachineName(machine: entry.machine)
+                        Spacer()
+                        status
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        MachineName(machine: entry.machine)
+                        HStack { status }
+                    }
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    MachineName(machine: entry.machine)
-                    HStack { status }
-                }
+            } else {
+                HStack { status }
             }
             if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
                 Text(message)

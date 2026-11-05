@@ -30,6 +30,16 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(shown([Match(.staticText, "MacBook Pro")], app), app.debugDescription)
     }
 
+    func testOneMachineLeavesItsNameOffAgentsButKeepsTheApprovalsPill() throws {
+        let app = try launchDemo(["--approval-demo"])
+        defer { app.terminate() }
+        for layout in ["List", "Grid"] {
+            app.choose(app.buttons[layout]) { app.buttons["Layout"].tap() }
+            XCTAssertTrue(app.descendants(matching: .any)["1 approval"].appears(within: 10), "\(layout)\n\(app.debugDescription)")
+            XCTAssertFalse(app.staticTexts["MacBook Pro"].exists, "\(layout)\n\(app.debugDescription)")
+        }
+    }
+
     func testSessionKeepsKeyboardAndLatestOutputAcrossRotation() throws {
         let app = try launchDemo()
         defer { app.terminate() }

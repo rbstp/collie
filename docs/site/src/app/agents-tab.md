@@ -13,7 +13,7 @@ To arrange your machines, open **Machines**, tap **Edit**, drag the handles, the
 
 ## Layouts
 
-The layout button at the top switches between Grid, List and Inbox. List is a compact list grouped by machine, blocked agents first. On Usage, the layout and search buttons hide, and only **+** stays.
+The layout button at the top switches between Grid, List and Inbox. List is a compact list grouped by machine, blocked agents first. With one machine paired, Grid and List leave its name out; its pending approvals and any link problem still show above its agents. On Usage, the layout and search buttons hide, and only **+** stays.
 
 ### Grid
 
