@@ -67,9 +67,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
     /// A single tap that clears no selection.
     public var onTap: (() -> Void)?
     /// Turns on the input box of `inputAgent`: a single tap in it goes here instead of `onTap`, with
-    /// the cursor index it points to and the box's Mac row count, and while typing the box stays
-    /// in view above the keyboard until the user scrolls away from it.
-    public var onTapInput: ((_ index: Int, _ lines: Int) -> Void)? {
+    /// the keys that move the cursor where it points, and while typing the box stays in view above
+    /// the keyboard until the user scrolls away from it.
+    public var onTapInput: ((TerminalInputWalk) -> Void)? {
         didSet {
             if (oldValue == nil) != (onTapInput == nil) { prepare() }
         }
@@ -80,6 +80,9 @@ public final class GhosttyTerminalUIView: UIScrollView {
             if oldValue != inputAgent { prepare() }
         }
     }
+    /// The snapshot as the Mac draws it, where the one shown joins rows it wrapped: the walk to a
+    /// tapped spot in the input box counts the Mac's rows.
+    public var inputSnapshot: String?
     /// Keystrokes while `typing`: text as typed, Return as "\n".
     public var onInsertText: ((String) -> Void)? {
         get { keyInput.insert }
@@ -282,7 +285,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
         if bounds.height > 0 {
             followsBottom = atFollowed
         }
-        let box = onTapInput == nil ? nil : inputAgent.flatMap { TerminalInputBox(frameData, agent: $0, snapshot: snapshot ?? "") }
+        let box = onTapInput == nil ? nil : inputAgent.flatMap { TerminalInputBox(frameData, agent: $0) }
         // Typing changes the box, which brings it back into view.
         if let box, box.text != inputBox?.text, typing {
             (followsBottom, followsInput) = (true, true)
@@ -427,13 +430,18 @@ public final class GhosttyTerminalUIView: UIScrollView {
         let m = canvas.metrics
         if selection != nil {
             selection = nil
-        } else if let onTapInput,
-            let cursor = inputBox?.cursor(row: Int(((point.y - m.inset) / m.height).rounded(.down)), column: (point.x - m.inset) / m.width)
+        } else if let onTapInput, let box = inputBox,
+            let walk = box.walk(row: Int(((point.y - m.inset) / m.height).rounded(.down)), column: (point.x - m.inset) / m.width, mac: macInputBox(box))
         {
-            onTapInput(cursor.index, cursor.lines)
+            onTapInput(walk)
         } else {
             onTap?()
         }
+    }
+
+    private func macInputBox(_ box: TerminalInputBox) -> TerminalInputBox? {
+        guard let inputSnapshot, inputSnapshot != snapshot else { return box }
+        return screen.flatMap { TerminalInputBox($0.render(ansiSnapshot: inputSnapshot), agent: box.agent) }
     }
 
     @objc private func doubleTapped() {
