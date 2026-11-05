@@ -23,8 +23,8 @@ final class KeyStripTests: XCTestCase {
         keys.tap()
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
         XCTAssertTrue(keys.isSelected, app.debugDescription)
-        XCTAssertTrue(app.buttons["Shift Tab"].exists, app.debugDescription)
-        XCTAssertGreaterThanOrEqual(app.buttons["Shift Tab"].frame.height, 44, app.debugDescription)
+        XCTAssertTrue(app.buttons["Shift Tab"].firstMatch.exists, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(app.buttons["Shift Tab"].firstMatch.frame.height, 44, app.debugDescription)
         XCTAssertFalse(app.buttons["Shift Left arrow"].exists, app.debugDescription)
         // Shortcuts are kept on the simulator, so an earlier failed run may have left some.
         removeShortcuts(app)
@@ -67,7 +67,8 @@ final class KeyStripTests: XCTestCase {
         app.buttons["Save"].tap()
         app.buttons["Done"].tap()
 
-        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "shift-tab")).firstMatch
+        // The saved key shortcut follows the built-in Shift Tab chip and reads the same.
+        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "Shift Tab")).element(boundBy: 1)
         let effort = app.buttons["/effort high"]
         XCTAssertTrue(custom.appears(within: 5), app.debugDescription)
         XCTAssertTrue(effort.appears(within: 5), app.debugDescription)
@@ -110,6 +111,70 @@ final class KeyStripTests: XCTestCase {
         }
         let joystick = app.descendants(matching: .any)["Arrow joystick"].firstMatch
         XCTAssertEqual(joystick.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
+    }
+
+    func testJoystickWithoutTheStrip() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+
+        let keys = app.buttons["Keys"]
+        XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
+        let escape = app.buttons["Escape"]
+        if keys.isSelected { keys.tap() }
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+        let joysticks = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Arrow joystick"))
+        let joystick = joysticks.firstMatch
+        XCTAssertTrue(joystick.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 1, app.debugDescription)
+        XCTAssertTrue(joystick.isHittable, app.debugDescription)
+        let keyboardButton = app.buttons["Keyboard"]
+        XCTAssertEqual(joystick.frame.midY, keys.frame.midY, accuracy: 2, app.debugDescription)
+        XCTAssertEqual(joystick.frame.height, keyboardButton.frame.height, accuracy: 1, app.debugDescription)
+        XCTAssertLessThan(joystick.frame.maxX, keyboardButton.frame.minX, app.debugDescription)
+
+        keyboardButton.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(joystick.isHittable, app.debugDescription)
+        app.buttons["Hide keyboard"].tap()
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+
+        keys.tap()
+        XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 1, app.debugDescription)
+        XCTAssertEqual(joystick.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
+        keys.tap()
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+
+        app.buttons["Chat"].firstMatch.tap()
+        XCTAssertTrue(keys.disappears(within: 5), app.debugDescription)
+        XCTAssertEqual(joysticks.count, 0, app.debugDescription)
+    }
+
+    func testReturnHidesTheTerminalKeyboard() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+        app.buttons["Keyboard"].tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        app.typeText("ok")
+        XCTAssertFalse(keyboard.disappears(within: 2), app.debugDescription)
+        app.typeText("\n")
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
     }
 
     private func removeShortcuts(_ app: XCUIApplication) {

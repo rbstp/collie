@@ -127,6 +127,11 @@ final class AgentModel {
 
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
 
+    /// Return typed into the terminal sends, so it hides the keyboard as a sent prompt does.
+    func keepsKeyboard(after typed: String) -> Bool {
+        keepsKeyboard || !typed.contains(where: \.isNewline)
+    }
+
     var historyLines: UInt16 { DevicePrefs.load(from: prefsFile).historyLines }
 
     func reloadGestures() {
@@ -1212,13 +1217,6 @@ struct CloseConfirmation: Equatable {
 
 enum KeyModifier: CaseIterable {
     case shift, control
-
-    var word: String {
-        switch self {
-        case .shift: "shift"
-        case .control: "ctrl"
-        }
-    }
 
     var accessibilityName: String {
         switch self {
