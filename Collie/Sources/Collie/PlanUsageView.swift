@@ -40,16 +40,21 @@ struct UsageSections: View {
                         let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
                         // The age shows only once no reading is current.
                         let fresh = planUsage.map { !$0.readingsStale(now: context.date) } ?? false
-                        layout {
-                            MachineName(machine: entry.machine).font(.footnote.weight(.semibold))
-                            if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                            if !fresh {
-                                Text(planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.footnote)
+                        // With one machine paired its name says nothing, as on Agents, and each stale reading says its own age.
+                        if entries.count > 1 {
+                            layout {
+                                MachineName(machine: entry.machine).font(.footnote.weight(.semibold))
+                                if !dynamicTypeSize.isAccessibilitySize { Spacer() }
+                                if !fresh {
+                                    Text(planUsage?.age(now: context.date) ?? "No plan usage recorded").font(.footnote)
+                                }
                             }
+                            .textCase(nil)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel(fresh ? entry.machine.label : "\(entry.machine.label), \(planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
+                        } else if planUsage == nil {
+                            Text("No plan usage recorded").font(.footnote).textCase(nil)
                         }
-                        .textCase(nil)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityLabel(fresh ? entry.machine.label : "\(entry.machine.label), \(planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
                     }
                 }
                 Section {
