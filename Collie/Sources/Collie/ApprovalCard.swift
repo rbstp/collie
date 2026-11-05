@@ -83,29 +83,38 @@ struct ApprovalCard: View {
     }
 
     private var reviewAndCountdown: some View {
-        HStack(spacing: 8) {
-            ApprovalCountdown(approval: approval)
-            Button {
-                model.toggleExpanded(item)
-            } label: {
-                // The band leaves the reason to the sheet; the shield says there is one.
-                Label {
-                    Text("Review")
-                } icon: {
-                    if approval.reason != nil { Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning) }
+        // Left out of the row until it shows: hidden inside its own view, it still took the row's spacing.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 8) {
+                if Countdown.shows(untilMs: approval.expiresAtMs, now: context.date) {
+                    ApprovalCountdown(approval: approval)
                 }
-                .labelStyle(.titleAndIcon)
-                .font(.footnote.weight(.semibold))
+                review
             }
-            .buttonStyle(.glass)
-            .tint(.primary)
-            .background(SessionBarDim(), in: .capsule)
-            // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
-            // the band, they sit in front and take the tap.
-            .contentShape(.interaction, Rectangle().inset(by: -7.5))
-            .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
+            .fixedSize()
         }
-        .fixedSize()
+    }
+
+    private var review: some View {
+        Button {
+            model.toggleExpanded(item)
+        } label: {
+            // The band leaves the reason to the sheet; the shield says there is one.
+            Label {
+                Text("Review")
+            } icon: {
+                if approval.reason != nil { Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.warning) }
+            }
+            .labelStyle(.titleAndIcon)
+            .font(.footnote.weight(.semibold))
+        }
+        .buttonStyle(.glass)
+        .tint(.primary)
+        .background(SessionBarDim(), in: .capsule)
+        // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
+        // the band, they sit in front and take the tap.
+        .contentShape(.interaction, Rectangle().inset(by: -7.5))
+        .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
     }
 }
 
@@ -282,21 +291,27 @@ private struct ApprovalCountdown: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Label(Countdown.string(untilMs: approval.expiresAtMs, now: context.date), systemImage: "timer")
-                .labelStyle(.titleAndIcon)
-                .font(.footnote.weight(.semibold).monospacedDigit())
-                .foregroundStyle(approval.expiresAtMs < context.date.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .padding(2)
-                .fixedSize()
-                // As tall as Review's glass beside it on the card and the band.
-                .frame(maxHeight: .infinity)
-                // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
-                // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
-                .background(SessionBarDim(), in: .capsule)
-                .glassEffect(.regular, in: .capsule)
+            if Countdown.shows(untilMs: approval.expiresAtMs, now: context.date) {
+                countdown(now: context.date)
+            }
         }
+    }
+
+    private func countdown(now: Date) -> some View {
+        Label(Countdown.string(untilMs: approval.expiresAtMs, now: now), systemImage: "timer")
+            .labelStyle(.titleAndIcon)
+            .font(.footnote.weight(.semibold).monospacedDigit())
+            .foregroundStyle(approval.expiresAtMs < now.unixMs + 60_000 ? AgentState.blocked.color : .metadata)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .padding(2)
+            .fixedSize()
+            // As tall as Review's glass beside it on the card and the band.
+            .frame(maxHeight: .infinity)
+            // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
+            // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
+            .background(SessionBarDim(), in: .capsule)
+            .glassEffect(.regular, in: .capsule)
     }
 }
 
