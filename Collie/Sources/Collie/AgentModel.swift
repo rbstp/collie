@@ -873,6 +873,18 @@ final class AgentModel {
         return enqueue(.key(key))
     }
 
+    /// Claude Code's cursor position is not on the wire: Right once per character of its input box
+    /// reaches the end from anywhere (Right at the end does nothing), then Left steps back to `index`.
+    @discardableResult
+    func placeCursor(at index: Int, of count: Int) -> Task<Void, Never>? {
+        guard canTap(.right), canTap(.left) else { return nil }
+        var task: Task<Void, Never>?
+        for key in Array(repeating: AgentKey.right, count: count) + Array(repeating: .left, count: count - index) {
+            task = tap(key) ?? task
+        }
+        return task
+    }
+
     func select(_ modifier: KeyModifier) {
         self.modifier = self.modifier == modifier ? nil : modifier
     }

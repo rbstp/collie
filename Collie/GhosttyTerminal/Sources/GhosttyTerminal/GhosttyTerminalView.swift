@@ -66,6 +66,14 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var onPinchEnded: (() -> Void)?
     /// A single tap that clears no selection.
     public var onTap: (() -> Void)?
+    /// Turns on Claude Code's input box: a single tap in it goes here instead of `onTap`, with the
+    /// cursor index it points to and the box's character count, and while typing the box stays in
+    /// view above the keyboard until the user scrolls away from it.
+    public var onTapInput: ((_ index: Int, _ count: Int) -> Void)? {
+        didSet {
+            if (oldValue == nil) != (onTapInput == nil) { prepare() }
+        }
+    }
     /// Keystrokes while `typing`: text as typed, Return as "\n".
     public var onInsertText: ((String) -> Void)? {
         get { keyInput.insert }
@@ -107,6 +115,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private(set) var frameData: TerminalFrame?
     private var renderedColumns: Int?
     private var followsBottom = true
+    private var followsInput = true
+    private var inputBox: TerminalInputBox?
+    /// The offset scrollToBottom last set, which may stop above the bottom to show the input box.
+    private var followed: CGFloat?
     private var laidOutSize = CGSize.zero
     var selection: TerminalSelection? {
         didSet { selectionChanged() }
@@ -177,7 +189,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         scrollEnd.ended = { [weak self] in
             guard let self else { return }
-            followsBottom = atBottom
+            followsBottom = atFollowed
+            followsInput = followsBottom
             if renderDeferred { render() }
         }
         delegate = scrollEnd
@@ -261,8 +274,14 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func prepare() {
         guard let frameData else { return }
         if bounds.height > 0 {
-            followsBottom = atBottom
+            followsBottom = atFollowed
         }
+        let box = onTapInput == nil ? nil : TerminalInputBox(frameData)
+        // Typing changes the box, which brings it back into view.
+        if let box, box.text != inputBox?.text, typing {
+            (followsBottom, followsInput) = (true, true)
+        }
+        inputBox = box
         canvas.prepare(frameData)
         let m = canvas.metrics
         contentSize = CGSize(
@@ -397,8 +416,18 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
-    @objc private func tapped() {
-        if selection != nil { selection = nil } else { onTap?() }
+    @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        let m = canvas.metrics
+        if selection != nil {
+            selection = nil
+        } else if let onTapInput,
+            let cursor = inputBox?.cursor(row: Int(((point.y - m.inset) / m.height).rounded(.down)), column: (point.x - m.inset) / m.width)
+        {
+            onTapInput(cursor.index, cursor.count)
+        } else {
+            onTap?()
+        }
     }
 
     @objc private func doubleTapped() {
@@ -597,8 +626,23 @@ public final class GhosttyTerminalUIView: UIScrollView {
         contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
     }
 
+    private var atFollowed: Bool {
+        atBottom || followed.map { abs(contentOffset.y - $0) < 1 } == true
+    }
+
     private func scrollToBottom() {
-        contentOffset.y = max(contentSize.height + adjustedContentInset.bottom - bounds.height, -adjustedContentInset.top)
+        let inset = adjustedContentInset
+        let bottom = max(contentSize.height + inset.bottom - bounds.height, -inset.top)
+        if typing && followsInput, let box = inputBox {
+            let m = canvas.metrics
+            contentOffset.y = TerminalInputBox.offset(
+                showing: m.inset + CGFloat(box.bottom + 1) * m.height, insetBottom: inset.bottom, height: bounds.height,
+                minimum: -inset.top, maximum: bottom
+            )
+        } else {
+            contentOffset.y = bottom
+        }
+        followed = contentOffset.y
     }
 }
 

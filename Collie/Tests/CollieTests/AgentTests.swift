@@ -864,6 +864,15 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(model.keyTaps == AgentKey.strip.count)
 }
 
+@MainActor
+@Test func aTapInTheInputBoxWalksToItsEndThenBack() async {
+    let core = FakeCore()
+    let model = agentModel(core)
+    await model.placeCursor(at: 17, of: 20)?.value
+    #expect(core.snapshot.keys.flatMap(\.self) == Array(repeating: .right, count: 20) + Array(repeating: .left, count: 3))
+    #expect(core.snapshot.keys.allSatisfy { $0.count <= 16 })
+}
+
 @Test func joystickPointsAtTheDominantAxisPastItsDeadZone() {
     #expect(AgentKey.arrow(for: CGSize(width: 8, height: -8)) == nil)
     #expect(AgentKey.arrow(for: CGSize(width: -20, height: 5)) == .left)
