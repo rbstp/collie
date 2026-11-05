@@ -573,8 +573,11 @@ struct StatusPill: View {
     @ScaledMetric(relativeTo: .caption) private var spinner: CGFloat = 14
 
     var body: some View {
+        let words = title ?? state.label.capitalized
+        // A status shows only its icon, read as the word; a title such as an approval count shows.
+        let iconOnly = title == nil
         Label {
-            Text(title ?? state.label.capitalized)
+            if !iconOnly { Text(words) }
         } icon: {
             if state == .working {
                 // The spinner grows less than text with Dynamic Type; pinned at its 20 pt default, it scales with the label.
@@ -582,7 +585,12 @@ struct StatusPill: View {
                     .dynamicTypeSize(.large)
                     .scaleEffect(spinner / 20)
                     .frame(width: spinner, height: spinner)
-                    .accessibilityHidden(true)
+                    .accessibilityLabel(words)
+                    .accessibilityHidden(!iconOnly)
+            } else if iconOnly {
+                Image(systemName: StatusIcon.symbol(state))
+                    .frame(width: spinner, height: spinner)
+                    .accessibilityLabel(words)
             } else {
                 Image(systemName: StatusIcon.symbol(state))
             }
@@ -590,7 +598,7 @@ struct StatusPill: View {
             .labelStyle(KindLabelStyle())
             .font(.caption.weight(.semibold))
             .foregroundStyle(state == .working ? appAccent : state.color)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, iconOnly ? 4 : 8)
             .padding(.vertical, 4)
             .padding(2)
             .glassEffect(.regular, in: .capsule)
