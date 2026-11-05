@@ -88,7 +88,7 @@ struct NewTaskSheet: View {
                                 .disabled(model.upload != nil || model.phase != .editing)
                             }
                             HStack(alignment: .bottom, spacing: 8) {
-                                let placeholder = model.location == .resume ? "Prompt (optional)" : "What should the agent do?"
+                                let placeholder = model.location == .resume ? "Prompt" : "What should the agent do?"
                                 TextField(placeholder, text: $model.prompt, selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical)
                                     .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
                                     .focused($editingPrompt)
@@ -192,7 +192,7 @@ struct NewTaskSheet: View {
                         if let listed = model.worktrees {
                             Text("Repository: \(listed.source)").font(.footnote.monospaced())
                             if model.worktreeAction == .create {
-                                TextField("Branch name (optional)", text: $model.branch, prompt: Text("Branch name (optional)").foregroundStyle(.metadata))
+                                TextField("Branch name", text: $model.branch, prompt: Text("Branch name").foregroundStyle(.metadata))
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
                                 if let path = model.createPath {
@@ -310,7 +310,7 @@ struct NewTaskSheet: View {
                             ProgressView()
                         }
                     }
-                    TextField("Workspace label (optional)", text: $model.label, prompt: Text("Workspace label (optional)").foregroundStyle(.metadata))
+                    TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
                 }
             }
             .listSectionSpacing(.compact)
