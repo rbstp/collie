@@ -43,32 +43,8 @@ const COLLAPSED: [&str; 5] = [
 /// while a dialog replaces it or once a draft taller than the screen pushed its top rule
 /// off.
 pub fn parse(ansi: &str) -> Option<InputBox> {
-    let rows: Vec<Vec<(char, bool)>> = ansi.split('\n').map(cells).collect();
-    let plain: Vec<String> = rows
-        .iter()
-        .map(|r| {
-            r.iter()
-                .map(|(c, _)| *c)
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect();
-    let rules: Vec<usize> = (0..plain.len())
-        .filter(|&i| plain[i].starts_with('─') && prompt::is_rule(&plain[i]))
-        .collect();
-    let (top, bottom) = rules
-        .windows(2)
-        .rev()
-        .map(|w| (w[0], w[1]))
-        .find(|&(t, b)| {
-            b > t + 1
-                && !plain[t + 1].is_empty()
-                && !plain[t + 1].starts_with(char::is_whitespace)
-                && plain[t + 2..b]
-                    .iter()
-                    .all(|l| l.is_empty() || l.starts_with("  "))
-        })?;
+    let (rows, plain) = screen(ansi);
+    let (top, bottom) = bounds(&plain)?;
     if ansi.split('\n').skip(bottom + 1).any(selected)
         || plain[bottom + 1..].iter().any(|l| l.starts_with('❯'))
     {
@@ -79,8 +55,93 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
     if !plain[top + 1].starts_with('❯') || COLLAPSED.iter().any(|p| shown.contains(p)) {
         return Some(InputBox::Opaque);
     }
-    let lines: Vec<String> = rows[top + 1..bottom]
+    let lines = lines(&rows[top + 1..bottom]);
+    let mut text = String::new();
+    for (sep, line) in joins(&lines, plain[bottom].width().saturating_sub(4))
+        .into_iter()
+        .zip(&lines)
+    {
+        text.push_str(sep);
+        text.push_str(line);
+    }
+    let mut text = normalize(&text);
+    if text.len() > MAX_PROMPT_BYTES {
+        let mut end = MAX_PROMPT_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text = normalize(&text[..end]);
+    }
+    Some(InputBox::Draft(Draft {
+        text,
+        lines: lines.len(),
+    }))
+}
+
+/// The rows of the input box's `❯` text that continue the row above, as `(wraps, splits)` of
+/// a `TerminalRead`: where [`parse`] joins them with a space or inside a word, never at a
+/// typed newline.
+pub(crate) fn wraps(ansi: &str) -> (Vec<u32>, Vec<u32>) {
+    let (rows, plain) = screen(ansi);
+    let (mut wraps, mut splits) = (Vec::new(), Vec::new());
+    let Some((top, bottom)) = bounds(&plain).filter(|&(top, _)| plain[top + 1].starts_with('❯'))
+    else {
+        return (wraps, splits);
+    };
+    let lines = lines(&rows[top + 1..bottom]);
+    let joins = joins(&lines, plain[bottom].width().saturating_sub(4));
+    for (i, sep) in joins.into_iter().enumerate().skip(1) {
+        let at = u32::try_from(top + 1 + i).unwrap_or(u32::MAX);
+        // A blank row holding only the hidden space after a full row: the phone trims the
+        // end of the row a space joins onto, so the space joins the row after it instead.
+        match sep {
+            " " if lines[i].is_empty() => splits.push(at),
+            "" if lines[i - 1].is_empty() => wraps.push(at),
+            " " => wraps.push(at),
+            "" => splits.push(at),
+            _ => {}
+        }
+    }
+    (wraps, splits)
+}
+
+fn screen(ansi: &str) -> (Vec<Vec<(char, bool)>>, Vec<String>) {
+    let rows: Vec<Vec<(char, bool)>> = ansi.split('\n').map(cells).collect();
+    let plain = rows
         .iter()
+        .map(|r| {
+            r.iter()
+                .map(|(c, _)| *c)
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect();
+    (rows, plain)
+}
+
+/// The rows of the input box's top and bottom rules.
+fn bounds(plain: &[String]) -> Option<(usize, usize)> {
+    let rules: Vec<usize> = (0..plain.len())
+        .filter(|&i| plain[i].starts_with('─') && prompt::is_rule(&plain[i]))
+        .collect();
+    rules
+        .windows(2)
+        .rev()
+        .map(|w| (w[0], w[1]))
+        .find(|&(t, b)| {
+            b > t + 1
+                && !plain[t + 1].is_empty()
+                && !plain[t + 1].starts_with(char::is_whitespace)
+                && plain[t + 2..b]
+                    .iter()
+                    .all(|l| l.is_empty() || l.starts_with("  "))
+        })
+}
+
+/// The typed text of each row inside the box, after the prompt or the two-space indent.
+fn lines(rows: &[Vec<(char, bool)>]) -> Vec<String> {
+    rows.iter()
         .enumerate()
         .map(|(i, row)| {
             let skip = if i == 0 {
@@ -96,35 +157,29 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
                 .trim_end()
                 .to_owned()
         })
-        .collect();
-    let width = plain[bottom].width().saturating_sub(4);
-    let mut text = String::new();
+        .collect()
+}
+
+/// What joins each of `lines` to the one above: `"\n"`, `" "` or `""` as [`Wrap::join`]
+/// gives, except that a blank row holding only the hidden space joins with `" "` and the row
+/// after it with `""`.
+fn joins(lines: &[String], width: usize) -> Vec<&'static str> {
+    let mut joins = vec![""; lines.len()];
     let mut wrap = Wrap::default();
     let mut after_hidden = false;
-    for (i, line) in lines.iter().enumerate() {
-        if i > 0 && !std::mem::take(&mut after_hidden) {
-            let prev = &lines[i - 1];
-            after_hidden = line.is_empty() && wrap.blank(prev, &lines[i + 1..], width);
-            text.push_str(if after_hidden {
-                " "
-            } else {
-                wrap.join(prev, line, &lines[i + 1..], width)
-            });
+    for i in 1..lines.len() {
+        if std::mem::take(&mut after_hidden) {
+            continue;
         }
-        text.push_str(line);
+        let (prev, line) = (&lines[i - 1], &lines[i]);
+        after_hidden = line.is_empty() && wrap.blank(prev, &lines[i + 1..], width);
+        joins[i] = if after_hidden {
+            " "
+        } else {
+            wrap.join(prev, line, &lines[i + 1..], width)
+        };
     }
-    let mut text = normalize(&text);
-    if text.len() > MAX_PROMPT_BYTES {
-        let mut end = MAX_PROMPT_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text = normalize(&text[..end]);
-    }
-    Some(InputBox::Draft(Draft {
-        text,
-        lines: lines.len(),
-    }))
+    joins
 }
 
 /// A soft wrap is a row the next word did not fit on, or a full row that split a word
