@@ -108,7 +108,7 @@ struct AgentScreen: View {
                             model.type(text)
                             if !model.keepsKeyboard(after: text) { typing = false }
                         }, deleteBackward: { model.tap(.backspace) },
-                        tapInput: model.agent?.kind == "claude" ? { model.placeCursor(at: $0, of: $1) } : nil
+                        inputAgent: model.agent?.kind, tapInput: { model.placeCursor(at: $0, of: $1) }
                     ) { await model.refresh() }
                         // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
                         .ignoresSafeArea(edges: [.top, .bottom])
@@ -719,6 +719,7 @@ private struct AgentTerminal: UIViewRepresentable {
     @Binding var typing: Bool
     let type: @MainActor (String) -> Void
     let deleteBackward: @MainActor () -> Void
+    let inputAgent: String?
     let tapInput: (@MainActor (Int, Int) -> Void)?
     let refresh: @MainActor () async -> Void
 
@@ -770,6 +771,7 @@ private struct AgentTerminal: UIViewRepresentable {
             view.onSwipe = nil
         }
         let keyboard = $typing
+        view.inputAgent = inputAgent
         view.onTapInput = tapInput.map { tapInput in
             { index, count in
                 tapInput(index, count)

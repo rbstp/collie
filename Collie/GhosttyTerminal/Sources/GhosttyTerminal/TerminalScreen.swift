@@ -41,6 +41,7 @@ struct TerminalFrame: Equatable, Sendable {
     var columns: Int
     var rows: Int
     var background: TerminalRGB
+    var foreground: TerminalRGB
     var runs: [TerminalRun]
     /// Rows that continue the row above after a soft wrap.
     var wrapContinuations: Set<Int> = []
@@ -650,6 +651,7 @@ final class TerminalScreen {
             columns: usedColumns,
             rows: usedRows,
             background: defaultBackground,
+            foreground: defaultForeground,
             runs: runs.filter { $0.row < usedRows && $0.startColumn < usedColumns }
         )
     }

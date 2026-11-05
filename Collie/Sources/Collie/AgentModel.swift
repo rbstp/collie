@@ -878,8 +878,9 @@ final class AgentModel {
         return enqueue(.key(key))
     }
 
-    /// Claude Code's cursor position is not on the wire: Right once per character of its input box
-    /// reaches the end from anywhere (Right at the end does nothing), then Left steps back to `index`.
+    /// The cursor's position in an agent's input box is not on the wire: Left once per character
+    /// of the box reaches its start from anywhere (Left at the start does nothing), then Right
+    /// steps to `index`, never past the text, where Right could accept a suggestion.
     @discardableResult
     func placeCursor(at index: Int, of count: Int) -> Task<Void, Never>? {
         guard canTap(.right), canTap(.left) else { return nil }
