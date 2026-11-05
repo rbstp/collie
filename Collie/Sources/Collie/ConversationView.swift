@@ -246,6 +246,8 @@ struct ConversationView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .scrollPosition(id: $visibleID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
+                // Rows measured again for a new width after the scroll below would move a rotated Chat up from its latest messages.
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
                 .onScrollGeometryChange(for: ScrollEdge.self) { geo in
                     ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.contentInsets.top + geo.containerSize.height >= geo.contentSize.height - 60)
                 } action: { old, new in
