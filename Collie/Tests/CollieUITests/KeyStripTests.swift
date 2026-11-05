@@ -23,8 +23,8 @@ final class KeyStripTests: XCTestCase {
         keys.tap()
         XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
         XCTAssertTrue(keys.isSelected, app.debugDescription)
-        XCTAssertTrue(app.buttons["Shift Tab"].exists, app.debugDescription)
-        XCTAssertGreaterThanOrEqual(app.buttons["Shift Tab"].frame.height, 44, app.debugDescription)
+        XCTAssertTrue(app.buttons["Shift Tab"].firstMatch.exists, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(app.buttons["Shift Tab"].firstMatch.frame.height, 44, app.debugDescription)
         XCTAssertFalse(app.buttons["Shift Left arrow"].exists, app.debugDescription)
         // Shortcuts are kept on the simulator, so an earlier failed run may have left some.
         removeShortcuts(app)
@@ -67,7 +67,8 @@ final class KeyStripTests: XCTestCase {
         app.buttons["Save"].tap()
         app.buttons["Done"].tap()
 
-        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "shift-tab")).firstMatch
+        // The saved key shortcut follows the built-in Shift Tab chip and reads the same.
+        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "Shift Tab")).element(boundBy: 1)
         let effort = app.buttons["/effort high"]
         XCTAssertTrue(custom.appears(within: 5), app.debugDescription)
         XCTAssertTrue(effort.appears(within: 5), app.debugDescription)

@@ -813,25 +813,26 @@ private struct KeyStrip: View {
         // The chips' touch targets fill most of the gaps above and below them.
         VStack(spacing: 1) {
             HStack(spacing: 8) {
-                // Words only when every cell fits the widest at an equal share; larger text falls back to glyphs.
-                ViewThatFits(in: .horizontal) {
-                    mainKeys(words: true)
-                    mainKeys(words: false)
-                }
+                mainKeys
                 CursorJoystick(model: model)
             }
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     // shift-left answers a queued Codex question; other agents never take it.
                     ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
-                        StripChip { model.run(StripShortcut(key: key.name)) } label: { Text(key.word) }
+                        StripChip { model.run(StripShortcut(key: key.name)) } label: { KeyGlyphs(key: key).font(.system(size: 20)) }
                             .accessibilityLabel(key.accessibilityName)
                             .disabled(!model.canTap(key))
                     }
                     ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
                         StripChip(literal: shortcut.name.isEmpty && shortcut.agentKey == nil) { model.run(shortcut) } label: {
-                            Text(shortcut.name.isEmpty ? shortcut.agentKey?.word ?? shortcut.text : shortcut.name)
+                            if shortcut.name.isEmpty, let key = shortcut.agentKey {
+                                KeyGlyphs(key: key).font(.system(size: 20))
+                            } else {
+                                Text(shortcut.name.isEmpty ? shortcut.text : shortcut.name)
+                            }
                         }
+                        .accessibilityLabel(shortcut.name.isEmpty ? shortcut.agentKey?.accessibilityName ?? shortcut.text : shortcut.name)
                         .disabled(!model.canRun(shortcut))
                     }
                     StripChip { editingShortcuts = true } label: { Image(systemName: "plus") }
@@ -855,17 +856,12 @@ private struct KeyStrip: View {
         }
     }
 
-    private func mainKeys(words: Bool) -> some View {
-        let widest = words ? [KeyModifier.shift.word, KeyModifier.control.word, "esc", "tab"] : []
-        return HStack(spacing: 0) {
+    private var mainKeys: some View {
+        HStack(spacing: 0) {
             ForEach([KeyModifier.control, .shift], id: \.self) { modifier in
                 let selected = model.modifier == modifier
-                KeyCap(selected: selected, widest: widest) { model.select(modifier) } label: {
-                    if words {
-                        Text(modifier.word)
-                    } else {
-                        Image(systemName: modifier == .control ? "control" : "shift")
-                    }
+                KeyCap(selected: selected) { model.select(modifier) } label: {
+                    Image(systemName: modifier == .control ? "control" : "shift")
                 }
                 .accessibilityLabel(modifier.accessibilityName)
                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -873,15 +869,7 @@ private struct KeyStrip: View {
                 Divider().frame(height: 18)
             }
             ForEach(AgentKey.strip, id: \.self) { key in
-                KeyCap(widest: widest) { model.press(key) } label: {
-                    switch key {
-                    case .tab:
-                        if words { Text("tab") } else { Image(systemName: "arrow.right.to.line") }
-                    case .backspace: Image(systemName: "delete.left").imageScale(.large)
-                    case .enter: Image(systemName: "return").imageScale(.large)
-                    default: Text(key.symbol)
-                    }
-                }
+                KeyCap { model.press(key) } label: { KeyGlyphs(key: key) }
                 .accessibilityLabel(key.accessibilityName)
                 .disabled(!model.canPress(key))
                 if key != AgentKey.strip.last { Divider().frame(height: 18) }
@@ -896,8 +884,6 @@ private struct KeyStrip: View {
 /// One key in the main keys' shared glass capsule.
 private struct KeyCap<Label: View>: View {
     var selected = false
-    /// Every cell is as wide as the widest of these, so the row is measured at equal widths.
-    var widest: [String] = []
     let action: () -> Void
     @ViewBuilder let label: Label
     @Environment(\.isEnabled) private var isEnabled
@@ -905,20 +891,17 @@ private struct KeyCap<Label: View>: View {
 
     var body: some View {
         Button(action: action) {
-            ZStack {
-                ForEach(widest, id: \.self) { Text($0).hidden() }
-                label
-            }
-            .font(.callout.weight(.medium))
-            .lineLimit(1)
-            .foregroundStyle(selected ? appAccent : .primary)
-            .padding(.horizontal, 6)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background {
-                if selected { Capsule().fill(appAccent.opacity(0.2)).padding(.vertical, 6) }
-            }
-            .contentShape(.rect)
-            .opacity(isEnabled ? 1 : 0.4)
+            label
+                .font(.system(size: 22))
+                .lineLimit(1)
+                .foregroundStyle(selected ? appAccent : .primary)
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background {
+                    if selected { Capsule().fill(appAccent.opacity(0.2)).padding(.vertical, 6) }
+                }
+                .contentShape(.rect)
+                .opacity(isEnabled ? 1 : 0.4)
         }
         .buttonStyle(.plain)
     }
@@ -926,7 +909,7 @@ private struct KeyCap<Label: View>: View {
 
 /// A combination or saved shortcut in the strip's scrolling second row.
 private struct StripChip<Label: View>: View {
-    /// Text typed as is, which reads as code; combinations and names take the main keys' font.
+    /// Text typed as is, which reads as code.
     var literal = false
     let action: () -> Void
     @ViewBuilder let label: Label
@@ -1041,20 +1024,32 @@ private struct JoystickSector: Shape {
     }
 }
 
-extension AgentKey {
-    /// The key strip's chip label, in the main keys' words.
-    var word: String {
-        switch self {
-        case .shiftTab: "shift-tab"
-        case .ctrlEnter: "ctrl-return"
-        case .shiftLeft: "shift-left"
-        case .enter: "return"
-        case .backspace: "delete"
-        case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "ctrl-" + name.dropFirst(5).uppercased()
-        case .esc, .up, .down, .left, .right, .tab: name
+/// A key's SF Symbols, the modifier's first; a control letter ends with the letter, which has no symbol.
+private struct KeyGlyphs: View {
+    let key: AgentKey
+
+    var body: some View {
+        HStack(spacing: 3) {
+            switch key {
+            case .esc: Image(systemName: "escape")
+            case .enter: Image(systemName: "return")
+            case .up: Image(systemName: "arrow.up")
+            case .down: Image(systemName: "arrow.down")
+            case .left: Image(systemName: "arrow.left")
+            case .right: Image(systemName: "arrow.right")
+            case .tab: Image(systemName: "arrow.right.to.line")
+            case .backspace: Image(systemName: "delete.left")
+            case .shiftTab: Image(systemName: "shift"); Image(systemName: "arrow.right.to.line")
+            case .shiftLeft: Image(systemName: "shift"); Image(systemName: "arrow.left")
+            case .ctrlEnter: Image(systemName: "control"); Image(systemName: "return")
+            case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW:
+                Image(systemName: "control"); Text(key.name.dropFirst(5).uppercased())
+            }
         }
     }
+}
 
+extension AgentKey {
     /// The arrow a joystick dragged by `offset` points to; nil inside its dead zone.
     static func arrow(for offset: CGSize, deadZone: CGFloat = 12) -> AgentKey? {
         guard hypot(offset.width, offset.height) >= deadZone else { return nil }

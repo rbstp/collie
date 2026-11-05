@@ -1201,13 +1201,6 @@ struct CloseConfirmation: Equatable {
 enum KeyModifier: CaseIterable {
     case shift, control
 
-    var word: String {
-        switch self {
-        case .shift: "shift"
-        case .control: "ctrl"
-        }
-    }
-
     var accessibilityName: String {
         switch self {
         case .shift: "Shift"

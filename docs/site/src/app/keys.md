@@ -5,14 +5,14 @@
 The key strip sends keys an iPhone keyboard lacks. The **Keys** button at the bottom of Terminal shows or hides it; it stays above the keyboard while you type.
 
 ```text
-ctrl | shift | esc | tab | ⌫ | ⏎    joystick
+⌃ | ⇧ | ⎋ | ⇥ | ⌫ | ⏎    joystick
 ```
 
-The main keys share one bar, with the joystick after it. With larger text, ctrl, shift and tab show as ⌃, ⇧ and ⇥.
+The main keys share one bar of large symbols, with the joystick after it: control, shift, escape, tab, delete and return.
 
-**esc** sends Escape. Tap ctrl or shift, then a key, to send the pair: shift and tab, ctrl and Return or, in Codex, shift and the left arrow. With ctrl selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
+The escape key sends Escape. Tap control or shift, then a key, to send the pair: shift and tab, control and Return or, in Codex, shift and the left arrow. With control selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
 
-The second row scrolls: **shift-tab**, **ctrl-return** and **ctrl-C**, with **shift-left** before **ctrl-C** in Codex sessions to answer a queued question, then your key shortcuts and **+** to add one.
+The second row scrolls, in symbols too: shift-tab (⇧⇥), control-return (⌃⏎) and control-C (⌃C), with shift-left (⇧←) before control-C in Codex sessions to answer a queued question, then your key shortcuts and **+** to add one. A key shortcut shows its keys' symbols, or its name or text when it has them.
 
 The round joystick sends the arrows. With the strip hidden, it sits in the bottom row, beside the keyboard button. Press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
 
