@@ -120,10 +120,11 @@ private struct OnAccentFill: ViewModifier {
 }
 
 extension ShapeStyle where Self == Color {
-    // System orange is about 2.3:1 as text on light backgrounds; light mode takes its high-contrast variant, 4.5:1 or more.
+    // System orange is about 2.3:1 as text on light backgrounds, and even its high-contrast variant (197,83,0) read 4.3:1 on
+    // the composer's light note glass; light mode takes a deeper orange of the same hue, 4.7:1 or more on light glass and pages.
     static var warning: Color {
         Color(uiColor: UIColor { traits in
-            .systemOrange.resolvedColor(with: traits.userInterfaceStyle == .dark ? traits : traits.modifyingTraits { $0.accessibilityContrast = .high })
+            traits.userInterfaceStyle == .dark ? .systemOrange.resolvedColor(with: traits) : UIColor(red: 180 / 255, green: 75 / 255, blue: 0, alpha: 1)
         })
     }
 }
