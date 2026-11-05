@@ -31,11 +31,6 @@ struct UsageSections: View {
                                 if let copilot {
                                     CopilotSubscriptionUsage(usage: copilot, now: context.date)
                                 }
-                                if !usage.limits(now: context.date).isEmpty || codex != nil || copilot.map({ !$0.unlimited }) == true {
-                                    Text("Ticks mark how much of each window has passed.")
-                                        .font(.caption)
-                                        .foregroundStyle(.metadata)
-                                }
                             }
                             .padding(.vertical, 4)
                         }
