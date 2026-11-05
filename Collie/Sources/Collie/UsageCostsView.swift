@@ -158,7 +158,7 @@ private struct CostsDetail: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.semibold).monospacedDigit())
-                Text("\(costs.scanning ? "Partial estimate" : "Estimated") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
+                Text("\(costs.scanning ? "Partial est." : "Est.") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
                     .font(.caption)
                     .foregroundStyle(.metadata)
             }
