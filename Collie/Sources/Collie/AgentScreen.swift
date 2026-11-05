@@ -153,7 +153,8 @@ struct AgentScreen: View {
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             let items = approvalItems
-            if !typingInLandscape || !items.isEmpty || approvals?.notice != nil {
+            let notice = approvals?.notice(machineId: model.route.machineId, terminalId: model.route.terminalId)
+            if !typingInLandscape || !items.isEmpty || notice != nil {
                 VStack(spacing: 0) {
                     if !typingInLandscape {
                         VStack(spacing: 0) {
@@ -181,7 +182,7 @@ struct AgentScreen: View {
                             ForEach(items) { item in
                                 ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
                             }
-                            if let notice = approvals.notice {
+                            if let notice {
                                 ApprovalNotice(notice: notice).padding([.horizontal, .bottom])
                             }
                         }

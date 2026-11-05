@@ -147,9 +147,10 @@ struct ApprovalReview: View {
                 }
                 let decides = !item.approval.answeredInTerminal && !item.approval.options.isEmpty
                 // The session's notice line sits behind the sheet: a failed or unconfirmed decision is reported here.
-                if decides || model.notice != nil {
+                let notice = model.noticeItem?.id == item.id ? model.notice : nil
+                if decides || notice != nil {
                     VStack(spacing: 8) {
-                        if let notice = model.notice {
+                        if let notice {
                             ApprovalNotice(notice: notice)
                         }
                         if decides { DecisionButtons(model: model, item: item) }

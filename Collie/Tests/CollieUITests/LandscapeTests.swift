@@ -185,6 +185,12 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(notice.allElementsBoundByIndex.contains { $0.isHittable }, app.debugDescription)
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
+        XCTAssertTrue(notice.firstMatch.exists, app.debugDescription)
+        // Another task never shows this approval's notice.
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_3")))
+        XCTAssertTrue(app.navigationBars.staticTexts["update the docs"].appears(within: 10), app.debugDescription)
+        XCTAssertFalse(app.buttons["Approve"].exists, app.debugDescription)
+        XCTAssertFalse(notice.firstMatch.exists, app.debugDescription)
     }
 
     /// Opens the review sheet from the band: the task, the whole command, the reason and every decision in reach, then
