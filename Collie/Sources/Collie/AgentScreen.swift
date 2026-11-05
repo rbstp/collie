@@ -104,7 +104,8 @@ struct AgentScreen: View {
                         // Leaving the screen cancels an upload in flight and hides how a send ends; a draft and its uploaded files are kept.
                         neighbor: model.upload == nil && !model.sendingPrompt ? neighbor : nil,
                         switchAgent: switchAgent, obscuredTop: obscuredTop, obscuredBottom: obscuredBottom,
-                        typing: $typing, type: { model.type($0) }, deleteBackward: { model.tap(.backspace) }
+                        typing: $typing, type: { model.type($0) }, deleteBackward: { model.tap(.backspace) },
+                        tapInput: model.agent?.kind == "claude" ? { model.placeCursor(at: $0, of: $1) } : nil
                     ) { await model.refresh() }
                         // The keyboard too: the measured bottom inset already counts it, so a frame that stopped above it would count it twice.
                         .ignoresSafeArea(edges: [.top, .bottom])
@@ -701,6 +702,7 @@ private struct AgentTerminal: UIViewRepresentable {
     @Binding var typing: Bool
     let type: @MainActor (String) -> Void
     let deleteBackward: @MainActor () -> Void
+    let tapInput: (@MainActor (Int, Int) -> Void)?
     let refresh: @MainActor () async -> Void
 
     func makeUIView(context: Context) -> GhosttyTerminalUIView {
@@ -745,6 +747,13 @@ private struct AgentTerminal: UIViewRepresentable {
         } else {
             view.canSwipe = nil
             view.onSwipe = nil
+        }
+        let keyboard = $typing
+        view.onTapInput = tapInput.map { tapInput in
+            { index, count in
+                tapInput(index, count)
+                keyboard.wrappedValue = true
+            }
         }
         if !ansi.isEmpty {
             view.show(ansiSnapshot: ansi)

@@ -16,6 +16,8 @@ The second row scrolls: **shift-tab**, **ctrl-return** and **ctrl-C**, with **sh
 
 The round joystick sends the arrows: press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
 
+In a Claude Code session, you can also tap a spot in the input box to move the cursor there; the phone sends the arrows for you.
+
 ## Key shortcuts
 
 Add your own buttons in **Settings > Prompt > Key shortcuts**, or with **+** on the strip. A shortcut sends a key or two-key combination, such as Shift+Tab, or text, such as `/effort high`, to every session or to one kind: Claude Code, Codex, Copilot CLI or Terminal.

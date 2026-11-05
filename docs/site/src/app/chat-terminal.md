@@ -45,6 +45,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 
 - Tap the terminal, or the keyboard button, to bring up the keyboard; tap the button again to hide it. Every key goes to the agent as you type, so a `/` opens Claude Code's command menu right there. Return, Tab and Backspace act as those keys.
 - The [key strip](keys.md) stays above the keyboard for Escape, Control and, with its joystick, the arrows.
+- In a Claude Code session, tap a word in the input box to move the cursor there and fix an earlier part of your prompt. While you type, Terminal keeps the input box above the keyboard; scroll away to read the rest, and it comes back when you type again or scroll to the bottom.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 
 - Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
