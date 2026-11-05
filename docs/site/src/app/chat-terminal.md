@@ -47,6 +47,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - The [key strip](keys.md) stays above the keyboard for Escape and Control. Its joystick sends the arrows; with the strip hidden, the joystick sits beside the keyboard button.
 - In a Claude Code session, tap a word in the input box to move the cursor there and fix an earlier part of your prompt. While you type, Terminal keeps the input box above the keyboard; scroll away to read the rest, and it comes back when you type again or scroll to the bottom.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
+- Tap the return key at the right end of the bottom row to send what you dictated, without opening the keyboard; with the key strip shown, use the strip's return key. Like Return on the keyboard, it hides the keyboard unless **Keep keyboard open after sending** is on.
 
 - Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.

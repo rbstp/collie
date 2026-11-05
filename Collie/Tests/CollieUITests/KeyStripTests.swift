@@ -158,6 +158,52 @@ final class KeyStripTests: XCTestCase {
         XCTAssertEqual(joysticks.count, 0, app.debugDescription)
     }
 
+    func testReturnWithoutTheStrip() throws {
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        let terminalView = app.buttons["Terminal"].firstMatch
+        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
+        terminalView.tap()
+
+        let keys = app.buttons["Keys"]
+        XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
+        let escape = app.buttons["Escape"]
+        if keys.isSelected { keys.tap() }
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+        let returns = app.buttons.matching(NSPredicate(format: "label == %@", "Return"))
+        let returnKey = returns.firstMatch
+        XCTAssertTrue(returnKey.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(returns.count, 1, app.debugDescription)
+        XCTAssertTrue(returnKey.isHittable && app.windows.firstMatch.frame.contains(returnKey.frame), app.debugDescription)
+        let keyboardButton = app.buttons["Keyboard"]
+        XCTAssertEqual(returnKey.frame.midY, keys.frame.midY, accuracy: 2, app.debugDescription)
+        XCTAssertEqual(returnKey.frame.height, keyboardButton.frame.height, accuracy: 1, app.debugDescription)
+        XCTAssertLessThan(keyboardButton.frame.maxX, returnKey.frame.minX, app.debugDescription)
+
+        keyboardButton.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
+        let composerReturn = try XCTUnwrap(returns.allElementsBoundByIndex.first { !keyboard.frame.intersects($0.frame) }, app.debugDescription)
+        XCTAssertTrue(composerReturn.isHittable, app.debugDescription)
+        composerReturn.tap()
+        XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
+
+        keys.tap()
+        XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
+        XCTAssertEqual(returns.count, 1, app.debugDescription)
+        XCTAssertEqual(returnKey.frame.midY, escape.frame.midY, accuracy: 2, app.debugDescription)
+        keys.tap()
+        XCTAssertTrue(escape.disappears(within: 5), app.debugDescription)
+
+        app.buttons["Chat"].firstMatch.tap()
+        XCTAssertTrue(keys.disappears(within: 5), app.debugDescription)
+        XCTAssertEqual(returns.count, 0, app.debugDescription)
+    }
+
     func testReturnHidesTheTerminalKeyboard() throws {
         continueAfterFailure = false
         let app = try demoApp("landscape-demo")

@@ -1084,6 +1084,7 @@ private struct PromptBar: View {
     @State private var pickingPrompt = false
     @State private var droppingLetter: String?
     @State private var copiedAt: Date?
+    @State private var returns = 0
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.appAccent) private var appAccent
 
@@ -1166,6 +1167,7 @@ private struct PromptBar: View {
                     .contentShape(.interaction, Circle().inset(by: -3))
                     .background(SessionBarDim(), in: .circle)
                     .accessibilityLabel(typing ? "Hide keyboard" : "Keyboard")
+                    if !model.keysShown { returnButton }
                 }
             } else {
                 PromptInputLayout(expanded: expanded && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
@@ -1353,6 +1355,27 @@ private struct PromptBar: View {
         .background(SessionBarDim(), in: .circle)
         .accessibilityLabel("Keys")
         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
+    }
+
+    private var returnButton: some View {
+        Button {
+            guard model.press(.enter) != nil else { return }
+            returns += 1
+            if !model.keepsKeyboard(after: "\n") { typing = false }
+        } label: {
+            Image(systemName: "return")
+                .font(.system(size: 18))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.glass)
+        .tint(.primary)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .contentShape(.interaction, Circle().inset(by: -3))
+        .background(SessionBarDim(), in: .circle)
+        .disabled(!model.canPress(.enter))
+        .sensoryFeedback(.impact(weight: .light), trigger: returns)
+        .accessibilityLabel("Return")
     }
 
     /// Dictation in the terminal view types what was said, then gives the chat draft back.
