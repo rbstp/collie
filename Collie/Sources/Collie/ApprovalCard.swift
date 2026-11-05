@@ -149,8 +149,13 @@ struct ApprovalReview: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var more = false
+    @State private var detent = PresentationDetent.medium
 
     var body: some View {
+        // At half height the card above, dimmed, still shows the task, the command and the reason: the sheet leaves them to
+        // it and gives the output the room. Landscape and accessibility sizes always show the whole sheet, and so does the
+        // keyboard, which lifts the sheet over the card while the detent still reads half.
+        let half = detent == .medium && verticalSizeClass != .compact && !typeSize.isAccessibilitySize && field == nil
         NavigationStack {
             // The decisions sit under the prompt, not over it: a bar over the scroll view, even over a hard edge, let the
             // prompt read through.
@@ -159,15 +164,17 @@ struct ApprovalReview: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // Full height, the sheet hides the session header: the task, and its machine when more than one is
                         // paired, say who gets the answer.
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: task).font(.subheadline)
-                            if showsMachine {
-                                // The metadata gray read 4.2:1 on the half-height sheet's light glass.
-                                Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                        if !half {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: task).font(.subheadline)
+                                if showsMachine {
+                                    // The metadata gray read 4.2:1 on the half-height sheet's light glass.
+                                    Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                                }
                             }
+                            .accessibilityElement(children: .combine)
                         }
-                        .accessibilityElement(children: .combine)
-                        ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
+                        ApprovalDetails(model: model, item: item, whole: true, commandAndReason: !half, field: $field, sendAnswer: sendAnswer)
                     }
                     .padding(.horizontal)
                     .padding(.bottom)
@@ -219,7 +226,7 @@ struct ApprovalReview: View {
             }
         }
         // At half height, stacked decisions left larger text no room for the reason.
-        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large], selection: $detent)
     }
 }
 
@@ -228,6 +235,7 @@ private struct ApprovalDetails: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let whole: Bool
+    var commandAndReason = true
     let field: FocusState<String?>.Binding
     let sendAnswer: (String) async throws -> Void
 
@@ -235,7 +243,7 @@ private struct ApprovalDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if approval.toolName != nil, let command = approval.toolSummary {
+            if commandAndReason, approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
                 // and a bare `--` stays with the argument after it.
                 let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
@@ -249,7 +257,7 @@ private struct ApprovalDetails: View {
                     .padding(.horizontal, 10)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
-            if let reason = approval.reason {
+            if commandAndReason, let reason = approval.reason {
                 ApprovalReason(reason: reason)
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {

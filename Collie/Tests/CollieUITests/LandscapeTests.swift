@@ -176,6 +176,9 @@ final class LandscapeTests: XCTestCase {
         let sheetApprove = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
         XCTAssertLessThanOrEqual(try XCTUnwrap(sheetNote, app.debugDescription).frame.maxY, try XCTUnwrap(sheetApprove).frame.minY, app.debugDescription)
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(sheetNote).frame.height, 44, app.debugDescription)
+        // At half height the card above still shows the command: the sheet leaves it there. Landscape shows it in both.
+        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
+        XCTAssertEqual(command.count, 1, app.debugDescription)
         // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
         // only on the band behind it.
         let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
@@ -196,6 +199,7 @@ final class LandscapeTests: XCTestCase {
                   let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first(where: { $0.isHittable }) else { return false }
             return note.frame.maxX <= approve.frame.minX && abs(note.frame.midY - approve.frame.midY) < 1
         }, app.debugDescription)
+        XCTAssertEqual(command.count, 2, app.debugDescription)
         XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
@@ -221,6 +225,9 @@ final class LandscapeTests: XCTestCase {
         let note = app.textFields["Note for Claude Code"]
         XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
         XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
+        // The keyboard lifts the sheet over the card, so the sheet shows the command again.
+        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
+        XCTAssertTrue(eventually(within: 10) { command.count == 2 }, app.debugDescription)
         _ = app.type("tests only", into: note)
         XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
         XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
