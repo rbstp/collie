@@ -388,10 +388,10 @@ private struct ApprovalCountdown: View {
             .fixedSize()
             // As tall as Review's glass beside it on the card and the band.
             .frame(maxHeight: .infinity)
-            // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
-            // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
-            .background(SessionBarDim(), in: .capsule)
+            // The dimming color behind the glass, as on Review: the glass alone left the digits at 3.7:1 over the dark
+            // terminal, and the last minute's red reads 4.6:1 there on the landscape band, its lowest.
             .glassEffect(.regular, in: .capsule)
+            .background(SessionBarDim(), in: .capsule)
     }
 }
 
