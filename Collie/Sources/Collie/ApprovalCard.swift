@@ -350,7 +350,8 @@ private struct NoteField: View {
     var body: some View {
         if model.noting.contains(item.id) {
             HStack(spacing: 8) {
-                TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
+                let placeholder = "Note for \(item.approval.agentLabel)"
+                TextField(placeholder, text: model.draft(item), prompt: Text(placeholder).foregroundStyle(.metadata))
                     .textFieldStyle(.roundedBorder)
                     .font(.footnote)
                     .submitLabel(.done)
@@ -365,7 +366,10 @@ private struct NoteField: View {
         } else {
             // On the band's glass over the dark terminal the primary color at 60% read 4.2:1 and the gold accent 3.8:1, so
             // the label takes the primary color at 75% and only the symbol the accent.
-            Button { model.toggleNote(item) } label: {
+            Button {
+                model.toggleNote(item)
+                field.wrappedValue = "note"
+            } label: {
                 Label {
                     Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
                 } icon: {

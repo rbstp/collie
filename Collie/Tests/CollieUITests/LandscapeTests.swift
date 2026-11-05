@@ -207,6 +207,26 @@ final class LandscapeTests: XCTestCase {
         XCTAssertFalse(notice.firstMatch.exists, app.debugDescription)
     }
 
+    func testAddNoteFocusesTheNoteFieldAboveTheKeyboard() throws {
+        let app = try launchDemo(["--approval-demo"])
+        defer { app.terminate() }
+        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
+        let review = app.buttons["Review"]
+        XCTAssertTrue(review.appears(within: 10), app.debugDescription)
+        review.tap()
+        let hittable = { (name: String) in app.buttons.matching(identifier: name).allElementsBoundByIndex.first { $0.isHittable } }
+        XCTAssertTrue(eventually(within: 10) { hittable("Add note") != nil }, app.debugDescription)
+        try XCTUnwrap(hittable("Add note"), app.debugDescription).tap()
+        // One tap starts the note: the field shows focused, and it and the decisions stay above the keyboard.
+        let note = app.textFields["Note for Claude Code"]
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
+        _ = app.type("tests only", into: note)
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
+        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
+    }
+
     /// Opens the review sheet from the band: the task, the whole command and every decision in reach, and the reason at
     /// most a scroll away, then closes it. The band stays under the sheet, so each is looked for among the elements a tap reaches.
     private func review(_ app: XCUIApplication) throws {
