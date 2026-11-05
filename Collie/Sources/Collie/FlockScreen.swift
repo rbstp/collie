@@ -93,7 +93,8 @@ struct FlockScreen: View {
                             .tint(.primary)
                         }
                     }
-                    if layout == .inbox {
+                    // The open field has its own close button.
+                    if layout == .inbox && !inboxSearching && inboxQuery.isEmpty {
                         ToolbarItem(placement: .primaryAction) {
                             Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
                         }
