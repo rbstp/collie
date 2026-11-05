@@ -53,8 +53,7 @@ final class LandscapeTests: XCTestCase {
         let escape = Match(.button, "Escape")
         let header = Match(.button, "Terminal")
         let controls = [
-            Match(.button, "Hide keyboard"), Match(.button, "Attachments and saved prompts"),
-            Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")), escape, Match(.button, "Control Return")
+            Match(.button, "Hide keyboard"), Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")), escape, Match(.button, "Control Return")
         ]
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
             XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")

@@ -195,9 +195,10 @@ struct AgentScreen: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                let continueInTerminal = showingChat && !model.isTerminal && approvalItems.allSatisfy(\.approval.answeredInTerminal) && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown)
                 // Typing in landscape, the hint's row is what the keyboard's predictions bar leaves the approval card.
-                // The approval cards already say how to answer.
-                if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty ? nil : model.blockedHint) {
+                // The approval cards and Continue in Terminal already say how to answer.
+                if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty || continueInTerminal ? nil : model.blockedHint) {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.warning)
@@ -206,7 +207,7 @@ struct AgentScreen: View {
                         .padding(.horizontal)
                         .padding(.top, 6)
                 }
-                if showingChat && !model.isTerminal && approvalItems.allSatisfy(\.approval.answeredInTerminal) && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown) {
+                if continueInTerminal {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
                         .font(.footnote).buttonStyle(.glass).background(SessionBarDim(), in: .capsule)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -218,6 +219,16 @@ struct AgentScreen: View {
                         if model.keysShown && (!showingChat || model.isTerminal) { KeyStrip(model: model, typing: $typing) }
                         PromptBar(model: model, typesIntoTerminal: !showingChat || model.isTerminal, typing: $typing)
                     }
+                }
+            }
+            .background {
+                // Typing, the terminal keeps Claude Code's input box above the composer, which puts the rows under the box
+                // behind the key strip and the composer, where they showed between and through the controls. No feather:
+                // the box's bottom rule ends at this edge, and a feather showed half of the row under it.
+                if typing && (!showingChat || model.isTerminal) {
+                    Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                        .ignoresSafeArea(edges: .bottom)
+                        .allowsHitTesting(false)
                 }
             }
             // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
@@ -503,11 +514,13 @@ private struct AgentHeader: View {
             HStack(spacing: 8) {
                 if let agent = model.agent {
                     HStack(spacing: 6) {
-                        StatusPill(state: agent.status)
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.primary)
+                        StatusIcon(state: agent.status, dimsIdle: false)
+                        if !approving {
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.primary)
+                            }
                         }
                     }
                     .fixedSize()
@@ -1146,7 +1159,6 @@ private struct PromptBar: View {
             }
             if typesIntoTerminal {
                 HStack(spacing: 8) {
-                    if !model.answering && !model.isTerminal { attachmentMenu }
                     keysButton
                     Spacer(minLength: 0)
                     if !model.isTerminal {
@@ -1162,7 +1174,7 @@ private struct PromptBar: View {
                         typing.toggle()
                     } label: {
                         Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
-                            .font(.system(size: 18))
+                            .font(.system(size: 20))
                             .frame(width: 28, height: 28)
                     }
                     .buttonStyle(.glass)
@@ -1287,12 +1299,8 @@ private struct PromptBar: View {
         .sheet(isPresented: $pickingPrompt) {
             NavigationStack {
                 PromptShortcutsView { shortcut in
-                    if typesIntoTerminal {
-                        model.type(shortcut.text)
-                    } else {
-                        model.insert(shortcut)
-                        editing = true
-                    }
+                    model.insert(shortcut)
+                    editing = true
                 }
             }
         }
@@ -1318,14 +1326,6 @@ private struct PromptBar: View {
             if !active { restoreDraft() }
             if !active && model.draft.isEmpty { dictationExpanded = false }
         }
-        // Each uploaded file's path is typed into the terminal rather than held for a prompt.
-        .onChange(of: model.attachments.map(\.id)) { old, _ in
-            guard typesIntoTerminal else { return }
-            for file in model.attachments where !old.contains(file.id) {
-                model.type(file.path + " ")
-                model.remove(file)
-            }
-        }
         .onDisappear { dictationExpanded = false }
     }
 
@@ -1348,8 +1348,8 @@ private struct PromptBar: View {
         Button {
             model.keysShown.toggle()
         } label: {
-            Image(systemName: model.keysShown ? "arrowkeys.fill" : "arrowkeys")
-                .font(.system(size: 16))
+            Image(systemName: model.keysShown ? "keyboard.badge.ellipsis.fill" : "keyboard.badge.ellipsis")
+                .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.glass)
@@ -1369,7 +1369,7 @@ private struct PromptBar: View {
             if !model.keepsKeyboard(after: "\n") { typing = false }
         } label: {
             Image(systemName: "return")
-                .font(.system(size: 18))
+                .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.glass)
