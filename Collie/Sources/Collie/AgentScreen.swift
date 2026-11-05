@@ -1159,6 +1159,7 @@ private struct PromptBar: View {
             }
             if typesIntoTerminal {
                 HStack(spacing: 8) {
+                    if !model.answering && !model.isTerminal { attachmentMenu }
                     keysButton
                     Spacer(minLength: 0)
                     if !model.isTerminal {
@@ -1299,8 +1300,12 @@ private struct PromptBar: View {
         .sheet(isPresented: $pickingPrompt) {
             NavigationStack {
                 PromptShortcutsView { shortcut in
-                    model.insert(shortcut)
-                    editing = true
+                    if typesIntoTerminal {
+                        model.type(shortcut.text)
+                    } else {
+                        model.insert(shortcut)
+                        editing = true
+                    }
                 }
             }
         }
@@ -1325,6 +1330,14 @@ private struct PromptBar: View {
         .onChange(of: model.dictation.isActive) { _, active in
             if !active { restoreDraft() }
             if !active && model.draft.isEmpty { dictationExpanded = false }
+        }
+        // Each uploaded file's path is typed into the terminal rather than held for a prompt.
+        .onChange(of: model.attachments.map(\.id)) { old, _ in
+            guard typesIntoTerminal else { return }
+            for file in model.attachments where !old.contains(file.id) {
+                model.type(file.path + " ")
+                model.remove(file)
+            }
         }
         .onDisappear { dictationExpanded = false }
     }
