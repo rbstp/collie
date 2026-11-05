@@ -1,29 +1,40 @@
+/// The keys that put an agent's cursor where a tap in its input box points: ⌃A, then ← and ⌃A
+/// once per further line of `lines`, reach the box's start; `right` →, then `down` ↓, reach the
+/// tapped row, and `across` → (← where negative) the tapped character.
+public struct TerminalInputWalk: Equatable {
+    public var lines: Int
+    public var right = 0
+    public var down: Int
+    public var across: Int
+}
+
 /// An agent's input box in a frame. Claude Code's is found as collied's draft parser finds it on
 /// the Mac: the rows between the last two rules drawn from column 0, the first starting with `❯`,
 /// the others that start a Mac row indented by two. Codex shades its box: a blank row, `›` and
 /// rows indented by two, a blank row. Copilot CLI frames its box with half blocks: `╻▄`, a row
 /// starting with `┃` for each Mac row, `╹▀`. The pane's cursor position is not on the wire, so a
-/// tap counts characters in the box instead: a Mac row after a full one adds one for the space
-/// it wrapped at, as Claude Code 2.1.318, Codex 0.166.0 and Copilot CLI 1.0.105 move Left across
-/// a wrapped row, except where Copilot CLI starts a row with the space after a full one. After a
-/// row that is not full, whose spaces typed at the end or before a newline do not show, a full
-/// row whose word may continue on the next, or a wide character at either side, the count is
-/// unknown, and later rows take no taps.
+/// tap walks there from the box's start: Down once per row as the Mac draws it, as Claude Code
+/// 2.1.318, Codex 0.166.0 and Copilot CLI 1.0.105 move Down, to that row's first character
+/// shown, then Right across the row, whose characters before the tap all show. Spaces typed at
+/// the end of a row or before a newline do not show, and Down steps over them.
 struct TerminalInputBox {
     /// The rules, blank rows or borders above and below the box.
     var top: Int
     var bottom: Int
     var text = ""
-    /// Characters before each row's first one, and the midpoints of that row's characters in
-    /// columns: a wide character counts once, centered on its two cells.
-    private var rows: [Int: (before: Int, mids: [Double])] = [:]
-    private var count = 0
-    private var lines = 0
+    let agent: String
+    /// Each Mac row's characters, as their text and cells: a wide character is one, of two cells.
+    private var lines: [[(text: String, cells: Int)]] = []
+    /// Each frame row's Mac row, the characters before it on that Mac row, and the midpoints of
+    /// its characters in columns.
+    private var rows: [Int: (line: Int, before: Int, mids: [Double])] = [:]
     private var hint = false
+    /// Claude Code's suggestions, drawn right above its box, which take Down.
+    private var menu = false
 
-    /// `agent` is the pane's agent kind: "claude", "codex" or "copilot"; `snapshot` is what `frame`
-    /// was rendered from, where the rows drawn across the Mac pane keep their width.
-    init?(_ frame: TerminalFrame, agent: String, snapshot: String) {
+    /// `agent` is the pane's agent kind: "claude", "codex" or "copilot".
+    init?(_ frame: TerminalFrame, agent: String) {
+        self.agent = agent
         var cells = [[(cluster: Cluster, style: TerminalStyle)]](repeating: [], count: frame.rows)
         var shades = [Set<TerminalRGB>](repeating: [], count: frame.rows)
         for run in frame.runs where run.row < frame.rows {
@@ -52,6 +63,11 @@ struct TerminalInputBox {
             }
             // Another `❯` below the box holds the keys, as when a background agent row is selected.
             if let bottom = found?.bottom, (bottom + 1..<frame.rows).contains(where: { plain($0).hasPrefix("❯") }) { return nil }
+            if let top = found?.top, top > 0 {
+                var above = top - 1
+                while frame.wrapContinuations.contains(above) { above -= 1 }
+                menu = cells[above].first { !$0.cluster.text.allSatisfy(\.isWhitespace) }?.cluster.column == 4
+            }
         case "codex":
             // A row right above the blank top row is a menu's, and Left and Right switch its list.
             let prompt = frame.rows > 1 ? (1..<frame.rows).last { cells[$0].first?.cluster.column == 0 && cells[$0].first?.cluster.text == "›" } : nil
@@ -103,79 +119,69 @@ struct TerminalInputBox {
                 macRows.append([(row, line)])
             }
         }
-        lines = macRows.count
-        let width = Self.wrapWidth(in: snapshot, agent: agent)
-        // Copilot CLI scrolls a box taller than about half its pane, without a sign, so a taller
-        // box may start above its first row shown.
-        var known = agent != "copilot" || lines < 8
         for (i, macRow) in macRows.enumerated() {
-            if i > 0 {
-                let (above, below) = (macRows[i - 1].flatMap(\.cells).map(\.cluster), macRow.flatMap(\.cells).map(\.cluster))
-                let join = Self.join(above, below, width: width, agent: agent)
-                known = known && join != nil
-                count += join ?? 1
-                text += join == 0 ? "" : " "
-            }
+            if i > 0 { text += " " }
+            var before = 0
             for (row, line) in macRow {
-                if known { rows[row] = (count, line.map { Double($0.cluster.column + $0.cluster.end) / 2 }) }
+                rows[row] = (i, before, line.map { Double($0.cluster.column + $0.cluster.end) / 2 })
+                before += line.count
                 text += line.map(\.cluster.text).joined()
-                count += line.count
             }
+            lines.append(macRow.flatMap(\.cells).map { ($0.cluster.text, $0.cluster.end - $0.cluster.column) })
         }
     }
 
-    /// Where a tap at `column` (in cells, fractional) of `row` puts the cursor: the character
-    /// boundary nearest to it on that row, as `(index, lines)` with `lines` Mac rows in the box.
-    /// Nil off the box's rows or past a row the count is unknown after, and while it shows a
-    /// placeholder, hint or suggestion, or a slash command, whose menu Right would complete.
-    func cursor(row: Int, column: Double) -> (index: Int, lines: Int)? {
-        guard let line = rows[row], count > 0, !hint, !text.hasPrefix("/") else { return nil }
-        return (line.before + line.mids.count { $0 < column }, lines)
-    }
-
-    /// The characters Left crosses from Mac row `below` into the full row `above`: one for the
-    /// space `above` ended at, none where Copilot CLI starts `below` with the space after a full
-    /// row. Nil where `above` is not full, since spaces typed at its end or before a newline do not
-    /// show, where a word may continue on `below`, or where a wide character ends or starts them.
-    private static func join(_ above: [Cluster], _ below: [Cluster], width: Int?, agent: String) -> Int? {
-        func cells(_ clusters: some Sequence<Cluster>) -> Int { clusters.reduce(0) { $0 + $1.end - $1.column } }
-        guard let width, cells(above) == width, let first = below.first, let last = above.last, cells([last]) == 1, cells([first]) == 1
+    /// The Mac row a tap at `column` (in cells, fractional) of `row` points to, and the character
+    /// boundary nearest to it on that Mac row. Nil off the box's rows, while it shows a
+    /// placeholder, hint or suggestion, or a slash command, whose menu Right would complete, and
+    /// in a Copilot CLI box of eight Mac rows or more, which Copilot CLI scrolls without a sign
+    /// once taller than about half its pane.
+    func cursor(row: Int, column: Double) -> (line: Int, index: Int)? {
+        guard let at = rows[row], lines.contains(where: { !$0.isEmpty }), !hint, !text.hasPrefix("/"),
+            agent != "copilot" || lines.count < 8
         else { return nil }
-        if first.text == " " { return agent == "copilot" ? 0 : nil }
-        // A word that fits a row is never split, so these two were not one word.
-        return cells(above.reversed().prefix { $0.text != " " }) + cells(below.prefix { $0.text != " " }) <= width ? 1 : nil
+        return (at.line, at.before + at.mids.count { $0 < column })
     }
 
-    /// The columns the agent wraps its box's text at on the Mac, from rows the snapshot draws
-    /// across the pane: Claude Code's last rule less 4, the blank row above Codex's last `›` row
-    /// and Copilot CLI's last `╻▄` border less 3.
-    static func wrapWidth(in snapshot: String, agent: String) -> Int? {
-        let rows = snapshot.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-        let plain = rows.map { line in
-            var out = String.UnicodeScalarView()
-            var escape = false
-            for scalar in line.unicodeScalars {
-                if scalar == "\u{1B}" {
-                    escape = true
-                } else if escape {
-                    escape = scalar != "m"
-                } else {
-                    out.append(scalar)
+    /// The walk to where a tap at `column` of `row` points, with `mac` the box as the Mac draws it,
+    /// where this one may join rows the Mac wrapped.
+    func walk(row: Int, column: Double, mac: @autoclosure () -> TerminalInputBox?) -> TerminalInputWalk? {
+        guard let (line, index) = cursor(row: row, column: column), let mac = mac(),
+            let (down, across) = mac.position(of: index, line: line, in: lines.map { $0.map(\.text) })
+        else { return nil }
+        // ⌃A goes to the start of the line in Claude Code and Codex, and of the row in Copilot CLI.
+        let walk = TerminalInputWalk(lines: agent == "copilot" ? mac.lines.count : lines.count, down: down, across: across)
+        guard down > 0 else { return walk }
+        if menu { return nil }
+        guard agent == "codex" else { return walk }
+        // Codex's Down at the start of a draft recalled from history recalls the next one instead,
+        // so a Right goes first. Down keeps that column, before a character that would cross it;
+        // a row narrower than it may end with spaces that do not show.
+        guard let first = mac.lines[0].first?.cells, mac.lines[down].reduce(0, { $0 + $1.cells }) >= first else { return nil }
+        var cells = 0
+        let landed = mac.lines[down].prefix { cells += $0.cells; return cells <= first }.count
+        return TerminalInputWalk(lines: walk.lines, right: 1, down: down, across: across - landed)
+    }
+
+    /// The Mac row and index on it of character `index` of line `line` of `shown`, the box's
+    /// lines with the rows the Mac wrapped joined, after a space where it wrapped at one.
+    private func position(of index: Int, line: Int, in shown: [[String]]) -> (row: Int, index: Int)? {
+        var row = 0
+        for (j, texts) in shown.enumerated() {
+            var at = 0
+            repeat {
+                guard row < lines.count else { return nil }
+                let mac = lines[row].map(\.text)
+                guard texts[at...].starts(with: mac) else { return nil }
+                if j == line, index <= at + mac.count { return (row, index - at) }
+                at += mac.count
+                row += 1
+                if at < texts.count, texts[at] == " ", row < lines.count, !texts[at...].starts(with: lines[row].map(\.text)) {
+                    at += 1
                 }
-            }
-            return String(out).trimmingSuffix { $0 == " " }
+            } while at < texts.count
         }
-        switch agent {
-        case "claude":
-            return plain.last { !$0.isEmpty && $0.allSatisfy { $0 == "─" } }.map { $0.count - 4 }
-        case "codex":
-            guard let prompt = plain.lastIndex(where: { $0.hasPrefix("›") }), prompt > 0 else { return nil }
-            return rows[prompt - 1].filter { $0 == " " }.count - 3
-        case "copilot":
-            return plain.last { $0.hasPrefix("╻▄") }.map { $0.count - 3 }
-        default:
-            return nil
-        }
+        return nil
     }
 
     /// The scroll offset that shows content down to `rowBottom` above an obscured bottom of

@@ -865,12 +865,15 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
 }
 
 @MainActor
-@Test func aTapInTheInputBoxWalksToItsStartThenForward() async {
+@Test func aTapInTheInputBoxWalksToItsStartThenDownAndAcross() async {
     let core = FakeCore()
     let model = agentModel(core)
-    await model.placeCursor(at: 17, lines: 3)?.value
-    #expect(core.snapshot.keys.flatMap(\.self) == [.ctrlA, .left, .ctrlA, .left, .ctrlA] + Array(repeating: .right, count: 17))
+    await model.placeCursor(lines: 3, right: 0, down: 2, across: 17)?.value
+    #expect(core.snapshot.keys.flatMap(\.self) == [.ctrlA, .left, .ctrlA, .left, .ctrlA, .down, .down] + Array(repeating: .right, count: 17))
     #expect(core.snapshot.keys.allSatisfy { $0.count <= 16 })
+    let codex = FakeCore()
+    await agentModel(codex).placeCursor(lines: 2, right: 1, down: 1, across: -1)?.value
+    #expect(codex.snapshot.keys.flatMap(\.self) == [.ctrlA, .left, .ctrlA, .right, .down, .left])
 }
 
 @Test func joystickPointsAtTheDominantAxisPastItsDeadZone() {

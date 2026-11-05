@@ -879,16 +879,20 @@ final class AgentModel {
     }
 
     /// The cursor's position in an agent's input box is not on the wire: Control-A, then Left and
-    /// Control-A once per further row of the box's `lines`, reaches its start from anywhere, past
-    /// spaces typed at the end of a row that the screen does not show (Control-A goes to the start
-    /// of the line, or in Copilot CLI of the row, and Left at the start does nothing). Then Right
-    /// steps to `index`, never past the text, where Right could accept a suggestion.
+    /// Control-A once per further line of `lines`, reaches its start from anywhere, past spaces
+    /// typed at the end of a row that the screen does not show (Control-A goes to the start of the
+    /// line, or in Copilot CLI of the row, and Left at the start does nothing). Then `right` Right
+    /// and `down` Down reach the tapped row, Down moving by row as drawn, and `across` Right (Left
+    /// where negative) the tapped character, never past the text, where Right could accept a
+    /// suggestion.
     @discardableResult
-    func placeCursor(at index: Int, lines: Int) -> Task<Void, Never>? {
-        guard canTap(.right), canTap(.left), canTap(.ctrlA) else { return nil }
+    func placeCursor(lines: Int, right: Int, down: Int, across: Int) -> Task<Void, Never>? {
+        guard canTap(.right), canTap(.left), canTap(.ctrlA), canTap(.down) else { return nil }
         var task: Task<Void, Never>?
         let start = [AgentKey.ctrlA] + Array(repeating: [AgentKey.left, .ctrlA], count: max(lines - 1, 0)).flatMap(\.self)
-        for key in start + Array(repeating: .right, count: index) {
+        let walk = Array(repeating: AgentKey.right, count: right) + Array(repeating: .down, count: down)
+            + Array(repeating: across < 0 ? .left : .right, count: abs(across))
+        for key in start + walk {
             task = tap(key) ?? task
         }
         return task
