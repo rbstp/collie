@@ -178,7 +178,7 @@ struct AgentScreen: View {
                                 ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
                             }
                             if let notice = approvals.notice {
-                                Text(notice).font(.footnote).padding([.horizontal, .bottom]).frame(maxWidth: .infinity, alignment: .leading)
+                                ApprovalNotice(notice: notice).padding([.horizontal, .bottom])
                             }
                         }
                     }
@@ -1625,7 +1625,7 @@ struct UploadChip: View {
     }
 }
 
-private extension View {
+extension View {
     func composerNoteGlass() -> some View {
         padding(.horizontal, 10)
             .padding(.vertical, 6)

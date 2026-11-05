@@ -132,7 +132,7 @@ struct ApprovalReview: View {
                 VStack(alignment: .leading, spacing: 10) {
                     // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: task).font(.subheadline.weight(.semibold))
+                        Text(verbatim: task).font(.subheadline)
                         // The metadata gray read 4.2:1 on the half-height sheet's light glass.
                         Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
                     }
@@ -150,7 +150,7 @@ struct ApprovalReview: View {
                 if decides || model.notice != nil {
                     VStack(spacing: 8) {
                         if let notice = model.notice {
-                            Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+                            ApprovalNotice(notice: notice)
                         }
                         if decides { DecisionButtons(model: model, item: item) }
                     }
@@ -248,22 +248,7 @@ private struct ApprovalDetails: View {
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty, !whole {
-                let count = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false).count
-                Button {
-                    model.toggleExpanded(item)
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines")
-                        Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .font(.caption)
-                .foregroundStyle(.primary.opacity(0.6))
-                .buttonStyle(.plain)
-                .accessibilityHint("Shows the whole prompt")
-            } else if !approval.snippet.isEmpty {
+            } else if !approval.snippet.isEmpty, whole {
                 Text(verbatim: approval.snippet)
                     .font(.caption2.monospaced())
                     // The metadata gray is 4.2:1 on a nested panel over the band's light tint; this is 5.3:1, and 5.5:1 in dark mode.
@@ -273,6 +258,17 @@ private struct ApprovalDetails: View {
                     .padding(.horizontal, 10)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            let showsOutput = !whole && !approval.snippet.isEmpty && !(approval.options.isEmpty && !approval.choices.isEmpty)
+            let addsNote = approval.supportsNote && !model.noting.contains(item.id)
+            if showsOutput || addsNote {
+                // Each link's 44-point tap target reaches into the 6-point gaps around its row, which keeps the row compact.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 24) { links(output: showsOutput, note: addsNote) }
+                    VStack(alignment: .leading, spacing: 0) { links(output: showsOutput, note: addsNote) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, -6)
             }
             if approval.supportsNote, model.noting.contains(item.id) {
                 NoteField(model: model, item: item, field: field)
@@ -291,14 +287,44 @@ private struct ApprovalDetails: View {
                     .font(.caption)
                     .foregroundStyle(.warning)
             }
-            if approval.supportsNote, !model.noting.contains(item.id) {
-                Button("Add note", systemImage: "text.bubble") { model.toggleNote(item) }
-                    .font(.caption)
-                    .disabled(model.steps[item.id] != nil)
-            }
             if approval.takesFeedback {
                 FeedbackField(model: model, item: item, field: field, sendAnswer: sendAnswer)
             }
+        }
+    }
+
+    // Over the dark terminal the band's glass comes out lighter: the primary color at 60% read 4.2:1 there and the
+    // gold accent 3.8:1, so the labels take the primary color at 75% and only Add note's symbol the accent.
+    @ViewBuilder private func links(output: Bool, note: Bool) -> some View {
+        if output {
+            let count = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false).count
+            Button {
+                model.toggleExpanded(item)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines")
+                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .font(.caption)
+            .foregroundStyle(.primary.opacity(0.75))
+            .buttonStyle(.plain)
+            .accessibilityHint("Shows the whole prompt")
+        }
+        if note {
+            Button { model.toggleNote(item) } label: {
+                Label {
+                    Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
+                } icon: {
+                    Image(systemName: "text.bubble").foregroundStyle(.tint)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .font(.caption)
+            .disabled(model.steps[item.id] != nil)
         }
     }
 }
@@ -318,6 +344,18 @@ private struct ApprovalCountdown: View {
                 .glassEffect(.regular, in: .capsule)
                 .fixedSize()
         }
+    }
+}
+
+struct ApprovalNotice: View {
+    let notice: String
+
+    var body: some View {
+        Label(notice, systemImage: "exclamationmark.triangle")
+            .font(.footnote)
+            .foregroundStyle(.warning)
+            .composerNoteGlass()
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

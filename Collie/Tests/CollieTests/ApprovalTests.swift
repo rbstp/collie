@@ -576,6 +576,35 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 }
 
 @MainActor
+@Test func failureNoticeStaysUntilTheNextDecisionOrItsApprovalLeaving() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1")] }
+    let model = ApprovalsModel(core: core, auth: auth, noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+    try await Task.sleep(for: .milliseconds(300))
+    model.poll()
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+
+    auth.state.withLock { $0.hold = true }
+    let decide = Task { await model.decide(item, .deny) }
+    await auth.waitHeld()
+    #expect(model.notice == nil)
+    auth.release(result: false)
+    await decide.value
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+
+    core.state.withLock { $0.pending["m1"] = [] }
+    model.poll()
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+    await poll { model.notice == nil }
+}
+
+@MainActor
 @Test func noticeClearsWhenTheListChangesOtherThanItsApprovalLeaving() async throws {
     let core = FakeApprovalCore()
     let model = approvalsModel(core, FakeAuthenticator())

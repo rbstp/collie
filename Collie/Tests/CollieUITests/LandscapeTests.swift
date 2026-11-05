@@ -164,6 +164,11 @@ final class LandscapeTests: XCTestCase {
         let output = app.buttons["Output, 8 lines"]
         XCTAssertTrue(output.appears(within: 10), app.debugDescription)
         XCTAssertFalse(app.staticTexts["test approvals::case_1 ... ok"].exists, app.debugDescription)
+        let addNote = app.buttons["Add note"]
+        XCTAssertTrue(addNote.appears(within: 10), app.debugDescription)
+        XCTAssertGreaterThanOrEqual(output.frame.height, 44, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(addNote.frame.height, 44, app.debugDescription)
+        XCTAssertFalse(output.frame.intersects(addNote.frame), app.debugDescription)
         output.tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
@@ -175,6 +180,9 @@ final class LandscapeTests: XCTestCase {
         if cancel.waitForExistence(timeout: 5) { cancel.tap() }
         let notice = app.staticTexts.matching(NSPredicate(format: "label == %@", "Not authenticated. Nothing was sent."))
         XCTAssertTrue(eventually(within: 10) { notice.allElementsBoundByIndex.contains { $0.isHittable } }, app.debugDescription)
+        // It stays until the next decision, past the six seconds it used to last.
+        sleep(7)
+        XCTAssertTrue(notice.allElementsBoundByIndex.contains { $0.isHittable }, app.debugDescription)
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
     }
