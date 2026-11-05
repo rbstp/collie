@@ -13,11 +13,11 @@ Codex and Copilot CLI notifications have no Approve or Deny: answer in the sessi
 Once the agent moves on, `collied` tries to remove the notification.
 
 <div class="screenshots">
-<img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, a link to its output, and Approve, Always allow and Deny buttons">
-<img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, a link to its output, and Approve, Always allow and Deny buttons">
+<img class="screenshot-light" src="../images/approval-light.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, Review, and Approve, Always allow and Deny buttons">
+<img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, Review, and Approve, Always allow and Deny buttons">
 </div>
 
-The card shows the command's output as a link with its length, such as **Output, 8 lines**: tap it to read the whole prompt and its output in a sheet. Without output, **Show full command** opens the sheet when the command is too long for the card. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review**, with a shield when the agent gave a reason, and, when they fit, the buttons. **Review** opens the sheet, with the task and its machine, the command, the reason, the output, **Add note** and the buttons. If a decision fails, for example when Face ID does not confirm it, a warning under the card, and in the sheet above the buttons, says so until your next decision or until the approval ends, even while other approvals arrive or leave.
+The card shows the tool, its command and **Review**, with a shield when the agent gave a reason. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the sheet, with the task and its machine, the whole command, the reason and the output, and **Add note** right above the buttons, as a note goes with your decision. If a decision fails, for example when Face ID does not confirm it, a warning under that task's card, and in its sheet above the buttons, says so until your next decision or until the approval ends, even while other approvals arrive or leave. Other tasks never show it.
 
 ## Answering by hand
 

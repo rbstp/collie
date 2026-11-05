@@ -614,6 +614,32 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 }
 
 @MainActor
+@Test func noticeShowsOnlyInItsApprovalsTask() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    var other = approval("ap_2")
+    other.terminalId = "term_2"
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1"), other] }
+    let model = ApprovalsModel(core: core, auth: auth, noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice(machineId: "m1", terminalId: "term_1") == "Not authenticated. Nothing was sent.")
+    #expect(model.notice(machineId: "m1", terminalId: "term_2") == nil)
+    #expect(model.notice(machineId: "m2", terminalId: "term_1") == nil)
+    #expect(model.noticeItem?.id == "ap_1")
+
+    // Once its approval leaves, the notice still belongs to that task until it lasts out.
+    core.state.withLock { $0.pending["m1"] = [other] }
+    model.poll()
+    #expect(model.notice(machineId: "m1", terminalId: "term_1") == "Not authenticated. Nothing was sent.")
+    #expect(model.notice(machineId: "m1", terminalId: "term_2") == nil)
+    await poll { model.notice == nil }
+    #expect(model.noticeItem == nil)
+}
+
+@MainActor
 @Test func noticeClearsWhenTheListChangesOtherThanItsApprovalLeaving() async throws {
     let core = FakeApprovalCore()
     let model = approvalsModel(core, FakeAuthenticator())

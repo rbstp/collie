@@ -19,6 +19,12 @@ struct ApprovalCard: View {
         Capped(maxHeight: max(0, maxHeight - 2 * padding)) {
             ViewThatFits(in: .vertical) {
                 VStack(alignment: .leading, spacing: 6) {
+                    // The session header above already names the agent and its machine.
+                    HStack(spacing: 8) {
+                        toolName
+                        Spacer(minLength: 0)
+                        reviewAndCountdown
+                    }
                     ApprovalDetails(model: model, item: item, whole: false, field: $field, sendAnswer: sendAnswer)
                     if offersDecisions { DecisionButtons(model: model, item: item) }
                 }
@@ -82,7 +88,7 @@ struct ApprovalCard: View {
             Button {
                 model.toggleExpanded(item)
             } label: {
-                // The reason waits in the sheet; its shield says there is one.
+                // The band leaves the reason to the sheet; the shield says there is one.
                 Label {
                     Text("Review")
                 } icon: {
@@ -93,6 +99,9 @@ struct ApprovalCard: View {
             }
             .buttonStyle(.glass)
             .tint(.primary)
+            // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
+            // the band, they sit in front and take the tap.
+            .contentShape(.interaction, Rectangle().inset(by: -7.5))
             .accessibilityHint(approval.reason == nil ? "Shows the whole prompt" : "Shows the whole prompt and why the agent asks")
         }
         .fixedSize()
@@ -104,7 +113,9 @@ private struct Capped: Layout {
     let maxHeight: CGFloat
 
     private func capped(_ proposal: ProposedViewSize, width: CGFloat?) -> ProposedViewSize {
-        ProposedViewSize(width: width, height: min(maxHeight, proposal.height ?? .infinity))
+        // The card's padding comes back from the parent as a hair under the height the card asked for (217.66666666666663
+        // for 217.66666666666666), and the whole card no longer fit it.
+        ProposedViewSize(width: width, height: min(maxHeight, (proposal.height ?? .infinity) + 0.001))
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -125,6 +136,7 @@ struct ApprovalReview: View {
     @FocusState private var field: String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var more = false
 
     var body: some View {
         NavigationStack {
@@ -145,14 +157,27 @@ struct ApprovalReview: View {
                     .padding(.horizontal)
                     .padding(.bottom)
                 }
+                .onScrollGeometryChange(for: Bool.self) { $0.visibleRect.maxY < $0.contentSize.height - 1 } action: { more = $1 }
+                // A row cut by the sheet's edge read as the end of the prompt: a fade on the scroll view's own edge says more follows.
+                .mask {
+                    VStack(spacing: 0) {
+                        Color.black
+                        LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: more ? 24 : 0)
+                    }
+                }
                 let decides = !item.approval.answeredInTerminal && !item.approval.options.isEmpty
                 // The session's notice line sits behind the sheet: a failed or unconfirmed decision is reported here.
-                if decides || model.notice != nil {
+                let notice = model.noticeItem?.id == item.id ? model.notice : nil
+                if decides || notice != nil {
                     VStack(spacing: 8) {
-                        if let notice = model.notice {
+                        if let notice {
                             ApprovalNotice(notice: notice)
                         }
-                        if decides { DecisionButtons(model: model, item: item) }
+                        if decides {
+                            // A note goes with the decision, so it sits with the decisions.
+                            if item.approval.supportsNote { NoteField(model: model, item: item, field: $field) }
+                            DecisionButtons(model: model, item: item)
+                        }
                     }
                     .padding()
                 }
@@ -174,66 +199,31 @@ struct ApprovalReview: View {
     }
 }
 
-/// The prompt: in the card, the command cut to three lines and the output a link to the review sheet; in the sheet, whole.
+/// The prompt: in the card, the command cut to three lines and the output left to the review sheet; in the sheet, whole.
 private struct ApprovalDetails: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let whole: Bool
     let field: FocusState<String?>.Binding
     let sendAnswer: (String) async throws -> Void
-    @State private var commandShown: CGFloat = 0
-    @State private var commandFull: CGFloat = 0
 
     private var approval: PendingApproval { item.approval }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            let showsOutput = !whole && !approval.snippet.isEmpty && !(approval.options.isEmpty && !approval.choices.isEmpty)
-            if !whole {
-                HStack(alignment: .center, spacing: 8) {
-                    // The session header above already names the agent and its machine.
-                    Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
-                    Spacer()
-                    ApprovalCountdown(approval: approval)
-                }
-            }
             if approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
                 // and a bare `--` stays with the argument after it.
                 let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(verbatim: wrapped)
-                        .lineLimit(whole ? nil : 3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandShown = $0 }
-                        .background(alignment: .top) {
-                            Text(verbatim: wrapped)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .hidden()
-                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandFull = $0 }
-                        }
-                        .accessibilityLabel(command)
-                    // One way into the sheet: with output, its link takes the place of this one.
-                    if !whole, !showsOutput, commandFull > commandShown + 1 {
-                        Button {
-                            model.toggleExpanded(item)
-                        } label: {
-                            ViewThatFits(in: .horizontal) {
-                                Text("Show full command")
-                                Text("Full command")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.primary.opacity(0.6))
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Show full command")
-                    }
-                }
-                .font(.footnote.monospaced())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 10)
-                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                Text(verbatim: wrapped)
+                    .lineLimit(whole ? nil : 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(command)
+                    .font(.footnote.monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
             if let reason = approval.reason {
                 ApprovalReason(reason: reason)
@@ -251,17 +241,8 @@ private struct ApprovalDetails: View {
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            let addsNote = approval.supportsNote && !model.noting.contains(item.id)
-            if showsOutput || addsNote {
-                // Each link's 44-point tap target reaches into the 6-point gaps around its row, which keeps the row compact.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 24) { links(output: showsOutput, note: addsNote) }
-                    VStack(alignment: .leading, spacing: 0) { links(output: showsOutput, note: addsNote) }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, -6)
-            }
-            if approval.supportsNote, model.noting.contains(item.id) {
+            // In the sheet the note sits with the decisions.
+            if approval.supportsNote, !whole {
                 NoteField(model: model, item: item, field: field)
             }
             if approval.answeredInTerminal {
@@ -281,38 +262,6 @@ private struct ApprovalDetails: View {
             if approval.takesFeedback {
                 FeedbackField(model: model, item: item, field: field, sendAnswer: sendAnswer)
             }
-        }
-    }
-
-    // Over the dark terminal the band's glass comes out lighter: the primary color at 60% read 4.2:1 there and the
-    // gold accent 3.8:1, so the labels take the primary color at 75% and only the symbols the accent.
-    @ViewBuilder private func links(output: Bool, note: Bool) -> some View {
-        if output {
-            let count = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false).count
-            Button { model.toggleExpanded(item) } label: {
-                Label {
-                    Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines").foregroundStyle(Color.primary.opacity(0.75))
-                } icon: {
-                    Image(systemName: "text.alignleft").foregroundStyle(.tint)
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .font(.caption)
-            .accessibilityHint("Shows the whole prompt")
-        }
-        if note {
-            Button { model.toggleNote(item) } label: {
-                Label {
-                    Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
-                } icon: {
-                    Image(systemName: "text.bubble").foregroundStyle(.tint)
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .font(.caption)
-            .disabled(model.steps[item.id] != nil)
         }
     }
 }
@@ -387,19 +336,38 @@ private struct NoteField: View {
     let field: FocusState<String?>.Binding
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
-                .textFieldStyle(.roundedBorder)
-                .font(.footnote)
-                .submitLabel(.done)
-                .focused(field, equals: "note")
-            Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+        if model.noting.contains(item.id) {
+            HStack(spacing: 8) {
+                TextField("Note for \(item.approval.agentLabel)", text: model.draft(item))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.footnote)
+                    .submitLabel(.done)
+                    .focused(field, equals: "note")
+                Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+            }
+            .id("note")
+            .disabled(model.steps[item.id] != nil)
+        } else {
+            // Over the dark terminal the band's glass comes out lighter: the primary color at 60% read 4.2:1 there and the
+            // gold accent 3.8:1, so the label takes the primary color at 75% and only the symbol the accent.
+            Button { model.toggleNote(item) } label: {
+                Label {
+                    Text("Add note").foregroundStyle(Color.primary.opacity(0.75))
+                } icon: {
+                    Image(systemName: "text.bubble").foregroundStyle(.tint)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .font(.caption)
+            .disabled(model.steps[item.id] != nil)
+            // The 44-point tap target reaches into the 6-point gaps around its row, which keeps the row compact.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, -6)
         }
-        .id("note")
-        .disabled(model.steps[item.id] != nil)
     }
 }
 
