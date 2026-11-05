@@ -590,6 +590,15 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     model.poll()
     #expect(model.notice == "Not authenticated. Nothing was sent.")
 
+    // Another approval arriving, changing or leaving is no decision about this one.
+    for other in [[approval("ap_2")], [approval("ap_2", options: [.approve, .deny])], []] {
+        core.state.withLock { $0.pending["m1"] = [approval("ap_1")] + other }
+        model.poll()
+        #expect(model.items.count == 1 + other.count)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.notice == "Not authenticated. Nothing was sent.")
+    }
+
     auth.state.withLock { $0.hold = true }
     let decide = Task { await model.decide(item, .deny) }
     await auth.waitHeld()
