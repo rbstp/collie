@@ -33,7 +33,7 @@ struct AgentInbox<Menu: View>: View {
                 if let notice {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.warning)
                 }
                 if entries.isEmpty {
                     NoMachines()
