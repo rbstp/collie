@@ -147,7 +147,12 @@ final class ApprovalsModel {
     }
 
     func toggleExpanded(_ item: ApprovalItem) {
-        if expanded.remove(item.id) == nil { expanded.insert(item.id) }
+        if expanded.remove(item.id) == nil {
+            expanded.insert(item.id)
+        } else {
+            // Add note lives in the sheet: once it closes, a note left open would go, unseen, with a decision on the card.
+            noting.remove(item.id)
+        }
     }
 
     func toggleNote(_ item: ApprovalItem) {

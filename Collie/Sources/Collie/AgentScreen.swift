@@ -182,7 +182,8 @@ struct AgentScreen: View {
                             ForEach(items) { item in
                                 ApprovalCard(model: approvals, item: item, maxHeight: cap, sendAnswer: model.typeAnswer)
                             }
-                            if let notice {
+                            // The open sheet shows its own copy, and this one peeked above it cut through its letters.
+                            if let notice, approvals.noticeItem.map({ approvals.expanded.contains($0.id) }) != true {
                                 ApprovalNotice(notice: notice).padding([.horizontal, .bottom])
                             }
                         }
@@ -338,7 +339,7 @@ struct AgentScreen: View {
         }
         // Presented here, not from the card: the band takes the dark scheme over the terminal, and the sheet follows the appearance.
         .sheet(item: reviewing) { item in
-            if let approvals { ApprovalReview(model: approvals, item: item, task: title, sendAnswer: model.typeAnswer) }
+            if let approvals { ApprovalReview(model: approvals, item: item, task: title, showsMachine: showsMachine, sendAnswer: model.typeAnswer) }
         }
         .onChange(of: blocked, initial: true) { _, blocked in model.blocked = blocked }
         .onChange(of: model.agent, initial: true) { _, agent in

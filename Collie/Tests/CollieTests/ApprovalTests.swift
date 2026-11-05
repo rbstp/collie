@@ -755,6 +755,10 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     #expect(model.note(for: item) == nil)
     model.toggleNote(item)
     #expect(model.note(for: item) == "use a .tmp extension")
+    model.toggleExpanded(item)
+    model.toggleExpanded(item)
+    #expect(model.note(for: item) == nil && model.drafts[item.id] == "use a .tmp extension")
+    model.toggleNote(item)
 
     await model.decide(item, .approveAlways)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
