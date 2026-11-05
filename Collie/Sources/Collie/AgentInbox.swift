@@ -224,7 +224,7 @@ struct AgentInbox<Menu: View>: View {
     private func row(_ item: InboxItem, wake: Date?, now: Date) -> some View {
         let isSeen = seen.isSeen(item.agent, route: item.route)
         return NavigationLink(value: item.route) {
-            InboxRow(item: item, followed: follows?.isFollowing(item.route) == true,
+            InboxRow(item: item, showsMachine: entries.count > 1, followed: follows?.isFollowing(item.route) == true,
                      unseen: item.agent.status == .done && !isSeen, wake: wake, now: now)
         }
         // No disclosure chevron, so the text keeps the width, as in Mail.
@@ -386,6 +386,7 @@ enum InboxSection: CaseIterable {
 
 private struct InboxRow: View {
     let item: InboxItem
+    let showsMachine: Bool
     let followed: Bool
     let unseen: Bool
     let wake: Date?
@@ -448,9 +449,13 @@ private struct InboxRow: View {
                     }
                     if let workspace = item.workspace {
                         Text(workspace).layoutPriority(1)
-                        Text(verbatim: "·").fixedSize()
+                        if showsMachine || item.stale {
+                            Text(verbatim: "·").fixedSize()
+                        }
                     }
-                    Text(item.machine)
+                    if showsMachine {
+                        Text(item.machine)
+                    }
                     if item.stale {
                         Text(item.linkDown ? "Offline · cached" : "Cached")
                     }
