@@ -99,6 +99,7 @@ struct ApprovalCard: View {
             }
             .buttonStyle(.glass)
             .tint(.primary)
+            .background(SessionBarDim(), in: .capsule)
             // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
             // the band, they sit in front and take the tap.
             .contentShape(.interaction, Rectangle().inset(by: -7.5))
