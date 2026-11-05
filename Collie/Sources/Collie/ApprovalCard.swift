@@ -448,10 +448,10 @@ private struct NoteField: View {
             HStack(spacing: 8) {
                 let placeholder = "Note for \(item.approval.agentLabel)"
                 TextField(placeholder, text: model.draft(item), prompt: Text(placeholder).foregroundStyle(.metadata))
-                    .textFieldStyle(.roundedBorder)
                     .font(.footnote)
                     .submitLabel(.done)
                     .focused(field, equals: "note")
+                    .panelField()
                 Button("Remove note", systemImage: "xmark.circle.fill") { model.toggleNote(item) }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
@@ -484,6 +484,15 @@ private struct NoteField: View {
     }
 }
 
+extension View {
+    /// The command and output panels' fill and shape: the rounded border style drew a black box on the dark sheet.
+    fileprivate func panelField() -> some View {
+        padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
 private struct FeedbackField: View {
     let model: ApprovalsModel
     let item: ApprovalItem
@@ -492,11 +501,11 @@ private struct FeedbackField: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField("Answer this prompt", text: model.draft(item))
-                .textFieldStyle(.roundedBorder)
+            TextField("Answer this prompt", text: model.draft(item), prompt: Text("Answer this prompt").foregroundStyle(.metadata))
                 .font(.footnote)
                 .submitLabel(.send)
                 .focused(field, equals: "answer")
+                .panelField()
                 .onSubmit { Task { await model.sendFeedback(item, send: sendAnswer) } }
             Button {
                 Task { await model.sendFeedback(item, send: sendAnswer) }
