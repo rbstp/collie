@@ -2,15 +2,15 @@
 
 A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch with the toggle at the top of the session. **Settings > Sessions > Default view** picks the view that opens first (Chat by default) and what [grid cards](agents-tab.md#grid) preview. Plain terminals have only Terminal.
 
-The session header shows the agent's state and how long it has been in it, then its machine. The state shows as its icon alone: a spinner while the agent works, a green check when it is done.
+The session header shows the agent's state and how long it has been in it, then its machine. The state shows as its icon alone, as on the [Agents](agents-tab.md) tab.
 
 With the largest text sizes (**Settings > Accessibility > Display & Text Size > Larger Text**), in portrait, the session's title moves from the top bar to the top of the session header, so it grows with your text. While an approval waits, it stays in the top bar to leave the approval room.
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/chat-light.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
 <img class="screenshot-dark" src="../images/chat-dark.png" width="300" height="652" loading="lazy" alt="An agent's Chat view: the conversation, with the prompt field at the bottom">
-<img class="screenshot-light" src="../images/terminal-light.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's raw screen, with the key strip button and the prompt field">
-<img class="screenshot-dark" src="../images/terminal-dark.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's raw screen, with the key strip button and the prompt field">
+<img class="screenshot-light" src="../images/terminal-light.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's screen, with the keys and keyboard buttons under it">
+<img class="screenshot-dark" src="../images/terminal-dark.png" width="300" height="652" loading="lazy" alt="An agent's Terminal view: the agent's screen, with the keys and keyboard buttons under it">
 </div>
 
 ## Chat
@@ -50,7 +50,6 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - In a Claude Code session, tap a word in the input box to move the cursor there and fix an earlier part of your prompt. While you type, Terminal keeps the input box above the keyboard; scroll away to read the rest, and it comes back when you type again or scroll to the bottom.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 - Tap the return key at the right end of the bottom row to send what you dictated, without opening the keyboard; with the key strip shown, use the strip's return key. Like Return on the keyboard, it hides the keyboard unless **Keep keyboard open after sending** is on.
-
 - Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.
 - Long-press to select text, then copy it, quote it into the prompt or open a link. In an agent session, **Open** previews a selected file path.

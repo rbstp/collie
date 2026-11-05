@@ -19,7 +19,7 @@ Do not describe a vulnerability in a public issue. Open an issue that only asks 
 
 ## Open source licenses
 
-**Acknowledgements**, in Settings or at the bottom of the Welcome screen, lists every open source component in the app with its license. The `collied` downloads list theirs in `THIRD_PARTY_NOTICES`.
+**Acknowledgements**, in **Settings > Diagnostics** or at the bottom of the Welcome screen, lists every open source component in the app with its license. The `collied` downloads list theirs in `THIRD_PARTY_NOTICES`.
 
 ## Privacy
 

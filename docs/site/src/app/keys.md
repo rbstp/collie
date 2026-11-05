@@ -2,7 +2,7 @@
 
 ## The key strip
 
-The key strip sends keys an iPhone keyboard lacks. The **Keys** button at the bottom of Terminal shows or hides it; it stays above the keyboard while you type.
+The key strip sends keys an iPhone keyboard lacks. The arrow keys button at the bottom left of Terminal shows or hides it; it stays above the keyboard while you type.
 
 ```text
 ⌃ | ⇧ | ⎋ | ⇥ | ⌫ | ⏎    joystick

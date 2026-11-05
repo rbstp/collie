@@ -19,6 +19,6 @@ Next, [pair your phone](pair.md) with each machine.
 
 ## Try the sample workspace
 
-To try Collie with made-up agents and no Tailscale login or machine, tap **Explore sample workspace** on Welcome, or at the bottom of Settings once signed in. Nothing you do there reaches a machine. The sample leaves out new tasks, pairing, attachments, dictation, Live Activities and remote notifications.
+To try Collie with made-up agents and no Tailscale login or machine, tap **Explore sample workspace** on Welcome, or in Settings once signed in. Nothing you do there reaches a machine. The sample leaves out new tasks, pairing, attachments, dictation, Live Activities and remote notifications.
 
 In the sample, **Reset sample workspace** in Settings restores it, and **Exit** returns to your setup. It lives only in memory and changes none of your accounts, pairings, drafts or preferences.
