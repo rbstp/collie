@@ -131,7 +131,10 @@ final class ApprovalsModel {
         guard next != items else { return }
         let pending = next.map(\.approval)
         if pending == items.filter({ $0.id != noticeSubject }).map(\.approval) {
-            noticeSubject = nil
+            if noticeSubject != nil {
+                noticeSubject = nil
+                expireNotice()
+            }
         } else if pending != items.map(\.approval) {
             show(nil)
         }
@@ -157,11 +160,17 @@ final class ApprovalsModel {
         return text.isEmpty ? nil : text
     }
 
+    /// A notice about a pending approval stays until the next decision; once that approval leaves, or for any other
+    /// notice, it lasts `noticeLifetime`.
     private func show(_ text: String?, about subject: String? = nil) {
         notice = text
-        noticeSubject = text == nil ? nil : subject
+        noticeSubject = text != nil && items.contains { $0.id == subject } ? subject : nil
         noticeTimer?.cancel()
-        guard text != nil else { return }
+        if text != nil, noticeSubject == nil { expireNotice() }
+    }
+
+    private func expireNotice() {
+        noticeTimer?.cancel()
         noticeTimer = Task { [weak self, noticeLifetime] in
             try? await Task.sleep(for: noticeLifetime)
             if !Task.isCancelled { self?.show(nil) }

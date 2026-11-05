@@ -17,7 +17,7 @@ Once the agent moves on, `collied` tries to remove the notification.
 <img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, a link to its output, and Approve, Always allow and Deny buttons">
 </div>
 
-The card leaves the command's output to a sheet: tap **Output** to read it. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the whole prompt in a sheet, with the task and its machine, the command, the reason, the output, **Add note** and the buttons; so do **Output**, the tool's name and **Show full command** on the full card. If a decision fails, for example when Face ID does not confirm it, the sheet says so above the buttons.
+The card leaves the command's output to a sheet: tap **Output** to read it. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the whole prompt in a sheet, with the task and its machine, the command, the reason, the output, **Add note** and the buttons; so do **Output**, the tool's name and **Show full command** on the full card. If a decision fails, for example when Face ID does not confirm it, a warning under the card, and in the sheet above the buttons, says so until your next decision or until the approval ends.
 
 ## Answering by hand
 
