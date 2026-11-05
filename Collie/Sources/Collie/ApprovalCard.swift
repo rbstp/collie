@@ -128,23 +128,23 @@ struct ApprovalReview: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: task).font(.subheadline)
-                        // The metadata gray read 4.2:1 on the half-height sheet's light glass.
-                        Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+            // The decisions sit under the prompt, not over it: a bar over the scroll view, even over a hard edge, let the
+            // prompt read through.
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // Full height, the sheet hides the session header: the task and its machine say who gets the answer.
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: task).font(.subheadline)
+                            // The metadata gray read 4.2:1 on the half-height sheet's light glass.
+                            Text(verbatim: item.machine.label).font(.caption).foregroundStyle(.primary.opacity(0.6))
+                        }
+                        .accessibilityElement(children: .combine)
+                        ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
                     }
-                    .accessibilityElement(children: .combine)
-                    ApprovalDetails(model: model, item: item, whole: true, field: $field, sendAnswer: sendAnswer)
+                    .padding(.horizontal)
+                    .padding(.bottom)
                 }
-                .padding(.horizontal)
-                .padding(.bottom)
-            }
-            // The soft edge left the prompt reading through the decisions' glass.
-            .scrollEdgeEffectStyle(.hard, for: .bottom)
-            .safeAreaBar(edge: .bottom) {
                 let decides = !item.approval.answeredInTerminal && !item.approval.options.isEmpty
                 // The session's notice line sits behind the sheet: a failed or unconfirmed decision is reported here.
                 if decides || model.notice != nil {
@@ -188,23 +188,14 @@ private struct ApprovalDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let showsOutput = !whole && !approval.snippet.isEmpty && !(approval.options.isEmpty && !approval.choices.isEmpty)
             if !whole {
-                Button {
-                    model.toggleExpanded(item)
-                } label: {
-                    HStack(alignment: .center, spacing: 8) {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        // The session header above already names the agent and its machine.
-                        Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
-                        Spacer()
-                        ApprovalCountdown(approval: approval)
-                    }
-                    .contentShape(Rectangle())
+                HStack(alignment: .center, spacing: 8) {
+                    // The session header above already names the agent and its machine.
+                    Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
+                    Spacer()
+                    ApprovalCountdown(approval: approval)
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint("Shows the whole prompt")
             }
             if approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
@@ -222,7 +213,8 @@ private struct ApprovalDetails: View {
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { commandFull = $0 }
                         }
                         .accessibilityLabel(command)
-                    if !whole, commandFull > commandShown + 1 {
+                    // One way into the sheet: with output, its link takes the place of this one.
+                    if !whole, !showsOutput, commandFull > commandShown + 1 {
                         Button {
                             model.toggleExpanded(item)
                         } label: {
@@ -259,7 +251,6 @@ private struct ApprovalDetails: View {
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            let showsOutput = !whole && !approval.snippet.isEmpty && !(approval.options.isEmpty && !approval.choices.isEmpty)
             let addsNote = approval.supportsNote && !model.noting.contains(item.id)
             if showsOutput || addsNote {
                 // Each link's 44-point tap target reaches into the 6-point gaps around its row, which keeps the row compact.
@@ -294,23 +285,20 @@ private struct ApprovalDetails: View {
     }
 
     // Over the dark terminal the band's glass comes out lighter: the primary color at 60% read 4.2:1 there and the
-    // gold accent 3.8:1, so the labels take the primary color at 75% and only Add note's symbol the accent.
+    // gold accent 3.8:1, so the labels take the primary color at 75% and only the symbols the accent.
     @ViewBuilder private func links(output: Bool, note: Bool) -> some View {
         if output {
             let count = approval.snippet.split(separator: "\n", omittingEmptySubsequences: false).count
-            Button {
-                model.toggleExpanded(item)
-            } label: {
-                HStack(spacing: 4) {
-                    Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines")
-                    Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+            Button { model.toggleExpanded(item) } label: {
+                Label {
+                    Text(count == 1 ? "Output, 1 line" : "Output, \(count) lines").foregroundStyle(Color.primary.opacity(0.75))
+                } icon: {
+                    Image(systemName: "text.alignleft").foregroundStyle(.tint)
                 }
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .font(.caption)
-            .foregroundStyle(.primary.opacity(0.75))
-            .buttonStyle(.plain)
             .accessibilityHint("Shows the whole prompt")
         }
         if note {
@@ -341,6 +329,9 @@ private struct ApprovalCountdown: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .padding(2)
+                // Over the glass, not behind it: the glass alone left the digits at 3.7:1 over the dark terminal, a dimming
+                // layer behind it the last minute's red at 4.49:1, and the sheet's toolbar drops a background.
+                .background(SessionBarDim(), in: .capsule)
                 .glassEffect(.regular, in: .capsule)
                 .fixedSize()
         }
