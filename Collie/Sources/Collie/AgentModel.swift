@@ -884,7 +884,7 @@ final class AgentModel {
     func placeCursor(at index: Int, of count: Int) -> Task<Void, Never>? {
         guard canTap(.right), canTap(.left) else { return nil }
         var task: Task<Void, Never>?
-        for key in Array(repeating: AgentKey.right, count: count) + Array(repeating: .left, count: count - index) {
+        for key in Array(repeating: AgentKey.left, count: count) + Array(repeating: .right, count: index) {
             task = tap(key) ?? task
         }
         return task
