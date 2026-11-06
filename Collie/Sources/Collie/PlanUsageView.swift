@@ -36,12 +36,13 @@ struct UsageSections: View {
                         }
                     }
                 } header: {
-                    TimelineView(.everyMinute) { context in
-                        let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
-                        // The age shows only once no reading is current.
-                        let fresh = planUsage.map { !$0.readingsStale(now: context.date) } ?? false
-                        // With one machine paired its name says nothing, as on Agents, and each stale reading says its own age.
-                        if entries.count > 1 {
+                    // With one machine paired its name says nothing, as on Agents, and each stale reading says its own age.
+                    // A TimelineView showing nothing still made a header, which set the first card off Agents' first card.
+                    if entries.count > 1 {
+                        TimelineView(.everyMinute) { context in
+                            let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
+                            // The age shows only once no reading is current.
+                            let fresh = planUsage.map { !$0.readingsStale(now: context.date) } ?? false
                             layout {
                                 MachineName(machine: entry.machine).font(.footnote.weight(.semibold))
                                 if !dynamicTypeSize.isAccessibilitySize { Spacer() }
@@ -52,9 +53,9 @@ struct UsageSections: View {
                             .textCase(nil)
                             .accessibilityElement(children: .combine)
                             .accessibilityLabel(fresh ? entry.machine.label : "\(entry.machine.label), \(planUsage?.spokenAge(now: context.date) ?? "no plan usage recorded")")
-                        } else if planUsage == nil {
-                            Text("No plan usage recorded").font(.footnote).textCase(nil)
                         }
+                    } else if planUsage == nil {
+                        Text("No plan usage recorded").font(.footnote).textCase(nil)
                     }
                 }
                 Section {

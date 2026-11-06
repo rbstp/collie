@@ -68,8 +68,10 @@ final class ApprovalsModel {
     /// The approval the notice reports on, kept after it leaves: the notice shows only in its task and its review sheet.
     private(set) var noticeItem: ApprovalItem?
     private(set) var expanded: Set<String> = []
-    /// Approvals whose card cuts the command or leaves out the reason: their half-height review sheet shows both.
-    private(set) var cut: Set<String> = []
+    /// Approvals whose card cuts the command: their half-height review sheet shows it.
+    private(set) var commandCut: Set<String> = []
+    /// Approvals whose card, a band, leaves out the reason: their half-height review sheet shows it.
+    private(set) var reasonLeftOut: Set<String> = []
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.
     private(set) var noting: Set<String> = []
@@ -144,7 +146,8 @@ final class ApprovalsModel {
         items = next
         let ids = Set(next.map(\.id))
         expanded.formIntersection(ids)
-        cut.formIntersection(ids)
+        commandCut.formIntersection(ids)
+        reasonLeftOut.formIntersection(ids)
         noting.formIntersection(ids)
         drafts = drafts.filter { ids.contains($0.key) }
     }
@@ -158,9 +161,14 @@ final class ApprovalsModel {
         }
     }
 
-    func setCut(_ item: ApprovalItem, _ isCut: Bool) {
-        guard isCut != cut.contains(item.id) else { return }
-        if isCut { cut.insert(item.id) } else { cut.remove(item.id) }
+    func setCommandCut(_ item: ApprovalItem, _ isCut: Bool) {
+        guard isCut != commandCut.contains(item.id) else { return }
+        if isCut { commandCut.insert(item.id) } else { commandCut.remove(item.id) }
+    }
+
+    func setReasonLeftOut(_ item: ApprovalItem, _ isLeftOut: Bool) {
+        guard isLeftOut != reasonLeftOut.contains(item.id) else { return }
+        if isLeftOut { reasonLeftOut.insert(item.id) } else { reasonLeftOut.remove(item.id) }
     }
 
     func toggleNote(_ item: ApprovalItem) {

@@ -28,6 +28,7 @@ struct ApprovalCard: View {
                     ApprovalDetails(model: model, item: item, whole: false, field: $field, sendAnswer: sendAnswer)
                     if offersDecisions { DecisionButtons(model: model, item: item) }
                 }
+                .onAppear { model.setReasonLeftOut(item, false) }
                 if offersDecisions { band(decisions: true) }
                 band(decisions: false)
             }
@@ -62,6 +63,7 @@ struct ApprovalCard: View {
             }
             if decisions { DecisionButtons(model: model, item: item) }
         }
+        .onChange(of: approval.reason != nil, initial: true) { model.setReasonLeftOut(item, $1) }
     }
 
     private var toolName: some View {
@@ -73,14 +75,14 @@ struct ApprovalCard: View {
         if approval.toolName != nil, let command = approval.toolSummary {
             Text(verbatim: command)
                 .lineLimit(1)
-                .modifier(CutReport(text: command) { model.setCut(item, $0 || approval.reason != nil) })
+                .modifier(CutReport(text: command) { model.setCommandCut(item, $0) })
                 .font(.footnote.monospaced())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
                 .padding(.horizontal, 10)
                 .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
         } else {
-            Spacer(minLength: 0).onAppear { model.setCut(item, approval.reason != nil) }
+            Spacer(minLength: 0)
         }
     }
 
@@ -200,9 +202,10 @@ struct ApprovalReview: View {
     }
 
     var body: some View {
-        // At half height the card above, dimmed, still shows the task, and the command and the reason unless it cut them:
-        // the sheet leaves to it what it shows whole.
-        let leaves = half && !model.cut.contains(item.id)
+        // At half height the session header above, dimmed, still shows the task, and the card the command and the reason
+        // unless it cut them: the sheet leaves to them what they show whole.
+        let showsCommand = !half || model.commandCut.contains(item.id)
+        let showsReason = !half || model.reasonLeftOut.contains(item.id)
         NavigationStack {
             // The decisions sit under the prompt, not over it: a bar over the scroll view, even over a hard edge, let the
             // prompt read through.
@@ -211,7 +214,7 @@ struct ApprovalReview: View {
                     VStack(alignment: .leading, spacing: 10) {
                         // Full height, the sheet hides the session header: the task, and its machine when more than one is
                         // paired, say who gets the answer.
-                        if !leaves {
+                        if !half {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(verbatim: task).font(.subheadline)
                                 if showsMachine {
@@ -221,7 +224,7 @@ struct ApprovalReview: View {
                             }
                             .accessibilityElement(children: .combine)
                         }
-                        ApprovalDetails(model: model, item: item, whole: true, commandAndReason: !leaves, field: $field, sendAnswer: sendAnswer)
+                        ApprovalDetails(model: model, item: item, whole: true, showsCommand: showsCommand, showsReason: showsReason, field: $field, sendAnswer: sendAnswer)
                     }
                     .padding(.horizontal)
                     .padding(.bottom)
@@ -306,7 +309,8 @@ private struct ApprovalDetails: View {
     let model: ApprovalsModel
     let item: ApprovalItem
     let whole: Bool
-    var commandAndReason = true
+    var showsCommand = true
+    var showsReason = true
     let field: FocusState<String?>.Binding
     let sendAnswer: (String) async throws -> Void
 
@@ -314,14 +318,14 @@ private struct ApprovalDetails: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if commandAndReason, approval.toolName != nil, let command = approval.toolSummary {
+            if showsCommand, approval.toolName != nil, let command = approval.toolSummary {
                 // Lines break at spaces only: a word joiner after each hyphen keeps a flag such as `--nocapture` whole,
                 // and a bare `--` stays with the argument after it.
                 let wrapped = command.replacingOccurrences(of: " -- ", with: " --\u{00A0}").replacingOccurrences(of: "-", with: "-\u{2060}")
                 Text(verbatim: wrapped)
                     .lineLimit(whole ? nil : 3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .modifier(CutReport(text: wrapped) { if !whole { model.setCut(item, $0) } })
+                    .modifier(CutReport(text: wrapped) { if !whole { model.setCommandCut(item, $0) } })
                     .accessibilityLabel(command)
                     .font(.footnote.monospaced())
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -329,7 +333,7 @@ private struct ApprovalDetails: View {
                     .padding(.horizontal, 10)
                     .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
             }
-            if commandAndReason, let reason = approval.reason {
+            if showsReason, let reason = approval.reason {
                 ApprovalReason(reason: reason)
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {

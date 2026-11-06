@@ -236,11 +236,15 @@ final class LandscapeTests: XCTestCase {
         review.tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
-        // The card cuts the command after three lines, so the half-height sheet shows it whole, with the reason.
+        // The card cuts the command after three lines, so the half-height sheet shows it whole. The card shows the reason
+        // whole and the session header the task, so the sheet leaves them out.
         let command = app.staticTexts.matching(NSPredicate(format: "label == %@", long))
         XCTAssertTrue(eventually(within: 10) { command.count == 2 }, app.debugDescription)
+        let inSheet = { (query: XCUIElementQuery) in query.allElementsBoundByIndex.contains { $0.frame.minY > close.frame.maxY } }
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
-        XCTAssertTrue(reason.allElementsBoundByIndex.contains { $0.frame.minY > close.frame.maxY }, app.debugDescription)
+        XCTAssertTrue(reason.firstMatch.exists, app.debugDescription)
+        XCTAssertFalse(inSheet(reason), app.debugDescription)
+        XCTAssertFalse(inSheet(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests"))), app.debugDescription)
     }
 
     func testAddNoteFocusesTheNoteFieldAboveTheKeyboard() throws {
