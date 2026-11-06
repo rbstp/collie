@@ -68,9 +68,9 @@ final class ApprovalsModel {
     /// The approval the notice reports on, kept after it leaves: the notice shows only in its task and its review sheet.
     private(set) var noticeItem: ApprovalItem?
     private(set) var expanded: Set<String> = []
-    /// Approvals whose card cuts the command, and those whose card leaves out the reason: their half-height review sheet
-    /// shows what the card does not.
+    /// Approvals whose card cuts the command: their half-height review sheet shows it.
     private(set) var commandCut: Set<String> = []
+    /// Approvals whose card, a band, leaves out the reason: their half-height review sheet shows it.
     private(set) var reasonLeftOut: Set<String> = []
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.

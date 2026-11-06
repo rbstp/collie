@@ -63,7 +63,7 @@ struct ApprovalCard: View {
             }
             if decisions { DecisionButtons(model: model, item: item) }
         }
-        .onAppear { model.setReasonLeftOut(item, approval.reason != nil) }
+        .onChange(of: approval.reason != nil, initial: true) { model.setReasonLeftOut(item, $1) }
     }
 
     private var toolName: some View {
