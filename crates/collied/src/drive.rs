@@ -754,7 +754,7 @@ impl Driver {
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
         let target =
-            blocked.then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(",")));
+            blocked.then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(" ")));
         let sent = async {
             authorized(auth)?;
             self.runtime

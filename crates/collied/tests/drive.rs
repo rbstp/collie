@@ -4242,19 +4242,19 @@ async fn agent_approval_allows_every_terminal_button() {
         let mut batch = keys(CLAUDE);
         batch.keys = buttons.to_vec();
         assert!(drive.send_keys(batch, &yes()).await.0.is_ok());
-        let combo = Key::Combo(KeyCombo::new("ctrl+alt+x").unwrap());
+        let combo = |name: &str| Key::Combo(KeyCombo::new(name).unwrap());
         let mut p = keys(CLAUDE);
-        p.keys = vec![combo];
+        p.keys = vec![combo("ctrl+alt+x"), combo(",")];
         assert_eq!(
             drive.send_keys(p, &yes()).await,
             (
                 Ok(Response::Ok),
-                Some(format!("{CLAUDE} blocked keys=ctrl+alt+x"))
+                Some(format!("{CLAUDE} blocked keys=ctrl+alt+x ,"))
             )
         );
         assert_eq!(
             herdr.params("agent.send_keys").last(),
-            Some(&json!({"target": "w6:p1", "keys": ["ctrl+alt+x"]}))
+            Some(&json!({"target": "w6:p1", "keys": ["ctrl+alt+x", ","]}))
         );
         assert_eq!(
             code(drive.prompt(prompt(CLAUDE), &yes()).await),
@@ -4360,7 +4360,7 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
         drive.send_keys(keys(CLAUDE), &yes()).await,
         (
             Ok(Response::Ok),
-            Some(format!("{CLAUDE} blocked keys=down,enter"))
+            Some(format!("{CLAUDE} blocked keys=down enter"))
         )
     );
     assert_eq!(
@@ -4378,7 +4378,7 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
         block(&herdr, screen);
         let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
         assert_eq!(reply, Ok(Response::Ok), "{screen}");
-        assert_eq!(target, Some(format!("{CLAUDE} blocked keys=down,enter")));
+        assert_eq!(target, Some(format!("{CLAUDE} blocked keys=down enter")));
     }
     assert_eq!(
         code(drive.send_keys(keys(CLAUDE), &no()).await.0),
