@@ -149,8 +149,9 @@ struct TerminalInputBox {
         guard let (line, index) = cursor(row: row, column: column), let mac = mac(),
             let (down, across) = mac.position(of: index, line: line, in: lines.map { $0.map(\.text) })
         else { return nil }
-        // ⌃A goes to the start of the line in Claude Code and Codex, and of the row in Copilot CLI.
-        let walk = TerminalInputWalk(lines: agent == "copilot" ? mac.lines.count : lines.count, down: down, across: across)
+        // ⌃A goes to the start of the row in Copilot CLI, and a row collied joined may end at a typed newline that
+        // looked like a soft wrap: once per Mac row reaches the start, and ← there does nothing.
+        let walk = TerminalInputWalk(lines: mac.lines.count, down: down, across: across)
         guard down > 0 else { return walk }
         if menu { return nil }
         guard agent == "codex" else { return walk }

@@ -65,15 +65,16 @@ private func index(of word: String, in draft: String) throws -> Int {
     let second = "cursor is to modify earlier parts"
     let mac = try #require(try inputBox(claude(["\u{276F}\u{A0}" + first, "  " + second, "  ok"]), agent: "claude"))
     let shown = try #require(try inputBox(claude(["\u{276F}\u{A0}" + first + " " + second, "  ok"]), agent: "claude"))
-    // The joined row wraps where the Mac did not; Down counts the Mac's rows.
-    #expect(keys(shown, 3, 2.0 + 40.4, mac: mac) == [2, 0, 0, 40])
-    #expect(keys(shown, 3, 2.0 + 41.4, mac: mac) == [2, 0, 1, 0])
-    #expect(keys(shown, 3, 2.0 + 48.4, mac: mac) == [2, 0, 1, 7])
-    #expect(keys(shown, 4, 2.0 + 1.4, mac: mac) == [2, 0, 2, 1])
+    // The joined row wraps where the Mac did not; Down counts the Mac's rows, and so does the walk to the start, since
+    // collied also joins a typed newline right where the next word would not have fit.
+    #expect(keys(shown, 3, 2.0 + 40.4, mac: mac) == [3, 0, 0, 40])
+    #expect(keys(shown, 3, 2.0 + 41.4, mac: mac) == [3, 0, 1, 0])
+    #expect(keys(shown, 3, 2.0 + 48.4, mac: mac) == [3, 0, 1, 7])
+    #expect(keys(shown, 4, 2.0 + 1.4, mac: mac) == [3, 0, 2, 1])
     // A word split across rows joins without a space.
     let split = try #require(try inputBox(claude(["\u{276F}\u{A0}see " + String(repeating: "a", count: 52), "  aaaa ok"]), agent: "claude"))
     let joined = try #require(try inputBox(claude(["\u{276F}\u{A0}see " + String(repeating: "a", count: 56) + " ok"]), agent: "claude"))
-    #expect(keys(joined, 3, 2.0 + 57.4, mac: split) == [1, 0, 1, 1])
+    #expect(keys(joined, 3, 2.0 + 57.4, mac: split) == [2, 0, 1, 1])
     // Without the Mac's rows, or rows that do not match, the tap places nothing.
     #expect(keys(shown, 3, 2.0 + 48.4, mac: split) == nil)
     #expect(shown.walk(row: 3, column: 2.4, mac: nil) == nil)
