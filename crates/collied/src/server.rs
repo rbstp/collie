@@ -2583,7 +2583,7 @@ fn audit_target(request: &Request) -> Option<String> {
             return Some(format!(
                 "{} keys={}",
                 p.terminal_id.as_str(),
-                keys.join(",")
+                keys.join(" ")
             ));
         }
         _ => return None,

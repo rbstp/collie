@@ -1086,9 +1086,18 @@ private struct KeyGlyphs: View {
             case .ctrlEnter: Image(systemName: "control"); Image(systemName: "return")
             case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW:
                 Image(systemName: "control"); Text(key.name.dropFirst(5).uppercased())
+            case .combo(let name):
+                let (modifiers, last) = AgentKey.parts(of: name)
+                ForEach(modifiers, id: \.self) { Image(systemName: $0.systemImage) }
+                if let image = Self.images[last] { Image(systemName: image) } else { Text(last.uppercased()) }
             }
         }
     }
+
+    private static let images = [
+        "esc": "escape", "enter": "return", "up": "arrow.up", "down": "arrow.down", "left": "arrow.left",
+        "right": "arrow.right", "tab": "arrow.right.to.line", "backspace": "delete.left", "space": "space",
+    ]
 }
 
 extension AgentKey {

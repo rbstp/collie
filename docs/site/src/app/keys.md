@@ -20,7 +20,11 @@ In a Claude Code, Codex or Copilot CLI session, you can also tap a spot in the i
 
 ## Key shortcuts
 
-Add your own buttons in **Settings > Prompt > Key shortcuts**, or with **+** on the strip. A shortcut sends a key or two-key combination, such as Shift+Tab, or text, such as `/effort high`, to every session or to one kind: Claude Code, Codex, Copilot CLI or Terminal.
+Add your own buttons in **Settings > Prompt > Key shortcuts**, or with **+** on the strip. A shortcut sends a key combination, such as ⌃⌥X, or text, such as `/effort high`, to every session or to one kind: Claude Code, Codex, Copilot CLI or Terminal.
+
+For a key combination, turn on any of control (⌃), option (⌥), shift (⇧) and command (⌘), then type the key: a letter, a digit, one of `` ' , - . / ; = \ ] ` `` or f1 to f12 (or `[` with control), or pick return, escape, tab, delete, space or an arrow from the keyboard menu beside the field. The strip shows the combination in symbols. You can't save control with D, Z, R, J, M, O, T, 4 or `\`: those keys would end or suspend the agent, search its history, submit like Return or open its transcript.
+
+Command reaches an agent only in herdr, and only one that turned on a keyboard protocol, as Claude Code and Codex do; Claude Code acts on it when you bind the key in its `keybindings.json`. A plain terminal ignores it, and herdr-core refuses it. In Herdr 2, key combinations need herdr-core 0.1.18, which also refuses control with `[`, or with shift and a letter.
 
 Text goes out at once and leaves your draft alone. Claude Code refuses it while its input box holds unsent text; Codex and Copilot CLI add it after that text. A plain terminal takes only Terminal text shortcuts, and runs them as commands.
 

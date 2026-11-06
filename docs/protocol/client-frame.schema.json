@@ -641,27 +641,39 @@
       "type": "object"
     },
     "Key": {
-      "enum": [
-        "enter",
-        "esc",
-        "up",
-        "down",
-        "left",
-        "shift+left",
-        "right",
-        "tab",
-        "shift+tab",
-        "backspace",
-        "ctrl+c",
-        "ctrl+enter",
-        "ctrl+a",
-        "ctrl+b",
-        "ctrl+e",
-        "ctrl+k",
-        "ctrl+l",
-        "ctrl+u",
-        "ctrl+w"
-      ],
+      "anyOf": [
+        {
+          "enum": [
+            "enter",
+            "esc",
+            "up",
+            "down",
+            "left",
+            "shift+left",
+            "right",
+            "tab",
+            "shift+tab",
+            "backspace",
+            "ctrl+c",
+            "ctrl+enter",
+            "ctrl+a",
+            "ctrl+b",
+            "ctrl+e",
+            "ctrl+k",
+            "ctrl+l",
+            "ctrl+u",
+            "ctrl+w"
+          ],
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/KeyCombo",
+          "description": "Untagged and last, so a listed name always decodes as its own variant."
+        }
+      ]
+    },
+    "KeyCombo": {
+      "pattern": "^(?!ctrl\\+(alt\\+)?(shift\\+)?(cmd\\+)?[dzrjmot\\\\4]$)(?!(alt\\+)?(shift\\+)?(cmd\\+)?\\[$)(ctrl\\+)?(alt\\+)?(shift\\+)?(cmd\\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\\-./;=\\[\\\\\\]`])$",
       "type": "string"
     },
     "Label": {

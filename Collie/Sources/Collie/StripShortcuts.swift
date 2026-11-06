@@ -1,11 +1,11 @@
 import CollieCore
 import SwiftUI
 
-/// A button of the key strip: one key (with its modifier, so never more than two keys), or text sent at once.
+/// A button of the key strip: one key with any modifiers, or text sent at once.
 struct StripShortcut: Codable, Identifiable, Equatable {
     var id = UUID()
     var name = ""
-    /// collied's key name; nil for a text shortcut.
+    /// collied's key name, such as `ctrl+alt+x`; nil for a text shortcut.
     var key: String?
     var text = ""
     /// nil for every agent and shell, else one kind: "claude", "codex", "copilot" or "terminal".
@@ -72,7 +72,7 @@ struct StripShortcutsView: View {
         .navigationTitle("Key shortcuts")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Add shortcut", systemImage: "plus") { editing = StripShortcut(key: AgentKey.shiftTab.name) }
+                Button("Add shortcut", systemImage: "plus") { editing = StripShortcut(key: "") }
             }
             if !shortcuts.items.isEmpty {
                 ToolbarItem(placement: .primaryAction) { EditButton() }
@@ -106,28 +106,71 @@ struct StripShortcutsView: View {
 }
 
 private struct StripShortcutEditor: View {
-    @State var shortcut: StripShortcut
+    @State private var shortcut: StripShortcut
+    @State private var modifiers: Set<KeyModifier>
+    @State private var key: String
     let save: (StripShortcut) -> Void
     @Environment(\.dismiss) private var dismiss
+
+    private static let namedKeys = ["enter", "esc", "tab", "backspace", "space", "up", "down", "left", "right"]
+
+    init(shortcut: StripShortcut, save: @escaping (StripShortcut) -> Void) {
+        let parts = AgentKey.parts(of: shortcut.key ?? "")
+        _shortcut = State(initialValue: shortcut)
+        _modifiers = State(initialValue: Set(parts.modifiers))
+        _key = State(initialValue: parts.key)
+        self.save = save
+    }
+
+    private var keyName: String {
+        let typed = key == " " ? "space" : key.trimmingCharacters(in: .whitespaces).lowercased()
+        return (KeyModifier.allCases.filter(modifiers.contains).map(\.name) + [typed]).joined(separator: "+")
+    }
 
     var body: some View {
         Form {
             TextField("Name (optional)", text: $shortcut.name)
             Picker("Sends", selection: Binding(
                 get: { shortcut.key != nil },
-                set: { shortcut.key = $0 ? AgentKey.shiftTab.name : nil }
+                set: { shortcut.key = $0 ? keyName : nil }
             )) {
                 Text("Keys").tag(true)
                 Text("Text").tag(false)
             }
             .pickerStyle(.segmented)
             if shortcut.key != nil {
-                Picker("Keys", selection: Binding(get: { shortcut.key ?? "" }, set: { shortcut.key = $0 })) {
-                    ForEach(AgentKey.all, id: \.self) { key in
-                        Text("\(key.symbol)  \(key.accessibilityName)").tag(key.name)
+                Section {
+                    HStack {
+                        ForEach(KeyModifier.allCases, id: \.self) { modifier in
+                            Toggle(isOn: Binding(
+                                get: { modifiers.contains(modifier) },
+                                set: { if $0 { modifiers.insert(modifier) } else { modifiers.remove(modifier) } }
+                            )) {
+                                Image(systemName: modifier.systemImage).frame(maxWidth: .infinity)
+                            }
+                            .accessibilityLabel(modifier.accessibilityName)
+                        }
                     }
+                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
+                    HStack {
+                        TextField("Key", text: $key)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Menu {
+                            ForEach(Self.namedKeys, id: \.self) { name in
+                                if let named = AgentKey(name: name) {
+                                    Button("\(named.symbol)  \(named.accessibilityName)") { key = name }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "keyboard")
+                        }
+                        .accessibilityLabel("Named keys")
+                    }
+                } footer: {
+                    Text(verbatim: "A letter, a digit, one of ' , - . / ; = \\ ] `, f1 to f12 or a key from the menu, and [ only with Control. Control with D, Z, R, J, M, O, T, 4 or \\ can't be saved. ⌘ reaches an agent only in herdr.")
                 }
-                .tint(.primary)
             } else {
                 Section {
                     TextField("/effort high", text: $shortcut.text, axis: .vertical)
@@ -151,11 +194,14 @@ private struct StripShortcutEditor: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
                     shortcut.name = shortcut.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if shortcut.key != nil { shortcut.key = keyName }
                     shortcut.text = shortcut.key == nil ? shortcut.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
                     save(shortcut)
                     dismiss()
                 }
-                .disabled(shortcut.key == nil && shortcut.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(shortcut.key == nil
+                    ? shortcut.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    : AgentKey(name: keyName) == nil)
             }
         }
     }

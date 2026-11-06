@@ -225,7 +225,7 @@ final class AgentModel {
     }
 
     func canTap(_ key: AgentKey) -> Bool {
-        accepts(key) && !(commandShown && (key == .enter || key == .ctrlEnter))
+        accepts(key) && !(commandShown && AgentKey.parts(of: key.name).key == "enter")
     }
 
     /// With a modifier selected, only keys it combines with stay on.
@@ -1042,7 +1042,7 @@ final class AgentModel {
                 batch.append(key)
                 queuedInput.removeFirst()
             }
-            if command { batch.removeAll { $0 == .enter || $0 == .ctrlEnter } }
+            if command { batch.removeAll { AgentKey.parts(of: $0.name).key == "enter" } }
             if batch.isEmpty { continue }
             do {
                 if isTerminal {
@@ -1224,12 +1224,42 @@ struct CloseConfirmation: Equatable {
 }
 
 enum KeyModifier: CaseIterable {
-    case shift, control
+    case control, option, shift, command
+
+    /// collied's name; a combination lists modifiers in this order.
+    var name: String {
+        switch self {
+        case .control: "ctrl"
+        case .option: "alt"
+        case .shift: "shift"
+        case .command: "cmd"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .control: "⌃"
+        case .option: "⌥"
+        case .shift: "⇧"
+        case .command: "⌘"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .control: "control"
+        case .option: "option"
+        case .shift: "shift"
+        case .command: "command"
+        }
+    }
 
     var accessibilityName: String {
         switch self {
-        case .shift: "Shift"
         case .control: "Control"
+        case .option: "Option"
+        case .shift: "Shift"
+        case .command: "Command"
         }
     }
 }
@@ -1256,8 +1286,28 @@ extension AgentKey {
     }
 
     init?(name: String) {
-        guard let key = Self.all.first(where: { $0.name == name }) else { return nil }
-        self = key
+        if let key = Self.all.first(where: { $0.name == name }) {
+            self = key
+        } else if isKeyCombo(name: name) {
+            self = .combo(name: name)
+        } else {
+            return nil
+        }
+    }
+
+    /// A combination's modifiers and its key: `ctrl+alt+x` is Control, Option and `x`.
+    static func parts(of name: String) -> (modifiers: [KeyModifier], key: String) {
+        var names = name.components(separatedBy: "+")
+        let key = names.removeLast()
+        return (KeyModifier.allCases.filter { names.contains($0.name) }, key)
+    }
+
+    private static func spelled(
+        _ name: String, modifier: KeyPath<KeyModifier, String>, key: KeyPath<AgentKey, String>, space: String, separator: String
+    ) -> String {
+        let (modifiers, last) = parts(of: name)
+        let spelledKey = all.first { $0.name == last }?[keyPath: key] ?? (last == "space" ? space : last.uppercased())
+        return (modifiers.map { $0[keyPath: modifier] } + [spelledKey]).joined(separator: separator)
     }
 
     /// collied's name for the key.
@@ -1282,6 +1332,7 @@ extension AgentKey {
         case .ctrlL: "ctrl+l"
         case .ctrlU: "ctrl+u"
         case .ctrlW: "ctrl+w"
+        case .combo(let name): name
         }
     }
 
@@ -1299,6 +1350,7 @@ extension AgentKey {
         case .backspace: "⌫"
         case .ctrlEnter: "⌃⏎"
         case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "^" + name.dropFirst(5).uppercased()
+        case .combo(let name): Self.spelled(name, modifier: \.symbol, key: \.symbol, space: "␣", separator: "")
         }
     }
 
@@ -1316,6 +1368,8 @@ extension AgentKey {
         case .backspace: "Backspace"
         case .ctrlEnter: "Control Return"
         case .ctrlC, .ctrlA, .ctrlB, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW: "Control " + name.dropFirst(5).uppercased()
+        case .combo(let name):
+            Self.spelled(name, modifier: \.accessibilityName, key: \.accessibilityName, space: "Space", separator: " ")
         }
     }
 }

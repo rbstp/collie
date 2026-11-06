@@ -900,7 +900,7 @@ pub struct AgentPromptParams {
     pub expected_draft: Option<DraftText>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub enum Key {
     #[serde(rename = "enter")]
@@ -941,10 +941,13 @@ pub enum Key {
     CtrlU,
     #[serde(rename = "ctrl+w")]
     CtrlW,
+    /// Untagged and last, so a listed name always decodes as its own variant.
+    #[serde(untagged)]
+    Combo(KeyCombo),
 }
 
 impl Key {
-    pub fn herdr_name(self) -> &'static str {
+    pub fn herdr_name(&self) -> &str {
         match self {
             Self::Enter => "enter",
             Self::Esc => "esc",
@@ -965,6 +968,7 @@ impl Key {
             Self::CtrlL => "ctrl+l",
             Self::CtrlU => "ctrl+u",
             Self::CtrlW => "ctrl+w",
+            Self::Combo(c) => c.as_str(),
         }
     }
 }
@@ -2345,7 +2349,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 31);
+        assert_eq!(crate::PROTOCOL_VERSION, 32);
     }
 
     #[test]
@@ -3198,6 +3202,26 @@ mod tests {
         };
         assert!(keys(r#"["ctrl+c"]"#).is_ok());
         assert!(keys(r#"["backspace","ctrl+a","ctrl+e","ctrl+u","ctrl+w"]"#).is_ok());
+        let Request::TerminalSendKeys(p) =
+            keys(r#"["ctrl+alt+x","shift+tab","cmd+k","shift+enter"]"#)
+                .unwrap()
+                .request
+        else {
+            panic!("not terminal keys");
+        };
+        assert_eq!(
+            p.keys,
+            [
+                Key::Combo(KeyCombo::new("ctrl+alt+x").unwrap()),
+                Key::ShiftTab,
+                Key::Combo(KeyCombo::new("cmd+k").unwrap()),
+                Key::Combo(KeyCombo::new("shift+enter").unwrap()),
+            ]
+        );
+        assert_eq!(
+            serde_json::to_string(&p.keys).unwrap(),
+            r#"["ctrl+alt+x","shift+tab","cmd+k","shift+enter"]"#
+        );
         for bad in [
             r#"["ctrl+d"]"#.to_owned(),
             r#"["ctrl+z"]"#.to_owned(),
@@ -3206,7 +3230,12 @@ mod tests {
             r#"["ctrl+t"]"#.to_owned(),
             r#"["ctrl+j"]"#.to_owned(),
             r#"["ctrl+m"]"#.to_owned(),
-            r#"["shift+enter"]"#.to_owned(),
+            r#"["ctrl+shift+d"]"#.to_owned(),
+            r#"["ctrl+alt+z"]"#.to_owned(),
+            r#"["home"]"#.to_owned(),
+            r#"["ctrl+X"]"#.to_owned(),
+            r#"["enter ctrl+d"]"#.to_owned(),
+            r#"["alt+[","1","0","0",";","5","u"]"#.to_owned(),
             "[]".to_owned(),
             serde_json::to_string(&vec!["enter"; 17]).unwrap(),
         ] {

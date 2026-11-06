@@ -19,7 +19,7 @@ use collied::server::{self, ServerConfig};
 use common::*;
 use protocol::{
     AgentPromptParams, AgentSendKeysParams, AgentTypeTextParams, ApprovalDecideParams,
-    ApprovalOutcome, Decision, ErrorCode, Event, Key, OpId, PaneCloseParams, PromptText,
+    ApprovalOutcome, Decision, ErrorCode, Event, Key, KeyCombo, OpId, PaneCloseParams, PromptText,
     ReadParams, ReadSource, Response, SendTextParams, TerminalId, TypedText, WorkspaceCloseParams,
     WorkspaceId,
 };
@@ -786,7 +786,7 @@ stty raw -echo
 while :; do dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' >> keys; echo >> keys; done"#;
 
 /// What each key reaches a program with no keyboard modes set as, from herdr-core 0.1.16.
-fn key_bytes(key: Key) -> &'static str {
+fn key_bytes(key: &Key) -> &'static str {
     match key {
         Key::Enter => "0d",
         Key::Esc => "1b",
@@ -807,8 +807,23 @@ fn key_bytes(key: Key) -> &'static str {
         Key::CtrlL => "0c",
         Key::CtrlU => "15",
         Key::CtrlW => "17",
+        Key::Combo(_) => unreachable!("combos are in COMBOS"),
     }
 }
+
+/// Combos from a key shortcut and their bytes, likewise, from herdr-core 0.1.18.
+const COMBOS: [(&str, &str); 10] = [
+    ("ctrl+alt+x", "1b18"),
+    ("alt+x", "1b78"),
+    ("shift+f5", "1b5b31353b327e"),
+    ("f12", "1b5b32347e"),
+    ("space", "20"),
+    ("ctrl+space", "00"),
+    ("/", "2f"),
+    ("alt+enter", "1b0d"),
+    ("shift+enter", "1b5b32373b323b31337e"),
+    ("shift+a", "41"),
+];
 
 const KEYS: [Key; 19] = [
     Key::Enter,
@@ -1150,12 +1165,30 @@ async fn input_scenario(core: &CoreSession) {
         })
         .await;
     };
-    for key in KEYS {
+    for key in &KEYS {
         rt.agent_send_keys(&d.pane_id, &[key.herdr_name()])
             .await
             .unwrap();
         expected.push_str(key_bytes(key));
         dumped(&expected).await;
+    }
+    for (name, bytes) in COMBOS {
+        assert!(KeyCombo::new(name).is_ok(), "{name}");
+        rt.agent_send_keys(&d.pane_id, &[name]).await.unwrap();
+        expected.push_str(bytes);
+        dumped(&expected).await;
+    }
+    // herdr-core has no Command modifier; herdr sends it to a program with a keyboard protocol.
+    assert!(KeyCombo::new("cmd+k").is_ok());
+    assert!(rt.agent_send_keys(&d.pane_id, &["cmd+k"]).await.is_err());
+    // herdr-core refuses Control with `[`, so no bare `[` (5b) reaches the program either,
+    // and Control with Shift and a letter.
+    for name in ["ctrl+[", "ctrl+shift+[", "ctrl+shift+a"] {
+        assert!(KeyCombo::new(name).is_ok(), "{name}");
+        assert!(
+            rt.agent_send_keys(&d.pane_id, &[name]).await.is_err(),
+            "{name}"
+        );
     }
     rt.scroll_bottom(&d.pane_id).await.unwrap();
     expected.push_str("1b5b313b3546");

@@ -57,7 +57,26 @@ final class KeyStripTests: XCTestCase {
         let addShortcut = app.buttons["Add shortcut"]
         XCTAssertTrue(addShortcut.appears(within: 5), app.debugDescription)
         addShortcut.tap()
-        app.buttons["Save"].tap()
+        let save = app.buttons["Save"]
+        XCTAssertTrue(save.appears(within: 5), app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        for name in ["Control", "Option"] {
+            let modifier = app.switches.matching(NSPredicate(format: "label == %@", name)).firstMatch
+            XCTAssertTrue(modifier.appears(within: 5), app.debugDescription)
+            modifier.tap()
+        }
+        let key = app.textFields["Key"]
+        key.tap()
+        key.typeText("d")
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
+        key.typeText(XCUIKeyboardKey.delete.rawValue + "x")
+        XCTAssertTrue(save.isEnabled, app.debugDescription)
+        let editor = XCTAttachment(screenshot: app.screenshot())
+        editor.name = "shortcut-editor"
+        editor.lifetime = .keepAlways
+        add(editor)
+        save.tap()
+        XCTAssertTrue(app.staticTexts["⌃⌥X"].appears(within: 5), app.debugDescription)
         addShortcut.tap()
         app.buttons["Text"].tap()
         let text = app.textFields["/effort high"]
@@ -67,8 +86,8 @@ final class KeyStripTests: XCTestCase {
         app.buttons["Save"].tap()
         app.buttons["Done"].tap()
 
-        // The saved key shortcut follows the built-in Shift Tab chip and reads the same.
-        let custom = app.buttons.matching(NSPredicate(format: "label == %@", "Shift Tab")).element(boundBy: 1)
+        // The saved key shortcut follows the built-in chips and reads its modifiers and key.
+        let custom = app.buttons["Control Option X"]
         let effort = app.buttons["/effort high"]
         XCTAssertTrue(custom.appears(within: 5), app.debugDescription)
         XCTAssertTrue(effort.appears(within: 5), app.debugDescription)

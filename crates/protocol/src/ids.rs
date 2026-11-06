@@ -511,9 +511,132 @@ validated_string!(
     schema = { "pattern": "^[A-Za-z0-9+/]*={0,2}$", "minLength": 4, "maxLength": 43692 }
 );
 
+validated_string!(
+    /// Modifiers, in this order, then one key, in the key-combo syntax herdr and herdr-core
+    /// both take: `ctrl+alt+x`, `cmd+k`, `shift+f5`. The key is a named key or a character of
+    /// an unshifted US keyboard, the only ones herdr-core 0.1.18 takes; herdr-core refuses
+    /// `cmd`, which herdr sends to a program that turned on a keyboard protocol.
+    KeyCombo,
+    debug = plain,
+    check = key_combo,
+    schema = { "pattern": r"^(?!ctrl\+(alt\+)?(shift\+)?(cmd\+)?[dzrjmot\\4]$)(?!(alt\+)?(shift\+)?(cmd\+)?\[$)(ctrl\+)?(alt\+)?(shift\+)?(cmd\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\-./;=\[\\\]`])$" }
+);
+
+const KEY_MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "cmd"];
+
+const NAMED_KEYS: [&str; 9] = [
+    "enter",
+    "esc",
+    "tab",
+    "backspace",
+    "space",
+    "up",
+    "down",
+    "left",
+    "right",
+];
+
+/// What Control turns these keys into would end, suspend or bypass the checks on the
+/// program (EOT, SUSP, reverse search, a newline or Return, Claude Code's and Codex's
+/// transcript views, and QUIT, which Control-4 also sends), whatever other modifier
+/// comes with it: Shift leaves the byte as is, and Alt only prefixes ESC.
+const CONTROL_REFUSED: &[u8] = b"dzrjmot\\4";
+
+fn key_combo(s: &str) -> bool {
+    let mut parts: Vec<&str> = s.split('+').collect();
+    let key = parts.pop().unwrap_or_default();
+    let mut next = 0;
+    for m in &parts {
+        match KEY_MODIFIERS[next..].iter().position(|k| k == m) {
+            Some(i) => next += i + 1,
+            None => return false,
+        }
+    }
+    let function = matches!(key.strip_prefix('f'), Some(n)
+        if !n.starts_with('0') && n.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)));
+    let char = match key.as_bytes() {
+        [b] => b.is_ascii_lowercase() || b.is_ascii_digit() || b"',-./;=[\\]`".contains(b),
+        _ => false,
+    };
+    let control = parts.first() == Some(&"ctrl");
+    let refused = control && key.len() == 1 && CONTROL_REFUSED.contains(&key.as_bytes()[0]);
+    // ESC (Esc, Alt, Control-3) then `[`, digits, `;` and a letter would spell an escape
+    // sequence, such as `ESC[100;5u` for Control-D, so `[` goes only with Control (ESC).
+    (NAMED_KEYS.contains(&key) || function || char) && !refused && (key != "[" || control)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_combos_are_herdr_names_without_the_refused_controls() {
+        for ok in [
+            "a",
+            "ctrl+alt+x",
+            "ctrl+alt+shift+cmd+backspace",
+            "cmd+k",
+            "shift+f5",
+            "f12",
+            "alt+enter",
+            "shift+enter",
+            "ctrl+space",
+            "/",
+            "`",
+            "\\",
+            "]",
+            "ctrl+[",
+            "ctrl+alt+[",
+            "alt+d",
+            "ctrl+c",
+        ] {
+            assert!(KeyCombo::new(ok).is_ok(), "{ok:?}");
+        }
+        for bad in [
+            "",
+            "+",
+            "ctrl+",
+            "ctrl++",
+            "+a",
+            "ctrl",
+            "alt+ctrl+x",
+            "ctrl+ctrl+x",
+            "control+x",
+            "super+x",
+            "ctrl+X",
+            "X",
+            "f0",
+            "f13",
+            "f01",
+            "home",
+            "ctrl+end",
+            "plus",
+            "~",
+            "?",
+            "!",
+            "ab",
+            "é",
+            " ",
+            "\u{1b}",
+            "ctrl+d",
+            "ctrl+shift+z",
+            "ctrl+alt+r",
+            "ctrl+cmd+j",
+            "ctrl+m",
+            "ctrl+o",
+            "ctrl+t",
+            "ctrl+\\",
+            "ctrl+4",
+            "[",
+            "alt+[",
+            "shift+[",
+            "alt+shift+cmd+[",
+            "enter enter",
+            "enter,esc",
+        ] {
+            assert!(KeyCombo::new(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn prompt_rejects_escape_sequences() {

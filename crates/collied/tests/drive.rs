@@ -9,8 +9,8 @@ use collied::transcript::Transcripts;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
-    Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, SendTextParams, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams,
+    Key, KeyCombo, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource,
+    Request, Response, SendTextParams, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams,
     TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
     TypedText, WorkspaceCloseParams, WorkspaceId,
 };
@@ -4222,9 +4222,9 @@ async fn agent_approval_allows_every_terminal_button() {
                 h.snapshot["agents"][0]["agent"] = json!(kind);
                 h.rule = rule.map(str::to_owned);
             });
-            for key in buttons {
+            for key in &buttons {
                 let mut p = keys(CLAUDE);
-                p.keys = vec![key];
+                p.keys = vec![key.clone()];
                 assert_eq!(
                     drive.send_keys(p, &yes()).await,
                     (
@@ -4242,6 +4242,20 @@ async fn agent_approval_allows_every_terminal_button() {
         let mut batch = keys(CLAUDE);
         batch.keys = buttons.to_vec();
         assert!(drive.send_keys(batch, &yes()).await.0.is_ok());
+        let combo = |name: &str| Key::Combo(KeyCombo::new(name).unwrap());
+        let mut p = keys(CLAUDE);
+        p.keys = vec![combo("ctrl+alt+x"), combo(",")];
+        assert_eq!(
+            drive.send_keys(p, &yes()).await,
+            (
+                Ok(Response::Ok),
+                Some(format!("{CLAUDE} blocked keys=ctrl+alt+x ,"))
+            )
+        );
+        assert_eq!(
+            herdr.params("agent.send_keys").last(),
+            Some(&json!({"target": "w6:p1", "keys": ["ctrl+alt+x", ","]}))
+        );
         assert_eq!(
             code(drive.prompt(prompt(CLAUDE), &yes()).await),
             ErrorCode::AgentBlocked
@@ -4250,7 +4264,7 @@ async fn agent_approval_allows_every_terminal_button() {
             drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
             Ok(Response::Ok)
         );
-        assert_eq!(herdr.params("agent.send_keys").len(), buttons.len() * 3 + 1);
+        assert_eq!(herdr.params("agent.send_keys").len(), buttons.len() * 3 + 2);
         assert_eq!(
             herdr.params("pane.send_input"),
             [json!({"pane_id": "w6:p1", "text": "\u{1b}[200~yes\u{1b}[201~", "keys": ["enter"]})]
@@ -4346,7 +4360,7 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
         drive.send_keys(keys(CLAUDE), &yes()).await,
         (
             Ok(Response::Ok),
-            Some(format!("{CLAUDE} blocked keys=down,enter"))
+            Some(format!("{CLAUDE} blocked keys=down enter"))
         )
     );
     assert_eq!(
@@ -4364,7 +4378,7 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
         block(&herdr, screen);
         let (reply, target) = drive.send_keys(keys(CLAUDE), &yes()).await;
         assert_eq!(reply, Ok(Response::Ok), "{screen}");
-        assert_eq!(target, Some(format!("{CLAUDE} blocked keys=down,enter")));
+        assert_eq!(target, Some(format!("{CLAUDE} blocked keys=down enter")));
     }
     assert_eq!(
         code(drive.send_keys(keys(CLAUDE), &no()).await.0),

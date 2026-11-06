@@ -2646,13 +2646,16 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     let core = FakeCore()
     let model = await slashReady(core)
     model.typed("/s")
+    let taps = model.keyTaps
     let enter = model.tap(.enter)
+    model.tap(.combo(name: "shift+enter"))
     #expect(enter != nil, "the box is still empty")
+    #expect(model.keyTaps == taps + 2, "both keys are queued")
     await enter?.value
     #expect(core.snapshot.slashes == ["/s"])
-    #expect(core.snapshot.keys.isEmpty, "Enter queued before the mirror is dropped")
+    #expect(core.snapshot.keys.isEmpty, "Enter queued before the mirror is dropped, with any modifiers")
     #expect(model.commandShown)
-    #expect(model.tap(.enter) == nil && model.tap(.ctrlEnter) == nil)
+    #expect(model.tap(.enter) == nil && model.tap(.ctrlEnter) == nil && model.tap(.combo(name: "alt+enter")) == nil)
     await model.tap(.down)?.value
     #expect(core.snapshot.keys == [[.down]])
 
@@ -3280,6 +3283,27 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     await model.run(shortcut)?.value
     #expect(model.modifier == nil)
     #expect(core.snapshot.keys == [[.shiftTab]])
+}
+
+@MainActor
+@Test func aKeyShortcutTakesAnyModifiersWithAnyKey() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    let shortcut = StripShortcut(key: "ctrl+alt+shift+cmd+x")
+    #expect(shortcut.agentKey == .combo(name: "ctrl+alt+shift+cmd+x"))
+    #expect(shortcut.label == "⌃⌥⇧⌘X")
+    #expect(shortcut.agentKey?.accessibilityName == "Control Option Shift Command X")
+    #expect(StripShortcut(key: "alt+space").label == "⌥␣")
+    #expect(StripShortcut(key: "shift+enter").agentKey?.accessibilityName == "Shift Return")
+    #expect(StripShortcut(key: "shift+tab").agentKey == .shiftTab, "a saved shortcut keeps its key")
+    for refused in ["ctrl+d", "alt+ctrl+x", "ctrl+X", "?", ""] {
+        #expect(StripShortcut(key: refused).agentKey == nil)
+    }
+    #expect(AgentKey.parts(of: "ctrl+alt+x").modifiers == [.control, .option])
+    await model.run(shortcut)?.value
+    #expect(core.snapshot.keys == [[.combo(name: "ctrl+alt+shift+cmd+x")]])
 }
 
 @MainActor
