@@ -21,8 +21,8 @@ use protocol::{
     ActivityId, AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
     AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
-    FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
-    PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
+    FolderName, Key, KeyCombo, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams,
+    PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SendTextParams,
     SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams,
     TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
@@ -618,7 +618,7 @@ pub struct AgentView {
     pub terminals_enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AgentKey {
     Enter,
     Esc,
@@ -639,11 +639,17 @@ pub enum AgentKey {
     CtrlL,
     CtrlU,
     CtrlW,
+    /// A key shortcut's modifiers and key, as `is_key_combo` takes them.
+    Combo {
+        name: String,
+    },
 }
 
-impl From<AgentKey> for Key {
-    fn from(k: AgentKey) -> Self {
-        match k {
+impl TryFrom<AgentKey> for Key {
+    type Error = CoreError;
+
+    fn try_from(k: AgentKey) -> Result<Self, CoreError> {
+        Ok(match k {
             AgentKey::Enter => Self::Enter,
             AgentKey::Esc => Self::Esc,
             AgentKey::Up => Self::Up,
@@ -663,8 +669,16 @@ impl From<AgentKey> for Key {
             AgentKey::CtrlL => Self::CtrlL,
             AgentKey::CtrlU => Self::CtrlU,
             AgentKey::CtrlW => Self::CtrlW,
-        }
+            AgentKey::Combo { name } => Self::Combo(
+                KeyCombo::new(name).map_err(|_| invalid("keys", "not a key combination"))?,
+            ),
+        })
     }
+}
+
+#[uniffi::export]
+pub fn is_key_combo(name: String) -> bool {
+    KeyCombo::new(name).is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1674,7 +1688,10 @@ impl CollieCore {
         let request = Request::TerminalSendKeys(AgentSendKeysParams {
             op_id: new_op_id(),
             terminal_id: terminal(terminal_id)?,
-            keys: keys.into_iter().map(Key::from).collect(),
+            keys: keys
+                .into_iter()
+                .map(Key::try_from)
+                .collect::<Result<_, _>>()?,
         });
         let conn = self.conn(&machine_id)?;
         let response = self.mutate(&machine_id, request, DRIVE_TIMEOUT).await;
@@ -1798,7 +1815,10 @@ impl CollieCore {
         let request = Request::AgentSendKeys(AgentSendKeysParams {
             op_id: new_op_id(),
             terminal_id: terminal(terminal_id)?,
-            keys: keys.into_iter().map(Key::from).collect(),
+            keys: keys
+                .into_iter()
+                .map(Key::try_from)
+                .collect::<Result<_, _>>()?,
         });
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
@@ -4891,6 +4911,21 @@ mod tests {
             field(rt.block_on(core.send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
         );
+        for name in ["ctrl+d", "ctrl+X", "home", "enter,esc"] {
+            let combo = vec![AgentKey::Combo { name: name.into() }];
+            assert_eq!(
+                field(rt.block_on(core.send_keys(m(), t(), combo.clone()))),
+                Some("keys".into()),
+                "{name}"
+            );
+            assert_eq!(
+                field(rt.block_on(core.terminal_send_keys(m(), t(), combo))),
+                Some("keys".into()),
+                "{name}"
+            );
+        }
+        assert!(is_key_combo("ctrl+alt+shift+cmd+x".into()));
+        assert!(!is_key_combo("alt+ctrl+x".into()));
         for bad in [
             "",
             "x\u{1b}[2J",
@@ -5403,7 +5438,14 @@ mod tailnet_tests {
                             }
                         }
                         Request::AgentSendKeys(p) => {
-                            assert_eq!(p.keys, vec![protocol::Key::ShiftTab, protocol::Key::Down]);
+                            assert_eq!(
+                                p.keys,
+                                vec![
+                                    protocol::Key::ShiftTab,
+                                    protocol::Key::Down,
+                                    protocol::Key::Combo(KeyCombo::new("ctrl+alt+x").unwrap())
+                                ]
+                            );
                             Err(ErrorCode::AgentBlocked)
                         }
                         Request::AgentTypeText(p) => {
@@ -5860,7 +5902,17 @@ mod tailnet_tests {
         }
 
         let err = rt
-            .block_on(core.send_keys(id(), t1(), vec![AgentKey::ShiftTab, AgentKey::Down]))
+            .block_on(core.send_keys(
+                id(),
+                t1(),
+                vec![
+                    AgentKey::ShiftTab,
+                    AgentKey::Down,
+                    AgentKey::Combo {
+                        name: "ctrl+alt+x".into(),
+                    },
+                ],
+            ))
             .unwrap_err();
         assert!(matches!(err, CoreError::AgentBlocked { .. }), "{err:?}");
         rt.block_on(core.type_text(id(), t1(), "DuckDB\n\tRedis".into()))

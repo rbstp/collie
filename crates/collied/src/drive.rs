@@ -3192,7 +3192,7 @@ mod tests {
 
     use super::*;
     use crate::runtime::herdr_core::tests as core_tests;
-    use protocol::Key;
+    use protocol::{Key, KeyCombo};
 
     const NAME: &str = "collie-0000aaaa";
     const DIALOG: &str = "\
@@ -3878,6 +3878,11 @@ mod tests {
             (Key::CtrlL, "ctrl+l"),
             (Key::CtrlU, "ctrl+u"),
             (Key::CtrlW, "ctrl+w"),
+            (
+                Key::Combo(KeyCombo::new("ctrl+alt+x").unwrap()),
+                "ctrl+alt+x",
+            ),
+            (Key::Combo(KeyCombo::new("cmd+k").unwrap()), "cmd+k"),
         ];
         for (key, name) in all {
             assert_eq!(key.herdr_name(), name);
