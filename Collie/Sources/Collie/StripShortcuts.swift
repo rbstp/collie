@@ -169,7 +169,7 @@ private struct StripShortcutEditor: View {
                         .accessibilityLabel("Named keys")
                     }
                 } footer: {
-                    Text(verbatim: "A letter, a digit, one of ' , - . / ; = [ \\ ] `, f1 to f12 or a key from the menu. Control with D, Z, R, J, M, O, T, 4 or \\ can't be saved. ⌘ reaches an agent only in herdr.")
+                    Text(verbatim: "A letter, a digit, one of ' , - . / ; = \\ ] `, f1 to f12 or a key from the menu, and [ only with Control. Control with D, Z, R, J, M, O, T, 4 or \\ can't be saved. ⌘ reaches an agent only in herdr.")
                 }
             } else {
                 Section {

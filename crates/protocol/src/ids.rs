@@ -519,7 +519,7 @@ validated_string!(
     KeyCombo,
     debug = plain,
     check = key_combo,
-    schema = { "pattern": r"^(ctrl\+)?(alt\+)?(shift\+)?(cmd\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\-./;=\[\\\]`])$" }
+    schema = { "pattern": r"^(?!ctrl\+(alt\+)?(shift\+)?(cmd\+)?[dzrjmot\\4]$)(?!(alt\+)?(shift\+)?(cmd\+)?\[$)(ctrl\+)?(alt\+)?(shift\+)?(cmd\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\-./;=\[\\\]`])$" }
 );
 
 const KEY_MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "cmd"];
@@ -558,10 +558,11 @@ fn key_combo(s: &str) -> bool {
         [b] => b.is_ascii_lowercase() || b.is_ascii_digit() || b"',-./;=[\\]`".contains(b),
         _ => false,
     };
-    let refused = parts.first() == Some(&"ctrl")
-        && key.len() == 1
-        && CONTROL_REFUSED.contains(&key.as_bytes()[0]);
-    (NAMED_KEYS.contains(&key) || function || char) && !refused
+    let control = parts.first() == Some(&"ctrl");
+    let refused = control && key.len() == 1 && CONTROL_REFUSED.contains(&key.as_bytes()[0]);
+    // ESC (Esc, Alt, Control-3) then `[`, digits, `;` and a letter would spell an escape
+    // sequence, such as `ESC[100;5u` for Control-D, so `[` goes only with Control (ESC).
+    (NAMED_KEYS.contains(&key) || function || char) && !refused && (key != "[" || control)
 }
 
 #[cfg(test)]
@@ -583,6 +584,9 @@ mod tests {
             "/",
             "`",
             "\\",
+            "]",
+            "ctrl+[",
+            "ctrl+alt+[",
             "alt+d",
             "ctrl+c",
         ] {
@@ -623,6 +627,10 @@ mod tests {
             "ctrl+t",
             "ctrl+\\",
             "ctrl+4",
+            "[",
+            "alt+[",
+            "shift+[",
+            "alt+shift+cmd+[",
             "enter enter",
             "enter,esc",
         ] {

@@ -673,7 +673,7 @@
       ]
     },
     "KeyCombo": {
-      "pattern": "^(ctrl\\+)?(alt\\+)?(shift\\+)?(cmd\\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\\-./;=\\[\\\\\\]`])$",
+      "pattern": "^(?!ctrl\\+(alt\\+)?(shift\\+)?(cmd\\+)?[dzrjmot\\\\4]$)(?!(alt\\+)?(shift\\+)?(cmd\\+)?\\[$)(ctrl\\+)?(alt\\+)?(shift\\+)?(cmd\\+)?(enter|esc|tab|backspace|space|up|down|left|right|f([1-9]|1[0-2])|[a-z0-9',\\-./;=\\[\\\\\\]`])$",
       "type": "string"
     },
     "Label": {

@@ -3235,6 +3235,7 @@ mod tests {
             r#"["home"]"#.to_owned(),
             r#"["ctrl+X"]"#.to_owned(),
             r#"["enter ctrl+d"]"#.to_owned(),
+            r#"["alt+[","1","0","0",";","5","u"]"#.to_owned(),
             "[]".to_owned(),
             serde_json::to_string(&vec!["enter"; 17]).unwrap(),
         ] {
