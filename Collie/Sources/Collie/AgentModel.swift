@@ -1042,7 +1042,7 @@ final class AgentModel {
                 batch.append(key)
                 queuedInput.removeFirst()
             }
-            if command { batch.removeAll { $0 == .enter || $0 == .ctrlEnter } }
+            if command { batch.removeAll { AgentKey.parts(of: $0.name).key == "enter" } }
             if batch.isEmpty { continue }
             do {
                 if isTerminal {

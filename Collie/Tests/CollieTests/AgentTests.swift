@@ -2647,10 +2647,12 @@ private func slashReady(_ core: FakeCore) async -> AgentModel {
     let model = await slashReady(core)
     model.typed("/s")
     let enter = model.tap(.enter)
-    #expect(enter != nil, "the box is still empty")
+    let combo = model.tap(.combo(name: "shift+enter"))
+    #expect(enter != nil && combo != nil, "the box is still empty")
     await enter?.value
+    await combo?.value
     #expect(core.snapshot.slashes == ["/s"])
-    #expect(core.snapshot.keys.isEmpty, "Enter queued before the mirror is dropped")
+    #expect(core.snapshot.keys.isEmpty, "Enter queued before the mirror is dropped, with any modifiers")
     #expect(model.commandShown)
     #expect(model.tap(.enter) == nil && model.tap(.ctrlEnter) == nil && model.tap(.combo(name: "alt+enter")) == nil)
     await model.tap(.down)?.value
