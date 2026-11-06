@@ -1170,7 +1170,7 @@ mod tests {
 
     #[tokio::test]
     async fn negotiated_terminal_opt_out_keeps_ordinary_calls_usable() {
-        for maximum in [26, 27, 28, 29, 30, 31, 32] {
+        for maximum in [26, 27, 28, 29, 30, 31, 32, 33] {
             let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
             let (mut session, mut ws) = (session.unwrap(), server.unwrap());
             let server = tokio::spawn(async move {
@@ -1178,7 +1178,7 @@ mod tests {
                 let Response::Hello(mut result) = hello_result(true) else {
                     unreachable!()
                 };
-                result.protocol_version = maximum.min(31);
+                result.protocol_version = maximum.min(32);
                 result.protocol_max_version = maximum;
                 result.capabilities.clear();
                 write(
@@ -1263,8 +1263,8 @@ mod tests {
             let Response::Hello(mut result) = hello_result(true) else {
                 unreachable!()
             };
-            result.protocol_version = 32;
-            result.protocol_max_version = 33;
+            result.protocol_version = 33;
+            result.protocol_max_version = 34;
             write(
                 &mut ws,
                 ServerFrame::Result {

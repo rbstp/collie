@@ -2349,7 +2349,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 31);
+        assert_eq!(crate::PROTOCOL_VERSION, 32);
     }
 
     #[test]

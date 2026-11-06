@@ -10,4 +10,4 @@ The app and `collied` use the highest protocol revision both support. When they 
 
 Then pull to refresh or reopen the app; you do not need to pair again.
 
-Current releases support revisions 26 to 31. Each new revision keeps at least the two previous ones; release notes say when support for one ends. From a release before revision 26, update both sides once. Until both sides support the revision a feature needs, the app leaves it out or asks you to update `collied`. See [Negotiated protocol compatibility](../reference/architecture.md#negotiated-protocol-compatibility).
+Current releases support revisions 26 to 32. Each new revision keeps at least the two previous ones; release notes say when support for one ends. From a release before revision 26, update both sides once. Until both sides support the revision a feature needs, the app leaves it out or asks you to update `collied`. See [Negotiated protocol compatibility](../reference/architecture.md#negotiated-protocol-compatibility).

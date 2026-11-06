@@ -1,12 +1,17 @@
 use crate::{
-    ClientFrame, Event, GitScope, GitSection, HelloParams, HelloResult, Label, Request, Response,
-    ServerFrame,
+    ClientFrame, Event, GitScope, GitSection, HelloParams, HelloResult, Key, Label, Request,
+    Response, ServerFrame,
 };
 
 pub const PROTOCOL_MIN_VERSION: u32 = 26;
 pub const TERMINAL_GRANTS_V1: &str = "terminal_grants_v1";
 pub const RELAY_GRANTS_V1: &str = "relay_grants_v1";
 pub const ENCRYPTED_DISPLAY_V1: &str = "encrypted_display_v1";
+
+/// A revision-31 daemon refuses a combination as an unknown variant.
+fn has_combo(keys: &[Key]) -> bool {
+    keys.iter().any(|k| matches!(k, Key::Combo(_)))
+}
 
 pub(crate) fn baseline_capabilities() -> Vec<Label> {
     vec![Label::new(TERMINAL_GRANTS_V1).expect("capability is a label")]
@@ -171,7 +176,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=31).contains(&self.version) {
+        if !(26..=32).contains(&self.version) {
             return false;
         }
         match request {
@@ -179,8 +184,11 @@ impl NegotiatedProtocol {
             | Request::TerminalGrant(_)
             | Request::TerminalWatch(_)
             | Request::TerminalRun(_)
-            | Request::TerminalSendKeys(_)
             | Request::TerminalLock(_) => self.terminal_grants,
+            Request::TerminalSendKeys(p) => {
+                self.terminal_grants && (self.version >= 32 || !has_combo(&p.keys))
+            }
+            Request::AgentSendKeys(p) => self.version >= 32 || !has_combo(&p.keys),
             Request::TerminalSendText(_) => self.terminal_grants && self.version >= 31,
             Request::AgentSendText(_) => self.version >= 31,
             Request::PushRegister(p) => {
@@ -208,7 +216,6 @@ impl NegotiatedProtocol {
             | Request::TaskOptions(_)
             | Request::AgentDraft(_)
             | Request::AgentPrompt(_)
-            | Request::AgentSendKeys(_)
             | Request::AgentTypeText(_)
             | Request::AgentFocus(_)
             | Request::AgentScrollBottom(_)
@@ -247,7 +254,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=31).contains(&self.version) {
+        if !(26..=32).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -362,7 +369,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(31)
+                offer["protocol_version"].as_u64().unwrap().min(32)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -392,7 +399,8 @@ mod tests {
             (29, 29),
             (30, 30),
             (31, 31),
-            (32, 31),
+            (32, 32),
+            (33, 32),
         ] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
@@ -525,7 +533,7 @@ mod tests {
         assert!(previous.server_frame(&reply).is_err());
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
-        assert_eq!(current.version(), 31);
+        assert_eq!(current.version(), 32);
         let encoded = current
             .client_frame(ClientFrame { id: 1, request })
             .unwrap();
@@ -590,6 +598,44 @@ mod tests {
             serde_json::from_str::<Value>(&encoded).unwrap(),
             json!({"id":1,"method":"file.open","params":{"terminal_id":"term_1","path":"src/main.rs"}})
         );
+    }
+
+    #[test]
+    fn key_combinations_require_revision_32() {
+        let params = |keys| crate::AgentSendKeysParams {
+            op_id: crate::OpId::new("AAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+            terminal_id: crate::TerminalId::new("term_1").unwrap(),
+            keys,
+        };
+        let combo = vec![
+            Key::Enter,
+            Key::Combo(crate::KeyCombo::new("ctrl+alt+x").unwrap()),
+        ];
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 31;
+        result.protocol_version = 31;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        for request in [
+            Request::AgentSendKeys(params(combo.clone())),
+            Request::TerminalSendKeys(params(combo.clone())),
+        ] {
+            assert!(!previous.allows_request(&request));
+            assert!(current.allows_request(&request));
+        }
+        for request in [
+            Request::AgentSendKeys(params(vec![Key::ShiftTab])),
+            Request::TerminalSendKeys(params(vec![Key::ShiftTab])),
+        ] {
+            assert!(previous.allows_request(&request));
+        }
+        let mut no_grants = fixture()["current_offer"].clone();
+        no_grants["capabilities"] = json!([]);
+        let no_grants = NegotiatedProtocol::negotiate(&offer(no_grants)).unwrap();
+        assert!(no_grants.allows_request(&Request::AgentSendKeys(params(combo.clone()))));
+        assert!(!no_grants.allows_request(&Request::TerminalSendKeys(params(combo))));
     }
 
     #[test]
