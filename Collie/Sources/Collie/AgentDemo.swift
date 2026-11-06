@@ -340,6 +340,15 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 message("a2", "assistant", "I need to run cargo test to check the new cases."),
             ]
         }
+        let short = [
+            "term_3": ("update the docs for the new release", "The docs now describe the inbox and the context ring."),
+            "term_4": ("add dark mode to the website", "Dark mode follows the system setting on every page."),
+            "term_5": ("merge the rate limiter PR", "The rate limiter is merged."),
+            "term_6": ("triage the open issues", "I labeled 5 issues as bug and 3 as enhancement. The other 4 need more detail from their authors."),
+        ]
+        if let turn = short[terminalId] {
+            return [message("u1", "user", turn.0), message("a1", "assistant", turn.1)]
+        }
         return [
             message("u1", "user", "the approval tests are flaky, fix them"),
             message("a1", "assistant", "I'll read the approval tests first to see where the timing depends on an idle machine."),

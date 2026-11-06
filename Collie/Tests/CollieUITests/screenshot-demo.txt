@@ -1,9 +1,3 @@
-> what does the approval hook send to collied?
-
-⏺ The hook posts the tool name, its input and the
-  session ID. collied matches the session to a
-  pane, then waits for an answer from the phone.
-
 > the approval tests are flaky, fix them
 
 ⏺ I'll read the approval tests first to see where
