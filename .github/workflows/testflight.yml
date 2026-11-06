@@ -157,7 +157,7 @@ jobs:
 
       # ci.yml tests the pull request, not the revision shipped, and a manual dispatch skips it.
       - name: test the revision being shipped
-        run: just --no-deps ios-test
+        run: just --no-deps test_iterations=2 ios-test
 
       - name: keep the test results
         if: ${{ failure() }}

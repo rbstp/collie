@@ -229,7 +229,7 @@ jobs:
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test
-        run: just --no-deps ios-test never
+        run: just --no-deps test_iterations=2 ios-test never
 
   desktop-packaging:
     runs-on: ubuntu-24.04

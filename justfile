@@ -82,6 +82,7 @@ ios_deployment_target := "26.0"
 sim := "iPhone 18 Pro"
 screenshot_watch := "true"
 screenshot_device := ""
+test_iterations := "1"
 xcodebuild := "xcodebuild -project Collie/Collie.xcodeproj -scheme Collie -derivedDataPath target/ios/DerivedData"
 
 ios-framework target="all" profile="release":
@@ -146,7 +147,8 @@ ios-build-sim: ios-framework ios-project
 ios-test diagnostics="on-failure": ios-framework ios-project
     swift test --package-path Collie/GhosttyTerminal
     cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
-    {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' CODE_SIGNING_ALLOWED=NO test
+    {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' \
+        {{ if test_iterations == "1" { "" } else { "-retry-tests-on-failure -test-iterations " + test_iterations } }} CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
 # With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>.
