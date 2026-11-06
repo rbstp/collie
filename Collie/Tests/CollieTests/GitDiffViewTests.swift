@@ -74,7 +74,7 @@ final class GitDiffViewTests: XCTestCase {
                         _ = try await waitFor("focused editor above the \(Int(inset)) inset") {
                             host.view.layoutIfNeeded()
                             guard let field = descendants(host.view).compactMap({ $0 as? UITextView }).first(where: \.isEditable) else { return nil as Bool? }
-                            // On a freshly booted CI simulator the system keyboard service can die, which resigns the field.
+                            // The simulator's keyboard service can hang or die and resign the field.
                             guard field.isFirstResponder else {
                                 field.becomeFirstResponder()
                                 return nil
