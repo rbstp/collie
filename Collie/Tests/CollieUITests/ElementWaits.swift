@@ -120,9 +120,14 @@ extension XCUIApplication {
         // menu's cell.
         guard ready else { return withInteractionOptions(1) { item.tap() } }
         let settled = last
-        withInteractionOptions(1) { item.tap() }
+        // XCTest's element tap reads the item again when it synthesizes the event, where a menu item's activation point is
+        // never valid: a passing tap scrolls its cell to visible and taps the frame's center. On a hosted runner that read
+        // returned a null frame on all three of its tries while snapshots before and after had the item laid out, so the
+        // item is tapped at the settled frame's center instead.
+        let center = coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: settled.midX, dy: settled.midY))
+        withInteractionOptions(1) { center.tap() }
         // The open menu can drop the tap and stay open, so an item still where it was tapped was not chosen.
-        if !eventually(within: 10, { !item.exists || (try? item.snapshot())?.frame != settled }) { withInteractionOptions(1) { item.tap() } }
+        if !eventually(within: 10, { !item.exists || (try? item.snapshot())?.frame != settled }) { withInteractionOptions(1) { center.tap() } }
     }
 
     /// Rotates and waits for the window to follow. A rotation with the keyboard up in a session could leave the app never
