@@ -58,7 +58,8 @@ final class GitDiffViewTests: XCTestCase {
                 let views = try await waitFor("\(name) inline editor") {
                     host.view.layoutIfNeeded()
                     let views = descendants(host.view).compactMap { $0 as? UITextView }.filter { !$0.isEditable && $0.layoutManager is GitDiffLayoutManager }
-                    return views.count == 2 && views.allSatisfy { !$0.bounds.isEmpty } ? views : nil
+                    let focused = descendants(host.view).contains { ($0 as? UITextView)?.isEditable == true && $0.isFirstResponder }
+                    return views.count == 2 && views.allSatisfy { !$0.bounds.isEmpty } && focused ? views : nil
                 }
                 XCTAssertEqual(review.comments.count, 1)
                 XCTAssertEqual(review.comments.first?.selection, "period")
@@ -72,7 +73,12 @@ final class GitDiffViewTests: XCTestCase {
                         host.additionalSafeAreaInsets.bottom = inset
                         _ = try await waitFor("focused editor above the \(Int(inset)) inset") {
                             host.view.layoutIfNeeded()
-                            guard let field = descendants(host.view).compactMap({ $0 as? UITextView }).first(where: { $0.isEditable && $0.isFirstResponder }) else { return nil as Bool? }
+                            guard let field = descendants(host.view).compactMap({ $0 as? UITextView }).first(where: \.isEditable) else { return nil as Bool? }
+                            // The simulator's keyboard service can hang or die and resign the field.
+                            guard field.isFirstResponder else {
+                                field.becomeFirstResponder()
+                                return nil
+                            }
                             var ancestor = field.superview
                             while ancestor != nil, !(ancestor is UIScrollView) { ancestor = ancestor?.superview }
                             guard let viewport = ancestor as? UIScrollView else { return nil }
