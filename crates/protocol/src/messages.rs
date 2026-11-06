@@ -388,6 +388,8 @@ pub enum Request {
     AgentSendKeys(AgentSendKeysParams),
     #[serde(rename = "agent.type_text")]
     AgentTypeText(AgentTypeTextParams),
+    #[serde(rename = "agent.send_text")]
+    AgentSendText(SendTextParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.scroll_bottom")]
@@ -448,6 +450,8 @@ pub enum Request {
     TerminalRun(TerminalRunParams),
     #[serde(rename = "terminal.send_keys")]
     TerminalSendKeys(AgentSendKeysParams),
+    #[serde(rename = "terminal.send_text")]
+    TerminalSendText(SendTextParams),
     #[serde(rename = "terminal.lock")]
     TerminalLock(Empty),
 }
@@ -473,6 +477,7 @@ impl Request {
         "agent.prompt",
         "agent.send_keys",
         "agent.type_text",
+        "agent.send_text",
         "agent.focus",
         "agent.scroll_bottom",
         "agent.answer_notice",
@@ -501,6 +506,7 @@ impl Request {
         "terminal.watch",
         "terminal.run",
         "terminal.send_keys",
+        "terminal.send_text",
         "terminal.lock",
     ];
 
@@ -525,6 +531,7 @@ impl Request {
             Self::AgentPrompt(_) => "agent.prompt",
             Self::AgentSendKeys(_) => "agent.send_keys",
             Self::AgentTypeText(_) => "agent.type_text",
+            Self::AgentSendText(_) => "agent.send_text",
             Self::AgentFocus(_) => "agent.focus",
             Self::AgentScrollBottom(_) => "agent.scroll_bottom",
             Self::AgentAnswerNotice(_) => "agent.answer_notice",
@@ -553,6 +560,7 @@ impl Request {
             Self::TerminalWatch(_) => "terminal.watch",
             Self::TerminalRun(_) => "terminal.run",
             Self::TerminalSendKeys(_) => "terminal.send_keys",
+            Self::TerminalSendText(_) => "terminal.send_text",
             Self::TerminalLock(_) => "terminal.lock",
         }
     }
@@ -577,6 +585,7 @@ impl Request {
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
             | Self::AgentTypeText(_)
+            | Self::AgentSendText(_)
             | Self::AgentFocus(_)
             | Self::AgentScrollBottom(_)
             | Self::AgentAnswerNotice(_)
@@ -604,6 +613,7 @@ impl Request {
             | Self::TerminalWatch(_)
             | Self::TerminalRun(_)
             | Self::TerminalSendKeys(_)
+            | Self::TerminalSendText(_)
             | Self::TerminalLock(_) => MethodClass::Terminal,
         }
     }
@@ -973,6 +983,16 @@ impl AgentSendKeysParams {
     pub fn is_valid(&self) -> bool {
         (1..=limits::MAX_KEYS_PER_CALL).contains(&self.keys.len())
     }
+}
+
+/// Keystrokes for `agent.send_text` and `terminal.send_text`, typed as is without Enter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SendTextParams {
+    pub op_id: OpId,
+    pub terminal_id: TerminalId,
+    pub text: TypedText,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2325,7 +2345,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 30);
+        assert_eq!(crate::PROTOCOL_VERSION, 31);
     }
 
     #[test]
@@ -3105,6 +3125,10 @@ mod tests {
                 "terminal.send_keys",
                 format!(r#"{{"op_id":"{op}","terminal_id":"term_1","keys":["ctrl+c","enter"]}}"#),
             ),
+            (
+                "terminal.send_text",
+                format!(r#"{{"op_id":"{op}","terminal_id":"term_1","text":"ls -la"}}"#),
+            ),
             ("terminal.lock", "{}".to_owned()),
         ] {
             let frame = parse(&format!(
@@ -3149,6 +3173,23 @@ mod tests {
                 ErrorCode::InvalidParams,
                 "{bad:?}"
             );
+        }
+        for method in ["terminal.send_text", "agent.send_text"] {
+            let typed = |text: &str| {
+                parse(&format!(
+                    r#"{{"id":1,"method":"{method}","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":{}}}}}"#,
+                    serde_json::to_string(text).unwrap()
+                ))
+            };
+            assert!(typed(" ").is_ok(), "{method}");
+            assert!(typed("/mod").is_ok(), "{method}");
+            for bad in ["", "a\nb", "a\rb", "a\tb", "a\u{1b}[A", "rm\u{200B} -rf"] {
+                assert_eq!(
+                    typed(bad).unwrap_err().code,
+                    ErrorCode::InvalidParams,
+                    "{method} {bad:?}"
+                );
+            }
         }
         let keys = |keys: &str| {
             parse(&format!(

@@ -6,7 +6,7 @@
 |---|---|
 | Grid preview, status and Inbox | Yes; if status looks wrong, see [Troubleshooting](../troubleshooting.md#codex-status-or-done-alerts-missing) |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes; Chat needs the [hook](#set-up) |
-| [Context ring](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | With the [hook](#set-up) |
+| [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | With the [hook](#set-up) |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Monthly credits, for a credit-metered workspace |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
@@ -27,7 +27,7 @@
 
 ### Herdr 2
 
-herdr's hook does nothing in Herdr 2 (herdr-core), so Chat, the context ring and keeping an open session out of Resume need `collied`'s own hook there. Add a second entry to `SessionStart` in `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`), beside herdr's:
+herdr's hook does nothing in Herdr 2 (herdr-core), so Chat, remaining context and keeping an open session out of Resume need `collied`'s own hook there. Add a second entry to `SessionStart` in `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`), beside herdr's:
 
 ```json
 { "hooks": [{ "type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5 }] }

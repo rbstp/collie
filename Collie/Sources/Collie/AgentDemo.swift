@@ -36,7 +36,7 @@ struct AgentDemo: View {
 
     var body: some View {
         TabView {
-            Tab("Agents", systemImage: "square.grid.2x2") {
+            Tab("Agents", systemImage: "sparkles.rectangle.stack") {
                 FlockScreen(core: core, machines: [DemoAgentCore.machine], approvals: approvals, follows: follows, opening: $opening)
             }
             Tab("Machines", systemImage: "desktopcomputer") {
@@ -51,6 +51,7 @@ struct AgentDemo: View {
                     }
                     .listStyle(.plain)
                     .scrollContentBackground(.hidden)
+                    .background(Color(.systemGroupedBackground))
                     .navigationTitle("Machines")
                 }
             }
@@ -260,7 +261,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
             PendingApproval(
                 approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Claude Code", workspaceLabel: "collie",
                 snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
-                toolName: "Bash", toolSummary: "cargo test -p collied --test approvals -- --nocapture",
+                toolName: "Bash",
+                toolSummary: ProcessInfo.processInfo.environment["COLLIE_DEMO_APPROVAL_COMMAND"] ?? "cargo test -p collied --test approvals -- --nocapture",
                 reason: "Command is not read-only, requires further permission checks",
                 options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
                 supportsNote: true, createdAtMs: now, expiresAtMs: now + 600_000
@@ -371,6 +373,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         if isSample { record(terminalId: terminalId, text: "Simulated terminal input: \(text)") }
     }
 
+    func sendText(machineId: String, terminalId: String, text: String) async throws {}
     func focus(machineId: String, terminalId: String) async throws {}
     func scrollBottom(machineId: String, terminalId: String) async throws {}
     func answerNotice(machineId: String, terminalId: String, digit: UInt8, label: String) async throws {}
@@ -498,6 +501,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         throw CoreError.TerminalsDisabled
     }
 
+    func terminalSendText(machineId: String, terminalId: String, text: String) async throws {
+        throw CoreError.TerminalsDisabled
+    }
+
     func registerActivityToken(machineId: String, activityId: String, terminalId: String, tokenHex: String, bindingId: String, relayGrant: RelayPushGrant?) throws {
         print("demo: activity \(activityId) token \(tokenHex.prefix(8))… for \(terminalId)")
     }
@@ -543,6 +550,9 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     private static let screenshotPreviews = [
         "term_2": """
+            ⏺ Search(pattern: "settle", path: "crates/collied")
+              ⎿  Found 4 files
+
             ⏺ Update(crates/collied/tests/approvals.rs)
               ⎿  Added 3 tests
 

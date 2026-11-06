@@ -95,40 +95,6 @@ extension DevicePrefs {
     }
 }
 
-enum AppAccent: String, Codable, CaseIterable {
-    case neutral, blue, orange, green, red, gold
-
-    var label: String {
-        switch self {
-        case .neutral: "None"
-        case .blue: "Blue"
-        case .orange: "Orange"
-        case .green: "Green"
-        case .red: "Red"
-        case .gold: "Dark Gold"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .neutral: Color(uiColor: .label)
-        case .blue: .blue
-        case .orange: .orange
-        case .green: .green
-        case .red: .red
-        case .gold:
-            Color(uiColor: UIColor { traits in
-                traits.userInterfaceStyle == .dark
-                    ? UIColor(red: 0.78, green: 0.62, blue: 0.25, alpha: 1)
-                    : UIColor(red: 0.50, green: 0.36, blue: 0.08, alpha: 1)
-            })
-        }
-    }
-
-    /// A switch's white knob vanishes on a white track, so None keeps the system's switch color.
-    var switchTint: Color { self == .neutral ? .green : color }
-}
-
 struct AccentSwitch: ToggleStyle {
     let tint: Color
 
@@ -138,16 +104,34 @@ struct AccentSwitch: ToggleStyle {
 }
 
 extension View {
-    /// None fills prominent buttons white in dark mode, where their white label would vanish.
+    /// A light accent fill (None and Dark Gold in dark mode, orange and green) takes a black label, where white falls under 3:1.
     func onAccentFill() -> some View { modifier(OnAccentFill()) }
 }
 
 private struct OnAccentFill: ViewModifier {
-    @Environment(\.neutralAccent) private var neutral
+    @Environment(\.appAccent) private var accent
+    @Environment(\.self) private var environment
+    @Environment(\.isEnabled) private var isEnabled
 
+    // Disabled, the fill is gray, not the accent: black on it read 1.9:1 in dark mode.
     func body(content: Content) -> some View {
-        if neutral { content.foregroundStyle(Color(uiColor: .systemBackground)) } else { content }
+        if isEnabled && accent.resolve(in: environment).takesDarkLabel { content.foregroundStyle(.black) } else { content }
     }
+}
+
+extension ShapeStyle where Self == Color {
+    // System orange is about 2.3:1 as text on light backgrounds, and even its high-contrast variant (197,83,0) read 4.3:1 on
+    // the composer's light note glass; light mode takes a deeper orange of the same hue, 4.7:1 or more on light glass and pages.
+    static var warning: Color {
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? .systemOrange.resolvedColor(with: traits) : UIColor(red: 180 / 255, green: 75 / 255, blue: 0, alpha: 1)
+        })
+    }
+}
+
+extension Color.Resolved {
+    // White keeps 3:1 up to a relative luminance of 0.3; blue and red stay under it in both appearances.
+    var takesDarkLabel: Bool { 0.2126 * linearRed + 0.7152 * linearGreen + 0.0722 * linearBlue > 0.3 }
 }
 
 enum SessionView: String, Codable, CaseIterable {
@@ -199,7 +183,7 @@ enum GestureAction: String, Codable, CaseIterable {
     var label: String {
         switch self {
         case .none: "None"
-        case .paste: "Paste into prompt"
+        case .paste: "Paste into terminal"
         case .escape: "Send Esc"
         }
     }

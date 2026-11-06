@@ -23,11 +23,11 @@ use protocol::{
     AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
     FolderName, Key, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams, PairingInvite,
     PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
-    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SessionId, Signature,
-    SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams, TaskFoldersParams, TaskNewParams,
-    TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId,
-    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, WorkspaceCloseParams,
-    WorkspaceId, limits,
+    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SendTextParams,
+    SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams,
+    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
+    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
+    TerminalWatchParams, TypedText, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -1682,6 +1682,19 @@ impl CollieCore {
         expect_ok(response?)
     }
 
+    pub async fn terminal_send_text(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::TerminalSendText(typed(terminal_id, text)?);
+        let conn = self.conn(&machine_id)?;
+        let response = self.mutate(&machine_id, request, DRIVE_TIMEOUT).await;
+        self.locked_on(&conn, &response);
+        expect_ok(response?)
+    }
+
     /// For the app leaving the foreground: every terminal is locked here at once, then on each
     /// connected machine. A machine that does not confirm has its session closed, which ends
     /// its grants there too.
@@ -1810,6 +1823,17 @@ impl CollieCore {
             terminal_id: terminal(terminal_id)?,
             text,
         });
+        expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
+    }
+
+    /// Keystrokes typed into the agent's pane as is, without Enter.
+    pub async fn send_text(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+        text: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentSendText(typed(terminal_id, text)?);
         expect_ok(self.mutate(&machine_id, request, DRIVE_TIMEOUT).await?)
     }
 
@@ -3772,6 +3796,7 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
         Request::TerminalSendKeys(p) => Some(&mut p.op_id),
+        Request::AgentSendText(p) | Request::TerminalSendText(p) => Some(&mut p.op_id),
         _ => None,
     }
 }
@@ -3812,6 +3837,19 @@ fn new_op_id() -> OpId {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).expect("system RNG");
     OpId::new(URL_SAFE_NO_PAD.encode(bytes)).expect("16 bytes encode to 22 base64url chars")
+}
+
+fn typed(terminal_id: String, text: String) -> Result<SendTextParams, CoreError> {
+    Ok(SendTextParams {
+        op_id: new_op_id(),
+        terminal_id: terminal(terminal_id)?,
+        text: TypedText::new(text).map_err(|_| {
+            invalid(
+                "text",
+                "typed text must be 1 byte to 32 KiB, without control or invisible characters",
+            )
+        })?,
+    })
 }
 
 fn invalid(field: &str, message: &str) -> CoreError {
@@ -4881,6 +4919,18 @@ mod tests {
             field(rt.block_on(core.terminal_send_keys(m(), t(), vec![AgentKey::Enter; 17]))),
             Some("keys".into())
         );
+        for bad in ["", "ls\n", "\t", "\u{1b}[A", "a\u{200B}b"] {
+            assert_eq!(
+                field(rt.block_on(core.send_text(m(), t(), bad.into()))),
+                Some("text".into()),
+                "{bad:?}"
+            );
+            assert_eq!(
+                field(rt.block_on(core.terminal_send_text(m(), t(), bad.into()))),
+                Some("text".into()),
+                "{bad:?}"
+            );
+        }
         assert_eq!(
             field(rt.block_on(core.terminal_grant(m(), t(), vec![1; 3]))),
             Some("signature".into())

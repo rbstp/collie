@@ -65,7 +65,11 @@ final class ApprovalsModel {
     private(set) var items: [ApprovalItem] = []
     private(set) var steps: [String: Step] = [:]
     private(set) var notice: String?
+    /// The approval the notice reports on, kept after it leaves: the notice shows only in its task and its review sheet.
+    private(set) var noticeItem: ApprovalItem?
     private(set) var expanded: Set<String> = []
+    /// Approvals whose card cuts the command or leaves out the reason: their half-height review sheet shows both.
+    private(set) var cut: Set<String> = []
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.
     private(set) var noting: Set<String> = []
@@ -129,21 +133,34 @@ final class ApprovalsModel {
         .sorted { ($0.approval.createdAtMs, $0.id) < ($1.approval.createdAtMs, $1.id) }
         swept = swept.filter { connected.contains($0.key) }
         guard next != items else { return }
-        let pending = next.map(\.approval)
-        if pending == items.filter({ $0.id != noticeSubject }).map(\.approval) {
-            noticeSubject = nil
-        } else if pending != items.map(\.approval) {
+        if let subject = noticeSubject {
+            if !next.contains(where: { $0.id == subject }) {
+                noticeSubject = nil
+                expireNotice()
+            }
+        } else if next.map(\.approval) != items.map(\.approval) {
             show(nil)
         }
         items = next
         let ids = Set(next.map(\.id))
         expanded.formIntersection(ids)
+        cut.formIntersection(ids)
         noting.formIntersection(ids)
         drafts = drafts.filter { ids.contains($0.key) }
     }
 
     func toggleExpanded(_ item: ApprovalItem) {
-        if expanded.remove(item.id) == nil { expanded.insert(item.id) }
+        if expanded.remove(item.id) == nil {
+            expanded.insert(item.id)
+        } else {
+            // Add note lives in the sheet: once it closes, a note left open would go, unseen, with a decision on the card.
+            noting.remove(item.id)
+        }
+    }
+
+    func setCut(_ item: ApprovalItem, _ isCut: Bool) {
+        guard isCut != cut.contains(item.id) else { return }
+        if isCut { cut.insert(item.id) } else { cut.remove(item.id) }
     }
 
     func toggleNote(_ item: ApprovalItem) {
@@ -157,15 +174,27 @@ final class ApprovalsModel {
         return text.isEmpty ? nil : text
     }
 
-    private func show(_ text: String?, about subject: String? = nil) {
+    /// A notice about a pending approval stays until the next decision; once that approval leaves, or for any other
+    /// notice, it lasts `noticeLifetime`.
+    private func show(_ text: String?, about item: ApprovalItem? = nil) {
         notice = text
-        noticeSubject = text == nil ? nil : subject
+        noticeItem = text != nil ? item : nil
+        noticeSubject = text != nil && items.contains { $0.id == item?.id } ? item?.id : nil
         noticeTimer?.cancel()
-        guard text != nil else { return }
+        if text != nil, noticeSubject == nil { expireNotice() }
+    }
+
+    private func expireNotice() {
+        noticeTimer?.cancel()
         noticeTimer = Task { [weak self, noticeLifetime] in
             try? await Task.sleep(for: noticeLifetime)
             if !Task.isCancelled { self?.show(nil) }
         }
+    }
+
+    func notice(machineId: String, terminalId: String) -> String? {
+        guard let about = noticeItem, about.machine.id == machineId, about.approval.terminalId == terminalId else { return nil }
+        return notice
     }
 
     func items(machineId: String, terminalId: String) -> [ApprovalItem] {
@@ -252,7 +281,7 @@ final class ApprovalsModel {
         else { return }
         if let note {
             do { try checkNote(note: note, decision: decision) } catch {
-                show(describe(error), about: item.id)
+                show(describe(error), about: item)
                 return
             }
         }
@@ -260,7 +289,7 @@ final class ApprovalsModel {
         show(nil)
         guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {
             steps[item.id] = nil
-            show("Not authenticated. Nothing was sent.", about: item.id)
+            show("Not authenticated. Nothing was sent.", about: item)
             return
         }
         steps[item.id] = .sending(decision)
@@ -269,9 +298,9 @@ final class ApprovalsModel {
             let outcome = try await core.decide(
                 machineId: item.machine.id, approvalId: item.approval.approvalId, decision: decision, note: note
             )
-            show(outcome.message(agent: item.approval.agentLabel), about: item.id)
+            show(outcome.message(agent: item.approval.agentLabel), about: item)
         } catch {
-            show(describe(error), about: item.id)
+            show(describe(error), about: item)
         }
         poll()
     }
@@ -281,7 +310,7 @@ final class ApprovalsModel {
         guard let core, steps[item.id] == nil, item.approval.takesFeedback, !text.isEmpty else { return }
         poll()
         guard items.contains(where: { $0.id == item.id }) else {
-            show("This plan is no longer waiting for an answer.", about: item.id)
+            show("This plan is no longer waiting for an answer.", about: item)
             return
         }
         steps[item.id] = .typing
@@ -294,9 +323,9 @@ final class ApprovalsModel {
                 try await core.typeText(machineId: item.machine.id, terminalId: item.approval.terminalId, text: text)
             }
             drafts[item.id] = nil
-            show("Sent your answer to \(item.approval.agentLabel).", about: item.id)
+            show("Sent your answer to \(item.approval.agentLabel).", about: item)
         } catch {
-            show(describe(error), about: item.id)
+            show(describe(error), about: item)
         }
         poll()
     }
@@ -339,6 +368,11 @@ extension DecisionOutcome {
 }
 
 enum Countdown {
+    /// Only the last 2 minutes: until then the approval's time left is no call to act.
+    static func shows(untilMs: UInt64, now: Date) -> Bool {
+        untilMs < now.unixMs + 120_000
+    }
+
     static func string(untilMs: UInt64, now: Date) -> String {
         let seconds = Int(untilMs / 1000) - Int(now.timeIntervalSince1970)
         guard seconds > 0 else { return "expired" }

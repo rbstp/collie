@@ -178,7 +178,7 @@ struct TerminalSelection: Equatable, Sendable {
 }
 
 /// One cell's characters and the columns they cover: two for a wide character.
-private struct Cluster {
+struct Cluster {
     var column: Int
     var end: Int
     var text: String

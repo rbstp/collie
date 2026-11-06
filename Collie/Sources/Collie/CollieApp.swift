@@ -7,19 +7,22 @@ struct CollieApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
-            if let demo = AgentDemo(arguments: CommandLine.arguments) {
-                demo
-            } else {
+            Group {
+                #if DEBUG
+                if let demo = AgentDemo(arguments: CommandLine.arguments) {
+                    demo
+                } else {
+                    RootView(app: delegate.app)
+                        .task { await delegate.app.launch() }
+                        .onOpenURL { delegate.app.open($0) }
+                }
+                #else
                 RootView(app: delegate.app)
                     .task { await delegate.app.launch() }
                     .onOpenURL { delegate.app.open($0) }
+                #endif
             }
-            #else
-            RootView(app: delegate.app)
-                .task { await delegate.app.launch() }
-                .onOpenURL { delegate.app.open($0) }
-            #endif
+            .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         }
         .onChange(of: scenePhase) { _, phase in
             #if DEBUG
@@ -75,7 +78,7 @@ struct RootView: View {
                     app.tab = tab
                 }
             ) {
-                Tab("Agents", systemImage: "square.grid.2x2", value: AppTab.agents) {
+                Tab("Agents", systemImage: "sparkles.rectangle.stack", value: AppTab.agents) {
                     FlockScreen(
                         core: app.core, machines: app.machines, approvals: app.approvals, follows: app.follows,
                         opening: $app.openingAgent, tailnetStarting: !app.isRunning, reselected: agentsReselected,

@@ -5,9 +5,7 @@ import UIKit
 /// Scrolls over the snapshot and draws only the visible cells, so a wide pane never needs a
 /// backing store larger than the screen.
 public final class GhosttyTerminalUIView: UIScrollView {
-    static let background = TerminalRGB(0x28, 0x2C, 0x34)
-    public static let backgroundColor = UIColor(background)
-    static let foreground = TerminalRGB(0xFF, 0xFF, 0xFF)
+    public static let backgroundColor = UIColor { UIColor(TerminalTheme($0).background) }
 
     public var fontSize: CGFloat {
         didSet {
@@ -46,6 +44,15 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
+    /// Replaces the theme's background, resolved for the appearance; text keeps its minimum contrast against it.
+    public var themeBackground: UIColor? {
+        didSet {
+            backgroundColor = themeBackground ?? Self.backgroundColor
+            canvas.backgroundColor = backgroundColor
+            render()
+        }
+    }
+
     // Each gesture below is off while a selection is active, and while its callback is nil.
     public var onDoubleTap: (() -> Void)? {
         didSet { gesturesChanged() }
@@ -57,6 +64,46 @@ public final class GhosttyTerminalUIView: UIScrollView {
         didSet { gesturesChanged() }
     }
     public var onPinchEnded: (() -> Void)?
+    /// A single tap that clears no selection.
+    public var onTap: (() -> Void)?
+    /// Turns on the input box of `inputAgent`: a single tap in it goes here instead of `onTap`, with
+    /// the keys that move the cursor where it points, and while typing the box stays in view above
+    /// the keyboard until the user scrolls away from it.
+    public var onTapInput: ((TerminalInputWalk) -> Void)? {
+        didSet {
+            if (oldValue == nil) != (onTapInput == nil) { prepare() }
+        }
+    }
+    /// The pane's agent kind, whose input box `onTapInput` finds: "claude", "codex" or "copilot".
+    public var inputAgent: String? {
+        didSet {
+            if oldValue != inputAgent { prepare() }
+        }
+    }
+    /// The snapshot as the Mac draws it, where the one shown joins rows it wrapped: the walk to a
+    /// tapped spot in the input box counts the Mac's rows.
+    public var inputSnapshot: String?
+    /// Keystrokes while `typing`: text as typed, Return as "\n".
+    public var onInsertText: ((String) -> Void)? {
+        get { keyInput.insert }
+        set { keyInput.insert = newValue }
+    }
+    public var onDeleteBackward: (() -> Void)? {
+        get { keyInput.delete }
+        set { keyInput.delete = newValue }
+    }
+    /// Shows the keyboard for `onInsertText`. A hidden view takes it, so the terminal stays a
+    /// scroll view to accessibility rather than turning into a text view.
+    public var typing: Bool {
+        get { keyInput.isFirstResponder }
+        set { _ = newValue ? keyInput.becomeFirstResponder() : keyInput.resignFirstResponder() }
+    }
+    /// Whenever the keyboard comes or goes, by `typing` or by UIKit.
+    public var onTypingChanged: ((Bool) -> Void)? {
+        get { keyInput.changed }
+        set { keyInput.changed = newValue }
+    }
+    private let keyInput = KeyInput()
     /// Also off unless rows wrap: without wrapping, a sideways pan scrolls the terminal.
     public var onSwipe: ((TerminalSwipe) -> Void)? {
         didSet { gesturesChanged() }
@@ -68,7 +115,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public var filePath: ((String) -> String?)?
     public var onOpenFile: ((String) -> Void)?
 
-    private let screen = TerminalScreen(background: GhosttyTerminalUIView.background, foreground: GhosttyTerminalUIView.foreground)
+    private let screen = TerminalScreen(theme: .dark)
+    private var theme = TerminalTheme.dark
     private let canvas = TerminalCanvas()
     private var snapshot: String?
     private var renderDeferred = false
@@ -76,6 +124,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private(set) var frameData: TerminalFrame?
     private var renderedColumns: Int?
     private var followsBottom = true
+    private var followsInput = true
+    private var inputBox: TerminalInputBox?
+    /// The offset scrollToBottom last set, which may stop above the bottom to show the input box.
+    private var followed: CGFloat?
     private var laidOutSize = CGSize.zero
     var selection: TerminalSelection? {
         didSet { selectionChanged() }
@@ -109,11 +161,10 @@ public final class GhosttyTerminalUIView: UIScrollView {
     public init(fontSize: CGFloat) {
         self.fontSize = fontSize
         super.init(frame: .zero)
-        backgroundColor = UIColor(Self.background)
-        indicatorStyle = .white
+        backgroundColor = Self.backgroundColor
         alwaysBounceVertical = true
         canvas.metrics = CellMetrics(size: fontSize)
-        canvas.backgroundColor = UIColor(Self.background)
+        canvas.backgroundColor = Self.backgroundColor
         canvas.isUserInteractionEnabled = false
         addSubview(canvas)
 
@@ -147,7 +198,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         panGestureRecognizer.addTarget(self, action: #selector(panned(_:)))
         scrollEnd.ended = { [weak self] in
             guard let self else { return }
-            followsBottom = atBottom
+            followsBottom = atFollowed
+            followsInput = followsBottom
             if renderDeferred { render() }
         }
         delegate = scrollEnd
@@ -179,6 +231,11 @@ public final class GhosttyTerminalUIView: UIScrollView {
         menu.spacing = 8
         menu.isHidden = true
         addSubview(menu)
+        keyInput.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        keyInput.isAccessibilityElement = true
+        keyInput.accessibilityLabel = "Terminal input"
+        addSubview(keyInput)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in self.render() }
     }
 
     required init?(coder: NSCoder) {
@@ -206,6 +263,15 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func render() {
         guard let snapshot, let screen else { return }
         renderDeferred = false
+        var current = TerminalTheme(traitCollection)
+        if let themeBackground {
+            current.background = TerminalRGB(themeBackground.resolvedColor(with: traitCollection))
+        }
+        if theme != current {
+            theme = current
+            screen.setColors(theme)
+            canvas.theme = theme
+        }
         let columns = wrapColumns
         // Wait for a width: rendering at one column would flash a tall, narrow frame.
         if wraps && columns == nil { return }
@@ -217,8 +283,14 @@ public final class GhosttyTerminalUIView: UIScrollView {
     private func prepare() {
         guard let frameData else { return }
         if bounds.height > 0 {
-            followsBottom = atBottom
+            followsBottom = atFollowed
         }
+        let box = onTapInput == nil ? nil : inputAgent.flatMap { TerminalInputBox(frameData, agent: $0) }
+        // Typing changes the box, which brings it back into view.
+        if let box, box.text != inputBox?.text, typing {
+            (followsBottom, followsInput) = (true, true)
+        }
+        inputBox = box
         canvas.prepare(frameData)
         let m = canvas.metrics
         contentSize = CGSize(
@@ -353,8 +425,23 @@ public final class GhosttyTerminalUIView: UIScrollView {
         }
     }
 
-    @objc private func tapped() {
-        if selection != nil { selection = nil }
+    @objc private func tapped(_ recognizer: UITapGestureRecognizer) {
+        let point = recognizer.location(in: self)
+        let m = canvas.metrics
+        if selection != nil {
+            selection = nil
+        } else if let onTapInput, let box = inputBox,
+            let walk = box.walk(row: Int(((point.y - m.inset) / m.height).rounded(.down)), column: (point.x - m.inset) / m.width, mac: macInputBox(box))
+        {
+            onTapInput(walk)
+        } else {
+            onTap?()
+        }
+    }
+
+    private func macInputBox(_ box: TerminalInputBox) -> TerminalInputBox? {
+        guard let inputSnapshot, inputSnapshot != snapshot else { return box }
+        return screen.flatMap { TerminalInputBox($0.render(ansiSnapshot: inputSnapshot), agent: box.agent) }
     }
 
     @objc private func doubleTapped() {
@@ -553,8 +640,23 @@ public final class GhosttyTerminalUIView: UIScrollView {
         contentOffset.y >= contentSize.height + adjustedContentInset.bottom - bounds.height - 1
     }
 
+    private var atFollowed: Bool {
+        atBottom || followed.map { abs(contentOffset.y - $0) < 1 } == true
+    }
+
     private func scrollToBottom() {
-        contentOffset.y = max(contentSize.height + adjustedContentInset.bottom - bounds.height, -adjustedContentInset.top)
+        let inset = adjustedContentInset
+        let bottom = max(contentSize.height + inset.bottom - bounds.height, -inset.top)
+        if typing && followsInput, let box = inputBox {
+            let m = canvas.metrics
+            contentOffset.y = TerminalInputBox.offset(
+                showing: m.inset + CGFloat(box.bottom + 1) * m.height, insetBottom: inset.bottom, height: bounds.height,
+                minimum: -inset.top, maximum: bottom
+            )
+        } else {
+            contentOffset.y = bottom
+        }
+        followed = contentOffset.y
     }
 }
 
@@ -748,6 +850,7 @@ private final class TerminalCanvas: UIView {
         }
     }
     var selection: TerminalSelection?
+    var theme = TerminalTheme.dark
     private var frameData: TerminalFrame?
     /// Built on first draw: most runs of a long history are never on screen.
     private var lines: [LineKey: (line: CTLine, utf16: [UInt16])] = [:]
@@ -828,7 +931,7 @@ private final class TerminalCanvas: UIView {
         var rowCodepoints: [Int: [UInt32]] = [:]
         for index in visible {
             let run = frameData.runs[index]
-            let color = UIColor(run.style.foreground).withAlphaComponent(run.style.faint ? 0.5 : 1).cgColor
+            let color = UIColor(theme.textColor(run.style, on: run.style.background ?? frameData.background)).cgColor
             let baseline = CGFloat(run.row) * m.height + m.ascent
             if let (line, utf16) = ctLine(run) {
                 ctx.saveGState()
@@ -981,6 +1084,77 @@ private final class SelectionHandle: UIView {
 
     func barFrame(in view: UIView) -> CGRect {
         convert(bar.frame, to: view)
+    }
+}
+
+private final class KeyInput: UIView, UIKeyInput {
+    var insert: ((String) -> Void)?
+    var delete: (() -> Void)?
+    var changed: ((Bool) -> Void)?
+
+    override var canBecomeFirstResponder: Bool { insert != nil }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { changed?(true) }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { changed?(false) }
+        return resigned
+    }
+
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        insert?(text)
+    }
+
+    func deleteBackward() {
+        delete?()
+    }
+
+    // Keystrokes go out as typed: no correction, capitals or smart punctuation that would change a command.
+    var autocorrectionType: UITextAutocorrectionType {
+        get { .no }
+        set {}
+    }
+    var autocapitalizationType: UITextAutocapitalizationType {
+        get { .none }
+        set {}
+    }
+    var spellCheckingType: UITextSpellCheckingType {
+        get { .no }
+        set {}
+    }
+    var smartQuotesType: UITextSmartQuotesType {
+        get { .no }
+        set {}
+    }
+    var smartDashesType: UITextSmartDashesType {
+        get { .no }
+        set {}
+    }
+    var smartInsertDeleteType: UITextSmartInsertDeleteType {
+        get { .no }
+        set {}
+    }
+}
+
+extension TerminalTheme {
+    init(_ traits: UITraitCollection) {
+        self = traits.userInterfaceStyle == .light ? .light : .dark
+    }
+}
+
+extension TerminalRGB {
+    init(_ color: UIColor) {
+        var (r, g, b, a): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        func byte(_ v: CGFloat) -> UInt8 { UInt8((min(max(v, 0), 1) * 255).rounded()) }
+        self.init(byte(r), byte(g), byte(b))
     }
 }
 

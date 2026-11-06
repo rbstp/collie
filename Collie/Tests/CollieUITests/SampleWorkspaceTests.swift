@@ -13,12 +13,8 @@ final class SampleWorkspaceTests: XCTestCase {
         let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
         XCTAssertTrue(card.appears(within: 5))
         let label = card.label
-        XCTAssertNotNil(label.range(
-            of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, Run approval tests, [0-9]+(?:h [0-9]+)?m"#,
-            options: .regularExpression
-        ))
-        XCTAssertTrue(label.contains("+3 more"))
-        XCTAssertFalse(label.contains("Check retry handling"))
+        XCTAssertNotNil(label.range(of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, \+4 more"#, options: .regularExpression))
+        XCTAssertFalse(label.contains("Run approval tests"))
         XCTAssertFalse(label.contains("5 subagents"))
         XCTAssertFalse(label.contains("12k"))
         let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch

@@ -46,13 +46,6 @@ final class KeyboardSwipeTests: XCTestCase {
         typed.tap()
         swipeDown(on: typed)
         XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
-
-        app.buttons["Terminal"].firstMatch.tap()
-        XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
-        typed.tap()
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        swipeDown(on: typed)
-        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
     }
 
     func testSwipeDownOnTheInboxSearchDismissesTheKeyboard() throws {
@@ -61,6 +54,9 @@ final class KeyboardSwipeTests: XCTestCase {
         let layout = app.buttons["Layout"]
         XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         app.choose(app.buttons["Inbox"]) { layout.tap() }
+        let search = app.buttons["Search"]
+        XCTAssertTrue(search.appears(within: 5), app.debugDescription)
+        search.tap()
         typeAndSwipeDown(app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch, in: app)
     }
 

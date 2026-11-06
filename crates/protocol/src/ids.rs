@@ -444,6 +444,17 @@ validated_string!(
 );
 
 validated_string!(
+    /// Keystrokes typed into a pane as is, without Enter or bracketed paste. Every C0/C1
+    /// control is rejected, so it can carry no escape sequence, Enter or Tab: those go
+    /// out as keys from the closed `Key` list. Redacted in logs: a shell may be reading a
+    /// password.
+    TypedText,
+    debug = redacted,
+    check = |s| !s.is_empty() && s.len() <= limits::MAX_PROMPT_BYTES && !s.chars().any(|c| c.is_control() || is_format(c)),
+    schema = { "minLength": 1, "maxLength": limits::MAX_PROMPT_BYTES }
+);
+
+validated_string!(
     /// Unsent text in the Mac's input box as collied read it; may be empty.
     DraftText,
     debug = plain,
@@ -511,6 +522,25 @@ mod tests {
         assert!(PromptText::new("x\u{9b}201~").is_err());
         assert!(PromptText::new("   ").is_err());
         assert!(PromptText::new("a".repeat(limits::MAX_PROMPT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn typed_text_is_plain_keystrokes() {
+        for ok in [" ", "/mod", "ls -la ~"] {
+            assert!(TypedText::new(ok).is_ok(), "{ok:?}");
+        }
+        for bad in [
+            "",
+            "a\n",
+            "a\r",
+            "a\t",
+            "\u{1b}[A",
+            "x\u{9b}A",
+            "a\u{202e}b",
+        ] {
+            assert!(TypedText::new(bad).is_err(), "{bad:?}");
+        }
+        assert!(TypedText::new("a".repeat(limits::MAX_PROMPT_BYTES + 1)).is_err());
     }
 
     #[test]

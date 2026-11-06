@@ -2,15 +2,21 @@
 
 ## The key strip
 
-The key strip sends keys an iPhone keyboard lacks. The **Keys** button next to Terminal's prompt field shows or hides it.
+The key strip sends keys an iPhone keyboard lacks. The ⌘ button at the bottom left of Terminal shows or hides it; it stays above the keyboard while you type.
 
 ```text
-⇧  ⌃  E  ←  ↑  ↓  →  ⇥  ⌫  ⏎
+⌃ | ⇧ | ⎋ | ⇥ | ⌫ | ⏎    joystick
 ```
 
-`E` sends Escape. Tap ⇧ or ⌃, then a key, to send the pair: ⇧⇥, ⇧← or ⌃⏎. With ⌃ selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
+The main keys share one bar of large symbols, with the joystick after it: control, shift, escape, tab, delete and return.
 
-The second row scrolls: `⇧⇥ ⌃⏎ ⇧← ^C`, your key shortcuts, then **+** to add one.
+The escape key sends Escape. Tap control or shift, then a key, to send the pair: shift and tab, control and Return or, in Codex, shift and the left arrow. With control selected, a letter typed on the keyboard sends Control and that letter (A, B, C, E, K, L, U or W).
+
+The second row scrolls, in symbols too: shift-tab (⇧⇥), control-return (⌃⏎) and control-C (⌃C), with shift-left (⇧←) before control-C in Codex sessions to answer a queued question, then your key shortcuts and **+** to add one. A key shortcut shows its keys' symbols, or its name or text when it has them.
+
+The round joystick sends the arrows. With the strip hidden, it sits in the bottom row, beside the keyboard button, and a return key follows the keyboard button at the right edge, so you can send Return after dictation without opening the keyboard or the strip. Press it and drag toward an arrow to send that arrow, and keep holding to repeat it, about 12 times a second after a short pause. The direction it sends lights up; let go to stop. With shift selected in Codex, the first left arrow goes out as shift-left.
+
+In a Claude Code, Codex or Copilot CLI session, you can also tap a spot in the input box to move the cursor there; the phone sends the keys for you, ↓ to the tapped line and → along it ([Terminal](chat-terminal.md#terminal) lists the few spots it skips).
 
 ## Key shortcuts
 
@@ -26,7 +32,7 @@ Set Terminal gestures in **Settings > Terminal > Gestures**:
 
 | Gesture | Action |
 |---|---|
-| Double-tap | Paste into the prompt field |
+| Double-tap | Paste: types the clipboard into the terminal, new lines as spaces, never Return |
 | Pinch | Change the font size |
 | Swipe sideways | Switch agents (while lines wrap) |
 | Triple-tap | Send Esc (off by default) |

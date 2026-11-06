@@ -116,7 +116,7 @@ struct UsageCostsCard: View {
                 Spacer()
                 if case .loaded(let costs) = model.phase, costs.scanning {
                     ProgressView().controlSize(.small)
-                    Text("Scanning").font(.caption).foregroundStyle(.secondary)
+                    Text("Scanning").font(.caption).foregroundStyle(.metadata)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -125,9 +125,9 @@ struct UsageCostsCard: View {
             case .loading:
                 ProgressView().frame(maxWidth: .infinity)
             case .outdated:
-                Text("Update collied on this machine to see tokens and cost.").font(.subheadline).foregroundStyle(.secondary)
+                Text("Update collied on this machine to see tokens and cost.").font(.subheadline).foregroundStyle(.metadata)
             case .failed(let message):
-                Text(message).font(.subheadline).foregroundStyle(.secondary)
+                Text(message).font(.subheadline).foregroundStyle(.metadata)
             case .loaded(let costs):
                 CostsDetail(costs: costs)
             }
@@ -151,15 +151,16 @@ private struct CostsRead: Equatable {
 
 private struct CostsDetail: View {
     let costs: UsageCosts
+    @State private var pickedDay: Date?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.semibold).monospacedDigit())
-                Text("Estimated at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
+                Text("\(costs.scanning ? "Partial est." : "Est.") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.metadata)
             }
             .accessibilityElement(children: .combine)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
@@ -173,20 +174,48 @@ private struct CostsDetail: View {
                 }
             }
             if costs.days.count > 1 {
-                Chart(costs.days.compactMap { day in day.day.map { (day: $0, cost: day.costUsd) } }, id: \.day) { bar in
-                    BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                let bars = costs.days.compactMap { day in day.day.map { (day: $0, cost: day.costUsd) } }
+                let picked = pickedDay.flatMap { picked in bars.first { Calendar.current.isDate($0.day, inSameDayAs: picked) }?.day }
+                Chart {
+                    ForEach(bars, id: \.day) { bar in
+                        BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                            .foregroundStyle(.tint.opacity(picked == nil || picked == bar.day ? 1 : 0.35))
+                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4))
+                    }
+                    // Drawn after every bar, so the callout is not covered by the next one.
+                    if let bar = bars.first(where: { $0.day == picked }) {
+                        PointMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                            .symbolSize(0)
+                            .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                                Text("\(bar.day.formatted(.dateTime.month(.abbreviated).day())) · \(UsageCostsCard.dollars(bar.cost))")
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color(.tertiarySystemGroupedBackground), in: .capsule)
+                            }
+                    }
                 }
+                .chartXSelection(value: $pickedDay)
+                .chartGesture { proxy in
+                    SpatialTapGesture().onEnded { tap in
+                        let before = picked
+                        proxy.selectXValue(at: tap.location.x)
+                        if let before, let now = pickedDay, Calendar.current.isDate(before, inSameDayAs: now) { pickedDay = nil }
+                    }
+                }
+                .chartXAxis { AxisMarks { AxisValueLabel().foregroundStyle(.metadata) } }
                 .chartYAxis {
                     AxisMarks { value in
                         AxisGridLine()
-                        AxisValueLabel { value.as(Double.self).map { Text(UsageCostsCard.dollars($0)) } }
+                        AxisValueLabel { value.as(Double.self).map { Text($0.formatted(.currency(code: "USD").precision(.fractionLength($0 == $0.rounded() ? 0 : 2)))) } }
+                            .foregroundStyle(.metadata)
                     }
                 }
                 .frame(height: 120)
                 .accessibilityLabel("Daily cost")
             }
             if costs.models.isEmpty, !costs.scanning {
-                Text("No tokens recorded in this range").font(.subheadline).foregroundStyle(.secondary)
+                Text("No tokens recorded in this range").font(.subheadline).foregroundStyle(.metadata)
             }
             ForEach(costs.models, id: \.self) { row in
                 VStack(alignment: .leading, spacing: 2) {
@@ -194,18 +223,18 @@ private struct CostsDetail: View {
                     layout {
                         Text(row.model).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).truncationMode(.middle)
                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                        Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .secondary : .primary)
+                        Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .metadata : Color.primary)
                     }
                     Text("\(row.agentName) · \(UsageCostsCard.tokens(row.tokens.total)) tokens")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.metadata)
                 }
                 .accessibilityElement(children: .combine)
             }
             if costs.models.contains(where: { $0.agent == "copilot" }) {
                 Text("Copilot bills premium requests; its cost is an API-equivalent estimate.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.metadata)
             }
         }
     }
@@ -218,8 +247,9 @@ private struct TokenFigure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(UsageCostsCard.tokens(value)).font(.subheadline.monospacedDigit())
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(.metadata)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 }

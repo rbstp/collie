@@ -1,6 +1,6 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::draft::{Wrap, separator};
+use crate::draft::{self, Wrap, separator};
 
 enum Prev {
     /// A row here may start a paragraph.
@@ -17,7 +17,8 @@ enum Prev {
 /// or `※` row counts; a row that only might continue the one above never does. A numbered item
 /// continues past its number or, as Claude Code 2.1.303 drew items with blank rows between
 /// them, under it. A shaded sent prompt, wrapped at `cols - 3`, joins only after a row Claude
-/// Code ended with a space in the text's style.
+/// Code ended with a space in the text's style. The input box's unsent text joins as
+/// [`draft::parse`] reads it.
 pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut prose = false;
@@ -156,6 +157,9 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             Prev::Row(..) | Prev::Held => Prev::Held,
         };
     }
+    let (typed_wraps, typed_splits) = draft::wraps(ansi);
+    wraps.extend(typed_wraps);
+    splits.extend(typed_splits);
     (wraps, splits)
 }
 
@@ -1184,6 +1188,104 @@ mod tests {
         assert!(joined.contains("6) run python3 -c \u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m'print(round"));
         let typed = include_str!("../tests/fixtures/claude-2.1.299/sent-multiline.ansi.txt");
         assert_eq!(soft_wraps(typed, 182), (vec![8], vec![]));
+    }
+
+    fn reflowed(ansi: &str, cols: usize) -> Vec<String> {
+        let (wraps, splits) = soft_wraps(ansi, cols);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("t").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi: ansi.into(),
+            truncated: false,
+            wraps,
+            splits,
+            copilot_scrollbar: false,
+        };
+        read.reflowed()
+            .unwrap_or_else(|| ansi.into())
+            .split('\n')
+            .map(|row| {
+                let mut text = String::new();
+                plain_text(row, &mut text);
+                text.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    /// A 40-column Claude Code screen whose input box holds `rows`, each row's text holding
+    /// 36 columns.
+    fn input_box(rows: &[&str]) -> String {
+        let rule =
+            "\u{1b}[0m\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[0m";
+        format!(
+            "\u{1b}[0m\u{1b}[38;2;255;255;255m⏺ \u{1b}[0mDone.\r\n\r\n{rule}\r\n❯ {}\r\n{rule}\r\n  \u{1b}[0m\u{1b}[38;2;153;153;153mOpus 5.5 high\u{1b}[0m · ~/src/app",
+            rows.join("\r\n  ")
+        )
+    }
+
+    #[test]
+    fn an_unsent_prompt_joins_where_claude_wrapped_it() {
+        let screen = input_box(&["the quick brown fox jumps over the", "lazy dog"]);
+        assert_eq!(soft_wraps(&screen, 40), (vec![4], vec![]));
+        assert_eq!(
+            reflowed(&screen, 40)[3],
+            "❯ the quick brown fox jumps over the lazy dog"
+        );
+    }
+
+    #[test]
+    fn an_unsent_prompt_joins_across_a_path_longer_than_a_row() {
+        let text = "/Users/someone/Library/Caches/app/attachments/0123456789abcdef/photo-20261104-193409.jpg  we can remove the working text in the view";
+        let rows = model::rows(text, 36);
+        let shown: Vec<&str> = rows.iter().map(|(_, row)| row.trim_end()).collect();
+        let screen = input_box(&shown);
+        let at = |sep: &str| -> Vec<u32> {
+            (1..rows.len())
+                .filter(|&i| rows[i].0 == sep)
+                .map(|i| u32::try_from(i + 3).unwrap())
+                .collect()
+        };
+        assert_eq!(rows.iter().filter(|(sep, _)| sep.is_empty()).count(), 2);
+        assert_eq!(soft_wraps(&screen, 40), (at(" "), at("")));
+        assert_eq!(reflowed(&screen, 40)[3], format!("❯ {text}"));
+    }
+
+    #[test]
+    fn an_unsent_prompt_keeps_typed_newlines() {
+        let screen = input_box(&["first line", "second line", "", "after a blank"]);
+        assert_eq!(soft_wraps(&screen, 40), (vec![], vec![]));
+        let indented = input_box(&["the quick brown fox jumps over the", "  indented"]);
+        assert_eq!(soft_wraps(&indented, 40), (vec![], vec![]));
+        let bash = input_box(&["the quick brown fox jumps over the", "lazy dog"])
+            .replace("❯ the", "! the");
+        assert_eq!(soft_wraps(&bash, 40), (vec![], vec![]));
+    }
+
+    #[test]
+    fn a_blank_row_after_a_full_row_joins_as_the_hidden_space() {
+        // Claude Code 2.1.302 draws a word that fills a row on the row after the one holding
+        // the hidden space.
+        let full = format!("{} {}", "a".repeat(20), "b".repeat(15));
+        let c36 = "c".repeat(36);
+        let screen = input_box(&[&full, "", &c36]);
+        assert_eq!(soft_wraps(&screen, 40), (vec![5], vec![4]));
+        assert_eq!(reflowed(&screen, 40)[3], format!("❯ {full} {c36}"));
+    }
+
+    #[test]
+    fn a_sent_prompt_still_joins_beside_an_unsent_one() {
+        let sent = include_str!("../tests/fixtures/claude-2.1.303/sent-prompt.ansi.txt");
+        let first = "alpha ".repeat(33);
+        let screen = sent.replace(
+            "\n❯\u{a0}\n",
+            &format!("\n❯ {}\n  omega tail\n", first.trim_end()),
+        );
+        assert_eq!(soft_wraps(&screen, 206), (vec![3, 9], vec![]));
+        let rows = reflowed(&screen, 206);
+        assert!(
+            rows[2].ends_with("her differ by every was do, one our'i first through go he out?")
+        );
+        assert_eq!(rows[7], format!("❯ {first}omega tail"));
     }
 
     #[test]

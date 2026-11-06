@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Collie
@@ -93,6 +94,14 @@ func accentPreferenceSurvivesOtherPreferenceUpdates(_ accent: AppAccent) throws 
     #expect(prefs.keepKeyboard)
     #expect(prefs.historyLines == 500)
     #expect(prefs.taskBases == ["m1": "/Users/me/git"])
+}
+
+@Test(arguments: [ColorScheme.light, .dark])
+func prominentButtonsTakeADarkLabelOnlyOnALightAccentFill(_ scheme: ColorScheme) {
+    var environment = EnvironmentValues()
+    environment.colorScheme = scheme
+    let dark = AppAccent.allCases.filter { $0.color.resolve(in: environment).takesDarkLabel }
+    #expect(Set(dark) == (scheme == .dark ? [.neutral, .orange, .green, .gold] : [.orange, .green]))
 }
 
 @Test func draftsFileLoadsAndSavesTheSameJSON() throws {

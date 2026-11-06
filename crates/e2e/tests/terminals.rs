@@ -127,8 +127,13 @@ async fn scenario(
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
+    let err = core
+        .terminal_send_text(m.clone(), shell.clone(), "echo locked".into())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::TerminalLocked), "{err:?}");
 
-    println!("a signed grant unlocks it: watch, run, keys");
+    println!("a signed grant unlocks it: watch, run, typing, keys");
     unlock(core, &m, &shell, &key).await;
     let view = core.agent_view(m.clone(), shell.clone(), 0).unwrap();
     assert!(view.agent.is_none() && view.terminal.is_some() && view.terminals_enabled);
@@ -143,6 +148,21 @@ async fn scenario(
         v.output
             .as_ref()
             .is_some_and(|o| o.ansi.contains("collie-42"))
+    })
+    .await;
+    core.terminal_send_text(m.clone(), shell.clone(), "echo typed-".into())
+        .await
+        .unwrap();
+    core.terminal_send_text(m.clone(), shell.clone(), "$((2 * 21))".into())
+        .await
+        .unwrap();
+    core.terminal_send_keys(m.clone(), shell.clone(), vec![AgentKey::Enter])
+        .await
+        .unwrap();
+    wait_view(core, &m, &shell, "the typed command's output", |v| {
+        v.output
+            .as_ref()
+            .is_some_and(|o| o.ansi.contains("typed-42"))
     })
     .await;
     core.terminal_send_keys(m.clone(), shell.clone(), vec![AgentKey::CtrlC])
@@ -191,5 +211,9 @@ async fn scenario(
     );
     let text = std::fs::read_to_string(&audit).unwrap();
     assert!(!text.contains("collie-$"), "typed text in the audit log");
+    assert!(
+        !text.contains("typed-"),
+        "typed keystrokes in the audit log"
+    );
     handle.shutdown().await;
 }

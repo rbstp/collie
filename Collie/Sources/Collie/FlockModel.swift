@@ -229,7 +229,7 @@ struct UsageLimit: Equatable {
 
     var left: UInt8 { 100 - used }
 
-    var title: String { label == "5h" ? "5-hour usage limit" : "Weekly usage limit" }
+    var title: String { label == "5h" ? "5-hour limit" : "Weekly limit" }
 
     /// The share of the window that has passed, from its reset time and its length.
     var elapsed: Double { min(1, max(0, 1 - Double(seconds) / Double(length))) }
@@ -285,6 +285,11 @@ extension PlanUsage {
         }
     }
 
+    /// No reading is current: each is past its own agent's limit.
+    func readingsStale(now: Date) -> Bool {
+        isStale(now: now) && codex?.isStale(now: now) != false && copilot?.isStale(now: now) != false
+    }
+
     func age(now: Date) -> String {
         Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
     }
@@ -337,7 +342,7 @@ extension PlanUsage {
         return PlanUsageWarning(
             text: head + resets + (stale ? ", recorded \(Self.age(sinceMs: sinceMs, now: now))" : ""),
             spoken: head + spokenResets + (stale ? ", \(Self.spokenAge(sinceMs: sinceMs, now: now))" : ""),
-            reached: used >= 100
+            used: used
         )
     }
 
@@ -385,7 +390,7 @@ extension AgentSummary {
 struct PlanUsageWarning: Equatable {
     let text: String
     let spoken: String
-    let reached: Bool
+    let used: UInt8
 }
 
 private func monthElapsed(resetsAtMs: UInt64, now: Date) -> Double {

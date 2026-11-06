@@ -117,6 +117,7 @@ struct ConversationView: View {
     @State private var submitted = ""
     @State private var visibleID: String?
     @State private var atBottom = true
+    @State private var viewport: CGFloat = 0
     @State private var selectedMatch: String?
     @FocusState private var searchFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -125,7 +126,7 @@ struct ConversationView: View {
         VStack(spacing: 0) {
             if searching { searchBar }
             if let error = model.error {
-                Text(error).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
+                Text(error).font(.footnote).foregroundStyle(.warning).padding(.horizontal)
             }
             if model.available == false {
                 ContentUnavailableView {
@@ -208,7 +209,7 @@ struct ConversationView: View {
                     .padding(.bottom, 6)
                 }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 20) {
+                    LazyVStack(alignment: .leading, spacing: 12) {
                         if model.before != nil && submitted.isEmpty {
                             Button {
                                 Task { await model.fetch(older: true, load: load) }
@@ -234,17 +235,23 @@ struct ConversationView: View {
                         ForEach(model.rows) { row in
                             ConversationRowView(row: row, query: submitted).id(row.id)
                         }
-                        Color.clear.frame(height: 1).id("bottom")
                     }
                     .scrollTargetLayout()
                     .padding()
+                    // Scrolled to a marker after the last row, a conversation shorter than the view sat low on the screen under
+                    // an empty band; at least the view's height, with the marker at its end, it starts under the header.
+                    .frame(minHeight: viewport, alignment: .top)
+                    .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id("bottom") }
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .scrollPosition(id: $visibleID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
+                // Rows measured again for a new width after the scroll below would move a rotated Chat up from its latest messages.
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
                 .onScrollGeometryChange(for: ScrollEdge.self) { geo in
                     ScrollEdge(size: geo.containerSize, atBottom: geo.contentOffset.y + geo.contentInsets.top + geo.containerSize.height >= geo.contentSize.height - 60)
                 } action: { old, new in
+                    viewport = new.size.height
                     // The position follows the top row, so a rotation or the keyboard would leave the latest messages out of view.
                     // Not old.atBottom: a resize comes in several steps, and a step measured before a deferred scroll lands reads as scrolled up.
                     if atBottom && old.size != new.size && submitted.isEmpty {
@@ -267,7 +274,7 @@ struct ConversationView: View {
                 .onChange(of: model.messages.last?.id) { _, _ in
                     if atBottom && submitted.isEmpty { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .bottom) {
                     if !atBottom && submitted.isEmpty {
                         Button("Latest messages", systemImage: "arrow.down") { proxy.scrollTo("bottom", anchor: .bottom) }
                             .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
@@ -323,13 +330,14 @@ private struct ConversationWake: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "eye")
+                    Image(systemName: "eye").foregroundStyle(.metadata)
                     Text(verbatim: line).lineLimit(1)
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.metadata)
                 }
                 .font(.footnote)
             }
             .buttonStyle(.glass)
+            .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 ConversationMarkdown(text: message.text, query: query)
@@ -342,7 +350,7 @@ private struct ConversationWake: View {
     }
 }
 
-private struct ConversationActivity: View {
+struct ConversationActivity: View {
     let tools: [ConversationTool]
     let steps: Int
     @State private var expanded = false
@@ -353,13 +361,16 @@ private struct ConversationActivity: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "wrench.and.screwdriver")
-                    Text("Activity · \(tools.count) \(tools.count == 1 ? "call" : "calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2)
+                    // Secondary gray measured 2.9:1 on this glass over a light chat.
+                    Text(verbatim: ConversationActivity.title(tools))
+                        + Text("\(tools.count == 1 ? "" : " · \(tools.count) calls")\(steps == 0 ? "" : " · \(steps) subagent \(steps == 1 ? "step" : "steps")")")
+                            .foregroundStyle(.metadata)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption2).foregroundStyle(.metadata)
                 }
                 .font(.footnote)
             }
             .buttonStyle(.glass)
+            .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -398,6 +409,14 @@ private struct ConversationActivity: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// "Read", "Update, Bash", or "Update and 2 more" from three tools on.
+    static func title(_ tools: [ConversationTool]) -> String {
+        var names: [String] = []
+        for tool in tools where !names.contains(tool.name) { names.append(tool.name) }
+        guard let first = names.first else { return "Activity" }
+        return names.count <= 2 ? names.joined(separator: ", ") : "\(first) and \(names.count - 1) more"
+    }
 }
 
 private struct ConversationMessage: View {
@@ -411,8 +430,8 @@ private struct ConversationMessage: View {
         HStack(alignment: .top) {
             if user { Spacer(minLength: 28) }
             VStack(alignment: .leading, spacing: 6) {
-                if user || message.parentCallId != nil {
-                    Text(user ? "You" : "Subagent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                if message.parentCallId != nil {
+                    Text("Subagent").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 }
                 if message.tool != nil {
                     Text(verbatim: message.tool ?? "Tool").font(.callout.weight(.semibold))
@@ -422,11 +441,12 @@ private struct ConversationMessage: View {
                     ConversationTruncation(truncated: message.truncated)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(user ? 12 : 0)
+            .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
+            .padding(.horizontal, user ? 14 : 0)
+            .padding(.vertical, user ? 10 : 0)
             .background {
                 if user {
-                    RoundedRectangle(cornerRadius: 18).fill(.tint.opacity(0.1))
+                    RoundedRectangle(cornerRadius: 18).fill(.fill.tertiary)
                 }
             }
         }
@@ -436,6 +456,8 @@ private struct ConversationMessage: View {
                 Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }
             }
         }
+        // A user's turn sets off the conversation more than the activity between replies.
+        .padding(.vertical, user ? 8 : 0)
     }
 }
 
@@ -489,6 +511,7 @@ struct ConversationMarkdown: View {
     let text: String
     var query: String = ""
     @Environment(AgentModel.self) private var agent: AgentModel?
+    @State private var copied: Int?
 
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
@@ -517,6 +540,15 @@ struct ConversationMarkdown: View {
         return result
     }
 
+    /// Monospaced at body size, and even at callout, outsized the prose around it; subheadline matches code blocks.
+    static func inlineCode(_ text: AttributedString) -> AttributedString {
+        var result = text
+        for run in text.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            result[run.range].font = .system(.subheadline, design: .monospaced)
+        }
+        return result
+    }
+
     static func blocks(_ text: String) -> [(code: Bool, text: String)] {
         var result: [(Bool, String)] = []
         var code = false
@@ -540,7 +572,8 @@ struct ConversationMarkdown: View {
         let quote = trimmed.hasPrefix("> ")
         let bullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
-        let rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
+        var rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
+        if !heading { rendered = Self.inlineCode(rendered) }
         return Text(Self.highlighted(FileLinks.linked(rendered), query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)
@@ -554,24 +587,29 @@ struct ConversationMarkdown: View {
             ForEach(blocks.indices, id: \.self) { index in
                 let block = blocks[index]
                 if block.code {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Code").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            if let agent {
-                                Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
-                                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
-                            }
-                            Button("Copy code", systemImage: "doc.on.doc") { UIPasteboard.general.string = block.text }
-                                .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
-                        }
+                    HStack(alignment: .top, spacing: 8) {
                         ScrollView(.horizontal) {
                             Text(Self.highlighted(AttributedString(block.text), query: query))
-                                .font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+                                .font(.system(.subheadline, design: .monospaced)).textSelection(.enabled)
+                                .padding(.vertical, 4)
+                        }
+                        Button {
+                            copy(block.text, index)
+                        } label: {
+                            Label(copied == index ? "Copied" : "Copy code", systemImage: copied == index ? AgentActivityStatus(.done).symbol : "doc.on.doc")
+                                .foregroundStyle(copied == index ? AgentState.done.color : .primary)
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.glass).tint(.primary).controlSize(.small)
+                    }
+                    .padding(8)
+                    .padding(.leading, 4)
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                    .contextMenu {
+                        Button("Copy code", systemImage: "doc.on.doc") { copy(block.text, index) }
+                        if let agent {
+                            Button("Quote code", systemImage: "text.quote") { agent.quote(block.text) }
                         }
                     }
-                    .padding(10)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
                 } else {
                     let lines = block.text.components(separatedBy: "\n")
                     VStack(alignment: .leading, spacing: 4) {
@@ -585,5 +623,16 @@ struct ConversationMarkdown: View {
         .environment(\.openURL, OpenURLAction { url in
             MainActor.assumeIsolated { Self.open(url, agent: agent) }
         })
+        .task(id: copied) {
+            guard copied != nil else { return }
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            copied = nil
+        }
+    }
+
+    private func copy(_ code: String, _ index: Int) {
+        UIPasteboard.general.string = code
+        copied = index
     }
 }

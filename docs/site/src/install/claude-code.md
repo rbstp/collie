@@ -26,7 +26,7 @@ Only the status line command receives Claude Code's 5-hour and weekly limits. To
 printf '%s' "$input" | ~/.cargo/bin/collied statusline >/dev/null 2>&1 &
 ```
 
-`collied` keeps only the limits and each session's context window size, which the [context ring](../app/agents-tab.md#remaining-context) uses.
+`collied` keeps only the limits and each session's context window size, which [remaining context](../app/agents-tab.md#remaining-context) uses.
 
 If `statusLine.command` is a single command, point it at a script that reads `input=$(cat)`, runs the line above, then pipes `printf '%s' "$input"` into the old command.
 

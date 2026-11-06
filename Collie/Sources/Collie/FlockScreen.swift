@@ -26,6 +26,7 @@ struct FlockScreen: View {
     @State private var dragging: GridDrag?
     @State private var inboxQuery = ""
     @State private var inboxFilter = InboxFilter.all
+    @State private var inboxSearching = false
     @State private var showsSnoozed = false
     /// The order the layout showed when the session opened; nil follows the layout as it is now.
     @State private var swipeOrder: [AgentRoute]?
@@ -39,22 +40,34 @@ struct FlockScreen: View {
                 agents.background(GridPageLock(locked: pagerLocked) { listMargin = $0 }).tag(false)
                 List { UsageSections(entries: model.entries, core: core, refresh: usageRefresh) }
                     .modifier(PagerListMargin(edge: .leading, margin: listMargin))
+                    .refreshable { await refresh() }
+                    // Off screen, the Agents page is not laid out on a rotation, and Usage kept the other orientation's margin.
+                    .background(GridPageLock(locked: pagerLocked) { listMargin = $0 })
                     .tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
             .ignoresSafeArea(.container)
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            // UIKit's top scroll edge effect follows the pager, not the pages' own scroll views.
+            .overlay(alignment: .top) {
+                GeometryReader { geometry in
+                    let background = Color(.systemGroupedBackground)
+                    let height = geometry.safeAreaInsets.top + 12
+                    // Solid under the whole bar: content fading out beside its glass controls showed through as a ghost.
+                    LinearGradient(stops: [.init(color: background, location: geometry.safeAreaInsets.top / height),
+                                           .init(color: background.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: height)
+                        .offset(y: -geometry.safeAreaInsets.top)
+                }
+                .allowsHitTesting(false)
+            }
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
             .navigationTitle("Agents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(removing: .title)
-            .refreshable {
-                for machine in machines { try? core?.reconnect(machineId: machine.id) }
-                await model.refresh(core: core, machines: machines)
-                usageRefresh += 1
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if tailnetStarting {
@@ -67,14 +80,21 @@ struct FlockScreen: View {
                     }
                 }
                 .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .primaryAction) {
-                    Menu("Layout", systemImage: layout.icon) {
-                        Picker("Layout", selection: $layout) {
-                            ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
+                if !showsUsage {
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu("Layout", systemImage: layout.icon) {
+                            Picker("Layout", selection: $layout) {
+                                ForEach(AgentsLayout.allCases, id: \.self) { Label($0.label, systemImage: $0.icon) }
+                            }
+                            .tint(.primary)
                         }
-                        .tint(.primary)
                     }
-                    .disabled(showsUsage)
+                    // The open field has its own close button.
+                    if layout == .inbox && !inboxSearching && inboxQuery.isEmpty {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button("Search", systemImage: "magnifyingglass") { inboxSearching = true }
+                        }
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("New task", systemImage: "plus") { newTask = true }
@@ -173,6 +193,7 @@ struct FlockScreen: View {
             .onChange(of: layout) { _, layout in
                 inboxQuery = ""
                 inboxFilter = .all
+                inboxSearching = false
                 showsSnoozed = false
                 if persistsState { DevicePrefs.update(in: DevicePrefs.file) { $0.agentsLayout = layout } }
             }
@@ -200,8 +221,9 @@ struct FlockScreen: View {
             AgentGrid(
                 entries: model.entries, previews: previews, order: $gridOrder, notice: model.closeNotice,
                 approvalsCount: approvalsCount, reconnect: reconnect, showsLink: !tailnetStarting, follows: follows,
-                closePane: { model.beginClose(.pane, route: $0) }, menu: menu, dragging: $dragging
+                closePane: { model.beginClose(.pane, route: $0) }, margin: listMargin, menu: menu, dragging: $dragging
             )
+            .refreshable { await refresh() }
             .task(id: core != nil && scenePhase == .active && !newTask && !showsUsage) {
                 guard let core, scenePhase == .active, !newTask, !showsUsage else { return }
                 previews.showChat(DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat)
@@ -211,7 +233,8 @@ struct FlockScreen: View {
             AgentInbox(
                 entries: model.entries, notice: model.closeNotice, follows: follows,
                 seen: seen, markUnseen: markUnseen, snoozed: snoozed, snooze: snooze,
-                query: $inboxQuery, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin, menu: menu
+                query: $inboxQuery, searching: $inboxSearching, filter: $inboxFilter, showsSnoozed: $showsSnoozed, margin: listMargin,
+                refresh: refresh, menu: menu
             )
         case .list:
             TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -219,7 +242,7 @@ struct FlockScreen: View {
                     if let notice = model.closeNotice {
                         Label(notice, systemImage: "exclamationmark.triangle")
                             .font(.footnote)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.warning)
                     }
                     if model.entries.isEmpty {
                         NoMachines()
@@ -241,7 +264,7 @@ struct FlockScreen: View {
                             }
                             .opacity(entry.linkDown ? 0.5 : 1)
                             if !entry.terminals.isEmpty {
-                                Text("Terminals").font(.caption).foregroundStyle(.secondary)
+                                Text("Terminals").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                                 ForEach(entry.terminals, id: \.terminalId) { terminal in
                                     let route = AgentRoute(machineId: entry.id, terminalId: terminal.terminalId)
                                     NavigationLink(value: route) {
@@ -261,17 +284,31 @@ struct FlockScreen: View {
                                 .opacity(entry.linkDown ? 0.5 : 1)
                             }
                         } header: {
-                            Button {
-                                reconnect(entry)
-                            } label: {
-                                MachineHeader(entry: entry, approvalsCount: approvalsCount(entry), showsLink: !tailnetStarting, now: context.date)
+                            let header = MachineHeader(
+                                entry: entry, showsName: model.entries.count > 1, approvalsCount: approvalsCount(entry),
+                                showsLink: !tailnetStarting, now: context.date
+                            )
+                            if !header.isEmpty {
+                                let label = header.font(.footnote.weight(.semibold)).textCase(nil)
+                                // Reconnecting a connected machine shows nothing: alone, the approvals pill is plain status.
+                                if model.entries.count > 1 || entry.flock?.link != .connected {
+                                    Button {
+                                        reconnect(entry)
+                                    } label: {
+                                        label
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    label
+                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
+                .listSectionSpacing(.compact)
                 .modifier(PagerListMargin(edge: .trailing, margin: listMargin))
             }
+            .refreshable { await refresh() }
         }
     }
 
@@ -285,7 +322,7 @@ struct FlockScreen: View {
             }
         case .inbox:
             let items = InboxItem.items(in: entries).filter { !filtered || $0.matches(inboxQuery) }
-            let rows = InboxItem.rows(items, filter: filtered ? inboxFilter : .all, seen: seen, snoozed: snoozed, now: .now)
+            let rows = InboxItem.rows(items, filter: filtered && inboxQuery.isEmpty ? inboxFilter : .all, snoozed: snoozed, now: .now)
             let asleep = filtered && !showsSnoozed ? [] : rows.asleep.map(\.0)
             return (InboxSection.allCases.flatMap { rows.active[$0] ?? [] } + asleep).map(\.route)
         case .list:
@@ -297,6 +334,13 @@ struct FlockScreen: View {
     private func snapshotOrder(opening route: AgentRoute) {
         let shown = layoutOrder(model.entries, starred: previews.starred, filtered: true)
         swipeOrder = shown.contains(route) ? shown : nil
+    }
+
+    // Each page takes its own refreshable: on the pager it reached every scroll view, the inbox's filter row too.
+    private func refresh() async {
+        for machine in machines { try? core?.reconnect(machineId: machine.id) }
+        await model.refresh(core: core, machines: machines)
+        usageRefresh += 1
     }
 
     private func approvalsCount(_ entry: MachineFlockEntry) -> Int {
@@ -362,7 +406,7 @@ struct ViewSwitch: View {
     @Binding var showsUsage: Bool
 
     var body: some View {
-        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)])
+        GlassPicker(title: "View", selection: $showsUsage, options: [("Agents", false), ("Usage", true)], toolbar: true)
     }
 }
 
@@ -378,36 +422,58 @@ struct NoMachines: View {
 
 struct MachineHeader: View {
     let entry: MachineFlockEntry
+    /// With one machine paired its name says nothing, as on inbox rows: the header keeps only its pills and messages.
+    let showsName: Bool
     let approvalsCount: Int
     let showsLink: Bool
     let now: Date
 
+    var isEmpty: Bool {
+        guard !showsName, approvalsCount == 0, showsLink, let flock = entry.flock else { return !showsName && approvalsCount == 0 }
+        return flock.link == .connected && !(flock.versionMismatch && flock.lastError != nil) && flock.reason == nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                MachineName(machine: entry.machine)
-                Spacer()
-                if approvalsCount > 0 {
-                    Text("\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
-                        .foregroundStyle(.red)
-                }
-                if showsLink, let link = entry.flock?.link {
-                    if link == .connecting {
-                        ProgressView().controlSize(.mini)
-                        Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
-                    } else {
-                        StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+            if showsName {
+                // With larger text the pills drop under the name rather than break it mid-word.
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        MachineName(machine: entry.machine)
+                        Spacer()
+                        status
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        MachineName(machine: entry.machine)
+                        HStack { status }
                     }
                 }
+            } else {
+                HStack { status }
             }
             if showsLink, entry.flock?.versionMismatch == true, let message = entry.flock?.lastError {
                 Text(message)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.warning)
             } else if showsLink, entry.flock?.link != .connecting, let reason = entry.flock?.reason {
                 Text(reason.label(machine: entry.machine.label, now: now))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if approvalsCount > 0 {
+            StatusPill(state: .blocked, title: "\(approvalsCount) approval\(approvalsCount == 1 ? "" : "s")")
+        }
+        if showsLink, let link = entry.flock?.link {
+            if link == .connecting {
+                ProgressView().controlSize(.mini)
+                Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+            } else if link != .connected {
+                StatusPill(state: .idle, title: link.label)
             }
         }
     }
@@ -418,45 +484,40 @@ private struct AgentRow: View {
     let workspace: String?
     let followed: Bool
     let now: Date
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 6
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             StatusIcon(state: agent.status)
                 .accessibilityHidden(true)
                 // Centered on the title's first line rather than sitting on its baseline.
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + lift }
             VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                HStack(spacing: 4) {
+                    if let kind = agent.kind {
+                        AgentKindLabel(kind: kind, iconOnly: true)
+                    }
                     if followed {
                         Image(systemName: "pin.fill")
-                            .font(.caption)
                             .foregroundStyle(.tint)
                             .accessibilityLabel("Followed")
                     }
-                    Text(agent.displayTitle).lineLimit(2)
-                }
-                if workspace != nil || agent.kind != nil {
-                    HStack(spacing: 4) {
-                        if let workspace { Text(workspace) }
-                        if let kind = agent.kind {
-                            if workspace != nil { Text(verbatim: "·") }
-                            AgentKindLabel(kind: kind).fixedSize()
-                        }
+                    if let workspace {
+                        Text(workspace)
+                        Text(verbatim: "·").fixedSize()
                     }
-                    .lineLimit(1)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    StatusAge(agent: agent, now: now).fixedSize()
                 }
+                .lineLimit(1)
+                .font(.caption)
+                .foregroundStyle(.metadata)
+                // At accessibility sizes a trailing column cut the title and the workspace to a few letters.
+                if typeSize.isAccessibilitySize, let left = agent.contextLeft, ContextRing.shows(left) { ContextRing(left: left, font: .caption2) }
             }
             Spacer()
-            StatusAge(agent: agent, now: now)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            // A fixed slot, so times line up whether or not a row has a ring.
-            ZStack {
-                if let left = agent.contextLeft { ContextRing(left: left) }
-            }
-            .frame(width: ContextRing.size)
+            if !typeSize.isAccessibilitySize, let left = agent.contextLeft, ContextRing.shows(left) { ContextRing(left: left, font: .caption2, aligned: true) }
         }
     }
 }
@@ -466,11 +527,11 @@ private struct TerminalRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AgentKindLabel(kind: "terminal", iconOnly: true).frame(width: 20)
+            AgentKindLabel(kind: "terminal", iconOnly: true).frame(minWidth: 20)
             VStack(alignment: .leading, spacing: 2) {
                 Text(terminal.displayTitle).lineLimit(1)
                 if let workspace = terminal.workspaceLabel {
-                    Text(workspace).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(workspace).font(.caption).foregroundStyle(.metadata).lineLimit(1)
                 }
             }
             Spacer()
@@ -487,26 +548,36 @@ private struct TerminalRow: View {
 struct AgentKindLabel: View {
     let kind: String
     var iconOnly = false
+    // The logos are bitmaps of a fixed size; alone beside text they grow with it, as a symbol would.
+    @ScaledMetric(relativeTo: .caption) private var scale: CGFloat = 1
 
     var body: some View {
-        let label = Group {
-            switch kind {
-            case "claude": Label("Claude", image: "Claude")
-            case "codex": Label("Codex", image: "Codex")
-            case "copilot": Label("Copilot", image: "Copilot")
-            case "terminal": Label("Terminal", image: "Ghostty")
-            default: Label(kind, systemImage: "terminal")
-            }
+        switch (logo, iconOnly) {
+        case let ((title, image)?, true):
+            let size = UIImage(named: image)?.size ?? .zero
+            Image(image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size.width * scale, height: size.height * scale)
+                .accessibilityLabel(title)
+        case let ((title, image)?, false): Label(title, image: image).labelStyle(KindLabelStyle())
+        case (nil, true): Label(kind, systemImage: "terminal").labelStyle(.iconOnly)
+        case (nil, false): Label(kind, systemImage: "terminal").labelStyle(KindLabelStyle())
         }
-        if iconOnly {
-            label.labelStyle(.iconOnly)
-        } else {
-            label.labelStyle(KindLabelStyle())
+    }
+
+    private var logo: (String, String)? {
+        switch kind {
+        case "claude": ("Claude", "Claude")
+        case "codex": ("Codex", "Codex")
+        case "copilot": ("Copilot", "Copilot")
+        case "terminal": ("Terminal", "Ghostty")
+        default: nil
         }
     }
 }
 
-private struct KindLabelStyle: LabelStyle {
+struct KindLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) {
             configuration.icon
@@ -517,21 +588,11 @@ private struct KindLabelStyle: LabelStyle {
 
 struct StatusPill: View {
     let state: AgentState
-    var title: String? = nil
+    let title: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Label {
-            Text(title ?? state.label.capitalized)
-        } icon: {
-            if state == .working {
-                StatusIcon(state: state)
-                    .scaleEffect(0.7)
-                    .frame(width: 14, height: 14)
-                    .accessibilityHidden(true)
-            } else {
-                Image(systemName: AgentActivityStatus(state).symbol)
-            }
-        }
+        Label(title, systemImage: StatusIcon.symbol(state))
             .labelStyle(KindLabelStyle())
             .font(.caption.weight(.semibold))
             .foregroundStyle(state.color)
@@ -539,6 +600,8 @@ struct StatusPill: View {
             .padding(.vertical, 4)
             .padding(2)
             .glassEffect(.regular, in: .capsule)
+            // Dark glass over a lighter surface such as the terminal turns gray; the dim keeps the label at 4.5:1 or more.
+            .background(colorScheme == .dark ? .black.opacity(0.75) : .clear, in: .capsule)
             .fixedSize()
     }
 }
@@ -557,57 +620,125 @@ struct StatusAge: View {
 
 struct StatusIcon: View {
     let state: AgentState
+    var size: CGFloat = 20
+    var dimsIdle = true
+    @ScaledMetric(relativeTo: .subheadline) private var scale: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appAccent) private var appAccent
 
     var body: some View {
+        // Grows with the text beside it, up to half again its size, so a glyph never outweighs the title it marks.
+        let side = size * min(scale, 1.5)
+        let unit = side / 20
         Group {
             switch state {
             // Core Animation spins it; a SwiftUI repeatForever redraws the app every frame (battery).
             case .working where reduceMotion:
                 Circle()
                     .trim(from: 0, to: 0.7)
-                    .stroke(state.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .padding(2)
-            case .working: ProgressView().controlSize(.small).tint(state.color)
-            case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(state.color)
-            case .idle: Image(systemName: "circle.fill").font(.system(size: 9)).foregroundStyle(state.color)
-            case .blocked: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(state.color)
-            case .unknown: Image(systemName: "questionmark.circle").foregroundStyle(state.color)
+                    .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5 * unit, lineCap: .round))
+                    .padding(2 * unit)
+            // The ring keeps a steady silhouette, like Done's circle, while the spinner's spokes fade in turn.
+            case .working:
+                ZStack {
+                    Circle().stroke(appAccent, lineWidth: 1.5 * unit).padding(2.5 * unit)
+                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6 * unit)
+                }
+            // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; the session header, over
+            // the terminal, keeps the full color.
+            default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle && dimsIdle ? 0.75 : 1))
             }
         }
-        .font(.system(size: 18))
-        .frame(width: 20, height: 20)
+        .frame(width: side, height: side)
         .accessibilityElement()
         .accessibilityLabel(state.label)
+    }
+
+    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest,
+    /// and idle's is dashed, so it stays the quietest rather than reading as an unchecked Done.
+    static func symbol(_ state: AgentState) -> String {
+        switch state {
+        case .blocked: "exclamationmark.circle.fill"
+        case .done: "checkmark.circle"
+        case .idle: "circle.dashed"
+        default: "questionmark.circle"
+        }
+    }
+}
+
+extension ShapeStyle where Self == Color {
+    // Secondary gray is about 3.4:1 on white and 4.2:1 on the session bar over the terminal; both get a stronger gray, 4.5:1 or more.
+    static var metadata: Color {
+        Color(uiColor: UIColor {
+            $0.userInterfaceStyle == .dark
+                ? UIColor.secondaryLabel.resolvedColor(with: $0).withAlphaComponent(0.7)
+                : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+        })
     }
 }
 
 struct ContextRing: View {
-    static let size: CGFloat = 14
     let left: UInt8
+    var font: Font = .caption
+    /// Takes the width "100%" would, so a column of rows keeps one width; the chip stays beside its figure.
+    var aligned = false
 
     var body: some View {
-        let tone = Self.tone(left)
-        ZStack {
-            Circle().stroke(tone.opacity(0.2), lineWidth: 2)
-            Circle()
-                .trim(from: 0, to: Double(min(left, 100)) / 100)
-                .stroke(tone, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .rotationEffect(.degrees(-90))
+        let left = min(left, 100)
+        Group {
+            if aligned {
+                label("100%").hidden().overlay(alignment: .trailing) { label("\(left)%") }
+            } else {
+                label("\(left)%")
+            }
         }
-        .padding(1)
-        .frame(width: Self.size, height: Self.size)
-        .accessibilityElement()
-        .accessibilityLabel("Context \(left)% left")
+            .font(font.monospacedDigit())
+            .foregroundStyle(left <= 20 ? Self.tone(left) : .metadata)
+            .fixedSize()
+            .accessibilityElement()
+            .accessibilityLabel("\(left)% of context left")
     }
 
-    static func tone(_ left: UInt8) -> Color { WatchUsage.usedColor(100 - min(left, 100)) }
+    private func label(_ figure: String) -> some View {
+        Label(figure, systemImage: "memorychip").labelStyle(KindLabelStyle())
+    }
+
+    /// Owner decision: the figure shows only once less than 70% of the context is left.
+    static func shows(_ left: UInt8) -> Bool { left < 70 }
+
+    /// The one warning rule for context and usage limits: accent, orange from 80% used, red from 90%.
+    static func tone(_ left: UInt8) -> Color {
+        switch 100 - Int(min(left, 100)) {
+        case ..<80: .accentColor
+        case ..<90: .warning
+        default: AgentState.blocked.color
+        }
+    }
 }
 
 extension AgentState {
     var label: String { AgentActivityStatus(self).label }
 
-    var color: Color { self == .working ? .accentColor : AgentActivityStatus(self).color }
+    var color: Color {
+        switch self {
+        case .working: .accentColor
+        // System red is about 3.3:1 as small text on light glass, even its high-contrast variant 4.1:1; light mode gets a deeper red.
+        // On dark glass it is about 3.2:1 and its high-contrast variant 3.8:1; dark mode gets a lighter red, 4.5:1 or more.
+        case .blocked:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.54, blue: 0.5, alpha: 1) : UIColor(red: 0.78, green: 0, blue: 0.08, alpha: 1)
+            })
+        // System green is about 2.2:1 on white and system gray 4.3:1 on the dark status pill; both read 4.5:1 or more
+        // as the pill's label on light and dark glass, and 3:1 or more as row glyphs.
+        case .done:
+            Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemGreen.resolvedColor(with: $0) : UIColor(red: 0, green: 0.47, blue: 0.18, alpha: 1) })
+        case .idle:
+            Color(uiColor: UIColor {
+                $0.userInterfaceStyle == .dark ? UIColor(red: 0.6, green: 0.6, blue: 0.62, alpha: 1) : UIColor(red: 0.42, green: 0.42, blue: 0.44, alpha: 1)
+            })
+        case .unknown: AgentActivityStatus(self).color
+        }
+    }
 }
 
 extension LinkPhase {

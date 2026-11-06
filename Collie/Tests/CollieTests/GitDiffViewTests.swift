@@ -11,7 +11,7 @@ final class GitDiffViewTests: XCTestCase {
         for (name, style, size, wraps) in [
             ("light", UIUserInterfaceStyle.light, UIContentSizeCategory.large, true),
             ("dark", .dark, .large, true),
-            ("large-text", .dark, .accessibilityExtraExtraExtraLarge, true),
+            ("large-text", .dark, .accessibilityExtraLarge, true),
             ("no-wrap", .light, .large, false)
         ] {
             UserDefaults.standard.set(wraps, forKey: "gitWrapLines")

@@ -74,6 +74,7 @@ struct MachinesList: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .background(Color(.systemGroupedBackground))
         .renameMachine($renaming, app: app)
     }
 }
@@ -85,42 +86,71 @@ struct MachineRow<Destination: View>: View {
     @ViewBuilder let destination: () -> Destination
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            NavigationLink(destination: destination) {
-                VStack(alignment: .leading, spacing: 2) {
-                    let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
-                    HStack(spacing: 8) {
-                        MachineName(machine: machine)
-                            .font(.body)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                            .foregroundStyle(reachable ? .primary : .secondary)
-                            .tint(reachable ? nil : .secondary)
-                        Spacer(minLength: 0)
-                        if let link = flock?.link {
-                            StatusPill(state: link == .connected ? .done : .idle, title: link.label)
+        let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            MachineLogo(machine: machine).foregroundStyle(reachable ? .primary : .secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                NavigationLink(destination: destination) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 8) {
+                            Text(machine.label)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                                .foregroundStyle(reachable ? .primary : .secondary)
+                            Spacer(minLength: 0)
+                            if let link = flock?.link {
+                                MachineLinkStatus(link: link)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
                         }
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
+                        Text(machine.host)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
-                    Text(machine.host)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .navigationLinkIndicatorVisibility(.hidden)
-            if let flock, flock.link != .connecting,
-               let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
-                MachineConnectionDetails(message: message, error: flock.lastError ?? message)
+                .buttonStyle(.plain)
+                .navigationLinkIndicatorVisibility(.hidden)
+                if let flock, flock.link != .connecting,
+                   let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
+                    MachineConnectionDetails(message: message, error: flock.lastError ?? message)
+                }
             }
         }
-        .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .padding(12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+    }
+}
+
+/// Connected is the Agents header's green dot; other states name themselves.
+private struct MachineLinkStatus: View {
+    let link: LinkPhase
+
+    var body: some View {
+        switch link {
+        case .connected:
+            Image(systemName: "circle.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.green)
+                .accessibilityLabel(link.label)
+        default:
+            HStack(spacing: 4) {
+                if link == .connecting {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: link == .waiting ? "arrow.clockwise" : link == .stopped ? "stop.circle" : "wifi.slash")
+                        .accessibilityHidden(true)
+                }
+                Text(link.label)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .fixedSize()
+        }
     }
 }
 
@@ -134,8 +164,7 @@ private struct MachineConnectionDetails: View {
             Text(message)
                 .font(.footnote)
                 .foregroundStyle(.orange)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button {
                 UIPasteboard.general.string = error
                 copiedAt = .now
@@ -426,21 +455,30 @@ struct PairView: View {
 
 struct MachineName: View {
     let machine: Machine
-    // SF Symbols has no Linux glyph; Tux is a drawn template image, sized like the symbol.
-    @ScaledMetric(relativeTo: .body) private var tuxSize: CGFloat = 18
 
     var body: some View {
         Label {
             Text(machine.label)
         } icon: {
-            Group {
-                if machine.kind == .linux {
-                    Image("Tux").resizable().scaledToFit().frame(width: tuxSize, height: tuxSize)
-                } else {
-                    Image(systemName: "apple.logo")
-                }
-            }
-            .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
+            MachineLogo(machine: machine)
         }
+        .labelStyle(KindLabelStyle())
+    }
+}
+
+struct MachineLogo: View {
+    let machine: Machine
+    // SF Symbols has no Linux glyph; Tux is a drawn template image, sized like the symbol.
+    @ScaledMetric(relativeTo: .body) private var tuxSize: CGFloat = 18
+
+    var body: some View {
+        Group {
+            if machine.kind == .linux {
+                Image("Tux").resizable().scaledToFit().frame(width: tuxSize, height: tuxSize)
+            } else {
+                Image(systemName: "apple.logo")
+            }
+        }
+        .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
     }
 }

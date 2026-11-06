@@ -6,7 +6,7 @@
 |---|---|
 | Grid preview, status and Inbox | Yes |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes |
-| [Context ring](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Yes |
+| [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Yes |
 | [Approval alerts](../notifications/approvals.md) | Approve, Deny or another option, from the phone or watch |
 | [Plan usage](../app/usage.md) | 5-hour and weekly, with the [status line tap](../install/claude-code.md#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |

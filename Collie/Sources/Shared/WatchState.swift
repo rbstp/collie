@@ -12,6 +12,7 @@ struct WatchState: Codable, Equatable, Sendable {
     var usage: WatchUsage?
     var decisionsAllowed: Bool
     var live: Bool
+    var accent: Color.Resolved?
 }
 
 struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
@@ -47,7 +48,7 @@ struct WatchChoice: Codable, Equatable, Sendable {
     let label: String
 }
 
-/// No Approve always, as on the lock screen.
+/// No Always allow, as on the lock screen.
 enum WatchDecision: Codable, Hashable, Sendable {
     case approve
     case deny

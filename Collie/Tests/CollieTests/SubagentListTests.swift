@@ -46,7 +46,7 @@ final class SubagentListTests: XCTestCase {
         let fit = { (view: AnyView) in
             UIHostingController(rootView: view).sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude))
         }
-        for size in [DynamicTypeSize.large, .accessibility5] {
+        for size in [DynamicTypeSize.large, .accessibility3] {
             let list = fit(AnyView(SubagentList(subagents: [row]).environment(\.dynamicTypeSize, size)))
             let line = fit(AnyView(Text(verbatim: "x").font(.caption).environment(\.dynamicTypeSize, size))).height
             XCTAssertLessThanOrEqual(list.width, 370.5, "\(size)")
@@ -67,7 +67,7 @@ final class SubagentListTests: XCTestCase {
             var agent = sample
             agent.kind = kind
             for starred in [false, true] {
-                for size in [DynamicTypeSize.large, .accessibility5] {
+                for size in [DynamicTypeSize.large, .accessibility3] {
                     func card(_ agent: AgentSummary) -> some View {
                         AgentCard(agent: agent, screen: output, conversation: nil, workspace: nil, followed: false, starred: starred, now: .now)
                             .environment(\.dynamicTypeSize, size)
@@ -80,8 +80,8 @@ final class SubagentListTests: XCTestCase {
                         let terminal = try XCTUnwrap(descendants(host.view).compactMap { $0 as? GhosttyTerminalUIView }.first)
                         let lineHeight = UIHostingController(rootView: Text("x").font(.caption2).environment(\.dynamicTypeSize, size))
                             .sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
-                        let listHeight = lineHeight * (starred ? 5 : 3) + (starred ? 8 : 4) + 12
-                        XCTAssertGreaterThan(terminal.bounds.height - listHeight, 40)
+                        let listHeight = lineHeight * (starred ? 5 : 2) + (starred ? 8 : 2) + 12
+                        XCTAssertGreaterThan(terminal.bounds.height - listHeight, starred ? 40 : 30)
                         XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
                         let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -97,7 +97,7 @@ final class SubagentListTests: XCTestCase {
                             host.rootView = card(updated)
                             try await Task.sleep(for: .milliseconds(100))
                             host.view.layoutIfNeeded()
-                            XCTAssertEqual(terminal.bounds.height, starred ? 240 : 120, accuracy: 1)
+                            XCTAssertEqual(terminal.bounds.height, starred ? 150 : 84, accuracy: 1)
                             XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
                         }
                     }

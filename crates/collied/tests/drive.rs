@@ -10,9 +10,9 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
     Key, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource, Request,
-    Response, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams, TaskSessionsParams,
-    TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams, WorkspaceCloseParams,
-    WorkspaceId,
+    Response, SendTextParams, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams,
+    TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
+    TypedText, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -1822,41 +1822,53 @@ async fn slash_draft_refusals_write_nothing() {
 }
 
 #[tokio::test]
-async fn enter_never_runs_a_slash_command_in_the_box() {
+async fn enter_runs_a_slash_command_in_the_box() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
-    let send = |keys: Vec<Key>| AgentSendKeysParams {
-        op_id: op('K'),
-        terminal_id: tid(CLAUDE),
-        keys,
-    };
     herdr.with(|h| h.text = SLASH_MENU.into());
     for enter in [Key::Enter, Key::CtrlEnter] {
+        let send = AgentSendKeysParams {
+            op_id: op('K'),
+            terminal_id: tid(CLAUDE),
+            keys: vec![Key::Down, enter],
+        };
         assert_eq!(
-            drive.send_keys(send(vec![Key::Down, enter]), &yes()).await,
-            (
-                Err((
-                    ErrorCode::AgentNotReady,
-                    "a slash command shows in the input box; send it as a prompt".into()
-                )),
-                None
-            )
+            drive.send_keys(send, &yes()).await,
+            (Ok(Response::Ok), None)
         );
     }
-    assert!(herdr.mutations().is_empty());
-    assert_eq!(
-        drive
-            .send_keys(send(vec![Key::Down, Key::Tab]), &yes())
-            .await,
-        (Ok(Response::Ok), None)
-    );
-    herdr.with(|h| h.text = screen("❯ fix the build"));
-    assert_eq!(
-        drive.send_keys(send(vec![Key::Enter]), &yes()).await,
-        (Ok(Response::Ok), None)
-    );
     assert_eq!(herdr.mutations(), ["agent.send_keys", "agent.send_keys"]);
+}
+
+#[tokio::test]
+async fn typed_text_reaches_an_agent_box_without_enter() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = SLASH_MENU.into());
+    assert_eq!(
+        drive.send_text(sent(CLAUDE, "el"), &yes()).await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        vec![json!({"pane_id": "w6:p1", "text": "el"})]
+    );
+    assert_eq!(
+        code(drive.send_text(sent(CLAUDE, "x"), &no()).await),
+        ErrorCode::NotPaired
+    );
+    assert_eq!(
+        code(drive.send_text(sent(SHELL, "x"), &yes()).await),
+        ErrorCode::NotFound
+    );
+    herdr.with(|h| h.text = drawn(SCROLLED));
+    assert_eq!(
+        code(drive.send_text(sent(CLAUDE, "x"), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(herdr.mutations(), ["pane.send_text"]);
 }
 
 #[tokio::test]
@@ -3607,6 +3619,16 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         herdr.params("pane.send_keys"),
         vec![json!({"pane_id": "w7:p2", "keys": ["ctrl+c", "up", "enter"]})]
     );
+    assert_eq!(
+        drive
+            .terminal_send_text(sent(SHELL, "ls -la"), &yes())
+            .await,
+        Ok(Response::Ok)
+    );
+    assert_eq!(
+        herdr.params("pane.send_text"),
+        vec![json!({"pane_id": "w7:p2", "text": "ls -la"})]
+    );
 
     let refused = |reply: Reply, want: ErrorCode, message: Option<&str>| {
         let (got, text) = reply.expect_err("refused");
@@ -3624,6 +3646,16 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         drive.terminal_send_keys(keys.clone(), &no()).await,
         ErrorCode::TerminalLocked,
         None,
+    );
+    refused(
+        drive.terminal_send_text(sent(SHELL, "x"), &no()).await,
+        ErrorCode::TerminalLocked,
+        None,
+    );
+    refused(
+        drive.terminal_send_text(sent(CLAUDE, "y"), &yes()).await,
+        ErrorCode::NotFound,
+        Some(collied::drive::HOSTS_AGENT),
     );
     refused(
         drive.terminal_run(run(CLAUDE, "y"), &yes()).await,
@@ -3646,7 +3678,10 @@ async fn terminal_input_reaches_a_shell_pane_only() {
         ErrorCode::NotFound,
         Some(collied::drive::HOSTS_AGENT),
     );
-    assert_eq!(herdr.mutations(), ["pane.send_input", "pane.send_keys"]);
+    assert_eq!(
+        herdr.mutations(),
+        ["pane.send_input", "pane.send_keys", "pane.send_text"]
+    );
 
     herdr.fail_next("pane.send_input", &["pane_input_failed"]);
     herdr.with(|h| {
@@ -4126,6 +4161,14 @@ fn block(herdr: &Mock, text: &str) {
     });
 }
 
+fn sent(terminal: &str, text: &str) -> SendTextParams {
+    SendTextParams {
+        op_id: op('S'),
+        terminal_id: tid(terminal),
+        text: TypedText::new(text).unwrap(),
+    }
+}
+
 fn typed(terminal: &str, text: &str) -> AgentTypeTextParams {
     AgentTypeTextParams {
         op_id: op('Y'),
@@ -4373,18 +4416,13 @@ async fn blocked_keys_do_not_depend_on_prompt_parsing() {
 }
 
 #[tokio::test]
-async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
+async fn typed_answers_keep_idle_claude_scroll_safeguards() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["claude"], &base);
     herdr.with(|h| h.snapshot["agents"][0]["agent_status"] = json!("idle"));
 
-    for screen in [
-        drawn(SCROLLED),
-        drawn(SCROLLED_DIALOG),
-        drawn(NEW_MESSAGE),
-        SLASH_STA.into(),
-    ] {
+    for screen in [drawn(SCROLLED), drawn(SCROLLED_DIALOG), drawn(NEW_MESSAGE)] {
         herdr.with(|h| h.text = screen.clone());
         assert_eq!(
             code(drive.type_text(typed(CLAUDE, "yes"), &yes()).await),
@@ -4393,6 +4431,11 @@ async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
         );
     }
     assert!(herdr.mutations().is_empty());
+    herdr.with(|h| h.text = SLASH_STA.into());
+    assert_eq!(
+        drive.type_text(typed(CLAUDE, "yes"), &yes()).await,
+        Ok(Response::Ok)
+    );
 
     for screen in [SCROLLED_DIALOG, SLASH_STA] {
         block(&herdr, screen);
@@ -4401,7 +4444,7 @@ async fn typed_answers_keep_idle_claude_scroll_and_slash_safeguards() {
             Ok(Response::Ok)
         );
     }
-    assert_eq!(herdr.params("pane.send_input").len(), 2);
+    assert_eq!(herdr.params("pane.send_input").len(), 3);
 }
 
 #[tokio::test]
@@ -4449,9 +4492,8 @@ async fn typed_text_is_pasted_and_submitted_without_prompt_parsing() {
     );
     assert_eq!(herdr.params("pane.send_input").len(), 8);
     let reads = herdr.params("pane.read");
-    assert_eq!(reads.len(), 2);
+    assert_eq!(reads.len(), 1);
     assert_eq!(reads[0]["source"], "visible");
-    assert_eq!(reads[1]["source"], "visible");
 }
 
 #[tokio::test]

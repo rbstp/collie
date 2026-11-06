@@ -32,14 +32,6 @@ struct SettingsView: View {
                     .tint(app.accent.color)
                     .id(app.accent)
                 }
-                Section("Tailnet") {
-                    LabeledContent("State", value: app.node.map { $0.backendState.label } ?? "unknown")
-                    LabeledContent("Device", value: app.node?.selfDnsName ?? "-")
-                    LabeledContent("Signed in as", value: app.node?.loginName ?? "-")
-                    if let error = app.nodeError {
-                        Text(error).foregroundStyle(.red)
-                    }
-                }
                 Section {
                     LabeledContent("Push", value: app.pushStatus)
                     Toggle("Notify when an agent finishes", isOn: $doneAlerts)
@@ -90,30 +82,41 @@ struct SettingsView: View {
                             .navigationTitle("Machines")
                     }
                 }
-                Section("Cold start") {
-                    if let report {
-                        LabeledContent("Node created", value: "\(report.nodeCreatedMs) ms")
-                        LabeledContent("Started", value: "\(report.startedMs) ms")
-                        LabeledContent("Login URL or running", value: report.settledMs.map { "\($0) ms" } ?? "timeout")
-                        LabeledContent("Backend state", value: report.backendState.label)
-                        LabeledContent("Login URL issued", value: report.authUrlPresent ? "yes" : "no")
-                        LabeledContent("Status polls", value: "\(report.statusPolls)")
-                    } else {
-                        Text("Measured when the tailnet node first starts.").foregroundStyle(.secondary)
-                    }
-                }
-                Section("Build") {
-                    LabeledContent("Core", value: build.coreVersion)
-                    LabeledContent("Protocol", value: "\(protocolVersion())")
-                    LabeledContent("Go", value: build.go)
-                    LabeledContent("Rust", value: build.rustc)
-                    LabeledContent("Target", value: build.target)
-                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
-                }
                 Section {
                     Button("Explore sample workspace", systemImage: "play.rectangle", action: openSample)
                 } footer: {
                     Text("Try simulated agents and approvals without signing in or connecting a machine.")
+                }
+                Section("Diagnostics") {
+                    DisclosureGroup {
+                        LabeledContent("Device", value: app.node?.selfDnsName ?? "-")
+                        LabeledContent("Signed in as", value: app.node?.loginName ?? "-")
+                    } label: {
+                        LabeledContent("Tailnet", value: app.node.map { $0.backendState.label } ?? "unknown")
+                    }
+                    if let error = app.nodeError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    DisclosureGroup("Cold start") {
+                        if let report {
+                            LabeledContent("Node created", value: "\(report.nodeCreatedMs) ms")
+                            LabeledContent("Started", value: "\(report.startedMs) ms")
+                            LabeledContent("Login URL or running", value: report.settledMs.map { "\($0) ms" } ?? "timeout")
+                            LabeledContent("Backend state", value: report.backendState.label)
+                            LabeledContent("Login URL issued", value: report.authUrlPresent ? "yes" : "no")
+                            LabeledContent("Status polls", value: "\(report.statusPolls)")
+                        } else {
+                            Text("Measured when the tailnet node first starts.").foregroundStyle(.secondary)
+                        }
+                    }
+                    DisclosureGroup("Build") {
+                        LabeledContent("Core", value: build.coreVersion)
+                        LabeledContent("Protocol", value: "\(protocolVersion())")
+                        LabeledContent("Go", value: build.go)
+                        LabeledContent("Rust", value: build.rustc)
+                        LabeledContent("Target", value: build.target)
+                    }
+                    NavigationLink("Acknowledgements") { AcknowledgementsView() }
                 }
             }
             .navigationTitle("Settings")
@@ -160,7 +163,7 @@ private struct GesturesView: View {
                 Toggle("Pinch to resize text", isOn: $gestures.pinchResizesText)
                 Toggle("Swipe sideways to switch agents", isOn: $gestures.swipeSwitchesAgents)
             } footer: {
-                Text("Paste only fills the prompt field; it never sends. iOS asks before each paste unless Paste from Other Apps is set to Allow in the Settings app under collie. Swipe left for the next agent in the list and right for the previous one; it works only while lines wrap, since otherwise a sideways swipe scrolls the terminal, and not while a file uploads or a prompt is sending. Gestures are off while text is selected.")
+                Text("Paste fills the prompt field in Chat and types into the terminal in the Terminal view; it never presses Return. iOS asks before each paste unless Paste from Other Apps is set to Allow in the Settings app under collie. Swipe left for the next agent in the list and right for the previous one; it works only while lines wrap, since otherwise a sideways swipe scrolls the terminal, and not while a file uploads or a prompt is sending. Gestures are off while text is selected.")
             }
         }
         .navigationTitle("Gestures")

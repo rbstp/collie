@@ -159,6 +159,9 @@ import UserNotifications
     #expect(Countdown.string(untilMs: 1_700_000_000_000 + 600_000, now: now) == "10:00")
     #expect(Countdown.string(untilMs: 1_700_000_000_000, now: now) == "expired")
     #expect(Countdown.string(untilMs: 0, now: now) == "expired")
+    #expect(!Countdown.shows(untilMs: 1_700_000_000_000 + 125_000, now: now))
+    #expect(Countdown.shows(untilMs: 1_700_000_000_000 + 119_000, now: now))
+    #expect(Countdown.shows(untilMs: 1_700_000_000_000, now: now))
 }
 
 final class FakeApprovalCore: ApprovalCore {
@@ -277,12 +280,15 @@ private let reason = "Dangerous rm operation on statically-unresolvable target: 
 }
 
 @MainActor
-@Test func aCappedCardScrollsItsPromptInsteadOfGrowing() {
+@Test func aCardOverItsShareShowsAsABand() {
     var long = approval("ap_1")
     long.snippet = (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n")
     long.reason = reason
-    #expect(height(card(long)) > 200, "the prompt overflows the cap")
-    #expect(abs(height(card(long, maxHeight: 150)) - 150) < 1, "the prompt scrolls inside the cap")
+    #expect(height(card(long)) > 150, "the prompt overflows the cap")
+    #expect(height(card(long, maxHeight: 150)) <= 150, "the band fits the cap")
+    var brief = long
+    brief.snippet = "test approvals::case_1 ... ok"
+    #expect(height(card(long)) == height(card(brief)), "the card shows only a link to the output, however long")
     let short = approval("ap_1")
     #expect(height(card(short, maxHeight: 400)) == height(card(short)), "a prompt that fits keeps its own height")
 }
@@ -573,6 +579,70 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 }
 
 @MainActor
+@Test func failureNoticeStaysUntilTheNextDecisionOrItsApprovalLeaving() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1")] }
+    let model = ApprovalsModel(core: core, auth: auth, noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+    try await Task.sleep(for: .milliseconds(300))
+    model.poll()
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+
+    // Another approval arriving, changing or leaving is no decision about this one.
+    for other in [[approval("ap_2")], [approval("ap_2", options: [.approve, .deny])], []] {
+        core.state.withLock { $0.pending["m1"] = [approval("ap_1")] + other }
+        model.poll()
+        #expect(model.items.count == 1 + other.count)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(model.notice == "Not authenticated. Nothing was sent.")
+    }
+
+    auth.state.withLock { $0.hold = true }
+    let decide = Task { await model.decide(item, .deny) }
+    await auth.waitHeld()
+    #expect(model.notice == nil)
+    auth.release(result: false)
+    await decide.value
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+
+    core.state.withLock { $0.pending["m1"] = [] }
+    model.poll()
+    #expect(model.notice == "Not authenticated. Nothing was sent.")
+    await poll { model.notice == nil }
+}
+
+@MainActor
+@Test func noticeShowsOnlyInItsApprovalsTask() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    auth.state.withLock { $0.result = false }
+    var other = approval("ap_2")
+    other.terminalId = "term_2"
+    core.state.withLock { $0.pending["m1"] = [approval("ap_1"), other] }
+    let model = ApprovalsModel(core: core, auth: auth, noticeLifetime: .milliseconds(50))
+    model.poll()
+    let item = try #require(model.items.first)
+    await model.decide(item, .approve)
+    #expect(model.notice(machineId: "m1", terminalId: "term_1") == "Not authenticated. Nothing was sent.")
+    #expect(model.notice(machineId: "m1", terminalId: "term_2") == nil)
+    #expect(model.notice(machineId: "m2", terminalId: "term_1") == nil)
+    #expect(model.noticeItem?.id == "ap_1")
+
+    // Once its approval leaves, the notice still belongs to that task until it lasts out.
+    core.state.withLock { $0.pending["m1"] = [other] }
+    model.poll()
+    #expect(model.notice(machineId: "m1", terminalId: "term_1") == "Not authenticated. Nothing was sent.")
+    #expect(model.notice(machineId: "m1", terminalId: "term_2") == nil)
+    await poll { model.notice == nil }
+    #expect(model.noticeItem == nil)
+}
+
+@MainActor
 @Test func noticeClearsWhenTheListChangesOtherThanItsApprovalLeaving() async throws {
     let core = FakeApprovalCore()
     let model = approvalsModel(core, FakeAuthenticator())
@@ -688,6 +758,10 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     #expect(model.note(for: item) == nil)
     model.toggleNote(item)
     #expect(model.note(for: item) == "use a .tmp extension")
+    model.toggleExpanded(item)
+    model.toggleExpanded(item)
+    #expect(model.note(for: item) == nil && model.drafts[item.id] == "use a .tmp extension")
+    model.toggleNote(item)
 
     await model.decide(item, .approveAlways)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)

@@ -1,21 +1,21 @@
 # New task
 
-**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there.
+**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there. Write what the agent should do, choose where it runs, then tap **Start** at the top right. While the task starts, **Start** shows a spinner and the title reads "Starting the task…", then "Waiting for the agent…".
 
 <div class="screenshots">
-<img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
-<img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: location, folder, agent picker and prompt">
+<img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: prompt, location, folder and agent picker">
+<img class="screenshot-dark" src="../images/new-task-dark.png" width="300" height="652" loading="lazy" alt="The New task sheet: prompt, location, folder and agent picker">
 </div>
 
 ## Plan usage
 
-When the agent you pick has used 80% or more of a [plan limit](usage.md) on that machine, a line under the agent picker says so, such as "Claude 5-hour limit at 92%, resets at 3:40 PM", and turns orange at 100%.
+When the agent you pick has used 80% or more of a [plan limit](usage.md) on that machine, a line under the agent picker says so, such as "Claude 5-hour limit at 92%, resets at 3:40 PM". Like the Usage bars, the line is orange from 80% and red from 90%.
 
 ## Choose a folder
 
 Each machine can have a **base folder** (**Machines** > the machine > **Base folder**). Give its full path, such as `/Users/you/git`: collie does not expand `~`. It must be inside one of `collied`'s task roots (`[tasks] roots` in `collied.toml`, your home folder by default).
 
-Type a folder's name in the base, tap **Browse**, pick a recent folder or give an absolute path inside a task root. **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
+Type a folder's name in the base, tap **Browse**, pick a recent folder (a path too long for the row shows its last folders, such as `…/git/collie`) or give an absolute path inside a task root. Until you choose one, **Start** stays dimmed, and once you write a prompt the empty folder field reads "Choose a folder to start" in orange. A checkmark marks the recent folder you chose. **New folder** creates an empty folder, without `git init`, in the base, or in a task root when no base is set.
 
 ## Clone a repository
 
@@ -38,6 +38,7 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 ## Options
 
 - **Ultracode** (Claude Code only, off by default) turns on Claude Code's Ultracode setting; if it stays off, the task fails without sending the prompt.
+- **Name workspace**, under the agent, shows a field for the herdr workspace's label.
 - Codex tasks start with `--no-daemon`: see [Codex](../agents/codex.md).
 
 ## Archive

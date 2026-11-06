@@ -47,7 +47,7 @@ private struct AttachmentMenuControl: UIViewRepresentable {
         button.isEnabled = context.environment.isEnabled
         button.configure(
             savedPromptsEnabled: savedPromptsEnabled, filesEnabled: filesEnabled,
-            accent: UIColor(Color(context.environment.appAccent.resolve(in: context.environment))),
+            color: UIColor(Color(Color.primary.resolve(in: context.environment))),
             locale: context.environment.locale
         )
     }
@@ -72,7 +72,8 @@ final class AttachmentMenuButton: UIButton {
         super.init(frame: .zero)
         var configuration = UIButton.Configuration.glass()
         configuration.image = UIImage(systemName: "paperclip")
-        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 16)
+        // Not the neighbors' 20: the diagonal paperclip at 20 measured 24 by 27 points and filled its circle; 17 matches them optically.
+        configuration.preferredSymbolConfigurationForImage = .init(pointSize: 17)
         configuration.cornerStyle = .capsule
         configuration.buttonSize = .small
         configuration.background.backgroundInsets = NSDirectionalEdgeInsets(
@@ -87,12 +88,12 @@ final class AttachmentMenuButton: UIButton {
         super.init(coder: coder)
     }
 
-    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, accent: UIColor, locale: Locale) {
+    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, color: UIColor, locale: Locale) {
         self.savedPromptsEnabled = savedPromptsEnabled
         self.filesEnabled = filesEnabled
         guard !isHeld else { return }
-        configuration?.baseForegroundColor = accent
-        configuration?.image = UIImage(systemName: "paperclip")?.withTintColor(accent, renderingMode: .alwaysOriginal)
+        configuration?.baseForegroundColor = color
+        configuration?.image = UIImage(systemName: "paperclip")?.withTintColor(color, renderingMode: .alwaysOriginal)
         accessibilityLabel = String(localized: "Attachments and saved prompts", locale: locale)
         let actions = AttachmentChoice.allCases.map { choice in
             UIAction(

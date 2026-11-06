@@ -37,6 +37,27 @@ final class SessionTitleTests: XCTestCase {
         }
     }
 
+    func testAtAccessibilitySizesTheHeaderTitleOutgrowsTheBarsCapAndTheStatusRow() async throws {
+        let size = UIContentSizeCategory.accessibilityExtraLarge
+        let caption = UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: UITraitCollection(preferredContentSizeCategory: size))
+        for inHeader in [false, true] {
+            let host = UIHostingController(rootView: SessionTitle(title: "fix the build", inHeader: inHeader).frame(width: 300))
+            host.traitOverrides.preferredContentSizeCategory = size
+            try await hosting(host) { _ in
+                let label = try await waitFor("title") {
+                    host.view.layoutIfNeeded()
+                    return descendants(host.view).compactMap { $0 as? UILabel }.first { $0.bounds.width > 0 }
+                }
+                if inHeader {
+                    XCTAssertGreaterThan(label.font.pointSize, caption.pointSize)
+                    XCTAssertEqual(label.textAlignment, .natural)
+                } else {
+                    XCTAssertEqual(label.font.pointSize, 19)
+                }
+            }
+        }
+    }
+
     private func render(_ label: UILabel) -> Data? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2

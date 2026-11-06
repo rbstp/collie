@@ -62,11 +62,11 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     // 2_000_000_000 is 14:33:20 at UTC+11; 2h 13m later is 16:46.
     #expect(limits[0].resets(now: now, style: style) == "16:46")
     #expect(limits[1].resets(now: now, style: style) == "3d 16h")
-    #expect(limits.map(\.title) == ["5-hour usage limit", "Weekly usage limit"])
+    #expect(limits.map(\.title) == ["5-hour limit", "Weekly limit"])
     #expect(limits[1].resetsLine(now: now) == "resets in 3d 16h")
     #expect(limits[0].resetsLine(now: now).hasPrefix("resets at "))
-    #expect(limits[1].spokenLine(now: now) == "Weekly usage limit, 22 percent used, 48 percent of the window elapsed, usage pace slower, resets in 3 days, 16 hours")
-    #expect(limits[0].spokenLine(now: now).hasPrefix("5-hour usage limit, 75 percent used, 56 percent of the window elapsed, usage pace faster, resets at "))
+    #expect(limits[1].spokenLine(now: now) == "Weekly limit, 22 percent used, 48 percent of the window elapsed, usage pace slower, resets in 3 days, 16 hours")
+    #expect(limits[0].spokenLine(now: now).hasPrefix("5-hour limit, 75 percent used, 56 percent of the window elapsed, usage pace faster, resets at "))
     #expect(PlanUsage.countdown(seconds: 45 * 60) == "45m")
     let recorded = { (ago: UInt64) in PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs - ago * 1000) }
     #expect(recorded(20).age(now: now) == "just now")
@@ -75,6 +75,18 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(recorded(90_000).age(now: now) == "1d ago")
     #expect(recorded(7_980).spokenAge(now: now) == "recorded 2 hours, 13 minutes ago")
     #expect(PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs + 5_000).age(now: now) == "just now")
+}
+
+@Test func planUsageAgeShowsOnlyOnceNoReadingIsCurrent() {
+    var plan = PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: nowMs - 6 * 60_000)
+    #expect(plan.readingsStale(now: now))
+    plan.codex = CodexUsage(used: 1, limit: 100, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 9 * 60_000)
+    #expect(!plan.readingsStale(now: now))
+    plan.codex?.recordedMs = nowMs - 11 * 60_000
+    plan.copilot = CopilotUsage(used: 1, limit: 300, unlimited: false, tokenBasedBilling: false, resetsAtMs: nowMs + 86_400_000, recordedMs: nowMs - 11 * 60_000)
+    #expect(plan.readingsStale(now: now))
+    plan.recordedMs = nowMs - 4 * 60_000
+    #expect(!plan.readingsStale(now: now))
 }
 
 @Test func planUsageSpellsOutDurationsForVoiceOver() {
@@ -115,14 +127,14 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(warning.text == "Claude 5-hour limit at 92%, \(resets(usage, "5h"))")
     #expect(warning.text.hasPrefix("Claude 5-hour limit at 92%, resets at "))
     #expect(warning.spoken == warning.text)
-    #expect(!warning.reached)
+    #expect(warning.used == 92)
     #expect(usage.warning(agent: "copilot", now: now) == nil)
     #expect(usage.warning(agent: "codex", now: now) == nil)
 
     usage.fiveHour?.usedPercent = 100
     warning = try #require(usage.warning(agent: "claude", now: now))
     #expect(warning.text == "Claude 5-hour limit reached, \(resets(usage, "5h"))")
-    #expect(warning.reached)
+    #expect(warning.used == 100)
 
     usage.fiveHour?.usedPercent = 79
     #expect(usage.warning(agent: "claude", now: now) == nil)
@@ -139,7 +151,7 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     usage.codex = CodexUsage(used: 2_000, limit: 2_000, resetsAtMs: now.unixMs + 9 * 86_400_000, recordedMs: now.unixMs - 20_000)
     warning = try #require(usage.warning(agent: "codex", now: now))
     #expect(warning.text == "Codex monthly limit reached, resets \(Date(unixMs: now.unixMs + 9 * 86_400_000).formatted(date: .abbreviated, time: .omitted))")
-    #expect(warning.reached)
+    #expect(warning.used == 100)
     #expect(usage.warning(agent: "copilot", now: now) == nil)
     usage.codex?.used = 1_600
     #expect(usage.warning(agent: "codex", now: now)?.text.hasPrefix("Codex monthly limit at 80%, resets ") == true)
@@ -180,7 +192,7 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(usage.copilot?.percent == 103)
     let warning = try #require(usage.warning(agent: "copilot", now: now))
     #expect(warning.text.hasPrefix("Copilot premium limit reached, resets "))
-    #expect(warning.reached)
+    #expect(warning.used == 100)
     usage.copilot?.recordedMs = nowMs - 11 * 60_000
     #expect(usage.warning(agent: "copilot", now: now)?.text.hasSuffix(", recorded 11m ago") == true)
     #expect(usage.age(now: now) == "11m ago")

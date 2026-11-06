@@ -13,7 +13,10 @@ struct NewTaskSheet: View {
     @State private var dictationExpanded = false
     @State private var dictationShown = false
     @State private var selection: TextSelection?
+    @State private var now = Date.now
     @FocusState private var editingPrompt: Bool
+    @State private var naming = false
+    @FocusState private var editingLabel: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -47,212 +50,11 @@ struct NewTaskSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if machines.count > 1 {
-                    Picker("Machine", selection: $model.machineId) {
-                        ForEach(machines, id: \.id) { machine in
-                            Text(machine.label).tag(Optional(machine.id))
-                        }
-                    }
-                    .tint(.primary)
+                if let error = model.error {
+                    Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
                 }
 
-                Picker("Location", selection: $model.location) {
-                    ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
-                        Text(location.rawValue).tag(location)
-                    }
-                }
-                .tint(.primary)
-
-                if model.location == .folder {
-                    Section {
-                        Toggle("New folder", isOn: $model.newFolder)
-                        if model.newFolder {
-                            if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
-                                Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
-                                    ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
-                                }
-                                .tint(.primary)
-                            }
-                            TextField("Folder name", text: $model.folderName)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .font(.body.monospaced())
-                        } else {
-                            folderPicker($model.cwd, completions: model.completions)
-                        }
-                    } header: {
-                        Text("Folder")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if model.newFolder, let parent = model.newFolderParent {
-                                let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                                Text("Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there.")
-                            }
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                            if let error = model.foldersError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                } else if model.location == .clone {
-                    Section {
-                        if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
-                            Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
-                                ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
-                            }
-                            .tint(.primary)
-                        }
-                        TextField("owner/repo or URL", text: $model.repository)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                            .font(.body.monospaced())
-                    } header: {
-                        Text("Repository")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let parent = model.newFolderParent {
-                                Text("Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there.")
-                            }
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                } else if model.location == .resume {
-                    Section {
-                        folderPicker($model.cwd, completions: model.completions)
-                    } header: {
-                        Text("Folder")
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let error = model.optionsError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                            if let error = model.foldersError {
-                                Text(error).foregroundStyle(.red)
-                            }
-                        }
-                    }
-                    Section("Session") {
-                        if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
-                            ProgressView("Finding sessions…")
-                        }
-                        if let sessions = model.sessions {
-                            if sessions.isEmpty {
-                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.secondary)
-                            }
-                            ForEach(sessions, id: \.sessionId) { session in
-                                Button {
-                                    model.session = session
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(session.firstPrompt.isEmpty ? "Prompt not shown" : session.firstPrompt).lineLimit(2)
-                                            HStack {
-                                                AgentKindLabel(kind: session.agent)
-                                                Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
-                                            }
-                                            .font(.footnote)
-                                            .foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark") }
-                                    }
-                                }
-                                .foregroundStyle(.primary)
-                            }
-                        }
-                        if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
-                    }
-                } else {
-                    Section("Git worktree") {
-                        Picker("Action", selection: $model.worktreeAction) {
-                            ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
-                                Text(action.rawValue).tag(action)
-                            }
-                        }
-                        .tint(.primary)
-                        folderPicker($model.source, completions: model.sourceCompletions)
-                        if model.worktrees == nil, model.worktreesError == nil, model.sourceFolder != nil {
-                            ProgressView("Checking repository…")
-                        }
-                        if let error = model.optionsError { Text(error).foregroundStyle(.red) }
-                        if let error = model.foldersError { Text(error).foregroundStyle(.red) }
-                        if let listed = model.worktrees {
-                            Text("Repository: \(listed.source)").font(.footnote.monospaced())
-                            if model.worktreeAction == .create {
-                                TextField("Branch name (optional)", text: $model.branch)
-                                    .textInputAutocapitalization(.never)
-                                    .autocorrectionDisabled()
-                                if let path = model.createPath {
-                                    Text("Create \(model.createBranch) at \(path)")
-                                        .font(.footnote)
-                                }
-                            } else if model.worktreeAction == .pullRequest {
-                                TextField("Pull request number", text: $model.pullRequestNumber)
-                                    .keyboardType(.numberPad)
-                                if let number = model.pullRequest {
-                                    Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
-                                        .font(.footnote)
-                                }
-                            } else {
-                                ForEach(listed.worktrees, id: \.path) { checkout in
-                                    Button {
-                                        model.checkoutPath = checkout.path
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading) {
-                                                Text(checkout.branch ?? "Detached")
-                                                Text(checkout.path).font(.footnote.monospaced())
-                                            }
-                                            Spacer()
-                                            if checkout.open { Text("Open").font(.footnote) }
-                                            if model.checkoutPath == checkout.path { Image(systemName: "checkmark") }
-                                        }
-                                    }
-                                    .foregroundStyle(.primary)
-                                }
-                            }
-                        }
-                        if let error = model.worktreesError { Text(error).foregroundStyle(.red) }
-                    }
-                }
-
-                if model.location != .resume {
-                    Section {
-                        if let agents = model.options?.agents {
-                            Picker("Agent", selection: $model.agent) {
-                                ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
-                            }
-                            .tint(.primary)
-                            if model.agent == "claude" {
-                                Toggle("Ultracode", isOn: $model.ultracode)
-                            }
-                        } else if model.optionsError == nil {
-                            ProgressView()
-                        }
-                    } header: {
-                        Text("Agent")
-                    } footer: {
-                        if !model.agent.isEmpty {
-                            TimelineView(.everyMinute) { context in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: context.date) {
-                                        Text(warning.text)
-                                            .foregroundStyle(warning.reached ? Color.orange : Color.secondary)
-                                            .accessibilityLabel(warning.spoken)
-                                    }
-                                    Text("Use the session's terminal buttons or type an answer to respond to approval prompts.")
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section(model.location == .resume ? "Prompt (optional)" : "Prompt") {
+                Section {
                     if let error = model.attachmentError {
                         Text(error).font(.footnote).foregroundStyle(.red)
                     }
@@ -273,7 +75,7 @@ struct NewTaskSheet: View {
                         .scrollIndicators(.hidden)
                     }
                     GlassEffectContainer(spacing: 4) {
-                        PromptInputLayout(expanded: expandedPrompt && (verticalSizeClass != .compact || model.dictation.isActive || dictationShown)) {
+                        PromptInputLayout(expanded: verticalSizeClass != .compact || model.dictation.isActive || dictationShown) {
                             ZStack {
                                 AttachmentMenu(
                                     savedPromptsEnabled: !model.dictation.isActive,
@@ -288,8 +90,9 @@ struct NewTaskSheet: View {
                                 .disabled(model.upload != nil || model.phase != .editing)
                             }
                             HStack(alignment: .bottom, spacing: 8) {
-                                TextField("What should the agent do?", text: $model.prompt, selection: $selection, axis: .vertical)
-                                    .lineLimit(expandedPrompt ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
+                                let placeholder = model.location == .resume ? "Prompt" : "What should the agent do?"
+                                TextField(placeholder, text: $model.prompt, selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical)
+                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive)
                                 if expandedPrompt && !model.prompt.isEmpty {
@@ -307,9 +110,6 @@ struct NewTaskSheet: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
                             DictationControl(dictation: model.dictation, disabled: model.phase != .editing, shown: $dictationShown) {
                                 dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
                                 editingPrompt = false
@@ -324,6 +124,7 @@ struct NewTaskSheet: View {
                                             .frame(width: 28, height: 28)
                                     }
                                     .buttonStyle(.glass)
+                                    .tint(.primary)
                                     .buttonBorderShape(.circle)
                                     .controlSize(.small)
                                     .accessibilityLabel("Hide keyboard")
@@ -331,41 +132,213 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
-                    .id(KeepsPromptVisible.id)
+                    .id(KeepsFieldVisible.prompt)
                 }
 
                 Section {
-                    TextField("Label (optional)", text: $model.label)
-                } footer: {
-                    Text("Names the new workspace in herdr.")
-                }
-
-                Section {
-                    Button {
-                        startTask = Task {
-                            if let route = await model.start() {
-                                dismiss()
-                                onStarted(route)
+                    if machines.count > 1 {
+                        Picker("Machine", selection: $model.machineId) {
+                            ForEach(machines, id: \.id) { machine in
+                                Text(machine.label).tag(Optional(machine.id))
                             }
                         }
-                    } label: {
-                        switch model.phase {
-                        case .editing, .startedNotVisible:
-                            Text("Start")
-                        case .starting:
-                            HStack { ProgressView(); Text("Starting the task…") }
-                        case .waitingForAgent:
-                            HStack { ProgressView(); Text("Waiting for the agent…") }
+                        .tint(.primary)
+                    }
+                    Picker("Location", selection: $model.location) {
+                        ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
+                            Text(location.rawValue).tag(location)
                         }
                     }
-                    .disabled(!model.canStart)
-                    if let error = model.error {
-                        Label(error, systemImage: "xmark.octagon").foregroundStyle(.red)
+                    .tint(.primary)
+                    if model.location == .folder {
+                        Toggle("New folder", isOn: $model.newFolder)
+                        if model.newFolder {
+                            if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
+                                Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
+                                    ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
+                                }
+                                .tint(.primary)
+                            }
+                            TextField("Folder name", text: $model.folderName, prompt: Text("Folder name").foregroundStyle(.metadata))
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.subheadline.monospaced())
+                        } else {
+                            folderPicker($model.cwd, completions: model.completions)
+                        }
+                    } else if model.location == .clone {
+                        if model.base == nil, let roots = model.options?.roots, roots.count > 1 {
+                            Picker("In", selection: Binding(get: { model.newFolderParent }, set: { model.newFolderRoot = $0 })) {
+                                ForEach(roots, id: \.self) { Text($0).tag(Optional($0)) }
+                            }
+                            .tint(.primary)
+                        }
+                        TextField("owner/repo or URL", text: $model.repository, prompt: Text("owner/repo or URL").foregroundStyle(.metadata))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .font(.subheadline.monospaced())
+                    } else if model.location == .resume {
+                        folderPicker($model.cwd, completions: model.completions)
+                    } else {
+                        Picker("Action", selection: $model.worktreeAction) {
+                            ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
+                                Text(action.rawValue).tag(action)
+                            }
+                        }
+                        .tint(.primary)
+                        folderPicker($model.source, completions: model.sourceCompletions)
+                        if model.worktrees == nil, model.worktreesError == nil, model.sourceFolder != nil {
+                            ProgressView("Checking repository…")
+                        }
+                        if let listed = model.worktrees {
+                            Text("Repository: \(listed.source)").font(.footnote.monospaced())
+                            if model.worktreeAction == .create {
+                                TextField("Branch name", text: $model.branch, prompt: Text("Branch name").foregroundStyle(.metadata))
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                if let path = model.createPath {
+                                    Text("Create \(model.createBranch) at \(path)")
+                                        .font(.footnote)
+                                }
+                            } else if model.worktreeAction == .pullRequest {
+                                TextField("Pull request number", text: $model.pullRequestNumber, prompt: Text("Pull request number").foregroundStyle(.metadata))
+                                    .keyboardType(.numberPad)
+                                if let number = model.pullRequest {
+                                    Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
+                                        .font(.footnote)
+                                }
+                            } else {
+                                ForEach(listed.worktrees, id: \.path) { checkout in
+                                    Button {
+                                        model.checkoutPath = checkout.path
+                                    } label: {
+                                        HStack {
+                                            VStack(alignment: .leading) {
+                                                Text(checkout.branch ?? "Detached")
+                                                Text(checkout.path).font(.footnote.monospaced())
+                                            }
+                                            Spacer()
+                                            if checkout.open { Text("Open").font(.footnote) }
+                                            if model.checkoutPath == checkout.path { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                        }
+                                    }
+                                    .foregroundStyle(.primary)
+                                }
+                            }
+                        }
+                        if let error = model.worktreesError { Text(error).foregroundStyle(.red) }
+                    }
+                } footer: {
+                    let parent = model.newFolderParent
+                    let name = model.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let note: String? =
+                        if model.location == .folder, model.newFolder, let parent {
+                            "Creates \(parent)/\(name.isEmpty ? "name" : name) (empty) and starts the agent there."
+                        } else if model.location == .clone, let parent {
+                            "Clones into \(parent)/\(model.cloneFolder ?? "repo") and starts the agent there."
+                        } else {
+                            nil
+                        }
+                    let errors = [model.optionsError, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
+                    // An empty footer still takes room in a Form, which widened the gap to the next section.
+                    if note != nil || !errors.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let note { Text(note) }
+                            ForEach(errors, id: \.self) { Text($0).foregroundStyle(.red) }
+                        }
+                    }
+                }
+
+                if model.location == .resume {
+                    Section("Session") {
+                        if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
+                            ProgressView("Finding sessions…")
+                        }
+                        if let sessions = model.sessions {
+                            if sessions.isEmpty {
+                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.metadata)
+                            }
+                            ForEach(sessions, id: \.sessionId) { session in
+                                Button {
+                                    model.session = session
+                                } label: {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(session.firstPrompt.isEmpty ? "Prompt not shown" : session.firstPrompt).lineLimit(2)
+                                            HStack {
+                                                AgentKindLabel(kind: session.agent)
+                                                Text(Date(timeIntervalSince1970: Double(session.modifiedMs) / 1000), format: .relative(presentation: .named))
+                                            }
+                                            .font(.footnote)
+                                            .foregroundStyle(.metadata)
+                                        }
+                                        Spacer()
+                                        if model.session?.sessionId == session.sessionId { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                    }
+                                }
+                                .foregroundStyle(.primary)
+                            }
+                        }
+                        if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
+                    }
+                }
+
+                Section {
+                    if model.location != .resume {
+                        if let agents = model.options?.agents {
+                            Picker(selection: $model.agent) {
+                                ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
+                            } label: {
+                                Text("Agent")
+                            } currentValueLabel: {
+                                // The menu's value drops the label's spacing, so the logo touched the name; the title carries the space.
+                                Label(" \(model.agent.capitalized)", image: model.agent.capitalized)
+                                    .accessibilityLabel(model.agent.capitalized)
+                            }
+                            .tint(.primary)
+                            // A row rather than the footer: light orange is 4.1:1 on the grouped background, 4.5:1 on the row.
+                            // A TimelineView here would leave an empty row without a warning.
+                            if let warning = model.machineId.flatMap({ planUsage[$0] })?.warning(agent: model.agent, now: now) {
+                                Text(warning.text)
+                                    .font(.footnote)
+                                    .foregroundStyle(ContextRing.tone(100 - warning.used))
+                                    .accessibilityLabel(warning.spoken)
+                            }
+                            if model.agent == "claude" {
+                                Toggle("Ultracode", isOn: $model.ultracode)
+                            }
+                        } else if model.optionsError == nil {
+                            ProgressView()
+                        }
+                    }
+                    if naming {
+                        TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
+                            .focused($editingLabel)
+                            .id(KeepsFieldVisible.label)
+                    }
+                } footer: {
+                    if !naming {
+                        Button {
+                            naming = true
+                            editingLabel = true
+                        } label: {
+                            Text("Name workspace")
+                                .padding(.top, 7)
+                                .frame(minHeight: 44, alignment: .top)
+                                .contentShape(Rectangle())
+                        }
+                        .font(.footnote)
+                        // The footer takes taps only inside its own bounds: a 44-point target fills it from the top, the
+                        // words where they were, which adds room only at the form's end.
+                        .padding(.vertical, -7)
                     }
                 }
             }
+            .listSectionSpacing(.compact)
+            .contentMargins(.top, 6, for: .scrollContent)
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
-            .modifier(KeepsPromptVisible(editing: editingPrompt))
+            .modifier(KeepsFieldVisible(row: editingPrompt ? KeepsFieldVisible.prompt : editingLabel ? KeepsFieldVisible.label : nil))
             .safeAreaInset(edge: .top) {
                 if let repository = model.cloning {
                     HStack(spacing: 10) {
@@ -382,6 +355,7 @@ struct NewTaskSheet: View {
                 }
             }
             .navigationTitle("New task")
+            .navigationSubtitle(model.phase == .starting ? "Starting the task…" : model.phase == .waitingForAgent ? "Waiting for the agent…" : "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -390,8 +364,33 @@ struct NewTaskSheet: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        startTask = Task {
+                            if let route = await model.start() {
+                                dismiss()
+                                onStarted(route)
+                            }
+                        }
+                    } label: {
+                        if model.phase == .starting || model.phase == .waitingForAgent {
+                            ProgressView()
+                        } else {
+                            Text("Start").onAccentFill()
+                        }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .accessibilityLabel("Start")
+                    .disabled(!model.canStart)
+                }
             }
             .task(id: model.machineId) { await model.loadOptions() }
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(60))
+                    now = .now
+                }
+            }
             .task(id: model.location == .worktree ? "\(model.machineId ?? ""):\(model.worktreeAction.rawValue):\(model.base ?? ""):\(model.source)" : nil) {
                 guard model.location == .worktree, model.sourceFolder != nil else {
                     return
@@ -434,12 +433,23 @@ struct NewTaskSheet: View {
         }
     }
 
+    private var missingFolder: Bool {
+        model.location == .folder && !model.newFolder && model.folder == nil
+            && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
+    }
+
     @ViewBuilder
     private func folderPicker(_ path: Binding<String>, completions: [String]) -> some View {
-        TextField(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project", text: path)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .font(.body.monospaced())
+        // The hint takes the placeholder's place, so the form keeps its geometry when a folder is chosen.
+        TextField(
+            "Folder", text: path,
+            prompt: missingFolder
+                ? Text("Choose a folder to start").font(.subheadline).foregroundStyle(ContextRing.tone(20))
+                : Text(model.base.map { "Name in \($0) or /absolute/path" } ?? "/path/to/project").foregroundStyle(.metadata)
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .font(.subheadline.monospaced())
         if let folders = model.folders {
             ForEach(completions, id: \.self) { name in
                 Button {
@@ -460,10 +470,20 @@ struct NewTaskSheet: View {
                 path.wrappedValue = cwd
             } label: {
                 HStack {
-                    Text(cwd).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(URL(filePath: cwd).lastPathComponent)
+                        // A long path drops whole leading folders rather than cutting one mid-word.
+                        ViewThatFits(in: .horizontal) {
+                            let parts = cwd.split(separator: "/")
+                            ForEach(0..<parts.count, id: \.self) { dropped in
+                                Text(verbatim: dropped == 0 ? cwd : "…/" + parts.dropFirst(dropped).joined(separator: "/"))
+                            }
+                        }
+                        .font(.caption.monospaced()).foregroundStyle(.metadata).lineLimit(1).truncationMode(.head)
+                    }
                     Spacer()
                     if path.wrappedValue == cwd {
-                        Image(systemName: "checkmark").foregroundStyle(.primary)
+                        Image(systemName: "checkmark").foregroundStyle(.tint)
                     }
                 }
             }
@@ -472,26 +492,28 @@ struct NewTaskSheet: View {
     }
 }
 
-/// A rotation moves the keyboard without scrolling the focused prompt back above it.
-private struct KeepsPromptVisible: ViewModifier {
-    let editing: Bool
+/// A rotation moves the keyboard without scrolling the focused prompt back above it, and UIKit scrolls a revealed field
+/// only until its text clears the keyboard, leaving the row's bottom under it.
+private struct KeepsFieldVisible: ViewModifier {
+    let row: String?
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
-                if editing { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+                if let row { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
             // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
             // the prompt row where UIKit keeps only the field visible, under the predictive bar. Scrolling from inside this
             // callback was measured against the old layout, hence the next turn of the main queue.
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom] } action: { _, _ in
-                guard editing else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(KeepsPromptVisible.id, anchor: .bottom) } }
+                guard let row else { return }
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
         }
     }
 
-    static let id = "prompt"
+    static let prompt = "prompt"
+    static let label = "label"
 }
 
 private struct FolderBrowser: View {

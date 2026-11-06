@@ -76,7 +76,7 @@ final class GlassPickerTests: XCTestCase {
                 VStack(spacing: 24) {
                     GlassPicker(title: "View", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
                     GlassPicker(title: "Session view", selection: $state.selected, options: [("Chat", false), ("Terminal", true)],
-                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(named: "Ghostty")])
+                                icons: [UIImage(systemName: "bubble.left.and.bubble.right"), UIImage(systemName: "terminal")])
                         .controlSize(.small)
                 }
                 .padding()
@@ -85,7 +85,7 @@ final class GlassPickerTests: XCTestCase {
                 .toolbar(removing: .title)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        GlassPicker(title: "Toolbar view", selection: $state.selected, options: [("Agents", false), ("Usage", true)])
+                        GlassPicker(title: "Toolbar view", selection: $state.selected, options: [("Agents", false), ("Usage", true)], toolbar: true)
                             .fixedSize()
                     }
                     .sharedBackgroundVisibility(.hidden)
@@ -106,8 +106,10 @@ final class GlassPickerTests: XCTestCase {
     }
 
     private func assertAppearance(_ controls: [UISegmentedControl], accent: AppAccent, style: UIUserInterfaceStyle) throws {
-        let expected = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
+        let accentColor = UIColor(accent.color).resolvedColor(with: UITraitCollection(userInterfaceStyle: style))
         for control in controls {
+            // In dark mode only the toolbar's picker keeps the accent; the others take white on their lighter lens.
+            let expected = style == .dark && control.accessibilityLabel != "Toolbar view" ? UIColor.white : accentColor
             XCTAssertNil(control.selectedSegmentTintColor)
             XCTAssertNil(control.titleTextAttributes(for: .normal)?[.foregroundColor])
             let actual = try XCTUnwrap(control.titleTextAttributes(for: .selected)?[.foregroundColor] as? UIColor)

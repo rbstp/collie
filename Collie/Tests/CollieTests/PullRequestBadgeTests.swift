@@ -69,6 +69,21 @@ private func pullRequest(
 }
 
 @MainActor
+@Test func badgeLabelsReadOnTheirPaleFillInLightMode() {
+    var light = EnvironmentValues()
+    light.colorScheme = .light
+    func luminance(_ c: Color.Resolved) -> Double {
+        0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue)
+    }
+    for state in [PullState.open, .draft, .merged, .closed] {
+        let text = PullRequestBadge.color(state).resolve(in: light)
+        // The fill is the label's color at 15% over white, in linear light as the compositor blends it.
+        let fill = 0.15 * luminance(text) + 0.85
+        #expect((fill + 0.05) / (luminance(text) + 0.05) >= 4.5)
+    }
+}
+
+@MainActor
 @Test func badgeOpensOnlyHttpsLinks() {
     #expect(PullRequestBadge.url(pullRequest(.open, .passing))?.absoluteString == "https://github.com/rbstp/collie/pull/264")
     for url in ["http://github.com/o/r/pull/1", "javascript:alert(1)", "collie://agent", "https:///pull/1", ""] {

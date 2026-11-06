@@ -37,20 +37,21 @@ private func entry(
     let inactive = agent("old", .idle, activity: nowMs - 25 * 3_600_000, kind: "codex")
     let olderDone = agent("older-done", .done, activity: nowMs - 20, since: nowMs - 26 * 3_600_000)
     let items = InboxItem.items(in: [entry("m1", [blocked]), entry("m2", [finished, inactive, olderDone], link: .offline)])
-    let seen = SeenAgents()
     #expect(items.first { $0.route.terminalId == "done" }?.stale == true)
     #expect(items.filter { $0.matches("review") }.map(\.route.terminalId) == ["done"])
     #expect(items.filter { $0.matches("build") }.map(\.route.terminalId) == ["blocked"])
     #expect(items.filter { $0.matches("collie") }.count == 4)
     #expect(items.filter { $0.matches("mac m2") }.count == 3)
     #expect(items.filter { $0.matches("CODEX") }.map(\.route.terminalId) == ["old"])
-    #expect(Set(items.filter { InboxFilter.needsAttention.includes($0, seen: seen, now: now) }.map(\.route.terminalId))
-            == Set(["blocked", "done", "older-done"]))
-    #expect(items.filter { InboxFilter.working.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["blocked"])
-    #expect(items.filter { InboxFilter.inactive.includes($0, seen: seen, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
+    #expect(items.filter { InboxFilter.needsYou.includes($0, now: now) }.map(\.route.terminalId) == ["blocked"])
+    #expect(items.filter { InboxFilter.working.includes($0, now: now) }.isEmpty)
+    #expect(items.filter { InboxFilter.done.includes($0, now: now) }.map(\.route.terminalId) == ["done"])
+    #expect(items.filter { InboxFilter.inactive.includes($0, now: now) }.map(\.route.terminalId) == ["old", "older-done"])
+    #expect(items.filter { InboxFilter.all.includes($0, now: now) }.count == 4)
+    #expect(InboxFilter.allCases.compactMap(\.section) == InboxSection.allCases)
 }
 
-@Test func seenCompletionSurvivesReloadAndNewCompletionNeedsAttention() throws {
+@Test func seenCompletionSurvivesReloadAndANewCompletionIsUnseen() throws {
     let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: file) }
     let route = AgentRoute(machineId: "m1", terminalId: "done")
@@ -60,7 +61,6 @@ private func entry(
     seen.save(to: file)
     seen = SeenAgents.load(from: file)
     #expect(seen.isSeen(first, route: route))
-    #expect(!InboxFilter.needsAttention.includes(InboxItem.items(in: [entry("m1", [first])])[0], seen: seen, now: now))
     let later = agent("done", .done, activity: 20, since: 15)
     #expect(!seen.isSeen(later, route: route))
     seen.markOpened(agent("done", .working, activity: 20, since: 15), route: route, nowMs: 150)
@@ -68,8 +68,6 @@ private func entry(
     seen.markOpened(later, route: route, nowMs: 200)
     seen.markUnseen(later, route: route)
     #expect(!seen.isSeen(later, route: route))
-    let blocked = agent("done", .blocked, activity: 30, since: 15)
-    #expect(InboxFilter.needsAttention.includes(InboxItem.items(in: [entry("m1", [blocked])])[0], seen: seen, now: now))
 }
 
 @Test func seenMarkersAreBoundedAndPrunedOnlyFromLoadedMachines() {
@@ -192,12 +190,12 @@ private func entry(
 @Test func inboxSectionsFollowStatusAndLastActivity() {
     let hour: UInt64 = 3_600_000
     #expect(InboxSection.of(agent("a", .working, activity: nil), now: now) == .working)
-    #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .working)
+    #expect(InboxSection.of(agent("a", .blocked, activity: nil), now: now) == .needsYou)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .done, activity: nil, since: nowMs - 25 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .done, activity: nowMs - 25 * hour, since: nowMs - hour), now: now) == .done)
     #expect(InboxSection.of(agent("a", .done, activity: nowMs - hour, since: nowMs - 24 * hour), now: now) == .inactive)
-    #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .working)
+    #expect(InboxSection.of(agent("a", .blocked, activity: nowMs - 25 * hour), now: now) == .needsYou)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - hour, since: nowMs - 15 * hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .unknown, activity: nowMs - hour), now: now) == .inactive)
     #expect(InboxSection.of(agent("a", .idle, activity: nowMs - 25 * hour), now: now) == .inactive)
@@ -205,7 +203,7 @@ private func entry(
     #expect(InboxSection.of(agent("a", .idle, activity: nil, since: nowMs - hour), now: now) == .inactive)
 }
 
-@Test func inboxPutsBlockedFirstThenTheMostRecentAcrossMachines() {
+@Test func inboxPutsBlockedInItsOwnSectionThenTheMostRecentAcrossMachines() {
     let entries = [
         entry("m1", [agent("old", .working, activity: 10), agent("blocked", .blocked, activity: 1), agent("idle", .idle, activity: nil)]),
         entry("m2", [agent("new", .working, activity: 30), agent("since", .done, activity: nil, since: nowMs - 50),
@@ -215,16 +213,87 @@ private func entry(
     #expect(items.first { $0.route.terminalId == "new" }?.machine == "Mac m2")
     #expect(items.first { $0.route.terminalId == "old" }?.workspace == "collie")
     let groups = InboxSection.grouped(items, now: now)
-    #expect(groups[.working]?.map(\.route.terminalId) == ["blocked", "new", "old"])
+    #expect(groups[.needsYou]?.map(\.route.terminalId) == ["blocked"])
+    #expect(groups[.working]?.map(\.route.terminalId) == ["new", "old"])
     #expect(groups[.done]?.map(\.route.terminalId) == ["done", "since"])
     #expect(groups[.inactive]?.map(\.route) == [AgentRoute(machineId: "m1", terminalId: "idle")])
 }
 
 @MainActor
-@Test func contextRingTonesUseTheWatchUsageScale() {
-    let environment = EnvironmentValues()
-    for left: UInt8 in [100, 72, 40, 20, 10, 5, 0] {
-        #expect(ContextRing.tone(left).resolve(in: environment) == WatchUsage.usedColor(100 - left).resolve(in: environment))
+@Test func contextFigureShowsOnlyBelowSeventyPercentLeft() {
+    for left: UInt8 in [255, 100, 70] {
+        #expect(!ContextRing.shows(left))
     }
-    #expect(ContextRing.tone(255).resolve(in: environment) == ContextRing.tone(100).resolve(in: environment))
+    for left: UInt8 in [69, 38, 12, 0] {
+        #expect(ContextRing.shows(left))
+    }
+}
+
+@MainActor
+@Test func contextRingTonesFollowTheOneWarningRule() {
+    for left: UInt8 in [100, 41, 21] {
+        #expect(ContextRing.tone(left) == .accentColor)
+    }
+    #expect(ContextRing.tone(255) == ContextRing.tone(100))
+    var light = EnvironmentValues()
+    light.colorScheme = .light
+    var dark = EnvironmentValues()
+    dark.colorScheme = .dark
+    func onWhite(_ color: Color) -> Double {
+        let c = color.resolve(in: light)
+        return 1.05 / (0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue) + 0.05)
+    }
+    for (lefts, tone) in [([20, 11] as [UInt8], Color.orange), ([10, 0], AgentState.blocked.color)] {
+        for left in lefts {
+            #expect(ContextRing.tone(left).resolve(in: dark) == tone.resolve(in: dark))
+            #expect(onWhite(ContextRing.tone(left)) >= 4.5)
+        }
+    }
+    #expect(onWhite(.metadata) >= 4.5)
+    #expect(onWhite(AgentState.blocked.color) >= 4.5)
+    // Dark glass under the approval buttons, about #3D3D3D.
+    let red = AgentState.blocked.color.resolve(in: dark)
+    #expect((0.2126 * Double(red.linearRed) + 0.7152 * Double(red.linearGreen) + 0.0722 * Double(red.linearBlue) + 0.05) / (0.047 + 0.05) >= 4.5)
+}
+
+@MainActor
+@Test func statusGlyphsAreOneFamilyAndReadInBothModes() {
+    #expect(StatusIcon.symbol(.blocked).hasSuffix(".fill"))
+    for state in [AgentState.done, .idle, .unknown] {
+        #expect(!StatusIcon.symbol(state).hasSuffix(".fill"))
+    }
+    var light = EnvironmentValues()
+    light.colorScheme = .light
+    var dark = EnvironmentValues()
+    dark.colorScheme = .dark
+    func luminance(_ c: Color.Resolved) -> Double {
+        0.2126 * Double(c.linearRed) + 0.7152 * Double(c.linearGreen) + 0.0722 * Double(c.linearBlue)
+    }
+    // The status pill's glass, about #F5F5F5 in light mode and #2B2B2B in dark mode, where the color is the label's.
+    let lightPill = luminance(Color(white: 245 / 255).resolve(in: light))
+    let darkPill = luminance(Color(white: 43 / 255).resolve(in: dark))
+    for state in [AgentState.blocked, .done, .idle] {
+        #expect((lightPill + 0.05) / (luminance(state.color.resolve(in: light)) + 0.05) >= 4.5)
+        #expect((luminance(state.color.resolve(in: dark)) + 0.05) / (darkPill + 0.05) >= 4.5)
+    }
+}
+
+@Test func theFilterRowEndsBetweenLabels() {
+    // Five segments with 14 pt of padding on each side of their labels, after a 16 pt inset.
+    let segments: [CGFloat] = [50, 100, 90, 66, 95]
+    #expect(InboxFilter.rowWidth(segments: segments, available: 500, atEnd: false) == 500)
+    // 378 falls inside the fifth label (336 to 403): the row ends where it starts.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: false) == 336)
+    // 330 falls in the padding between the fourth and fifth labels.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 330, atEnd: false) == 330)
+    // Scrolled to the end of 433 pt, a leading edge at 55 falls between the first two labels; one at 93 would cut the second (80 to 152), so the row starts after it: 433 - 152.
+    #expect(InboxFilter.rowWidth(segments: segments, available: 378, atEnd: true) == 378)
+    #expect(InboxFilter.rowWidth(segments: segments, available: 340, atEnd: true) == 281)
+}
+
+@Test func allFiveFiltersFitTheProMaxWithoutScrolling() {
+    let font = UIFont.systemFont(ofSize: 15, weight: .semibold)
+    let segments = InboxFilter.allCases.map { GlassSegment.width($0.title, font: font) }
+    // The iPhone 18 Pro Max is 440 points wide; narrower phones scroll the row.
+    #expect(segments.reduce(2 * InboxFilter.rowInset, +) <= 440)
 }

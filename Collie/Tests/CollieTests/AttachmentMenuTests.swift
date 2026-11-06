@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class AttachmentMenuTests: XCTestCase {
-    func testCircleMatchesNeighborsAndIconUsesAppAccent() async throws {
+    func testCircleMatchesNeighborsAndIconUsesPrimary() async throws {
         for style in [UIUserInterfaceStyle.light, .dark] {
             let neighbor = FrameBox()
             let host = UIHostingController(rootView: HStack(alignment: .bottom, spacing: 8) {
@@ -38,7 +38,7 @@ final class AttachmentMenuTests: XCTestCase {
                     XCTAssertTrue(window.hitTest(point, with: nil)?.isDescendant(of: button) == true, "\(point)")
                 }
                 let imageView = try XCTUnwrap(button.imageView)
-                XCTAssertLessThanOrEqual(imageView.bounds.height, 26)
+                XCTAssertLessThanOrEqual(imageView.bounds.height, 28)
                 XCTAssertEqual(imageView.image?.renderingMode, .alwaysOriginal)
                 let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                     window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -48,10 +48,10 @@ final class AttachmentMenuTests: XCTestCase {
                 attachment.lifetime = .keepAlways
                 add(attachment)
                 let actual = try XCTUnwrap(button.configuration?.baseForegroundColor).resolvedColor(with: button.traitCollection)
-                let expected = UIColor(AppAccent.gold.color).resolvedColor(with: button.traitCollection)
-                XCTAssertEqual(actual.cgColor.numberOfComponents, expected.cgColor.numberOfComponents)
-                for (component, wanted) in zip(actual.cgColor.components ?? [], expected.cgColor.components ?? []) {
-                    XCTAssertEqual(component, wanted, accuracy: 0.002)
+                var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0
+                XCTAssertTrue(actual.getRed(&red, green: &green, blue: &blue, alpha: nil))
+                for component in [red, green, blue] {
+                    XCTAssertEqual(component, style == .dark ? 1 : 0, accuracy: 0.002)
                 }
             }
         }
@@ -60,7 +60,7 @@ final class AttachmentMenuTests: XCTestCase {
     func testEveryChoiceWaitsForMenuDismissal() {
         for choice in AttachmentChoice.allCases {
             let button = AttachmentMenuButton()
-            button.configure(savedPromptsEnabled: true, filesEnabled: true, accent: .systemBlue, locale: .current)
+            button.configure(savedPromptsEnabled: true, filesEnabled: true, color: .label, locale: .current)
             var selected: [AttachmentChoice] = []
             button.select = { selected.append($0) }
             let animator = MenuAnimator()
@@ -79,7 +79,7 @@ final class AttachmentMenuTests: XCTestCase {
 
     func testCancellationAndDisabledChoicesDoNotPresent() {
         let button = AttachmentMenuButton()
-        button.configure(savedPromptsEnabled: true, filesEnabled: false, accent: .systemBlue, locale: .current)
+        button.configure(savedPromptsEnabled: true, filesEnabled: false, color: .label, locale: .current)
         var selected: [AttachmentChoice] = []
         button.select = { selected.append($0) }
         button.finishSelection(animator: nil)
@@ -91,7 +91,7 @@ final class AttachmentMenuTests: XCTestCase {
         button.queueSelection(.savedPrompts)
         button.finishSelection(animator: nil)
         XCTAssertEqual(selected, [.savedPrompts])
-        button.configure(savedPromptsEnabled: false, filesEnabled: true, accent: .systemBlue, locale: .current)
+        button.configure(savedPromptsEnabled: false, filesEnabled: true, color: .label, locale: .current)
         button.queueSelection(.savedPrompts)
         XCTAssertNil(button.pendingChoice)
         button.queueSelection(.files)

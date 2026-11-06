@@ -25,6 +25,6 @@ Terminals let you use plain shell panes from the phone. Anything typed there run
 **Terminals** in the app lists the machine's shell panes, including the pane of an agent that exited.
 
 1. Open a terminal and unlock it with Face ID or the passcode. One unlock covers that terminal for 5 minutes, or until the app goes to the background.
-2. The command field runs one line at a time. The [key strip](../app/keys.md) works as in an agent session.
+2. Tap the terminal and type, as in an agent's [Terminal view](../app/chat-terminal.md#terminal): every key goes to the shell, and Return runs the line. The [key strip](../app/keys.md) works as in an agent session.
 
-`collied` refuses to write to a pane where an agent now runs. The audit log records each unlock and command, without the command's text.
+`collied` refuses to write to a pane where an agent now runs. The audit log records each unlock and what you send, never its text.

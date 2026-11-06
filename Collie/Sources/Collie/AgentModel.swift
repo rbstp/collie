@@ -87,6 +87,7 @@ final class AgentModel {
     private(set) var quotes = 0
     private enum Input {
         case key(AgentKey)
+        case text(String)
         case answer(String, CheckedContinuation<Void, any Error>)
     }
     private var queuedInput: [Input] = []
@@ -125,6 +126,11 @@ final class AgentModel {
     var savesPreferences: Bool { prefsFile != nil }
 
     var keepsKeyboard: Bool { DevicePrefs.load(from: prefsFile).keepKeyboard }
+
+    /// Return typed into the terminal sends, so it hides the keyboard as a sent prompt does.
+    func keepsKeyboard(after typed: String) -> Bool {
+        keepsKeyboard || !typed.contains(where: \.isNewline)
+    }
 
     var historyLines: UInt16 { DevicePrefs.load(from: prefsFile).historyLines }
 
@@ -606,7 +612,7 @@ final class AgentModel {
             if !mine.isEmpty, Self.boxToken(current)?.hasPrefix(mine) == true { adopt(current) } else { macDraft = current }
         }
         if case .AgentBlocked = error as? CoreError, codexQuestionQueued {
-            promptError = "Tap ⇧← to view and answer the pending question."
+            promptError = "Tap shift-left to view and answer the pending question."
         } else {
             promptError = Self.promptMessage(for: error)
         }
@@ -872,8 +878,55 @@ final class AgentModel {
         return enqueue(.key(key))
     }
 
+    /// The cursor's position in an agent's input box is not on the wire: Control-A, then Left and
+    /// Control-A once per further line of `lines`, reaches its start from anywhere, past spaces
+    /// typed at the end of a row that the screen does not show (Control-A goes to the start of the
+    /// line, or in Copilot CLI of the row, and Left at the start does nothing). Then `right` Right
+    /// and `down` Down reach the tapped row, Down moving by row as drawn, and `across` Right (Left
+    /// where negative) the tapped character, never past the text, where Right could accept a
+    /// suggestion.
+    @discardableResult
+    func placeCursor(lines: Int, right: Int, down: Int, across: Int) -> Task<Void, Never>? {
+        guard canTap(.right), canTap(.left), canTap(.ctrlA), canTap(.down) else { return nil }
+        var task: Task<Void, Never>?
+        let start = [AgentKey.ctrlA] + Array(repeating: [AgentKey.left, .ctrlA], count: max(lines - 1, 0)).flatMap(\.self)
+        let walk = Array(repeating: AgentKey.right, count: right) + Array(repeating: .down, count: down)
+            + Array(repeating: across < 0 ? .left : .right, count: abs(across))
+        for key in start + walk {
+            task = tap(key) ?? task
+        }
+        return task
+    }
+
     func select(_ modifier: KeyModifier) {
         self.modifier = self.modifier == modifier ? nil : modifier
+    }
+
+    /// Keystrokes from the terminal view's keyboard, typed into the pane in order with the strip's
+    /// keys: Return and Tab go as keys, and text queued behind a send goes out in one call. With
+    /// Control selected, a listed letter goes out as Control and that letter.
+    @discardableResult
+    func type(_ text: String) -> Task<Void, Never>? {
+        guard acceptsKeys else { return nil }
+        if let selected = modifier {
+            modifier = nil
+            if selected == .control, text.count == 1, let letter = text.first, let key = AgentKey.control(letter), canTap(key) {
+                return tap(key)
+            }
+        }
+        var task: Task<Void, Never>?
+        var run = ""
+        for character in text {
+            if character.isNewline || character == "\t" {
+                if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+                run = ""
+                task = tap(character == "\t" ? .tab : .enter) ?? task
+            } else if !character.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
+                run.append(character)
+            }
+        }
+        if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+        return task
     }
 
     /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
@@ -961,6 +1014,26 @@ final class AgentModel {
             }
             if !isTerminal {
                 await flushMirror()
+            }
+            if case .text? = queuedInput.first {
+                var text = ""
+                while case let .text(more)? = queuedInput.first {
+                    text += more
+                    queuedInput.removeFirst()
+                }
+                do {
+                    if isTerminal {
+                        try await core.terminalSendText(machineId: route.machineId, terminalId: route.terminalId, text: text)
+                    } else {
+                        try await core.sendText(machineId: route.machineId, terminalId: route.terminalId, text: text)
+                    }
+                    notice = nil
+                } catch {
+                    if case .TerminalLocked = error as? CoreError { terminalLocked = true }
+                    cancelInput(error)
+                    notice = Self.message(for: error)
+                }
+                continue
             }
             guard case .key? = queuedInput.first else { continue }
             let command = commandShown
@@ -1153,13 +1226,6 @@ struct CloseConfirmation: Equatable {
 enum KeyModifier: CaseIterable {
     case shift, control
 
-    var symbol: String {
-        switch self {
-        case .shift: "⇧"
-        case .control: "⌃"
-        }
-    }
-
     var accessibilityName: String {
         switch self {
         case .shift: "Shift"
@@ -1169,10 +1235,11 @@ enum KeyModifier: CaseIterable {
 }
 
 extension AgentKey {
-    static let strip: [AgentKey] = [.esc, .left, .up, .down, .right, .tab, .backspace, .enter]
+    static let strip: [AgentKey] = [.esc, .tab, .backspace, .enter]
+    static let arrows: [AgentKey] = [.left, .up, .down, .right]
     static let combos: [AgentKey] = [.shiftTab, .ctrlEnter, .shiftLeft, .ctrlC]
     static let controlLetters: [AgentKey] = [.ctrlA, .ctrlB, .ctrlC, .ctrlE, .ctrlK, .ctrlL, .ctrlU, .ctrlW]
-    static let all: [AgentKey] = strip + combos.filter { $0 != .ctrlC } + controlLetters
+    static let all: [AgentKey] = strip + arrows + combos.filter { $0 != .ctrlC } + controlLetters
 
     /// The combination with a modifier; nil when collied has no such key.
     func with(_ modifier: KeyModifier) -> AgentKey? {
@@ -1220,7 +1287,7 @@ extension AgentKey {
 
     var symbol: String {
         switch self {
-        case .esc: "E"
+        case .esc: "esc"
         case .enter: "⏎"
         case .up: "↑"
         case .down: "↓"

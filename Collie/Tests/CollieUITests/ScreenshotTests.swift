@@ -30,7 +30,7 @@ final class ScreenshotTests: XCTestCase {
         let luma = (299 * Int(rgba[0]) + 587 * Int(rgba[1]) + 114 * Int(rgba[2])) / 1000
         XCTAssertEqual(luma < 128, suffix == "dark", "the background does not match the requested appearance")
         app.segmentedControls["View"].buttons["Usage"].tap()
-        XCTAssertTrue(app.staticTexts["5-hour usage limit"].appears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["5-hour limit"].appears(within: 5), app.debugDescription)
         try save("usage")
         app.segmentedControls["View"].buttons["Agents"].tap()
         app.buttons["New task"].tap()
