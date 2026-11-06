@@ -812,7 +812,7 @@ fn key_bytes(key: &Key) -> &'static str {
 }
 
 /// Combos from a key shortcut and their bytes, likewise, from herdr-core 0.1.18.
-const COMBOS: [(&str, &str); 9] = [
+const COMBOS: [(&str, &str); 10] = [
     ("ctrl+alt+x", "1b18"),
     ("alt+x", "1b78"),
     ("shift+f5", "1b5b31353b327e"),
@@ -822,6 +822,7 @@ const COMBOS: [(&str, &str); 9] = [
     ("/", "2f"),
     ("alt+enter", "1b0d"),
     ("shift+enter", "1b5b32373b323b31337e"),
+    ("shift+a", "41"),
 ];
 
 const KEYS: [Key; 19] = [
@@ -1180,6 +1181,15 @@ async fn input_scenario(core: &CoreSession) {
     // herdr-core has no Command modifier; herdr sends it to a program with a keyboard protocol.
     assert!(KeyCombo::new("cmd+k").is_ok());
     assert!(rt.agent_send_keys(&d.pane_id, &["cmd+k"]).await.is_err());
+    // herdr-core refuses Control with `[`, so no bare `[` (5b) reaches the program either,
+    // and Control with Shift and a letter.
+    for name in ["ctrl+[", "ctrl+shift+[", "ctrl+shift+a"] {
+        assert!(KeyCombo::new(name).is_ok(), "{name}");
+        assert!(
+            rt.agent_send_keys(&d.pane_id, &[name]).await.is_err(),
+            "{name}"
+        );
+    }
     rt.scroll_bottom(&d.pane_id).await.unwrap();
     expected.push_str("1b5b313b3546");
     rt.notice_digit(&d.pane_id, "1").await.unwrap();
