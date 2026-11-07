@@ -57,7 +57,9 @@ echo "zig: $zig ($("$zig" version))"
 
 unpack() {
     tarball="$work/$1.tar.gz"
-    curl -fsSL --retry 3 -o "$tarball" "https://release.files.ghostty.org/libghostty-vt/$LIBGHOSTTY_VT_VERSION/$1.tar.gz"
+    # Fallback for when release.files.ghostty.org is down: the same tarballs on this repo's release.
+    curl -fsSL --retry 3 -o "$tarball" "https://release.files.ghostty.org/libghostty-vt/$LIBGHOSTTY_VT_VERSION/$1.tar.gz" ||
+        curl -fsSL --retry 3 -o "$tarball" "https://github.com/rbstp/collie/releases/download/ghostty-vt-$LIBGHOSTTY_VT_VERSION/$1.tar.gz"
     echo "$2  $tarball" | shasum -a 256 -c -
     rm -rf "${work:?}/$1"
     tar -xzf "$tarball" -C "$work"
