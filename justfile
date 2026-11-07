@@ -132,7 +132,7 @@ ios-framework target="all" profile="release":
     xcodebuild -create-xcframework "${libraries[@]}" -output "$pkg/CollieCore.xcframework"
     echo "$want" > "$stamp"
 
-# libghostty-vt from a pinned Ghostty commit; skipped when already built for that pin.
+# libghostty-vt from a pinned release; skipped when already built for that pin.
 ios-ghostty:
     scripts/ghostty/build-xcframework.sh
 

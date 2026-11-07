@@ -1,35 +1,37 @@
 #!/usr/bin/env bash
-# Builds libghostty-vt from a pinned upstream Ghostty commit into
+# Builds libghostty-vt from its pinned release tarballs into
 # Collie/GhosttyTerminal/GhosttyVt.xcframework (ios, ios-simulator, macOS for `swift test`).
 #
-# Upstream main dropped iOS from the full GhosttyKit build ("only libghostty-vt supports iOS"),
-# and no release yet ships the libghostty-vt terminal and render-state API (v1.3.1 has only the
-# key/OSC/SGR parsers), so this pins a main commit.
+# The tarball SHA-256s are the ones in the release's SHA256SUMS, whose minisign signature was checked
+# against the Ghostty release key in PACKAGING-LIBGHOSTTY.md when pinning.
 set -euo pipefail
 
 # Moving this pin means rerunning scripts/ghostty/nerd-font-constraints.py.
-GHOSTTY_COMMIT=befcdfd2c3a1cb24d9ec886e93c95b2b5daa7028
-ZIG_VERSION=0.16.0
-ZIG_SHA256=b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+LIBGHOSTTY_VT_VERSION=1.0.0
+# The vt-1.0.0 tag, which nerd-font-constraints.py reads Ghostty's font tables from.
+GHOSTTY_COMMIT=0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec
+SOURCE_SHA256=4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676
+DEPS_SHA256=4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29
+ZIG_VERSION=0.17.1
+ZIG_SHA256=75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
 # Render state only: no Kitty graphics (file, temp-file and shared-memory image media), no input
 # encoders, no snapshot/formatter/search. The terminal parser itself is always built.
 VT_FEATURES=-all,+render-state
-# License texts the Ghostty tree and its Zig packages leave out, at the versions the pin vendors.
-SIMDUTF_LICENSE=https://raw.githubusercontent.com/simdutf/simdutf/ca7acbcea967b5dcbab490066e99e3a6e6925539/LICENSE-MIT
-SIMDUTF_LICENSE_SHA256=fc8dbc04e03ad4efc08a647ffe7f995b811a95bc04c0e85a56d5277c6593fa5f
-UUCODE_LICENSES=https://raw.githubusercontent.com/jacobsandlund/uucode/9d55524551411b493cca41ca06363625d90aff1e/licenses
+# License texts uucode's Zig package leaves out, at the commit the dependency tarball holds.
+UUCODE_LICENSES=https://raw.githubusercontent.com/jacobsandlund/uucode/1fb73433bba5d93366c57f23ff2e9d7939746500/licenses
 UUCODE_UNICODE_SHA256=1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175
 UUCODE_HOEHRMANN_SHA256=de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 work="$root/target/ghostty"
-src="$work/src"
+src="$work/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
+deps="$src-deps"
 out="$root/Collie/GhosttyTerminal/GhosttyVt.xcframework"
 stamp="$out/.collie-build"
-want="$GHOSTTY_COMMIT $ZIG_VERSION $VT_FEATURES"
+want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES"
 
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -d "$out/licenses" ]; then
-    echo "GhosttyVt.xcframework is up to date ($GHOSTTY_COMMIT)"
+    echo "GhosttyVt.xcframework is up to date (libghostty-vt $LIBGHOSTTY_VT_VERSION)"
     exit 0
 fi
 
@@ -53,66 +55,32 @@ else
 fi
 echo "zig: $zig ($("$zig" version))"
 
-if [ ! -d "$src/.git" ]; then
-    git init -q "$src"
-    git -C "$src" remote add origin https://github.com/ghostty-org/ghostty.git
-fi
-if [ "$(git -C "$src" rev-parse -q --verify HEAD || true)" != "$GHOSTTY_COMMIT" ]; then
-    git -C "$src" fetch -q --depth 1 origin "$GHOSTTY_COMMIT"
-    git -C "$src" checkout -q --force --detach FETCH_HEAD
-fi
-git -C "$src" clean -qfdx -e .zig-cache
-[ "$(git -C "$src" rev-parse HEAD)" = "$GHOSTTY_COMMIT" ]
-echo "ghostty: $GHOSTTY_COMMIT"
+unpack() {
+    tarball="$work/$1.tar.gz"
+    curl -fsSL --retry 3 -o "$tarball" "https://release.files.ghostty.org/libghostty-vt/$LIBGHOSTTY_VT_VERSION/$1.tar.gz"
+    echo "$2  $tarball" | shasum -a 256 -c -
+    rm -rf "${work:?}/$1"
+    tar -xzf "$tarball" -C "$work"
+    rm -f "$tarball"
+}
+unpack "libghostty-vt-$LIBGHOSTTY_VT_VERSION" "$SOURCE_SHA256"
+unpack "libghostty-vt-$LIBGHOSTTY_VT_VERSION-deps" "$DEPS_SHA256"
+echo "libghostty-vt: $LIBGHOSTTY_VT_VERSION"
 
+# A new cache each time: Zig 0.17 can crash on a cache that holds package archives, as the
+# fetches of earlier pins left in this one.
 cache="$work/zig-global-cache"
-build() {
-    rm -rf "$work/out"
-    (
-        cd "$src"
-        ZIG_GLOBAL_CACHE_DIR="$cache" "$zig" build \
-            -Demit-lib-vt=true \
-            -Demit-xcframework=true \
-            -Doptimize=ReleaseFast \
-            -Dvt-features="$VT_FEATURES" \
-            --prefix "$work/out"
-    )
-}
-
-# Fallback for when an upstream package host (codeberg.org, GitHub) is down: the same packages,
-# published on this repo's ghostty-deps-<commit> release. `zig fetch` recomputes each package hash,
-# which ghostty's build.zig.zon files pin, so the mirror cannot substitute content.
-# Regenerate the release from target/ghostty/zig-global-cache/p when GHOSTTY_COMMIT changes.
-MIRROR="https://github.com/rbstp/collie/releases/download/ghostty-deps-${GHOSTTY_COMMIT:0:8}"
-MIRRORED_PACKAGES=(
-    aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX
-    N-V-__8AAB0eQwD-0MdOEBmz7intriBReIsIDNlukNVoNu6o
-    N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE
-    N-V-__8AAM94BAAFk_hn4UW0x_OBD2g0vOwexeAAyWNNo4eB
-    translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr
-    uucode-0.2.0-ZZjBPuuFVgC8YZ8eld4fOKsZANLIhTFMzULQxhkLi1C7
+rm -rf "$cache" "$work/out"
+# The ceiling keeps Ghostty's build from taking this repository's git tags for its version.
+(
+    cd "$src"
+    GIT_CEILING_DIRECTORIES="$work" ZIG_GLOBAL_CACHE_DIR="$cache" "$zig" build \
+        --system "$deps" \
+        -Demit-xcframework=true \
+        -Doptimize=ReleaseFast \
+        -Dvt-features="$VT_FEATURES" \
+        --prefix "$work/out"
 )
-seed_from_mirror() {
-    mkdir -p "$work/mirror"
-    for pkg in "${MIRRORED_PACKAGES[@]}"; do
-        [ -f "$cache/p/$pkg.tar.gz" ] && continue
-        file="$work/mirror/$pkg.tar.gz"
-        curl -fsSL --retry 3 -o "$file" "$MIRROR/$pkg.tar.gz"
-        got="$(cd "$src" && "$zig" fetch --global-cache-dir "$cache" "$file" | tail -n 1)"
-        rm -f "$file"
-        if [ "$got" != "$pkg" ]; then
-            echo "mirrored package $pkg hashes to $got" >&2
-            exit 1
-        fi
-        echo "seeded $pkg from the mirror"
-    done
-}
-
-if ! build; then
-    echo "zig build failed; seeding missing packages from $MIRROR and retrying" >&2
-    seed_from_mirror
-    build
-fi
 
 built="$work/out/lib/ghostty-vt.xcframework"
 headers="$work/headers"
@@ -144,15 +112,15 @@ fetch() {
 }
 cp "$src/LICENSE" "$licenses/libghostty-vt"
 {
-    fetch "$SIMDUTF_LICENSE" "$SIMDUTF_LICENSE_SHA256"
+    cat "$src/pkg/simdutf/vendor/LICENSE-MIT"
     printf '\ninclude/simdutf/internal/isadetection.h is derived from\n'
     sed -n '/^https:\/\/github.com\/endorno\/pytorch/,/POSSIBILITY OF SUCH DAMAGE\./p' "$src/pkg/simdutf/vendor/simdutf.h"
 } >"$licenses/simdutf"
 grep -q 'Redistributions in binary form' "$licenses/simdutf"
 highway="$(sed -n 's/^ *\.hash = "\(.*\)",$/\1/p' "$src/pkg/highway/build.zig.zon")"
-cp "$src/zig-pkg/$highway/LICENSE-BSD3" "$licenses/Highway"
+cp "$deps/$highway/LICENSE-BSD3" "$licenses/Highway"
 {
-    cat "$src"/zig-pkg/uucode-*/LICENSE.md
+    cat "$deps"/uucode-*/LICENSE.md
     echo
     fetch "$UUCODE_LICENSES/LICENSE_unicode" "$UUCODE_UNICODE_SHA256"
     echo

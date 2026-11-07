@@ -49,7 +49,7 @@ When the CollieCore framework and the Xcode project are already current, `just -
 
 - Always pin the latest stable release of every dependency: crates, Swift packages, toolchains and tools downloaded in CI (checked against their SHA-256).
 - GitHub Actions are pinned by commit SHA with a version comment: `uses: actions/checkout@<sha> # v7.0.1`.
-- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from a pinned commit by `scripts/ghostty/build-xcframework.sh`.
+- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from its pinned release tarballs (checked against their SHA-256) by `scripts/ghostty/build-xcframework.sh`.
 
 ## Documentation follows features
 
