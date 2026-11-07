@@ -23,21 +23,50 @@ For each gate, record the exact build, source SHA, deployment version, operator 
 | Field | Draft |
 |---|---|
 | Name | Collie Herd |
-| Subtitle | Your coding agents, on iPhone |
-| Category | Developer Tools |
+| Subtitle | Remote for your coding agents |
+| Primary category | Developer Tools |
 | Price | Free |
+| Mac availability | Off: the app is not offered on Apple silicon Macs |
 | Support URL | <https://collie.rbstp.dev/support.html> |
 | Privacy URL | <https://collie.rbstp.dev/privacy.html> |
 | Marketing URL | <https://collie.rbstp.dev/> |
-| Keywords | coding,agents,terminal,developer,approvals,remote |
+| Keywords | herdr,ai,terminal,cli,developer,programming,code,git,diff,review,assistant,llm,monitor,approve |
+
+Promotional text:
+
+> Approve a blocked Claude Code agent from your Lock Screen, review its Git changes and send key combinations. Now redesigned, with Herdr 2 support.
 
 Description:
 
-> Follow coding agents on your own Mac or Linux machine from iPhone. Read conversations and terminal output, send prompts, review Git changes and respond to pending approvals. Keep track of work with notifications, Live Activities and Apple Watch.
->
-> Collie connects to your machines through your Tailscale account. Real use requires signing in inside Collie with the same personal Tailscale account on both devices, plus herdr and collied on a supported machine. No OS VPN profile or standalone Tailscale app is required. Compatible personal tailnet policies need no edits; restrictive administrator policies may still need a TCP 8457 grant. Explore the built-in sample workspace without an account or computer. Sample actions are simulated.
->
-> Commands, conversations and files travel between your devices over an authenticated encrypted connection. Notification content is encrypted on your machine and decrypted on your phone. The push service handles delivery metadata as described in the privacy policy.
+```text
+Collie Herd puts the coding agents on your Mac or Linux machine in your pocket. Follow every agent that herdr runs, see which one needs you, and answer it from your iPhone or Apple Watch.
+
+WHAT YOU CAN DO
+• See every agent on every paired machine: its status, a live preview and, for Claude Code and Codex, the context it has left.
+• Read an agent's conversation or its live terminal, and reply by typing, dictating, attaching files or sending keys.
+• Add key shortcuts that send a key combination, such as ⌃⌥X, or a command, such as /compact.
+• Approve or deny a blocked Claude Code agent from its notification, a Live Activity or the app.
+• Start a task in a folder, a new Git worktree, a fresh clone or a pull request branch.
+• Review an agent's Git changes and pull request diffs, and send it line comments.
+• Track plan limits and estimated token cost for Claude Code, Codex and Copilot.
+• Follow agents on the Lock Screen and in the Dynamic Island, and check agents, approvals and usage on Apple Watch.
+
+WHAT YOU NEED
+Collie Herd is a remote control: your agents keep running on your own machine. Real use needs:
+• herdr or herdr-core (Herdr 2) on an Apple silicon Mac or an x86_64 Linux machine
+• the free collied daemon on that machine (collie.rbstp.dev)
+• a personal Tailscale account, signed in inside the app and on that machine
+
+The app runs Tailscale itself, so you need no Tailscale app and no VPN profile. A restrictive tailnet policy may need an administrator to allow TCP port 8457.
+
+No machine yet? Explore the built-in sample workspace without an account. Its actions are simulated and never leave your phone.
+
+PRIVACY
+Your agents, transcripts and files stay on your machine, and there is no Collie account. The phone reaches the machine over your own tailnet, inside mutual TLS. Your machine encrypts notification content so that only your phone can read it; the push service sees generic alerts and delivery metadata, as the privacy policy describes.
+
+TESTED WITH
+Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. On Linux, only Arch Linux with Omarchy has been tested. In Herdr 2, some actions are limited; collie.rbstp.dev lists them.
+```
 
 Recheck these against App Store Connect and the submitted build; use the description only once relay notifications pass the release gates. Answer Apple's [age-rating questionnaire](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/) from actual capabilities: agent-generated and user-controlled content, external links, terminal behavior.
 

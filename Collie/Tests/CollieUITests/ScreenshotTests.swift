@@ -45,6 +45,7 @@ final class ScreenshotTests: XCTestCase {
         try save("chat")
         app.buttons["Terminal"].firstMatch.tap()
         XCTAssertTrue(app.scrollViews.firstMatch.appears(within: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["Escape"].appears(within: 5), app.debugDescription)
         try save("terminal")
         app.terminate()
 
