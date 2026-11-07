@@ -2,8 +2,10 @@ import XCTest
 
 @MainActor
 final class LandscapeTests: XCTestCase {
-    override func tearDown() async throws {
-        XCUIDevice.shared.orientation = .portrait
+    // An async tearDown makes XCTest end the runner on a failure when continueAfterFailure is false, and xcodebuild then
+    // skips -retry-tests-on-failure for the test.
+    override func tearDown() {
+        MainActor.assumeIsolated { XCUIDevice.shared.orientation = .portrait }
     }
 
     func testAgentsLayoutsAndUsage() throws {

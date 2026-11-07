@@ -503,9 +503,11 @@ private struct KeepsFieldVisible: ViewModifier {
                 if let row { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
             // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
-            // the prompt row where UIKit keeps only the field visible, under the predictive bar. Scrolling from inside this
-            // callback was measured against the old layout, hence the next turn of the main queue.
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom] } action: { _, _ in
+            // the prompt row where UIKit keeps only the field visible, under the predictive bar. The prompt row can also take
+            // its landscape height after the last scroll, and the list then moved it by the difference, under the navigation
+            // bar. Scrolling from inside this callback was measured against the old layout, hence the next turn of the main
+            // queue.
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom, $0.contentSize.height] } action: { _, _ in
                 guard let row else { return }
                 DispatchQueue.main.async { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
             }
