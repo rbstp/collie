@@ -638,12 +638,9 @@ struct StatusIcon: View {
                     .trim(from: 0, to: 0.7)
                     .stroke(appAccent, style: StrokeStyle(lineWidth: 2.5 * unit, lineCap: .round))
                     .padding(2 * unit)
-            // The ring keeps a steady silhouette, like Done's circle, while the spinner's spokes fade in turn.
+            // At .large the spinner spans 20 points, so 0.8 matches the 16-point circles; left to Dynamic Type, it would also grow on its own.
             case .working:
-                ZStack {
-                    Circle().stroke(appAccent, lineWidth: 1.5 * unit).padding(2.5 * unit)
-                    ProgressView().controlSize(.small).tint(appAccent).scaleEffect(0.6 * unit)
-                }
+                ProgressView().tint(appAccent).dynamicTypeSize(.large).scaleEffect(0.8 * unit)
             // Idle's ring is the quietest, near the 3:1 floor for a glyph on the rows and cards; the session header, over
             // the terminal, keeps the full color.
             default: Image(systemName: Self.symbol(state)).font(.system(size: 16 * unit)).foregroundStyle(state.color.opacity(state == .idle && dimsIdle ? 0.75 : 1))
@@ -654,7 +651,7 @@ struct StatusIcon: View {
         .accessibilityLabel(state.label)
     }
 
-    /// One family of outline circles the size of the working ring; blocked is the one filled disc, so it stays the loudest,
+    /// One family of outline circles the size of the working spinner; blocked is the one filled disc, so it stays the loudest,
     /// and idle's is dashed, so it stays the quietest rather than reading as an unchecked Done.
     static func symbol(_ state: AgentState) -> String {
         switch state {
