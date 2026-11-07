@@ -69,8 +69,8 @@ unpack "libghostty-vt-$LIBGHOSTTY_VT_VERSION" "$SOURCE_SHA256"
 unpack "libghostty-vt-$LIBGHOSTTY_VT_VERSION-deps" "$DEPS_SHA256"
 echo "libghostty-vt: $LIBGHOSTTY_VT_VERSION"
 
-# A new cache each time: Zig 0.17 can crash on a cache that holds package archives, as the
-# fetches of earlier pins left in this one.
+# PACKAGING-LIBGHOSTTY.md requires an empty ZIG_GLOBAL_CACHE_DIR for every build: with Zig 0.17,
+# a cache that holds a package archive can crash the build.
 cache="$work/zig-global-cache"
 rm -rf "$cache" "$work/out"
 # The ceiling keeps Ghostty's build from taking this repository's git tags for its version.
