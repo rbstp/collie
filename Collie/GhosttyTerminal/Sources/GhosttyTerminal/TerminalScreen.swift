@@ -50,6 +50,17 @@ struct TerminalFrame: Equatable, Sendable {
     var wrapsUnknown = false
 }
 
+/// style.h's GHOSTTY_STYLE_FLAG_* and GHOSTTY_STYLE_UNDERLINE_MASK, macros Swift does not import.
+private enum StyleFlag {
+    static let bold: GhosttyStyleFlags = 1 << 0
+    static let italic: GhosttyStyleFlags = 1 << 1
+    static let faint: GhosttyStyleFlags = 1 << 2
+    static let inverse: GhosttyStyleFlags = 1 << 4
+    static let invisible: GhosttyStyleFlags = 1 << 5
+    static let strikethrough: GhosttyStyleFlags = 1 << 6
+    static let underline: GhosttyStyleFlags = 0x7 << 8
+}
+
 /// A libghostty-vt terminal used as a snapshot renderer: no pty, no scrollback, no replies.
 /// Nothing is registered for terminal output (WRITE_PTY), clipboard or other effects, so the
 /// rendered content can never send bytes anywhere.
@@ -620,7 +631,10 @@ final class TerminalScreen {
                     if Int(length) > codepoints.count {
                         codepoints = [UInt32](repeating: 0, count: Int(length))
                     }
-                    ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &codepoints)
+                    codepoints.withUnsafeMutableBufferPointer { buffer in
+                        var graphemes = GhosttyCodepointBuffer(ptr: buffer.baseAddress, cap: buffer.count, len: 0)
+                        ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF, &graphemes)
+                    }
                     for value in codepoints.prefix(Int(length)) {
                         text.unicodeScalars.append(Unicode.Scalar(value) ?? "\u{FFFD}")
                     }
@@ -672,20 +686,19 @@ final class TerminalScreen {
         guard styled else { return TerminalStyle(foreground: foreground, background: background) }
 
         var raw = GhosttyStyle()
-        raw.size = MemoryLayout<GhosttyStyle>.size
         ghostty_render_state_row_cells_get(rowCells, GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE, &raw)
-        if raw.inverse {
+        if raw.flags & StyleFlag.inverse != 0 {
             (foreground, background) = (background ?? defaultBackground, foreground)
         }
         return TerminalStyle(
             foreground: foreground,
             background: background,
-            bold: raw.bold,
-            italic: raw.italic,
-            faint: raw.faint,
-            underline: raw.underline != Int32(GHOSTTY_SGR_UNDERLINE_NONE.rawValue),
-            strikethrough: raw.strikethrough,
-            invisible: raw.invisible
+            bold: raw.flags & StyleFlag.bold != 0,
+            italic: raw.flags & StyleFlag.italic != 0,
+            faint: raw.flags & StyleFlag.faint != 0,
+            underline: raw.flags & StyleFlag.underline != 0,
+            strikethrough: raw.flags & StyleFlag.strikethrough != 0,
+            invisible: raw.flags & StyleFlag.invisible != 0
         )
     }
 }
