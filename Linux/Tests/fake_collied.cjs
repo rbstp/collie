@@ -47,7 +47,12 @@ async function watch(socket, reader) {
   if (number === 1) {
     send(socket, { type: "watch", pending_approvals: 0, collied_version: "0.1.1" });
     await sleep(300);
-    send(socket, { type: "watch", pending_approvals: 2, collied_version: "0.1.1" });
+    send(socket, {
+      type: "watch",
+      pending_approvals: 2,
+      collied_version: "0.1.1",
+      limited: [{ title: "fixer", resets_at_ms: 1791028800000, resume_at_ms: 1791028860000 }],
+    });
     await sleep(500);
   } else if (number === 2) {
     send(socket, { type: "error", message: "unknown variant `watch`" });

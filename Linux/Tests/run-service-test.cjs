@@ -86,6 +86,11 @@ async function run() {
         if (status === wantedStatuses[statusPosition]) statusPosition++;
       }
       check(failures, statusPosition === wantedStatuses.length, `version statuses ${JSON.stringify(statuses)} lack ${JSON.stringify(wantedStatuses)} in order`);
+      check(
+        failures,
+        JSON.stringify(notes.limited || []).includes("1,0"),
+        `limited agents ${JSON.stringify(notes.limited)} never shown, then cleared`,
+      );
       check(failures, notes.answeredBeforeArmed === false, "Pair answered before it was armed");
       check(failures, notes.answered === true, "Pair not answered once armed");
       check(failures, notes.answeredBeforeClick === false, "Pair confirmed on its own once armed");

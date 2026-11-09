@@ -184,6 +184,17 @@ Panel {
             visible: !!root.svc && root.svc.state === "running" && root.svc.pending > 0
             text: root.svc ? Model.pendingText(root.svc.pending) : ""
           }
+          Repeater {
+            model: root.running ? root.svc.limited : []
+            Line {
+              required property var modelData
+              text: Model.limitedText(Printable.printable(modelData.title || ""), modelData, Date.now(), function(ms, today) {
+                var d = new Date(ms)
+                var t = Qt.formatTime(d, Qt.locale().timeFormat(Locale.ShortFormat))
+                return today ? t : Qt.formatDate(d, "ddd") + " " + t
+              })
+            }
+          }
           Line {
             visible: !!root.svc && root.svc.lastError !== ""
             text: root.svc ? root.svc.lastError : ""

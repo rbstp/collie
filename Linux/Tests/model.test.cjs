@@ -39,6 +39,21 @@ test("status uses the running daemon version and handles older replies", () => {
   assert.equal(M.statusText("running", printable("0.1.1\n")), "collied 0.1.1\\n: Running");
 });
 
+test("limited agents read like CollieBar's", () => {
+  const now = new Date(2026, 10, 9, 12, 0).getTime();
+  const at = new Date(2026, 10, 9, 15, 0).getTime();
+  const later = new Date(2026, 10, 12, 15, 0).getTime();
+  const reply = M.parseReply(
+    `{"type":"watch","pending_approvals":0,"limited":[{"title":"fixer","resets_at_ms":${at - 60000},"resume_at_ms":${at}},{"title":"api","resets_at_ms":${later}}]}`,
+  );
+  const time = (ms, today) => (today ? "" : "Thu ") + new Date(ms).getHours() + ":00";
+  assert.deepEqual(
+    reply.limited.map((l) => M.limitedText(printable(l.title), l, now, time)),
+    ["fixer: limited, resumes at 15:00", "api: limited until Thu 15:00"],
+  );
+  assert.equal(M.limitedText(printable("a\u202e"), { resets_at_ms: at }, now, time), "a\\u{202e}: limited until 15:00");
+});
+
 test("terminal key change matches collied", () => {
   const c = (terminal_key, previous_terminal_key) => M.terminalKeyChange({ terminal_key, previous_terminal_key });
   assert.equal(c(null, null), "none");

@@ -115,6 +115,20 @@ function qrRows(text) {
   return out
 }
 
+function sameDay(aMs, bMs) {
+  var a = new Date(aMs)
+  var b = new Date(bMs)
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+// An agent collied holds stopped at the plan limit, as CollieBar shows it. `title` is already
+// printable; `time(ms, today)` formats in the local time zone, with the weekday when not today.
+function limitedText(title, item, nowMs, time) {
+  var resumes = typeof item.resume_at_ms === "number"
+  var at = resumes ? item.resume_at_ms : item.resets_at_ms
+  return title + (resumes ? ": limited, resumes at " : ": limited until ") + time(at, sameDay(at, nowMs))
+}
+
 function secondsLeft(deadlineMs, nowMs) {
   return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000))
 }
@@ -135,5 +149,6 @@ if (typeof module !== "undefined")
     unitInfo: unitInfo,
     dataDir: dataDir,
     qrRows: qrRows,
+    limitedText: limitedText,
     secondsLeft: secondsLeft,
   }

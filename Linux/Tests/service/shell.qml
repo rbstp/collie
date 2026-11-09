@@ -27,6 +27,7 @@ ShellRoot {
     onWatchConnChanged: if (svc.watchConn && !harness.notes.started) harness.note("attempts", (harness.notes.attempts || 0) + 1)
     onStatusTextChanged: harness.statuses = harness.statuses.concat([svc.statusText])
     onPendingChanged: harness.states = harness.states.concat([svc.state + ":" + svc.pending])
+    onLimitedChanged: harness.note("limited", (harness.notes.limited || []).concat([svc.limited.length]))
     onPhaseChanged: {
       if (phase === "confirm") {
         svc.pairAnswer(true)
