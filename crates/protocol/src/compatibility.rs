@@ -176,7 +176,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn allows_request(&self, request: &Request) -> bool {
-        if !(26..=32).contains(&self.version) {
+        if !(26..=33).contains(&self.version) {
             return false;
         }
         match request {
@@ -191,6 +191,7 @@ impl NegotiatedProtocol {
             Request::AgentSendKeys(p) => self.version >= 32 || !has_combo(&p.keys),
             Request::TerminalSendText(_) => self.terminal_grants && self.version >= 31,
             Request::AgentSendText(_) => self.version >= 31,
+            Request::AgentCancelResume(_) | Request::PlanStopAtLimit(_) => self.version >= 33,
             Request::PushRegister(p) => {
                 self.encrypted_display && (p.relay_grant.is_none() || self.relay_grants)
             }
@@ -254,7 +255,7 @@ impl NegotiatedProtocol {
     }
 
     pub fn server_frame(&self, frame: &ServerFrame) -> Result<String, &'static str> {
-        if !(26..=32).contains(&self.version) {
+        if !(26..=33).contains(&self.version) {
             return Err("unsupported wire codec");
         }
         let allowed = match frame {
@@ -369,7 +370,7 @@ mod tests {
                     .unwrap();
             assert_eq!(
                 u64::from(negotiated.version()),
-                offer["protocol_version"].as_u64().unwrap().min(32)
+                offer["protocol_version"].as_u64().unwrap().min(33)
             );
             let frame = ClientFrame {
                 id: 2,
@@ -400,7 +401,8 @@ mod tests {
             (30, 30),
             (31, 31),
             (32, 32),
-            (33, 32),
+            (33, 33),
+            (34, 33),
         ] {
             result.protocol_max_version = maximum;
             result.protocol_version = selected;
@@ -533,7 +535,7 @@ mod tests {
         assert!(previous.server_frame(&reply).is_err());
         let current =
             NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
-        assert_eq!(current.version(), 32);
+        assert_eq!(current.version(), 33);
         let encoded = current
             .client_frame(ClientFrame { id: 1, request })
             .unwrap();
@@ -664,6 +666,26 @@ mod tests {
         let no_grants = NegotiatedProtocol::negotiate(&offer(no_grants)).unwrap();
         assert!(no_grants.allows_request(&Request::AgentSendText(params.clone())));
         assert!(!no_grants.allows_request(&Request::TerminalSendText(params)));
+    }
+
+    #[test]
+    fn limit_requests_require_revision_33() {
+        let mut result: HelloResult =
+            serde_json::from_value(fixture()["baseline_result"].clone()).unwrap();
+        result.protocol_max_version = 32;
+        result.protocol_version = 32;
+        let previous = NegotiatedProtocol::from_result(&result).unwrap();
+        let current =
+            NegotiatedProtocol::negotiate(&offer(fixture()["current_offer"].clone())).unwrap();
+        for request in [
+            Request::AgentCancelResume(crate::AgentTarget {
+                terminal_id: crate::TerminalId::new("term_1").unwrap(),
+            }),
+            Request::PlanStopAtLimit(crate::PlanStopAtLimitParams { enabled: true }),
+        ] {
+            assert!(!previous.allows_request(&request));
+            assert!(current.allows_request(&request));
+        }
     }
 
     #[test]

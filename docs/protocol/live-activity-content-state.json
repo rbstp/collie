@@ -18,6 +18,16 @@
     "approvalId": "apr_test",
     "enc": "oKGio6Slpqeoqaqr7QAv18tqJkZ41BDjm3Mz/9NV7Tim7Fe0ZJoerlF+PbZlhhy7Ws9jjgfEGOzE+w=="
   },
+  "limited_until_unix": 1791032400,
+  "content_state_limited": {
+    "status": "idle",
+    "statusSince": 812721600,
+    "title": "api-fixer",
+    "kind": "claude",
+    "workspace": "api",
+    "approvals": 0,
+    "limitedUntil": 812725200
+  },
   "statuses": ["idle", "working", "blocked", "done", "unknown"],
   "kinds": ["claude", "codex", "copilot"]
 }

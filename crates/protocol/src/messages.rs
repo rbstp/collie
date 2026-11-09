@@ -402,6 +402,10 @@ pub enum Request {
     AgentStar(AgentStarParams),
     #[serde(rename = "agent.watch_pull_request")]
     AgentWatchPullRequest(AgentWatchPullRequestParams),
+    #[serde(rename = "agent.cancel_resume")]
+    AgentCancelResume(AgentTarget),
+    #[serde(rename = "plan.stop_at_limit")]
+    PlanStopAtLimit(PlanStopAtLimitParams),
     #[serde(rename = "task.new")]
     TaskNew(TaskNewParams),
     #[serde(rename = "task.folders")]
@@ -484,6 +488,8 @@ impl Request {
         "agent.slash_draft",
         "agent.star",
         "agent.watch_pull_request",
+        "agent.cancel_resume",
+        "plan.stop_at_limit",
         "task.new",
         "task.folders",
         "task.worktrees",
@@ -538,6 +544,8 @@ impl Request {
             Self::AgentSlashDraft(_) => "agent.slash_draft",
             Self::AgentStar(_) => "agent.star",
             Self::AgentWatchPullRequest(_) => "agent.watch_pull_request",
+            Self::AgentCancelResume(_) => "agent.cancel_resume",
+            Self::PlanStopAtLimit(_) => "plan.stop_at_limit",
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
             Self::TaskWorktrees(_) => "task.worktrees",
@@ -592,6 +600,8 @@ impl Request {
             | Self::AgentSlashDraft(_)
             | Self::AgentStar(_)
             | Self::AgentWatchPullRequest(_)
+            | Self::AgentCancelResume(_)
+            | Self::PlanStopAtLimit(_)
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
             | Self::TaskWorktrees(_)
@@ -1091,6 +1101,13 @@ pub struct TaskArchiveParams {
     pub confirm: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PlanStopAtLimitParams {
+    pub enabled: bool,
+}
+
 /// The phone's "Archive when the PR merges" setting, sent on every connection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
@@ -1469,6 +1486,29 @@ pub struct Agent {
     pub pull_request: Option<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_watch: Option<PrWatch>,
+    /// Set while collied holds the agent stopped at a Claude Code plan limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_limit: Option<PlanLimit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct PlanLimit {
+    pub window: LimitWindow,
+    pub resets_at_ms: u64,
+    /// When collied prompts the agent to continue; absent once the resume is cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LimitWindow {
+    FiveHour,
+    SevenDay,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1605,6 +1645,9 @@ pub struct Flock {
     /// Starred panes, which collied follows across a herdr restart until they close.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub starred: Vec<TerminalId>,
+    /// Whether collied stops Claude Code agents at the plan limit and resumes them at the reset.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_at_limit: bool,
 }
 
 /// A pane with no agent. `label` is the name given in herdr, never a title the pane's
@@ -2353,7 +2396,7 @@ mod tests {
                 "{params}"
             );
         }
-        assert_eq!(crate::PROTOCOL_VERSION, 32);
+        assert_eq!(crate::PROTOCOL_VERSION, 33);
     }
 
     #[test]
@@ -2681,6 +2724,31 @@ mod tests {
     }
 
     #[test]
+    fn limit_requests_drive_and_take_exact_params() {
+        let json = r#"{"id":1,"method":"plan.stop_at_limit","params":{"enabled":true}}"#;
+        let frame = parse(json).unwrap();
+        assert_eq!(
+            frame.request,
+            Request::PlanStopAtLimit(PlanStopAtLimitParams { enabled: true })
+        );
+        assert_eq!(serde_json::to_string(&frame).unwrap(), json);
+        let json = r#"{"id":2,"method":"agent.cancel_resume","params":{"terminal_id":"t1"}}"#;
+        let cancel = parse(json).unwrap();
+        assert_eq!(cancel.request.method(), "agent.cancel_resume");
+        assert_eq!(serde_json::to_string(&cancel).unwrap(), json);
+        for f in [&frame, &cancel] {
+            assert_eq!(f.request.class(), MethodClass::Drive);
+        }
+        for bad in [
+            r#"{"id":1,"method":"plan.stop_at_limit","params":{}}"#,
+            r#"{"id":1,"method":"plan.stop_at_limit","params":{"enabled":true,"x":1}}"#,
+            r#"{"id":1,"method":"agent.cancel_resume","params":{"terminal_id":"t1","now":true}}"#,
+        ] {
+            assert_eq!(parse(bad).unwrap_err().code, ErrorCode::InvalidParams);
+        }
+    }
+
+    #[test]
     fn prompt_expected_draft_is_optional() {
         let base = r#"{"id":1,"method":"agent.prompt","params":{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","terminal_id":"t","text":"hi""#;
         let Request::AgentPrompt(p) = parse(&format!("{base}}}}}")).unwrap().request else {
@@ -2762,6 +2830,21 @@ mod tests {
         assert!(serde_json::to_string(&watched).unwrap().ends_with(
             r#""pr_watch":{"number":11,"url":"https://github.com/o/r/pull/11","every_minutes":15}}"#
         ));
+        let limited = Agent {
+            plan_limit: Some(PlanLimit {
+                window: LimitWindow::FiveHour,
+                resets_at_ms: 1_000,
+                resume_at_ms: Some(61_000),
+            }),
+            ..linked.clone()
+        };
+        let json = serde_json::to_string(&limited).unwrap();
+        assert!(json.ends_with(
+            r#""plan_limit":{"window":"five_hour","resets_at_ms":1000,"resume_at_ms":61000}}"#
+        ));
+        let later = json.replace("five_hour", "monthly");
+        let parsed = serde_json::from_str::<Agent>(&later).unwrap();
+        assert_eq!(parsed.plan_limit.unwrap().window, LimitWindow::Unknown);
         let newer = json.replace(r#""draft","checks":"none""#, r#""queued","checks":"stale""#);
         let parsed = serde_json::from_str::<Agent>(&newer)
             .unwrap()
@@ -2805,6 +2888,16 @@ mod tests {
         assert!(json.ends_with(
             r#""plan_usage":{"five_hour":{"used_percent":24,"resets_at_ms":1738425600000},"recorded_ms":1738420000000}}"#
         ));
+        assert!(!with.stop_at_limit);
+        let stopping = Flock {
+            stop_at_limit: true,
+            ..with
+        };
+        assert!(
+            serde_json::to_string(&stopping)
+                .unwrap()
+                .ends_with(r#""stop_at_limit":true}"#)
+        );
     }
 
     #[test]

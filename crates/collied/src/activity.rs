@@ -53,6 +53,9 @@ pub struct ContentState {
     pub approval_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enc: Option<String>,
+    /// Stopped at the plan limit: when it resumes, else when the limit resets.
+    #[serde(rename = "limitedUntil", skip_serializing_if = "Option::is_none")]
+    pub limited_until: Option<i64>,
 }
 
 pub fn reference_seconds(unix_ms: u64) -> i64 {
@@ -81,6 +84,7 @@ pub fn content(
             .count() as u32,
         approval_id: None,
         enc: None,
+        limited_until: None,
     })
 }
 
@@ -199,6 +203,7 @@ impl Live {
         routed: &mut Vec<Routed>,
         agents: &[AgentInfo],
         held: &dyn Fn(&str) -> bool,
+        limited: &dyn Fn(&str) -> Option<u64>,
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -259,6 +264,7 @@ impl Live {
             let Some(mut state) = content(a, workspaces, pending, tracker, now_ms) else {
                 continue;
             };
+            state.limited_until = limited(&a.terminal_id).map(reference_seconds);
             let device = (activity.stable_id.clone(), a.terminal_id.clone());
             let route = routed
                 .iter()
@@ -344,6 +350,7 @@ impl Live {
         audit: &Audit,
         agents: &[AgentInfo],
         held: &dyn Fn(&str) -> bool,
+        limited: &dyn Fn(&str) -> Option<u64>,
         workspaces: &[WorkspaceInfo],
         pending: &[Approval],
         tracker: &mut StatusTracker,
@@ -380,6 +387,7 @@ impl Live {
             &mut routed,
             agents,
             held,
+            limited,
             workspaces,
             pending,
             tracker,
@@ -475,6 +483,7 @@ mod tests {
         tracker: StatusTracker,
         clock_ms: u64,
         held: Vec<AgentInfo>,
+        limited: Option<u64>,
     }
 
     impl Rig {
@@ -484,6 +493,7 @@ mod tests {
                 tracker: StatusTracker::default(),
                 clock_ms: T0,
                 held: Vec::new(),
+                limited: None,
             }
         }
 
@@ -513,6 +523,7 @@ mod tests {
                 routed,
                 agents,
                 &|id| self.held.iter().any(|a| a.terminal_id == id),
+                &|id| self.limited.filter(|_| id == "term_1"),
                 &workspaces(),
                 pending,
                 &mut self.tracker,
@@ -870,6 +881,29 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_limited_agent_shows_until_when() {
+        let mut rig = Rig::new();
+        let acts = [activity('a')];
+        let sent = rig.plan(&acts, &[agent("idle")], &[]);
+        assert!(aps(&sent[0])["content-state"].get("limitedUntil").is_none());
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/protocol/live-activity-content-state.json"
+        );
+        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        rig.limited = Some(fixture["limited_until_unix"].as_u64().unwrap() * 1000);
+        rig.advance(Duration::from_secs(3)).await;
+        let sent = rig.plan(&acts, &[agent("idle")], &[]);
+        assert_eq!(sent.len(), 1, "the limit is a change");
+        let state = &aps(&sent[0])["content-state"];
+        assert_eq!(
+            state["limitedUntil"],
+            fixture["content_state_limited"]["limitedUntil"]
+        );
+        assert!(aps(&sent[0]).get("alert").is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn flapping_never_alerts_by_itself() {
         let mut rig = Rig::new();
         let acts = [activity('a')];
@@ -1113,6 +1147,7 @@ mod tests {
             &audit,
             &[agent("working")],
             &|_| false,
+            &|_| None,
             &workspaces(),
             &[],
             &mut tracker,

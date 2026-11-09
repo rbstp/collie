@@ -22,12 +22,12 @@ use protocol::{
     AgentSlashDraftParams, AgentStarParams, AgentTarget, AgentTypeTextParams, AgentWatchParams,
     AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
     FolderName, Key, KeyCombo, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams,
-    PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
-    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SendTextParams,
-    SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams,
-    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, TypedText, WorkspaceCloseParams, WorkspaceId, limits,
+    PairingInvite, PaneCloseParams, PlanStopAtLimitParams, PromptText, PushActivityEndParams,
+    PushActivityTokenParams, PushRegisterParams, PushToken, ReadParams, ReadSource, Request,
+    Response, SendTextParams, SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams,
+    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree,
+    TaskWorktreesParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalRead,
+    TerminalRunParams, TerminalWatchParams, TypedText, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -407,6 +407,24 @@ pub struct AgentSummary {
     pub pull_request: Option<PullRequestSummary>,
     #[uniffi(default = None)]
     pub pr_watch: Option<PrWatchSummary>,
+    /// Set while the machine holds the agent stopped at a Claude Code plan limit.
+    #[uniffi(default = None)]
+    pub plan_limit: Option<PlanLimitSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PlanLimitSummary {
+    pub window: LimitWindow,
+    pub resets_at_ms: u64,
+    /// When the machine prompts the agent to continue; none once the resume is cancelled.
+    pub resume_at_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum LimitWindow {
+    FiveHour,
+    SevenDay,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -527,6 +545,9 @@ pub struct MachineFlock {
     pub plan_usage: Option<PlanUsage>,
     #[uniffi(default = [])]
     pub starred: Vec<String>,
+    /// The machine stops Claude Code agents at the plan limit and resumes them at the reset.
+    #[uniffi(default = false)]
+    pub stop_at_limit: bool,
     #[uniffi(default = false)]
     pub version_mismatch: bool,
     #[uniffi(default = None)]
@@ -1961,6 +1982,28 @@ impl CollieCore {
             watching: every_minutes.is_some(),
             every_minutes,
         });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// The machine keeps the agent stopped at the plan limit until someone prompts it.
+    pub async fn cancel_resume(
+        &self,
+        machine_id: String,
+        terminal_id: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::AgentCancelResume(AgentTarget {
+            terminal_id: terminal(terminal_id)?,
+        });
+        expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Stored on the machine, so every phone paired with it agrees; the next snapshot shows it.
+    pub async fn set_stop_at_limit(
+        &self,
+        machine_id: String,
+        enabled: bool,
+    ) -> Result<(), CoreError> {
+        let request = Request::PlanStopAtLimit(PlanStopAtLimitParams { enabled });
         expect_ok(self.call(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
@@ -3701,6 +3744,7 @@ fn view(conn: &Conn) -> MachineFlock {
             .flat_map(|f| &f.starred)
             .map(|t| t.as_str().into())
             .collect(),
+        stop_at_limit: flock.is_some_and(|f| f.stop_at_limit),
         version_mismatch,
         reason,
     }
@@ -3757,6 +3801,15 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
             number: w.number,
             url: w.url.clone(),
             every_minutes: w.every_minutes,
+        }),
+        plan_limit: a.plan_limit.as_ref().map(|l| PlanLimitSummary {
+            window: match l.window {
+                protocol::LimitWindow::FiveHour => LimitWindow::FiveHour,
+                protocol::LimitWindow::SevenDay => LimitWindow::SevenDay,
+                protocol::LimitWindow::Unknown => LimitWindow::Unknown,
+            },
+            resets_at_ms: l.resets_at_ms,
+            resume_at_ms: l.resume_at_ms,
         }),
     }
 }
@@ -4172,6 +4225,19 @@ mod tests {
                 number: 6,
                 url: "https://github.com/o/r/pull/6".into(),
                 every_minutes: 30,
+            })
+        );
+        assert_eq!(s.plan_limit, None);
+        let limited = linked.replace(
+            r#""pull_request":"#,
+            r#""plan_limit":{"window":"seven_day","resets_at_ms":5,"resume_at_ms":65},"pull_request":"#,
+        );
+        assert_eq!(
+            agent_summary(&serde_json::from_str(&limited).unwrap()).plan_limit,
+            Some(PlanLimitSummary {
+                window: LimitWindow::SevenDay,
+                resets_at_ms: 5,
+                resume_at_ms: Some(65),
             })
         );
         assert!(s.subagents.is_empty());
@@ -5207,12 +5273,14 @@ mod tailnet_tests {
                 subagents: Vec::new(),
                 pull_request: None,
                 pr_watch: None,
+                plan_limit: None,
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),
             terminals_enabled: false,
             plan_usage: None,
             starred: Vec::new(),
+            stop_at_limit: false,
         }
     }
 

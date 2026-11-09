@@ -198,6 +198,7 @@ pub const STARS_FILE: &str = "stars.json";
 pub const WATCHES_FILE: &str = "pr-watches.json";
 pub const WAKES_FILE: &str = "pr-wakes.json";
 pub const ARCHIVE_ON_MERGE_FILE: &str = "archive-on-merge.json";
+pub const LIMITS_FILE: &str = "limits.json";
 pub const TLS_KEY_FILE: &str = "tls-key.json";
 pub const NODE_LOCK: &str = "node.lock";
 pub const PEERS_LOCK: &str = "peers.lock";

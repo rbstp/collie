@@ -41,6 +41,7 @@ use crate::drive::{self, Authorized, Driver, Origin, Reply, Watched, Watcher};
 use crate::files::{self, Downloads};
 use crate::flock::{self, Baseline, Stars, StatusTracker};
 use crate::gate::{self, Decision};
+use crate::limits::{self, Limits, Verdict};
 use crate::pairing::{Attempt, Pairing};
 use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Wakes, Watch, Watches};
@@ -65,6 +66,7 @@ const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const PULLS_EVERY: Duration = Duration::from_secs(30);
 const WATCH_EVERY: Duration = Duration::from_secs(30);
+const RESUME_EVERY: Duration = Duration::from_secs(5);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
@@ -87,6 +89,8 @@ pub struct ServerConfig {
     /// `[terminals] enabled`, read at start: no method changes it.
     pub terminals: bool,
     pub terminal_grant_ttl: Duration,
+    /// After a plan limit's reset, before collied prompts a stopped agent to continue.
+    pub resume_grace: Duration,
     /// The herdr-core socket to follow; None follows none.
     pub herdr_core: Option<PathBuf>,
 }
@@ -210,6 +214,7 @@ pub struct State {
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
     pulls: Mutex<Pulls>,
+    limits: Mutex<Limits>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     pub(crate) approvals: Arc<Approvals>,
@@ -339,6 +344,63 @@ impl State {
             &format!("{how}, {closed} session(s) closed"),
         );
         Ok((peer, closed))
+    }
+
+    /// Answers the PreToolUse hook. It reads only collied's own state, so a hook answered
+    /// late or not at all is the hook's timeout, which lets the agent go on.
+    pub(crate) fn limit_check(&self, session_id: &str, subagent: bool) -> Option<String> {
+        if !crate::hooks::valid_session(session_id) || !lock(&self.limits).enabled() {
+            return None;
+        }
+        let plan = lock(&self.transcripts).plan();
+        let now = crate::now_ms();
+        let verdict = lock(&self.limits).check(session_id, subagent, plan.as_ref(), now);
+        match verdict {
+            Verdict::Go => None,
+            Verdict::Hold(window) => Some(limits::reason(window)),
+            Verdict::Continued(terminal) => {
+                self.audit.log(
+                    "collied",
+                    "limit.cancel",
+                    Some(&terminal),
+                    "prompted while limited: runs on extra usage",
+                );
+                let _ = self.events.send(Event::FlockChanged {});
+                None
+            }
+            Verdict::Stopped(terminal, stop) => {
+                let window = limits::window_name(stop.window);
+                let (result, body) = match stop.resume_at_ms {
+                    Some(at) => (
+                        format!("{window} limit; resume at {at}"),
+                        format!(
+                            "Stopped at the {window} limit, resumes in {}",
+                            limits::wait(at.saturating_sub(now))
+                        ),
+                    ),
+                    None => (
+                        format!("{window} limit again after a resume; not resuming"),
+                        format!("Stopped at the {window} limit again; not resuming"),
+                    ),
+                };
+                self.audit
+                    .log("collied", "limit.stop", Some(&terminal), &result);
+                if let Ok(t) = TerminalId::new(terminal) {
+                    self.push.notify(push::agent_alert(
+                        &t,
+                        &stop.title,
+                        &body,
+                        &self.machine.node_id,
+                    ));
+                }
+                let _ = self.events.send(Event::FlockChanged {});
+                Some(limits::reason(stop.window))
+            }
+        }
+    }
+
+    pub(crate) fn watch_limited(&self) -> watch::Receiver<Vec<limits::Limited>> {
+        lock(&self.limits).watch()
     }
 
     fn archives_on_merge(&self) -> bool {
@@ -613,6 +675,12 @@ pub async fn start_with(
     let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
     let wakes = Wakes::load(cfg.data_dir.join(config::WAKES_FILE));
     let archive = pulls::ArchiveOnMerge::load(cfg.data_dir.join(config::ARCHIVE_ON_MERGE_FILE));
+    let started_ms = crate::now_ms();
+    let limits = Limits::load(
+        cfg.data_dir.join(config::LIMITS_FILE),
+        cfg.resume_grace,
+        started_ms,
+    );
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -623,7 +691,7 @@ pub async fn start_with(
         node,
         cfg,
         dns_name,
-        started_ms: crate::now_ms(),
+        started_ms,
         runtime: Runtime::new(herdr_socket).with_core(core.clone()),
         peers,
         pairing: Mutex::new(Pairing::default()),
@@ -641,6 +709,7 @@ pub async fn start_with(
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
         pulls: Mutex::new(Pulls::new(watches, wakes, archive)),
+        limits: Mutex::new(limits),
         events,
         drive,
         approvals,
@@ -666,6 +735,7 @@ pub async fn start_with(
         tokio::spawn(copilot_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
+        tokio::spawn(limit_resumes(state.clone(), rx.clone())),
         tokio::spawn(reconcile(state.clone(), rx.clone())),
     ];
     if let Some(core) = core {
@@ -952,6 +1022,80 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                 .is_some();
         }
         if ended {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
+    }
+}
+
+/// Prompts agents stopped at the plan limit once their resume time comes, with or
+/// without a phone.
+async fn limit_resumes(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut interval = tokio::time::interval(RESUME_EVERY);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown.changed() => return,
+        }
+        let due = lock(&state.limits).due(crate::now_ms());
+        if due.is_empty() {
+            continue;
+        }
+        let agents = state.runtime.agent_list().await.ok();
+        let plan = lock(&state.transcripts).plan();
+        for (terminal_id, stop) in due {
+            let now = crate::now_ms();
+            let window = limits::window_name(stop.window);
+            let at = stop.resume_at_ms.unwrap_or(now);
+            let (result, alert) = if now > at + limits::OVERDUE_MS {
+                lock(&state.limits).cancel(&terminal_id);
+                (
+                    "dropped: overdue".to_owned(),
+                    Some("Did not resume: the limit reset while the machine slept or collied was off".to_owned()),
+                )
+            } else if let Some(next) = lock(&state.limits).rearm(&terminal_id, plan.as_ref(), now) {
+                (format!("another limit is reached; resume at {next}"), None)
+            } else {
+                let auth: Authorized = {
+                    let (state, terminal_id, stop) =
+                        (state.clone(), terminal_id.clone(), stop.clone());
+                    Arc::new(move || lock(&state.limits).armed(&terminal_id, &stop))
+                };
+                let agent = agents
+                    .iter()
+                    .flatten()
+                    .find(|a| a.terminal_id == terminal_id);
+                match limits::resume(&state.drive, agent, &stop, &auth).await {
+                    Ok(()) => {
+                        lock(&state.limits).resumed(&terminal_id, crate::now_ms());
+                        if let Ok(t) = TerminalId::new(terminal_id.clone()) {
+                            state.push.notify_done(push::agent_alert(
+                                &t,
+                                &format!("Resumed {}", stop.title),
+                                &format!("The {window} limit reset"),
+                                &state.machine.node_id,
+                            ));
+                        }
+                        ("ok".to_owned(), None)
+                    }
+                    Err(reason) => {
+                        lock(&state.limits).cancel(&terminal_id);
+                        let alert =
+                            (reason != limits::BUSY).then(|| format!("Did not resume: {reason}"));
+                        (format!("not resumed: {reason}"), alert)
+                    }
+                }
+            };
+            state
+                .audit
+                .log("collied", "limit.resume", Some(&terminal_id), &result);
+            if let (Some(body), Ok(t)) = (alert, TerminalId::new(terminal_id.clone())) {
+                state.push.notify(push::agent_alert(
+                    &t,
+                    &stop.title,
+                    &body,
+                    &state.machine.node_id,
+                ));
+            }
             let _ = state.events.send(Event::FlockChanged {});
         }
     }
@@ -1619,8 +1763,14 @@ impl Session<'_> {
             }
             Request::AgentPrompt(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
+                let state = self.state.clone();
                 let op = self.audited(method, target.clone(), async move {
-                    (d.prompt(p, &auth).await, None)
+                    let terminal_id = p.terminal_id.clone();
+                    let reply = d.prompt(p, &auth).await;
+                    if reply.is_ok() && lock(&state.limits).prompted(terminal_id.as_str()) {
+                        let _ = state.events.send(Event::FlockChanged {});
+                    }
+                    (reply, None)
                 });
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))
@@ -1657,6 +1807,22 @@ impl Session<'_> {
             Request::AgentSlashDraft(p) => (drive.slash_draft(p, &auth).await, None),
             Request::AgentStar(p) => (self.star(p).await, None),
             Request::AgentWatchPullRequest(p) => (self.watch_pull_request(p).await, None),
+            Request::AgentCancelResume(p) => {
+                if lock(&self.state.limits).cancel(p.terminal_id.as_str()) {
+                    let _ = self.state.events.send(Event::FlockChanged {});
+                    (Ok(Response::Ok), None)
+                } else {
+                    (
+                        err(ErrorCode::InvalidParams, "no resume is armed for the agent"),
+                        None,
+                    )
+                }
+            }
+            Request::PlanStopAtLimit(p) => {
+                lock(&self.state.limits).set_enabled(p.enabled);
+                let _ = self.state.events.send(Event::FlockChanged {});
+                (Ok(Response::Ok), None)
+            }
             // Starting an agent takes up to 30 s; the session keeps serving meanwhile.
             Request::TaskNew(_) if !self.tasks.is_empty() => (
                 err(ErrorCode::RateLimited, "a task is already starting"),
@@ -2221,10 +2387,14 @@ impl Session<'_> {
             Some(&mut lock(&self.state.transcripts)),
         );
         let pulls = lock(&self.state.pulls);
+        let limits = lock(&self.state.limits);
+        let now = crate::now_ms();
         for agent in &mut flock.agents {
             pulls.fill(agent);
+            agent.plan_limit = limits.shown(agent.terminal_id.as_str(), now);
         }
-        drop(pulls);
+        flock.stop_at_limit = limits.enabled();
+        drop((pulls, limits));
         flock.approvals = self.state.approvals.pending();
         flock.starred = lock(&self.state.stars).reconcile(&snap.panes);
         if self.state.cfg.terminals {
@@ -2529,6 +2699,8 @@ fn audit_target(request: &Request) -> Option<String> {
         }
         Request::AgentSlashDraft(p) => p.terminal_id.as_str(),
         Request::AgentStar(p) => p.terminal_id.as_str(),
+        Request::AgentCancelResume(p) => p.terminal_id.as_str(),
+        Request::PlanStopAtLimit(p) => return Some(format!("enabled={}", p.enabled)),
         Request::AgentWatchPullRequest(p) => {
             return Some(format!(
                 "{} watching={}",
@@ -2750,6 +2922,7 @@ fn observe_agent(
     tracker: &mut StatusTracker,
     transcripts: &mut Transcripts,
     pulls: &Pulls,
+    limits: &Limits,
     events: &broadcast::Sender<Event>,
     now_ms: u64,
 ) {
@@ -2763,6 +2936,7 @@ fn observe_agent(
         && phones
     {
         pulls.fill(&mut agent);
+        agent.plan_limit = limits.shown(agent.terminal_id.as_str(), now_ms);
         let _ = events.send(Event::AgentStatus { agent });
     }
 }
@@ -2830,12 +3004,14 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                     transcripts.retain(&agents);
                     let now = crate::now_ms();
                     let pulls = lock(&state.pulls);
+                    let limits = lock(&state.limits);
                     for a in agents.iter().filter(|a| changed.contains(&a.terminal_id)) {
                         observe_agent(
                             a,
                             &mut tracker,
                             &mut transcripts,
                             &pulls,
+                            &limits,
                             &state.events,
                             now,
                         );
@@ -2869,6 +3045,19 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         }
         state.approvals.observe(&kept, &workspaces).await;
+        let ended = lock(&state.limits).observe(&kept, crate::now_ms());
+        for change in &ended {
+            let (terminal_id, result) = match change {
+                limits::Change::Prompted(t) => (t, "prompted on the machine"),
+                limits::Change::Gone(t) => (t, "the agent is gone"),
+            };
+            state
+                .audit
+                .log("collied", "limit.cancel", Some(terminal_id), result);
+        }
+        if !ended.is_empty() {
+            let _ = state.events.send(Event::FlockChanged {});
+        }
         for a in lock(&state.turns).observe(&kept, crate::now_ms()) {
             let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
                 continue;
@@ -2881,11 +3070,24 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             ));
         }
         let pending = state.approvals.pending();
+        let limited: HashMap<String, u64> = {
+            let (limits, now) = (lock(&state.limits), crate::now_ms());
+            kept.iter()
+                .filter_map(|a| {
+                    let l = limits.shown(&a.terminal_id, now)?;
+                    Some((
+                        a.terminal_id.clone(),
+                        l.resume_at_ms.unwrap_or(l.resets_at_ms),
+                    ))
+                })
+                .collect()
+        };
         lock(&state.live).observe(
             &state.push,
             &state.audit,
             &agents,
             &|id| herdr.holds(id),
+            &|id| limited.get(id).copied(),
             &workspaces,
             &pending,
             &mut lock(&state.tracker),
@@ -3020,6 +3222,7 @@ mod tests {
                 &mut Vec::new(),
                 agents,
                 &|id| herdr.holds(id),
+                &|_| None,
                 &[],
                 &[],
                 tracker,
@@ -3076,12 +3279,14 @@ mod tests {
         let mut tracker = StatusTracker::default();
         let events = broadcast::channel(16).0;
         let mut pulls = Pulls::default();
+        let limits = Limits::load(dir.path().join("limits.json"), limits::GRACE, 0);
 
         observe_agent(
             &agent,
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             1000,
         );
@@ -3092,6 +3297,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             2000,
         );
@@ -3127,6 +3333,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             3000,
         );
@@ -3148,6 +3355,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             4000,
         );
@@ -3163,6 +3371,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             5000,
         );
@@ -3173,6 +3382,7 @@ mod tests {
             &mut tracker,
             &mut transcripts,
             &pulls,
+            &limits,
             &events,
             6000,
         );

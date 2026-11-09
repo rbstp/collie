@@ -421,8 +421,14 @@ fn window(v: &Value) -> Option<UsageWindow> {
     let resets = v["resets_at"]
         .as_f64()
         .filter(|s| s.is_finite() && *s > 0.0 && *s < 1e11)?;
+    // 100 only at the limit itself: stopping at the plan limit reads it.
+    let used_percent = if used >= 100.0 {
+        100
+    } else {
+        used.round().clamp(0.0, 99.0) as u8
+    };
     Some(UsageWindow {
-        used_percent: used.round().clamp(0.0, 100.0) as u8,
+        used_percent,
         resets_at_ms: (resets * 1000.0) as u64,
     })
 }
@@ -812,6 +818,19 @@ mod tests {
         let plan = read(&data).plan.unwrap();
         assert_eq!(plan.five_hour, None);
         assert_eq!(plan.seven_day.unwrap().used_percent, 100);
+    }
+
+    #[test]
+    fn only_the_limit_itself_reads_100() {
+        let (_dir, data) = data();
+        for (used, want) in [(99.6, 99), (100.0, 100), (-3.0, 0)] {
+            record(&data, &limits(used, 1738425600, 1.0), 1_000).unwrap();
+            assert_eq!(
+                read(&data).plan.unwrap().five_hour.unwrap().used_percent,
+                want
+            );
+            std::fs::remove_file(data.join(USAGE_FILE)).unwrap();
+        }
     }
 
     #[test]

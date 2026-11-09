@@ -671,6 +671,7 @@ mod tests {
             subagents: Vec::new(),
             pull_request: None,
             pr_watch: None,
+            plan_limit: None,
         }
     }
 
@@ -693,6 +694,7 @@ mod tests {
             terminals_enabled: false,
             plan_usage: None,
             starred: Vec::new(),
+            stop_at_limit: false,
         }
     }
 
@@ -1171,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn negotiated_terminal_opt_out_keeps_ordinary_calls_usable() {
-        for maximum in [26, 27, 28, 29, 30, 31, 32, 33] {
+        for maximum in [26, 27, 28, 29, 30, 31, 32, 33, 34] {
             let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
             let (mut session, mut ws) = (session.unwrap(), server.unwrap());
             let server = tokio::spawn(async move {
@@ -1179,7 +1181,7 @@ mod tests {
                 let Response::Hello(mut result) = hello_result(true) else {
                     unreachable!()
                 };
-                result.protocol_version = maximum.min(32);
+                result.protocol_version = maximum.min(33);
                 result.protocol_max_version = maximum;
                 result.capabilities.clear();
                 write(
@@ -1264,8 +1266,8 @@ mod tests {
             let Response::Hello(mut result) = hello_result(true) else {
                 unreachable!()
             };
-            result.protocol_version = 33;
-            result.protocol_max_version = 34;
+            result.protocol_version = 34;
+            result.protocol_max_version = 35;
             write(
                 &mut ws,
                 ServerFrame::Result {

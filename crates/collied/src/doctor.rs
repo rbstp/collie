@@ -123,6 +123,9 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     }
     let (s, d) = check_hooks();
     r.line(s, "hooks", d);
+    let settings = hooks::settings_path().ok();
+    let (s, d) = check_limit(&data_dir, settings.as_deref());
+    r.line(s, "plan limit", d);
     let codex = match std::env::var_os("CODEX_HOME") {
         Some(dir) => Some(PathBuf::from(dir)),
         None => config::home_dir().ok().map(|h| h.join(".codex")),
@@ -161,6 +164,30 @@ fn check_hooks() -> (Status, String) {
         )
     } else {
         (Status::Warn, missing.to_owned())
+    }
+}
+
+/// Stopping at the plan limit needs the PreToolUse hook: without it the switch stops nothing.
+fn check_limit(data_dir: &Path, settings_path: Option<&Path>) -> (Status, String) {
+    let limits =
+        crate::limits::Limits::load(data_dir.join(config::LIMITS_FILE), crate::limits::GRACE, 0);
+    if !limits.enabled() {
+        return (Status::Ok, "stop at the plan limit is off".to_owned());
+    }
+    let settings = settings_path
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if hooks::installed(&settings, "PreToolUse") {
+        (
+            Status::Ok,
+            "stops Claude Code agents at the plan limit (PreToolUse hook installed)".to_owned(),
+        )
+    } else {
+        (
+            Status::Warn,
+            "stop at the plan limit is on, but the PreToolUse hook `collied hook` is not installed; no agent is stopped".to_owned(),
+        )
     }
 }
 
@@ -999,6 +1026,25 @@ mod tests {
         buf.extend_from_slice(b"/bin/sh\0\0\0\0sh\0-c\0A=1\0HERDR_PANE_ID=w1:p1\0\0junk=2\0");
         assert_eq!(procargs_env_names(&buf).unwrap(), ["A", "HERDR_PANE_ID"]);
         assert_eq!(procargs_env_names(&buf[..2]), None);
+    }
+
+    #[test]
+    fn warns_when_the_limit_switch_is_on_without_the_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("collie");
+        let settings = dir.path().join("settings.json");
+        assert!(check_limit(&data, Some(&settings)).0 == Status::Ok);
+        std::fs::create_dir_all(&data).unwrap();
+        crate::limits::Limits::load(data.join(config::LIMITS_FILE), crate::limits::GRACE, 0)
+            .set_enabled(true);
+        let (s, d) = check_limit(&data, Some(&settings));
+        assert!(s == Status::Warn && d.contains("PreToolUse"), "{d}");
+        std::fs::write(
+            &settings,
+            r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"~/.cargo/bin/collied hook","timeout":5}]}]}}"#,
+        )
+        .unwrap();
+        assert!(check_limit(&data, Some(&settings)).0 == Status::Ok);
     }
 
     #[test]

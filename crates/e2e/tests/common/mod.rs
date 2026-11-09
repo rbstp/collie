@@ -592,6 +592,7 @@ pub fn server_config(data_dir: &Path, herdr_session: &str) -> ServerConfig {
         approval_ttl: collied::approvals::TTL,
         terminals: false,
         terminal_grant_ttl: collied::terminal::GRANT_TTL,
+        resume_grace: collied::limits::GRACE,
         herdr_core: None,
     }
 }

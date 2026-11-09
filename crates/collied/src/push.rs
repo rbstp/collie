@@ -1960,6 +1960,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             approvals: 1,
             approval_id: Some("PRIVATE_APPROVAL".into()),
             enc: seal_fresh(&key(), "PRIVATE_APPROVAL", "PRIVATE_COMMAND"),
+            limited_until: None,
         };
         for source in [
             crate::activity::update(&state, true, 1791028800000),

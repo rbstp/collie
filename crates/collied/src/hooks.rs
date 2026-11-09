@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use protocol::PendingTool;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::control::{self, Request};
+use crate::control::{self, Reply, Request};
 use crate::prompt;
 
 const MAX_INPUT: u64 = 1024 * 1024;
@@ -25,11 +25,15 @@ struct Input {
     tool_name: String,
     #[serde(default)]
     tool_input: Value,
+    /// Set when the hook fires inside a subagent.
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
-/// `collied hook`: Claude Code's PermissionRequest hook and Codex's SessionStart hook. It
-/// only reports to the daemon and never answers: it prints nothing and exits 0, so the agent
-/// goes on as usual, even when collied is not running.
+/// `collied hook`: Claude Code's PermissionRequest and PreToolUse hooks and Codex's
+/// SessionStart hook. It exits 0 and prints nothing, so the agent goes on as usual, except
+/// for a PreToolUse that collied answers with a stop at the plan limit. Any failure, collied
+/// not running or not answering within the deadline included, lets the agent go on.
 pub async fn run(control_path: &Path) {
     let mut stdin = std::io::stdin();
     let mut raw = Vec::new();
@@ -42,7 +46,24 @@ pub async fn run(control_path: &Path) {
     let Some(request) = request(&raw, terminal) else {
         return;
     };
-    let _ = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
+    let reply = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
+    if let Ok(Ok(Some(Reply::Limit { stop: Some(reason) }))) = reply {
+        println!("{}", stop(&reason));
+    }
+}
+
+/// `continue: false` ends the turn before Claude Code's next request; the denial keeps the
+/// call itself from running.
+fn stop(reason: &str) -> Value {
+    json!({
+        "continue": false,
+        "stopReason": reason,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        },
+    })
 }
 
 /// A SessionStart outside a herdr-core terminal reports nothing: herdr's own hook binds it.
@@ -52,6 +73,10 @@ fn request(raw: &[u8], terminal: Option<String>) -> Option<Request> {
         Some("SessionStart") => Some(Request::Session {
             terminal_id: terminal.filter(|t| !t.is_empty())?,
             session_id: input.session_id,
+        }),
+        Some("PreToolUse") => Some(Request::Limit {
+            session_id: input.session_id,
+            subagent: input.agent_id.is_some(),
         }),
         None | Some("PermissionRequest") => {
             let shown = shown(&input.tool_name, &input.tool_input);
@@ -292,6 +317,47 @@ mod tests {
         let stop = br#"{"hook_event_name":"Stop","session_id":"s"}"#;
         assert!(request(stop, Some("t3".into())).is_none());
         assert!(request(b"not json", Some("t3".into())).is_none());
+    }
+
+    #[test]
+    fn pre_tool_use_asks_about_the_limit_and_stops_only_when_told() {
+        let raw = include_str!("../tests/fixtures/claude/pre-tool-use.synthetic.hook.json");
+        match request(raw.as_bytes(), None) {
+            Some(Request::Limit {
+                session_id,
+                subagent: false,
+            }) => assert_eq!(session_id, "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
+            other => panic!("{other:?}"),
+        }
+        let mut sub: Value = serde_json::from_str(raw).unwrap();
+        sub["agent_id"] = "a1b2c3".into();
+        assert!(matches!(
+            request(sub.to_string().as_bytes(), None),
+            Some(Request::Limit { subagent: true, .. })
+        ));
+        let out = stop("at the limit");
+        assert_eq!(out["continue"], false);
+        assert_eq!(out["stopReason"], "at the limit");
+        assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+
+    #[tokio::test]
+    async fn the_hook_fails_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("control.sock");
+        let raw = include_str!("../tests/fixtures/claude/pre-tool-use.synthetic.hook.json");
+        let request = request(raw.as_bytes(), None).unwrap();
+        // No collied.
+        assert!(matches!(
+            control::request(&socket, &request).await,
+            Ok(None)
+        ));
+        // A collied that never answers: the deadline lets the agent go on.
+        let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let start = std::time::Instant::now();
+        let reply = tokio::time::timeout(DEADLINE, control::request(&socket, &request)).await;
+        assert!(reply.is_err());
+        assert!(start.elapsed() < DEADLINE + Duration::from_secs(1));
     }
 
     #[test]

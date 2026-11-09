@@ -460,6 +460,7 @@ impl Rig {
             &self.audit_log,
             &agents,
             &|_| false,
+            &|_| None,
             &workspaces,
             &pending,
             tracker,

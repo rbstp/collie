@@ -41,6 +41,12 @@ pub enum Request {
         terminal_id: String,
         session_id: String,
     },
+    /// Claude Code's PreToolUse: whether to stop the agent at the plan limit.
+    Limit {
+        session_id: String,
+        #[serde(default)]
+        subagent: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,6 +157,14 @@ pub enum Reply {
         pending_approvals: usize,
         #[serde(default)]
         collied_version: Option<String>,
+        /// Agents stopped at the plan limit.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        limited: Vec<crate::limits::Limited>,
+    },
+    /// The `stopReason` when the agent must stop; none lets it go on.
+    Limit {
+        #[serde(default)]
+        stop: Option<String>,
     },
     Error {
         message: String,
@@ -347,6 +361,12 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
             }
             Reply::Noted
         }
+        Request::Limit {
+            session_id,
+            subagent,
+        } => Reply::Limit {
+            stop: state.limit_check(&session_id, subagent),
+        },
         Request::Pair => return pair(&state, &mut r, &mut w).await,
         Request::Watch => return watch_pending(&state, &mut r, &mut w, shutdown).await,
         Request::Confirm { .. } => Reply::Error {
@@ -456,24 +476,21 @@ async fn watch_pending(
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut rx = state.approvals.watch_pending();
+    let mut limited = state.watch_limited();
     let closed = read_msg::<Request>(r);
     tokio::pin!(closed);
     loop {
-        let n = *rx.borrow_and_update();
-        if write_msg(
-            w,
-            &Reply::Watch {
-                pending_approvals: n,
-                collied_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-            },
-        )
-        .await
-        .is_err()
-        {
+        let reply = Reply::Watch {
+            pending_approvals: *rx.borrow_and_update(),
+            collied_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+            limited: limited.borrow_and_update().clone(),
+        };
+        if write_msg(w, &reply).await.is_err() {
             return;
         }
         tokio::select! {
             res = rx.changed() => if res.is_err() { return },
+            res = limited.changed() => if res.is_err() { return },
             _ = &mut closed => return,
             _ = shutdown.changed() => return,
         }
@@ -642,15 +659,41 @@ mod tests {
             Reply::Watch {
                 pending_approvals: 1,
                 collied_version: None,
-            }
+                ref limited,
+            } if limited.is_empty()
         ));
         assert_eq!(
             serde_json::to_string(&Reply::Watch {
                 pending_approvals: 1,
                 collied_version: Some("0.1.1".to_owned()),
+                limited: Vec::new(),
             })
             .unwrap(),
             r#"{"type":"watch","pending_approvals":1,"collied_version":"0.1.1"}"#
         );
+        // The bars read these exact keys.
+        assert_eq!(
+            serde_json::to_string(&Reply::Watch {
+                pending_approvals: 0,
+                collied_version: None,
+                limited: vec![crate::limits::Limited {
+                    title: "fixer".into(),
+                    resets_at_ms: 2,
+                    resume_at_ms: Some(3),
+                }],
+            })
+            .unwrap(),
+            r#"{"type":"watch","pending_approvals":0,"collied_version":null,"limited":[{"title":"fixer","resets_at_ms":2,"resume_at_ms":3}]}"#
+        );
+        // `collied hook` sends this line for PreToolUse.
+        let limit: Request = serde_json::from_str(
+            r#"{"cmd":"limit","session_id":"3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d","subagent":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(limit, Request::Limit { subagent: true, .. }));
+        assert!(matches!(
+            serde_json::from_str::<Reply>(r#"{"type":"limit"}"#).unwrap(),
+            Reply::Limit { stop: None }
+        ));
     }
 }

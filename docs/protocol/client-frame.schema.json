@@ -751,6 +751,18 @@
       ],
       "type": "object"
     },
+    "PlanStopAtLimitParams": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
     "PromptText": {
       "maxLength": 32768,
       "minLength": 1,
@@ -1709,6 +1721,38 @@
         },
         "params": {
           "$ref": "#/$defs/AgentWatchPullRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "agent.cancel_resume",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/AgentTarget"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "plan.stop_at_limit",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/PlanStopAtLimitParams"
         }
       },
       "required": [

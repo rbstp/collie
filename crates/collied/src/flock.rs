@@ -207,6 +207,7 @@ pub fn map_agent(
         subagents: derived.subagents,
         pull_request: None,
         pr_watch: None,
+        plan_limit: None,
     })
 }
 
@@ -289,6 +290,7 @@ pub fn map_flock(
         terminals: Vec::new(),
         terminals_enabled: false,
         starred: Vec::new(),
+        stop_at_limit: false,
     }
 }
 

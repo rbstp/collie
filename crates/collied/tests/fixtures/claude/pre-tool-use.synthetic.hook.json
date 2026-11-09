@@ -1,0 +1,17 @@
+{
+  "session_id": "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-src-collie/3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d.jsonl",
+  "cwd": "/Users/me/src/collie",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "cargo test",
+    "description": "Run the tests"
+  },
+  "tool_use_id": "toolu_01ABCDEFGHIJKLMNOPQRSTUV"
+}

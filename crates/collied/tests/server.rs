@@ -174,6 +174,7 @@ async fn scenario(
             attachments_dir: data_dir.join("attachments"),
             terminals: false,
             terminal_grant_ttl: collied::terminal::GRANT_TTL,
+            resume_grace: collied::limits::GRACE,
             herdr_core: None,
         },
         herdr_socket.clone(),
@@ -208,6 +209,7 @@ async fn scenario(
         Reply::Watch {
             pending_approvals: 0,
             collied_version: Some(ref version),
+            ..
         } if version == env!("CARGO_PKG_VERSION")
     ));
     // A watcher that goes away ends its task; the pairing below still gets its window.
@@ -286,13 +288,13 @@ async fn scenario(
         assert_closed(&mut ws).await;
     }
 
-    for maximum in [26, 27, 28, 29, 30, 31, 32, 33] {
+    for maximum in [26, 27, 28, 29, 30, 31, 32, 33, 34] {
         let mut ws = open(&phone, &target).await;
         send(&mut ws, json!({"id":1,"method":"hello","params":{"protocol_version":maximum,"protocol_min_version":26,"app_version":"it","capabilities":[]}})).await;
         let Response::Hello(hello) = result(recv(&mut ws).await) else {
             panic!("no negotiated hello")
         };
-        assert_eq!(hello.protocol_version, maximum.min(32));
+        assert_eq!(hello.protocol_version, maximum.min(33));
         assert!(hello.capabilities.is_empty());
         send(&mut ws, json!({"id":2,"method":"pair.complete","params":{"pairing_code":invite.code.as_str(),"device_label":"phone","terminal_key":format!("{}Q", "M".repeat(121))}})).await;
         assert_error(&recv(&mut ws).await, ErrorCode::NotImplemented);
@@ -436,6 +438,7 @@ async fn scenario(
         Reply::Watch {
             pending_approvals: 1,
             collied_version: Some(ref version),
+            ..
         } if version == env!("CARGO_PKG_VERSION")
     ));
     let mut ws = open(&phone, &target).await;
@@ -1305,6 +1308,7 @@ async fn terminal_phase(
             attachments_dir: data_dir.join("attachments"),
             terminals: true,
             terminal_grant_ttl: Duration::from_secs(3),
+            resume_grace: collied::limits::GRACE,
             herdr_core: None,
         },
         herdr_socket.to_owned(),

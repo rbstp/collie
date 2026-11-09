@@ -62,6 +62,17 @@
             "null"
           ]
         },
+        "plan_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set while collied holds the agent stopped at a Claude Code plan limit."
+        },
         "pr_watch": {
           "anyOf": [
             {
@@ -775,6 +786,10 @@
           },
           "type": "array"
         },
+        "stop_at_limit": {
+          "description": "Whether collied stops Claude Code agents at the plan limit and resumes them at the reset.",
+          "type": "boolean"
+        },
         "terminals": {
           "default": [],
           "description": "Shell panes: only when the machine enables terminals.",
@@ -1203,6 +1218,14 @@
       "minLength": 1,
       "type": "string"
     },
+    "LimitWindow": {
+      "enum": [
+        "five_hour",
+        "seven_day",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "MachineInfo": {
       "description": "`node_id` is the Tailscale stable node ID; the phone pins it at pairing time.",
       "properties": {
@@ -1380,6 +1403,32 @@
       "required": [
         "name",
         "summary"
+      ],
+      "type": "object"
+    },
+    "PlanLimit": {
+      "properties": {
+        "resets_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resume_at_ms": {
+          "description": "When collied prompts the agent to continue; absent once the resume is cancelled.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/LimitWindow"
+        }
+      },
+      "required": [
+        "window",
+        "resets_at_ms"
       ],
       "type": "object"
     },
