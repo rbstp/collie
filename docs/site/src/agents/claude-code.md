@@ -9,6 +9,7 @@
 | [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Yes |
 | [Approval alerts](../notifications/approvals.md) | Approve, Deny or another option, from the phone or watch |
 | [Plan usage](../app/usage.md) | 5-hour and weekly, with the [status line tap](../install/claude-code.md#plan-usage) |
+| [Plan limits](#plan-limits) | Stops at the limit instead of using extra usage, and continues at the reset |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | [Slash command menu](#slash-commands), [notice buttons](#notices), [draft sync](#draft-sync), [prompt suggestions](#prompt-suggestions) and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | Yes |
 | [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode, in herdr or [Herdr 2](../app/new-task.md#herdr-2) |
@@ -17,7 +18,20 @@
 
 1. Install the [PermissionRequest hook](../install/claude-code.md#the-permissionrequest-hook) so approval alerts name the exact command.
 2. Add the [status line tap](../install/claude-code.md#plan-usage) for plan usage and exact context windows.
-3. Check both with `collied doctor`.
+3. To stop agents at the plan limit, also install the [PreToolUse hook](../install/claude-code.md#the-pretooluse-hook).
+4. Check them with `collied doctor`.
+
+## Plan limits
+
+With extra usage turned on for your account, Claude Code keeps working past your 5-hour or weekly limit and bills the excess. To have your agents wait for the reset instead, turn on **Stop at the plan limit** in [Usage](../app/usage.md#stop-at-the-plan-limit) and install the [PreToolUse hook](../install/claude-code.md#the-pretooluse-hook).
+
+- When a limit is reached, `collied` stops the agent before its next tool call and notifies you once, for example "Stopped at the 5-hour limit, resumes in 2 h 5 min". When both limits are reached, it waits for the later reset.
+- The agent shows an hourglass with the time it resumes. A minute after the reset, `collied` types **Continue.** into it and notifies you.
+- To change that, tap the hourglass on the agent's screen: **Cancel resume** leaves the agent stopped, and **Continue now** sends **Continue.** at once, on extra usage.
+- A prompt you type on the machine or send from the phone goes through, on extra usage, and cancels the resume.
+- `collied` does not resume an agent you closed, that started another session, or that is no longer idle. When an agent hits the limit again right after resuming, `collied` waits once more, then leaves it stopped and tells you.
+- Keep the machine awake at the reset. When it wakes later, `collied` resumes the agent then, unless the reset is more than 3 hours past; then it tells you and leaves the agent stopped.
+- Claude Code tells `collied` about the limit only after the reply that reached it, so that reply, and sometimes one more tool call, run on extra usage.
 
 ## Approvals
 

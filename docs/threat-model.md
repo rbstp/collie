@@ -361,6 +361,16 @@ Computer nodes are user-owned, not tag-confined: they get their user's tailnet p
 | Residual | `worktree.remove` still forces, so it loses a file written between the last check and the removal (milliseconds), anything git ignores and commits a submodule holds on another branch. An agent that starts working in that window is closed. A sparse checkout (skip-worktree entries) is never archived automatically. If `gh` answers for a repository other than the checkout's (a remote pointing elsewhere), that pull request can archive only a checkout whose `HEAD` is already in its history. |
 | Phase | Built |
 
+### Stopping at the plan limit
+
+| | |
+|---|---|
+| Assets | The agent's input; the account's extra usage; the user's work in a stopped agent |
+| Attack | collied types into a pane with no phone action behind it, so a crafted transcript, screen or status line could choose the text or the target; a same-UID process feeds a false limit to stop agents, or a stale one to resume them at the wrong time; a broken or slow collied blocks every agent; a resume lands in another session that took the pane. |
+| Mitigations | Off by default; only an audited paired-phone request (`plan.stop_at_limit`) turns it on, and turning it off drops every stop. The continuation prompt is the fixed `Continue.`, never text from a transcript, screen or the network, typed through `Driver::prompt_agent` with `idle_only` and no `expected_draft`, so text in the input box, a scrolled screen or a blocked agent refuses it. The resume checks that the terminal still runs Claude Code with the stopped session id and is idle, and right before the write that the resume is still armed and the switch on. The hook fails open: no collied, an error or a 2 s timeout prints nothing, and it stops only sessions of agents collied lists. Only a fresh reading recorded while collied runs stops an agent. Every stop, cancel and resume writes an audit line; stops and failed resumes alert the phone. |
+| Residual | A same-UID process that writes `usage.json` or reaches the control socket can stop agents (it can already type into them through herdr) or make a stopped agent wait for a false reset; it cannot choose the text. The reply that crossed the limit, and possibly one tool call, run on extra usage before the stop. A resume missed by more than 3 hours is dropped, and a sleeping machine resumes nothing until it wakes. |
+| Phase | Built |
+
 ### Shell input from the phone
 
 | | |

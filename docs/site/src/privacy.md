@@ -20,6 +20,7 @@ This policy covers the Collie app for iPhone and Apple Watch, its notification e
 - the audit log, and its service log (the user journal on Linux);
 - recorded plan usage, and token counts from your agents' transcripts for the last 32 days, by transcript, model and quarter hour, without any message text;
 - starred agents, the pull requests you watch with their URLs, and the last 20 prompts that watching typed into each agent, so Chat can tell them from yours;
+- whether to stop Claude Code agents at the plan limit, and the agents it stopped, with their Claude Code session IDs and when they resume;
 - attachments you sent from the phone, deleted after 24 hours.
 
 Your agents' transcripts and your files stay where the agents keep them; `collied` reads them only to answer the phone.

@@ -20,5 +20,6 @@ To update, run `git pull`, then `just tray-install` again.
 
 - The icon is bright while `collied` runs, dim while it is off, and shows a dot for a pending approval.
 - The menu shows the status and version, turns `collied` off and on, pairs a phone, lists the paired phones and opens the audit log. **Quit** also stops `collied` and takes the widget off the bar; `omarchy plugin enable rbstp.collie` brings it back.
+- An agent [stopped at the plan limit](../agents/claude-code.md#plan-limits) gets a line in the menu, with the time it resumes.
 - To set up the machine or sign in again, run `collied setup` in a terminal.
 - While enabled, it loads at every login.

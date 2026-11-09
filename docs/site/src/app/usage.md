@@ -19,6 +19,10 @@ Each limit leads with its figure, then a bar and its reset time. The bar turns o
 <img src="../images/watch-widget.png" width="208" height="248" loading="lazy" alt="The Plan usage widget on the Apple Watch: three gauges, Claude with its 5-hour and weekly halves, Codex monthly and Copilot monthly, each with a reset countdown">
 </div>
 
+## Stop at the plan limit
+
+Under Claude Code's limits, **Stop at the plan limit** has the machine stop its Claude Code agents at the 5-hour or weekly limit instead of letting them run on extra usage, and continue them a minute after the reset. The machine keeps the setting, so every phone paired with it shows the same. It is off by default and needs the [PreToolUse hook](../install/claude-code.md#the-pretooluse-hook). Turning it off also cancels the resumes of agents it already stopped. While agents wait, each limit says how many, such as "2 agents wait". [Plan limits](../agents/claude-code.md#plan-limits) explains what the agents do.
+
 ## Tokens and cost
 
 The **Tokens and cost** card, below the plan usage, shows the tokens all of the machine's agents used **Today** or over **7 days** or **30 days**, and their cost at API prices, by token type and by model. Over 7 or 30 days a chart shows the cost of each day: tap a bar to read that day's cost, and tap it again to clear it.

@@ -30,6 +30,7 @@ Attention previews prefer the pending question or action:
 - Codex conversation screen: the assistant response marked `•` after the user input marked `›`, never that input.
 - Incomplete or ambiguous question: `Blocked in <workspace>`.
 - Completion: `Done in <workspace>`, with no reply excerpt.
+- [Plan limit](architecture.md#stopping-at-the-plan-limit): one alert when collied stops an agent (`Stopped at the 5-hour limit, resumes in 2 h 5 min`, a duration since collied does not know the phone's time zone, or `... again; not resuming`), one when a resume fails (`Did not resume: <reason>`), never one per status line refresh; a resume (`Resumed <agent>`, `The 5-hour limit reset`) goes through the done path, so muting done alerts silences it. In clear, each reads `An agent needs attention`.
 
 iPhone and Apple Watch show the authenticated preview, as does an iPhone notification mirrored to macOS; CollieBar and CollieTray send no desktop notifications.
 
