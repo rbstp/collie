@@ -464,6 +464,10 @@ impl Driver {
             read.ansi = reflow::without_copilot_scrollbar(&read.ansi, width);
         }
         if kind == "claude" {
+            read.suggestion = match draft::parse(&read.ansi) {
+                Some(InputBox::Draft(d)) => d.suggestion,
+                _ => None,
+            };
             read.ansi = reflow::without_claude_black(&read.ansi);
         }
         cols.is_ok()
@@ -2821,6 +2825,7 @@ fn terminal_read(
         wraps: Vec::new(),
         splits: Vec::new(),
         copilot_scrollbar: false,
+        suggestion: None,
     }
 }
 

@@ -950,6 +950,7 @@ mod tests {
             wraps,
             splits,
             copilot_scrollbar: true,
+            suggestion: None,
         };
         let reflowed = read.reflowed().unwrap();
         assert_eq!(
@@ -1183,6 +1184,7 @@ mod tests {
             wraps,
             splits,
             copilot_scrollbar: false,
+            suggestion: None,
         };
         let joined = read.reflowed().unwrap();
         assert!(joined.contains("6) run python3 -c \u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[0m\u{1b}[48;2;55;55;55m\u{1b}[0m\u{1b}[38;2;255;255;255m\u{1b}[48;2;55;55;55m'print(round"));
@@ -1200,6 +1202,7 @@ mod tests {
             wraps,
             splits,
             copilot_scrollbar: false,
+            suggestion: None,
         };
         read.reflowed()
             .unwrap_or_else(|| ansi.into())

@@ -1045,6 +1045,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         }
     }
 
@@ -1666,6 +1667,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                suggestion: None,
             };
             write(
                 &mut ws,
@@ -1742,6 +1744,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                suggestion: None,
             };
             write(
                 &mut ws,

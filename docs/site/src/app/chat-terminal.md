@@ -50,6 +50,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 - In a Claude Code, Codex or Copilot CLI session, tap a word in the input box to move the cursor there and fix an earlier part of your prompt, on any line. A few taps only bring up the keyboard: on an empty line in Codex or below an empty first line, below the first line while Claude Code lists files above the box, and in a tall Copilot CLI box. While you type, Terminal keeps the input box above the keyboard; scroll away to read the rest, and it comes back when you type again or scroll to the bottom.
 - Attach a file with the paperclip and its path on the machine is typed in; dictation types what you said once you stop. Saved prompts are typed too.
 - Tap the return key at the right end of the bottom row to send what you dictated, without opening the keyboard; with the key strip shown, use the strip's return key. Like Return on the keyboard, it hides the keyboard unless **Keep keyboard open after sending** is on.
+- When Claude Code suggests your next prompt, grayed out in its empty input box, a ⇥ key shows before return in the bottom row. Tap ⇥ to take the suggestion, then return to send it, or type over it. The ⇥ key shows only while the suggestion does.
 - Terminal follows your phone's appearance: light in Light Mode, dark in Dark Mode, switching as the phone does. Agents color their text for the machine's terminal, so in Light Mode Terminal darkens text too pale to read on its light background, and lightens text on the dark bands some agents draw.
 - Lines wrap to the phone's width; turn off the wrap button to scroll long lines sideways.
 - Long-press to select text, then copy it, quote it into the prompt or open a link. In an agent session, **Open** previews a selected file path.
@@ -57,6 +58,7 @@ Terminal has no prompt field: you type straight into the pane, as in a terminal 
 
 ## The prompt in Chat
 
+- When Claude Code suggests your next prompt, an empty prompt field shows the suggestion in gray, with a ⇥ button at its end. Tap ⇥ to put the suggestion in the field, then edit it or send it. Text you type, a draft from the machine or a saved prompt replaces the suggestion.
 - When a prompt cannot reach the machine, the send button spins while the phone retries, up to 5 tries in all, a minute apart or as soon as the connection is back. To stop, edit the prompt or tap the spinner.
 - **Quote** adds text to the end of the prompt as a code block, without sending it. A prompt holds up to 32 KiB.
 - To hide the keyboard, tap the hide-keyboard button or swipe down on the prompt field. **Settings > Prompt > Keep keyboard open after sending** keeps it up.

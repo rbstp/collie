@@ -38,6 +38,7 @@ final class AgentModel {
     private(set) var reflowed: String?
     private var screenBanner = false
     private var screenNotice: [NoticeOption] = []
+    private var screenSuggestion: String?
     /// When the phone first saw the notice; Claude Code ignores a digit within 600 ms of showing it and
     /// leaves the digit in the input box.
     @ObservationIgnored private var noticeSince: ContinuousClock.Instant?
@@ -210,6 +211,24 @@ final class AgentModel {
     /// A Claude Code notice's options, in screen order; collied sends the digit only while it shows.
     var noticeOptions: [NoticeOption] {
         mode == .agent && agent?.kind == "claude" && agent?.status != .blocked && blocked == nil && !jumpBanner && noticeArmed ? screenNotice : []
+    }
+
+    /// Claude Code's suggested next prompt, dim in its otherwise empty input box on the machine.
+    var suggestion: String? {
+        mode == .agent && agent?.kind == "claude" && !answering && !jumpBanner ? screenSuggestion : nil
+    }
+
+    /// Tab takes the suggestion into the input box. The key hides until the next screen, so a second tap
+    /// waits for a screen showing a suggestion again.
+    func acceptSuggestion() {
+        guard suggestion != nil, canTap(.tab) else { return }
+        screenSuggestion = nil
+        tap(.tab)
+    }
+
+    func useSuggestion() {
+        guard draft.isEmpty, let suggestion else { return }
+        insert(PromptShortcut(text: suggestion))
     }
 
     /// A slash command shows in Claude Code's input box, so Enter would run its highlighted command.
@@ -448,6 +467,7 @@ final class AgentModel {
             ansi = output.ansi
             reflowed = output.reflowed
             screenBanner = output.jumpBanner
+            screenSuggestion = output.suggestion
             show(notice: output.notice)
             revision = view.outputRevision
         }
@@ -544,6 +564,7 @@ final class AgentModel {
             ansi = read.ansi
             reflowed = read.reflowed
             screenBanner = read.jumpBanner
+            screenSuggestion = read.suggestion
             show(notice: read.notice)
             notice = nil
         } catch {

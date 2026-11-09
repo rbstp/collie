@@ -1206,6 +1206,7 @@ private struct PromptBar: View {
                     .contentShape(.interaction, Circle().inset(by: -3))
                     .background(SessionBarDim(), in: .circle)
                     .accessibilityLabel(typing ? "Hide keyboard" : "Keyboard")
+                    if !model.keysShown, model.suggestion != nil { suggestionButton }
                     if !model.keysShown { returnButton }
                 }
             } else {
@@ -1216,9 +1217,10 @@ private struct PromptBar: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .bottom, spacing: 8) {
                             let placeholder = model.answering ? "Type an answer" : "Prompt the agent"
+                            let suggestion = model.draft.isEmpty && !model.dictation.isActive ? model.suggestion : nil
                             TextField(
                                 placeholder, text: Binding(get: { model.draft }, set: typed),
-                                selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical
+                                selection: $selection, prompt: Text(suggestion ?? placeholder).foregroundStyle(.metadata), axis: .vertical
                             )
                                 .lineLimit(expanded || model.showsMacDraft ? 1...(verticalSizeClass == .compact ? 2 : 5) : 1...1)
                                 .focused($editing)
@@ -1237,6 +1239,20 @@ private struct PromptBar: View {
                                     }
                                 }
                                 .accessibilityAction(named: "Copy prompt", copyPrompt)
+                            if suggestion != nil {
+                                Button {
+                                    model.useSuggestion()
+                                } label: {
+                                    Image(systemName: "arrow.right.to.line")
+                                        .font(.system(size: 17))
+                                        .foregroundStyle(appAccent)
+                                        .frame(width: 36, height: 36)
+                                        .contentShape(Rectangle().inset(by: -4))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(model.sendingPrompt)
+                                .accessibilityLabel("Use suggestion")
+                            }
                             if expanded && !model.draft.isEmpty {
                                 Button {
                                     if model.dictation.isActive {
@@ -1394,6 +1410,24 @@ private struct PromptBar: View {
         .background(SessionBarDim(), in: .circle)
         .accessibilityLabel("Keys")
         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
+    }
+
+    private var suggestionButton: some View {
+        Button {
+            model.acceptSuggestion()
+        } label: {
+            Image(systemName: "arrow.right.to.line")
+                .font(.system(size: 20))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.glass)
+        .tint(.primary)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .contentShape(.interaction, Circle().inset(by: -3))
+        .background(SessionBarDim(), in: .circle)
+        .disabled(!model.canTap(.tab))
+        .accessibilityLabel("Accept suggestion")
     }
 
     private var returnButton: some View {

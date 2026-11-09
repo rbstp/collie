@@ -1319,6 +1319,13 @@
             "null"
           ]
         },
+        "suggestion": {
+          "description": "[`TerminalRead::suggestion`] of the new text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tail": {
           "items": {
             "type": "string"
@@ -2148,6 +2155,13 @@
             "type": "integer"
           },
           "type": "array"
+        },
+        "suggestion": {
+          "description": "Claude Code's suggested next prompt, drawn dim in its otherwise empty input box,\nwhich Tab there takes.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "terminal_id": {
           "$ref": "#/$defs/TerminalId"

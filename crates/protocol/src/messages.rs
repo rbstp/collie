@@ -1633,6 +1633,10 @@ pub struct TerminalRead {
     pub splits: Vec<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub copilot_scrollbar: bool,
+    /// Claude Code's suggested next prompt, drawn dim in its otherwise empty input box,
+    /// which Tab there takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 impl TerminalRead {
@@ -3417,6 +3421,7 @@ mod tests {
             wraps: wraps.to_vec(),
             splits: splits.to_vec(),
             copilot_scrollbar: false,
+            suggestion: None,
         }
     }
 
@@ -3501,6 +3506,19 @@ mod tests {
         let with = read_with("a\nb\nc", &[1], &[2]);
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.ends_with(r#""wraps":[1],"splits":[2]}"#), "{json}");
+    }
+
+    #[test]
+    fn suggestion_is_additive() {
+        let older = r#"{"terminal_id":"t1","source":"recent","ansi":"a","truncated":false}"#;
+        let r: TerminalRead = serde_json::from_str(older).unwrap();
+        assert_eq!(r.suggestion, None);
+        let with = TerminalRead {
+            suggestion: Some("run the tests".into()),
+            ..r
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.ends_with(r#""suggestion":"run the tests"}"#), "{json}");
     }
 
     #[test]
