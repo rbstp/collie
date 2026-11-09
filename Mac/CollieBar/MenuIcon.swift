@@ -27,7 +27,7 @@ enum MenuIcon {
     static func label(_ state: DaemonState) -> String {
         switch state {
         case .off: "collie: off"
-        case .running(let n, _) where n > 0: "collie: running, \(pendingText(n))"
+        case .running(let n, _, _) where n > 0: "collie: running, \(pendingText(n))"
         case .running: "collie: running"
         }
     }

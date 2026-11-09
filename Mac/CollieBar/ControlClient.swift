@@ -63,12 +63,33 @@ struct Peer: Decodable, Equatable, Sendable {
     let stableId: String
 }
 
+/// An agent collied holds stopped at a Claude Code plan limit.
+struct Limited: Decodable, Equatable, Sendable {
+    let title: String
+    let resetsAtMs: UInt64
+    let resumeAtMs: UInt64?
+
+    /// The time in this Mac's time zone; a day other than today is named.
+    func text(now: Date = .now) -> String {
+        func time(_ ms: UInt64) -> String {
+            let date = Date(timeIntervalSince1970: Double(ms) / 1000)
+            return Calendar.current.isDate(date, inSameDayAs: now)
+                ? date.formatted(date: .omitted, time: .shortened)
+                : date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        }
+        return switch resumeAtMs {
+        case let at?: "\(printable(title)): limited, resumes at \(time(at))"
+        case nil: "\(printable(title)): limited until \(time(resetsAtMs))"
+        }
+    }
+}
+
 enum Reply: Equatable, Sendable {
     case invite(uri: String, expiresInSecs: Int)
     case confirm(Candidate)
     case pairDone(paired: Bool, detail: String)
     case peers([Peer])
-    case watch(pendingApprovals: Int, colliedVersion: String? = nil)
+    case watch(pendingApprovals: Int, colliedVersion: String? = nil, limited: [Limited] = [])
     case error(String)
     case other
 
@@ -82,7 +103,7 @@ enum Reply: Equatable, Sendable {
         let reply: Reply
 
         private enum Keys: String, CodingKey {
-            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, colliedVersion, message
+            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, colliedVersion, limited, message
         }
 
         init(from decoder: any Decoder) throws {
@@ -101,7 +122,8 @@ enum Reply: Equatable, Sendable {
             case "watch":
                 .watch(
                     pendingApprovals: try c.decode(Int.self, forKey: .pendingApprovals),
-                    colliedVersion: try c.decodeIfPresent(String.self, forKey: .colliedVersion))
+                    colliedVersion: try c.decodeIfPresent(String.self, forKey: .colliedVersion),
+                    limited: try c.decodeIfPresent([Limited].self, forKey: .limited) ?? [])
             case "error": .error(try c.decode(String.self, forKey: .message))
             default: .other
             }
@@ -270,14 +292,18 @@ func request(_ request: Request, socket: String) async throws -> Reply {
 
 enum DaemonState: Equatable, Sendable {
     case off
-    case running(pendingApprovals: Int, colliedVersion: String? = nil)
+    case running(pendingApprovals: Int, colliedVersion: String? = nil, limited: [Limited] = [])
 
     var statusText: String {
         switch self {
         case .off: "collied: Off"
-        case .running(_, let version?) where !version.isEmpty: "collied \(printable(version)): Running"
+        case .running(_, let version?, _) where !version.isEmpty: "collied \(printable(version)): Running"
         case .running: "collied: Running (version unavailable)"
         }
+    }
+
+    var limited: [Limited] {
+        if case .running(_, _, let limited) = self { limited } else { [] }
     }
 }
 
@@ -289,8 +315,8 @@ func watchDaemon(socket: String, retry: Duration, update: @Sendable (DaemonState
             do {
                 try conn.send(.watch)
                 for try await line in conn.lines {
-                    if case .watch(let n, let version) = try Reply.decode(line) {
-                        await update(.running(pendingApprovals: n, colliedVersion: version))
+                    if case .watch(let n, let version, let limited) = try Reply.decode(line) {
+                        await update(.running(pendingApprovals: n, colliedVersion: version, limited: limited))
                     }
                 }
             } catch {}

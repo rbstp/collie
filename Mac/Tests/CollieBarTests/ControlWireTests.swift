@@ -45,6 +45,23 @@ struct ControlWireTests {
         #expect(DaemonState.off.statusText == "collied: Off")
     }
 
+    @Test func limitedAgentsComeWithTheWatch() throws {
+        let now = Date(timeIntervalSince1970: 1_791_028_800)
+        let at = UInt64(now.addingTimeInterval(3_600).timeIntervalSince1970 * 1000)
+        let reply = try decode(
+            #"{"type":"watch","pending_approvals":0,"collied_version":"0.1.1","limited":[{"title":"fixer","resets_at_ms":"#
+                + "\(at - 60_000)" + #","resume_at_ms":"# + "\(at)" + #"},{"title":"api\u202e","resets_at_ms":"# + "\(at)" + "}]}")
+        guard case .watch(_, _, let limited) = reply else {
+            Issue.record("not a watch")
+            return
+        }
+        let time = Date(timeIntervalSince1970: Double(at) / 1000).formatted(date: .omitted, time: .shortened)
+        #expect(limited.map { $0.text(now: now) } == ["fixer: limited, resumes at \(time)", "api\\u{202e}: limited until \(time)"])
+        #expect(DaemonState.running(pendingApprovals: 0, limited: limited).limited.count == 2)
+        #expect(DaemonState.off.limited.isEmpty)
+        #expect(try decode(#"{"type":"watch","pending_approvals":1}"#) == .watch(pendingApprovals: 1, limited: []))
+    }
+
     @Test func candidateDecodesWithAndWithoutOptionalKeys() throws {
         let base = #""device_label":"iPhone","node_name":"phone","stable_id":"nP","login":"me","user_id":7,"tls_key":"k""#
         guard case .confirm(let old) = try decode("{\"type\":\"confirm\",\(base)}") else {

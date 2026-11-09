@@ -32,6 +32,9 @@ struct MenuContent: View {
         if daemon.pendingApprovals > 0 {
             Text(verbatim: MenuIcon.pendingText(daemon.pendingApprovals))
         }
+        ForEach(Array(daemon.state.limited.enumerated()), id: \.offset) { _, limited in
+            Text(verbatim: limited.text())
+        }
         if let error = daemon.lastError {
             Text(verbatim: error)
         }
