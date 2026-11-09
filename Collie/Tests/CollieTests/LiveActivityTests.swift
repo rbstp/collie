@@ -48,6 +48,33 @@ private func displayVectors() throws -> [[String: Any]] {
     #expect(encoded["enc"] as? String == enc)
 }
 
+@Test func aLimitedStateOpensWithItsTime() throws {
+    struct Limited: Codable {
+        let status: String
+        let statusSince: Double
+        let title: String
+        let kind: String?
+        let workspace: String?
+        let approvals: Int
+        let limitedUntil: Double
+    }
+    struct Display: Encodable {
+        let v: Int
+        let state: Limited
+    }
+    let limited = try JSONDecoder().decode(
+        Limited.self, from: JSONSerialization.data(withJSONObject: try #require(try fixture()["content_state_limited"]))
+    )
+    let enc = try #require(PushEnvelope.seal(Display(v: 1, state: limited), kind: 2, nodeId: "nMAC", scope: "binding-test", key: vectorKey))
+    let stored = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: JSONSerialization.data(withJSONObject: ["v": 1, "enc": enc]))
+    let state = stored.opened(nodeId: "nMAC", scope: "binding-test", key: vectorKey)
+    #expect(state.status == .idle)
+    #expect(state.limitedUntil == Date(timeIntervalSinceReferenceDate: limited.limitedUntil))
+    #expect(!state.sameDisplay(as: AgentActivityAttributes.ContentState(
+        status: .idle, statusSince: state.statusSince, title: state.title, kind: state.kind, workspace: state.workspace, approvals: 0
+    )))
+}
+
 @Test func ciphertextChangesRemainDistinctToActivityKit() throws {
     let first = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(#"{"v":1,"enc":"first"}"#.utf8))
     let second = try JSONDecoder().decode(AgentActivityAttributes.ContentState.self, from: Data(#"{"v":1,"enc":"second"}"#.utf8))

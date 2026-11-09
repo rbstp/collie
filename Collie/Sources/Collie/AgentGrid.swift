@@ -274,6 +274,9 @@ struct AgentCard: View {
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if let limit = agent.planLimit {
+                        LimitBadge(limit: limit, compact: true)
+                    }
                     if let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
                     }

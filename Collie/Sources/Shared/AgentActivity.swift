@@ -63,6 +63,8 @@ struct AgentActivityAttributes: ActivityAttributes {
         var enc: String?
         /// Local only, never sent by collied: "Approving…" after a tap, until its next push.
         var progress: String?
+        /// Stopped at the plan limit: when it resumes, else when the limit resets.
+        var limitedUntil: Date?
         private var sealedDisplay: String? = nil
 
         init(
@@ -94,6 +96,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             var approvalId: String?
             var enc: String?
             var progress: String?
+            var limitedUntil: Double?
         }
 
         private enum CodingKeys: String, CodingKey { case v, enc }
@@ -116,7 +119,8 @@ struct AgentActivityAttributes: ActivityAttributes {
         func secured(nodeId: String, scope: String) -> Self {
             var state = self
             let privateState = PrivateState(status: status, statusSince: statusSince.timeIntervalSinceReferenceDate.rounded(.down),
-                title: title, kind: kind, workspace: workspace, approvals: approvals, approvalId: approvalId, enc: enc, progress: progress)
+                title: title, kind: kind, workspace: workspace, approvals: approvals, approvalId: approvalId, enc: enc, progress: progress,
+                limitedUntil: limitedUntil?.timeIntervalSinceReferenceDate)
             state.sealedDisplay = NotificationKey.load(nodeId: nodeId).flatMap {
                 PushEnvelope.seal(Display(v: 1, state: privateState), kind: 2, nodeId: nodeId, scope: scope, key: $0)
             } ?? ""
@@ -141,6 +145,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             var state = Self(status: d.status, statusSince: Date(timeIntervalSinceReferenceDate: d.statusSince), title: d.title,
                 kind: d.kind, workspace: d.workspace, approvals: d.approvals, approvalId: d.approvalId, enc: d.enc)
             state.progress = d.progress
+            state.limitedUntil = d.limitedUntil.map(Date.init(timeIntervalSinceReferenceDate:))
             state.sealedDisplay = sealedDisplay
             return state
         }
@@ -149,6 +154,7 @@ struct AgentActivityAttributes: ActivityAttributes {
             status == other.status && statusSince == other.statusSince && title == other.title
                 && kind == other.kind && workspace == other.workspace && approvals == other.approvals
                 && approvalId == other.approvalId && enc == other.enc && progress == other.progress
+                && limitedUntil == other.limitedUntil
         }
 
         /// The kinds collied sends, each with an icon in CollieWidgets.

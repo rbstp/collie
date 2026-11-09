@@ -459,6 +459,9 @@ private struct InboxRow: View {
                     if item.stale {
                         Text(item.linkDown ? "Offline · cached" : "Cached")
                     }
+                    if let limit = agent.planLimit {
+                        LimitBadge(limit: limit)
+                    }
                     if let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch)
                     }

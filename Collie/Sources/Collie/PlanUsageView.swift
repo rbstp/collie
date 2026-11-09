@@ -23,7 +23,8 @@ struct UsageSections: View {
                             let copilot = usage.copilot.flatMap { $0.resetsAtMs > context.date.unixMs ? $0 : nil }
                             VStack(alignment: .leading, spacing: 20) {
                                 if usage.fiveHour != nil || usage.sevenDay != nil {
-                                    SubscriptionUsage(usage: usage, now: context.date)
+                                    SubscriptionUsage(usage: usage, waiting: Self.waiting(entry.flock?.agents ?? []), now: context.date)
+                                    StopAtLimitToggle(machineId: entry.machine.id, on: entry.flock?.stopAtLimit ?? false, core: core)
                                 }
                                 if let codex {
                                     CodexSubscriptionUsage(usage: codex, now: context.date)
@@ -64,6 +65,54 @@ struct UsageSections: View {
             }
             .listSectionSpacing(.compact)
             .opacity(entry.linkDown ? 0.6 : 1)
+        }
+    }
+}
+
+extension UsageSections {
+    /// Agents the machine holds stopped at each limit, by `UsageLimit.label`.
+    static func waiting(_ agents: [AgentSummary]) -> [String: Int] {
+        agents.reduce(into: [:]) { counts, agent in
+            switch agent.planLimit?.window {
+            case .fiveHour: counts["5h", default: 0] += 1
+            case .sevenDay: counts["7d", default: 0] += 1
+            case .unknown, nil: break
+            }
+        }
+    }
+}
+
+/// Stored on the machine, so every phone shows the same; the next snapshot confirms a change.
+private struct StopAtLimitToggle: View {
+    let machineId: String
+    let on: Bool
+    let core: (any FlockCore)?
+    @State private var asked: Bool?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Stop at the plan limit", isOn: Binding(get: { asked ?? on }, set: set))
+                .font(.subheadline)
+                .disabled(core == nil)
+            Text(failure ?? "Agents wait for the reset instead of using extra usage.")
+                .font(.caption)
+                .foregroundStyle(.metadata)
+        }
+        .onChange(of: on) { asked = nil }
+    }
+
+    private func set(_ enabled: Bool) {
+        guard let core else { return }
+        asked = enabled
+        Task {
+            do {
+                try await core.setStopAtLimit(machineId: machineId, enabled: enabled)
+                failure = nil
+            } catch {
+                asked = nil
+                failure = AgentModel.message(for: error)
+            }
         }
     }
 }
@@ -112,6 +161,7 @@ private struct CopilotSubscriptionUsage: View {
 
 private struct SubscriptionUsage: View {
     let usage: PlanUsage
+    let waiting: [String: Int]
     let now: Date
 
     var body: some View {
@@ -119,9 +169,13 @@ private struct SubscriptionUsage: View {
             UsageHeader(image: "Claude", title: "Claude Code", recordedMs: usage.isStale(now: now) ? usage.recordedMs : nil, now: now)
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(usage.limits(now: now), id: \.label) { limit in
-                    UsageLimitRow(title: limit.title, figure: "\(limit.used)%", used: limit.used, elapsed: limit.elapsed, resets: limit.resetsLine(now: now))
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(limit.spokenLine(now: now))
+                    let held = waiting[limit.label].map { $0 == 1 ? "1 agent waits" : "\($0) agents wait" }
+                    UsageLimitRow(
+                        title: limit.title, figure: "\(limit.used)%", used: limit.used, elapsed: limit.elapsed,
+                        resets: [limit.resetsLine(now: now), held].compactMap { $0 }.joined(separator: " · ")
+                    )
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel([limit.spokenLine(now: now), held].compactMap { $0 }.joined(separator: ", "))
                 }
             }
         }

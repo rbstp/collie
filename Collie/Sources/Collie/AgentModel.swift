@@ -1106,6 +1106,26 @@ final class AgentModel {
         }
     }
 
+    func cancelResume() async {
+        do {
+            try await core.cancelResume(machineId: route.machineId, terminalId: route.terminalId)
+            notice = nil
+        } catch {
+            notice = Self.message(for: error)
+        }
+    }
+
+    /// Sent like a prompt typed on the machine: the agent goes on, on extra usage.
+    func continueNow() async {
+        do {
+            notice = try await sendAlone(Self.continuePrompt) ? nil : "The agent cannot accept a prompt right now."
+        } catch {
+            notice = Self.message(for: error)
+        }
+    }
+
+    static let continuePrompt = "Continue."
+
     func jumpToBottom() async {
         screenBanner = false
         do {

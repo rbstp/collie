@@ -68,6 +68,8 @@ struct WatchAgent: Codable, Equatable, Identifiable, Sendable {
     let done: Bool
     let activityMs: UInt64
     let contextLeft: UInt8?
+    /// Stopped at the plan limit: when it resumes, else when the limit resets.
+    var limitedUntilMs: UInt64? = nil
 }
 
 struct WatchUsage: Codable, Equatable, Sendable {

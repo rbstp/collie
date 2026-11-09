@@ -10,7 +10,8 @@ import Synchronization
 /// first "text" string of a herdr JSON response (or the raw file), with no Mac. Debug builds only.
 /// `--follow-demo <terminal id>` also follows that agent, which starts its Live Activity, and
 /// gives a blocked one the approval fields collied would push. `--approval-demo` shows that
-/// approval's card on the blocked agent's screen.
+/// approval's card on the blocked agent's screen. `--limit-demo` holds an idle agent at the
+/// 5-hour limit with a resume armed.
 struct AgentDemo: View {
     let core: DemoAgentCore
     private let followed: String?
@@ -27,7 +28,8 @@ struct AgentDemo: View {
         core = DemoAgentCore(
             snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self),
             connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"],
-            subagentDemo: arguments.contains("--subagent-demo")
+            subagentDemo: arguments.contains("--subagent-demo"),
+            limitDemo: arguments.contains("--limit-demo")
         )
         _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, dismissResolved: { _, _ in }) : nil)
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
@@ -119,6 +121,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         var output: [String: String] = [:]
         var messages: [String: [HistoryMessage]] = [:]
         var suggestion: String?
+        var resumeCancelled = false
+        var stopAtLimit = false
     }
 
     private let simulation = Mutex(Simulation())
@@ -129,8 +133,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     #if DEBUG
-    convenience init(snapshot: String, connectionError: String? = nil, subagentDemo: Bool = false) {
-        self.init(snapshot: snapshot, connectionError: connectionError, isSample: false, subagentDemo: subagentDemo)
+    convenience init(snapshot: String, connectionError: String? = nil, subagentDemo: Bool = false, limitDemo: Bool = false) {
+        self.init(snapshot: snapshot, connectionError: connectionError, isSample: false, subagentDemo: subagentDemo, limitDemo: limitDemo)
     }
     #endif
 
@@ -142,8 +146,9 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         #endif
     }
 
-    private init(snapshot: String, connectionError: String?, isSample: Bool, subagentDemo: Bool = false) {
+    private init(snapshot: String, connectionError: String?, isSample: Bool, subagentDemo: Bool = false, limitDemo: Bool = false) {
         self.isSample = isSample
+        simulation.withLock { $0.stopAtLimit = limitDemo }
         self.snapshot = snapshot
         self.connectionError = connectionError
         let now = Date.now.unixMs
@@ -181,7 +186,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
                 status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website",
                 lastLine: "The docs now describe the inbox and the context ring.", contextLeft: 12,
-                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000
+                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000,
+                planLimit: limitDemo ? PlanLimitSummary(window: .fiveHour, resetsAtMs: now + 5_400_000, resumeAtMs: now + 5_460_000) : nil
             ),
             AgentSummary(
                 terminalId: "term_4", workspaceId: "ws_site", kind: "codex", name: nil, title: "dark mode",
@@ -411,6 +417,15 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         throw CoreError.NotImplemented
     }
 
+    func cancelResume(machineId: String, terminalId: String) async throws {
+        guard agents.contains(where: { $0.terminalId == terminalId && $0.planLimit?.resumeAtMs != nil }) else { throw CoreError.NotImplemented }
+        simulation.withLock { $0.resumeCancelled = true }
+    }
+
+    func setStopAtLimit(machineId: String, enabled: Bool) async throws {
+        simulation.withLock { $0.stopAtLimit = enabled }
+    }
+
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         throw CoreError.NotImplemented
     }
@@ -541,10 +556,11 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     }
 
     private var currentAgents: [AgentSummary] {
-        guard simulation.withLock({ $0.resolved }) else { return agents }
+        let (resolved, cancelled) = simulation.withLock { ($0.resolved, $0.resumeCancelled) }
         return agents.map { agent in
-            guard agent.terminalId == "term_2" else { return agent }
             var agent = agent
+            if cancelled { agent.planLimit?.resumeAtMs = nil }
+            guard resolved, agent.terminalId == "term_2" else { return agent }
             agent.status = .done
             agent.lastLine = "Sample decision applied locally. No command was run."
             return agent
@@ -560,7 +576,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
-            agents: currentAgents, approvalsCount: simulation.withLock { $0.resolved ? 0 : 1 }, planUsage: usage, starred: stars.withLock { $0 }
+            agents: currentAgents, approvalsCount: simulation.withLock { $0.resolved ? 0 : 1 }, planUsage: usage, starred: stars.withLock { $0 },
+            stopAtLimit: simulation.withLock { $0.stopAtLimit }
         )
     }
 

@@ -71,7 +71,8 @@ private func link(_ context: ActivityViewContext<AgentActivityAttributes>) -> UR
 private func subtitle(_ context: ActivityViewContext<AgentActivityAttributes>) -> String {
     let state = context.state.opened(attributes: context.attributes)
     guard state.status != .unknown else { return "Open Collie to view the agent" }
-    return [state.workspace, context.attributes.machineLabel].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    let limited = state.limitedUntil.map { "Limited until \($0.formatted(date: .omitted, time: .shortened))" }
+    return [limited, state.workspace, context.attributes.machineLabel].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
 private struct LockScreenView: View {

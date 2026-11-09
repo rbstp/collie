@@ -129,7 +129,8 @@ extension WatchAgent {
             id: "\(item.route.machineId)/\(item.route.terminalId)", title: clip(agent.lastLine ?? agent.displayTitle, 100),
             workspace: item.workspace.map { clip($0, 60) }, machine: clip(item.machine, 60),
             status: Status(rawValue: AgentActivityStatus(agent.status).rawValue) ?? .unknown,
-            done: done, activityMs: agent.activityMs, contextLeft: agent.contextLeft
+            done: done, activityMs: agent.activityMs, contextLeft: agent.contextLeft,
+            limitedUntilMs: agent.planLimit.map { $0.resumeAtMs ?? $0.resetsAtMs }
         )
     }
 }

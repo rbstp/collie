@@ -541,6 +541,13 @@ private struct AgentHeader: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
                 if let agent = model.agent {
+                    if let limit = agent.planLimit {
+                        LimitMenu(limit: limit) {
+                            Task { await model.cancelResume() }
+                        } continueNow: {
+                            Task { await model.continueNow() }
+                        }
+                    }
                     if let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch) { text in
                             model.insert(PromptShortcut(text: text))

@@ -24,6 +24,8 @@ protocol AgentCore: AnyObject, Sendable {
     func slashDraft(machineId: String, terminalId: String, command: String, expectedDraft: String?) async throws
     func star(machineId: String, terminalId: String, starred: Bool) async throws
     func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws
+    func cancelResume(machineId: String, terminalId: String) async throws
+    func setStopAtLimit(machineId: String, enabled: Bool) async throws
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws
     func closePane(machineId: String, terminalId: String, confirm: Bool) async throws
     func archiveTask(machineId: String, terminalId: String, confirm: Bool) async throws -> String
@@ -77,4 +79,12 @@ extension AgentCore {
     }
 
     func cancelDownloads(machineId: String) {}
+
+    func cancelResume(machineId: String, terminalId: String) async throws {
+        throw CoreError.NotImplemented
+    }
+
+    func setStopAtLimit(machineId: String, enabled: Bool) async throws {
+        throw CoreError.NotImplemented
+    }
 }

@@ -34,6 +34,7 @@ final class FakeCore: AgentCore {
         var closes: [String] = []
         var stars: [String] = []
         var prWatches: [String] = []
+        var limitCalls: [String] = []
         var scrolls: [String] = []
         var answers: [UInt8] = []
         var answerLabels: [String] = []
@@ -298,6 +299,12 @@ final class FakeCore: AgentCore {
     }
     func watchPullRequest(machineId: String, terminalId: String, everyMinutes: UInt32?) async throws {
         try await call { $0.prWatches.append("\(machineId) \(terminalId) \(everyMinutes.map(String.init) ?? "stop")") }
+    }
+    func cancelResume(machineId: String, terminalId: String) async throws {
+        try await call { $0.limitCalls.append("cancel \(machineId) \(terminalId)") }
+    }
+    func setStopAtLimit(machineId: String, enabled: Bool) async throws {
+        try await call { $0.limitCalls.append("stop \(machineId) \(enabled)") }
     }
     func closeWorkspace(machineId: String, workspaceId: String, confirm: Bool) async throws {
         try await call { $0.closes.append("workspace \(workspaceId) confirm=\(confirm)") }
