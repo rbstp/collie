@@ -1963,6 +1963,68 @@ func agentApprovalsSendManualText(kind: String) async {
     #expect(!model.jumpBanner && model.acceptsKeys)
 }
 
+@MainActor
+private func suggesting(_ core: FakeCore, kind: String = "claude") -> AgentModel {
+    core.state.withLock {
+        $0.kind = kind
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ run the tests", truncated: false, suggestion: "run the tests")
+    }
+    let model = agentModel(core)
+    model.poll()
+    return model
+}
+
+@MainActor
+@Test func tabTakesClaudeCodesSuggestionOnce() async {
+    let core = FakeCore()
+    let model = suggesting(core)
+    #expect(model.suggestion == "run the tests")
+    model.acceptSuggestion()
+    model.acceptSuggestion()
+    await poll { !core.snapshot.keys.isEmpty }
+    #expect(core.snapshot.keys == [[.tab]])
+    #expect(model.suggestion == nil, "hidden until a new screen shows a suggestion")
+
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ run the tests", truncated: false)
+        $0.outputRevision = 2
+    }
+    model.poll()
+    #expect(model.suggestion == nil)
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "❯ commit it", truncated: false, suggestion: "commit it")
+        $0.outputRevision = 3
+    }
+    model.poll()
+    #expect(model.suggestion == "commit it")
+}
+
+@MainActor
+@Test func onlyAClaudeCodeBoxTakingInputOffersASuggestion() {
+    #expect(suggesting(FakeCore(), kind: "codex").suggestion == nil)
+    let model = suggesting(FakeCore())
+    model.blocked = .optionsOnly
+    #expect(model.suggestion == nil)
+    model.acceptSuggestion()
+    model.blocked = nil
+    #expect(model.suggestion == "run the tests")
+}
+
+@MainActor
+@Test func aSuggestionFillsOnlyAnEmptyPrompt() async {
+    let core = FakeCore()
+    let model = suggesting(core)
+    model.draft = "mine"
+    model.useSuggestion()
+    #expect(model.draft == "mine")
+    model.draft = ""
+    model.useSuggestion()
+    #expect(model.draft == "run the tests")
+    #expect(core.snapshot.keys.isEmpty && core.snapshot.slashes.isEmpty)
+    await model.sendPrompt()
+    #expect(core.snapshot.prompts == ["run the tests"])
+}
+
 @MainActor private let rating = [
     NoticeOption(digit: 1, label: "Bad"), NoticeOption(digit: 2, label: "Fine"),
     NoticeOption(digit: 3, label: "Good"), NoticeOption(digit: 0, label: "Dismiss"),

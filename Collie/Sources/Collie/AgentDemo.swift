@@ -118,6 +118,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
         var revision: UInt64 = 1
         var output: [String: String] = [:]
         var messages: [String: [HistoryMessage]] = [:]
+        var suggestion: String?
     }
 
     private let simulation = Mutex(Simulation())
@@ -199,6 +200,10 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 status: .idle, statusSinceMs: now - 7_200_000, cwd: "/Users/demo/api", lastLine: nil
             ),
         ]
+        #if DEBUG
+        let suggestion = ProcessInfo.processInfo.environment["COLLIE_DEMO_SUGGESTION"]
+        simulation.withLock { $0.suggestion = suggestion }
+        #endif
     }
 
     func machines() -> [Machine] { [Self.machine] }
@@ -376,6 +381,13 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     func sendKeys(machineId: String, terminalId: String, keys: [AgentKey]) async throws {
         if isSample { record(terminalId: terminalId, text: "Simulated terminal keys received. No keys were sent to a machine.") }
+        if terminalId == "term_demo", keys.contains(.tab) {
+            simulation.withLock { state in
+                guard state.suggestion != nil else { return }
+                state.suggestion = nil
+                state.revision += 1
+            }
+        }
     }
 
     func typeText(machineId: String, terminalId: String, text: String) async throws {
@@ -554,7 +566,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     private func read(_ terminalId: String) -> TerminalSnapshot {
         let preview = (isSample || screenshotDemo) ? Self.screenshotPreviews[terminalId]?.replacingOccurrences(of: "\n", with: "\r\n") : nil
-        return TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: (preview ?? snapshot) + simulation.withLock { $0.output[terminalId, default: ""] }, truncated: false)
+        let (output, suggestion) = simulation.withLock { ($0.output[terminalId, default: ""], terminalId == "term_demo" ? $0.suggestion : nil) }
+        return TerminalSnapshot(terminalId: terminalId, source: .recent, ansi: (preview ?? snapshot) + output, truncated: false, suggestion: suggestion)
     }
 
     private static let screenshotPreviews = [

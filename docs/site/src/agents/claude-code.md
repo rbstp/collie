@@ -10,7 +10,7 @@
 | [Approval alerts](../notifications/approvals.md) | Approve, Deny or another option, from the phone or watch |
 | [Plan usage](../app/usage.md) | 5-hour and weekly, with the [status line tap](../install/claude-code.md#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
-| [Slash command menu](#slash-commands), [notice buttons](#notices), [draft sync](#draft-sync) and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | Yes |
+| [Slash command menu](#slash-commands), [notice buttons](#notices), [draft sync](#draft-sync), [prompt suggestions](#prompt-suggestions) and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | Yes |
 | [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode, in herdr or [Herdr 2](../app/new-task.md#herdr-2) |
 
 ## Set up
@@ -34,6 +34,10 @@ Notices above the input box, such as the "Heads up" tip or the session rating qu
 ## Draft sync
 
 Unsent text in the machine's input box fills the phone's empty prompt field; sending from the phone replaces it.
+
+## Prompt suggestions
+
+After a turn, Claude Code may suggest your next prompt, grayed out in its empty input box. The phone shows it too: in Terminal, a ⇥ key in the bottom row takes it into the box; in Chat, an empty prompt field shows it, and ⇥ fills the field with it. Claude Code skips a suggestion when the next step is not obvious, in the first turns of a session, near your plan limits, in plan mode and while a permission prompt waits. The suggestion never goes into notifications, Live Activities or the watch.
 
 ## Fullscreen mode
 
