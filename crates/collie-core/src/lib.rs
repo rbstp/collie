@@ -572,6 +572,9 @@ pub struct TerminalSnapshot {
     /// The options of a Claude Code notice above its input box, in screen order.
     #[uniffi(default = [])]
     pub notice: Vec<NoticeOption>,
+    /// Claude Code's suggested next prompt, dim in its otherwise empty input box: Tab takes it.
+    #[uniffi(default = None)]
+    pub suggestion: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -596,6 +599,7 @@ impl From<TerminalRead> for TerminalSnapshot {
             source: r.source.into(),
             ansi: r.ansi,
             truncated: r.truncated,
+            suggestion: r.suggestion,
         }
     }
 }
@@ -5033,6 +5037,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         };
         assert_eq!(TerminalSnapshot::from(read.clone()).reflowed, None);
         let read = TerminalRead {
@@ -5055,6 +5060,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         };
         assert!(!TerminalSnapshot::from(read("  95\n❯ ")).jump_banner);
         let scrolled = "  96   \u{1b}[48;2;55;55;55m Jump to bottom: fn+↓ to scroll \u{1b}[0m\n❯ ";
@@ -5071,6 +5077,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         };
         let survey = include_str!("../../collied/tests/fixtures/claude-2.1.293/survey.ansi.txt");
         let options: Vec<(u8, String)> = TerminalSnapshot::from(read(survey))
@@ -5085,6 +5092,29 @@ mod tests {
         let bottom =
             include_str!("../../collied/tests/fixtures/claude-2.1.293/bottom-idle.detection.txt");
         assert!(TerminalSnapshot::from(read(bottom)).notice.is_empty());
+    }
+
+    #[test]
+    fn snapshots_carry_the_suggestion() {
+        let read = TerminalRead {
+            terminal_id: TerminalId::new("term_1").unwrap(),
+            source: ReadSource::Recent,
+            ansi: "❯ yes".into(),
+            truncated: false,
+            wraps: Vec::new(),
+            splits: Vec::new(),
+            copilot_scrollbar: false,
+            suggestion: None,
+        };
+        assert_eq!(TerminalSnapshot::from(read.clone()).suggestion, None);
+        let suggested = TerminalRead {
+            suggestion: Some("yes".into()),
+            ..read
+        };
+        assert_eq!(
+            TerminalSnapshot::from(suggested).suggestion.as_deref(),
+            Some("yes")
+        );
     }
 }
 
@@ -5272,6 +5302,7 @@ mod tailnet_tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         }
     }
 

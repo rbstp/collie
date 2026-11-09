@@ -3864,6 +3864,45 @@ async fn claude_prose_uses_the_input_box_rule_width_when_the_layout_differs() {
 }
 
 #[tokio::test]
+async fn claude_reads_and_watches_carry_its_suggestion() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base);
+    herdr.with(|h| h.text = include_str!("fixtures/claude-2.1.321/suggestion.ansi.txt").into());
+    let recent = |terminal: &str| ReadParams {
+        terminal_id: tid(terminal),
+        source: ReadSource::Recent,
+        lines: None,
+    };
+    let suggestion = |reply: Reply| match reply {
+        Ok(Response::Terminal(read)) => read.suggestion,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        suggestion(drive.read(recent(CLAUDE), true).await).as_deref(),
+        Some("yes")
+    );
+    assert_eq!(
+        suggestion(drive.read(recent(CODEX_BLOCKED), true).await),
+        None
+    );
+    assert_eq!(suggestion(drive.read(recent(CLAUDE), false).await), None);
+
+    let mut watcher = drive.watch(tid(CLAUDE), 200, false).await.unwrap();
+    let Ok(Some(Watched::Output(first))) = next(&mut watcher).await else {
+        panic!("no first output");
+    };
+    assert_eq!(first.suggestion.as_deref(), Some("yes"));
+    herdr.with(|h| h.text = include_str!("fixtures/claude-2.1.321/tabbed.ansi.txt").into());
+    let tabbed = match next(&mut watcher).await {
+        Ok(Some(Watched::Patch(patch))) => patch.suggestion,
+        Ok(Some(Watched::Output(read))) => read.suggestion,
+        _ => panic!("no output after Tab"),
+    };
+    assert_eq!(tabbed, None);
+}
+
+#[tokio::test]
 async fn codex_prose_uses_the_composer_width_when_the_layout_differs() {
     let herdr = Mock::start();
     let (_d, base) = root();

@@ -19,10 +19,13 @@ pub enum InputBox {
 /// Unsent text in the input box.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
-    /// Normalized; empty when the box shows only its placeholder.
+    /// Normalized; empty when the box shows only its placeholder or a suggestion.
     pub text: String,
     /// Visual rows of the box, wrapped rows included: what the clearing keys walk.
     pub lines: usize,
+    /// Claude Code's suggested next prompt, normalized like `text`: dim text in an otherwise
+    /// empty box that is not one of its placeholders.
+    pub suggestion: Option<String>,
 }
 
 /// Claude Code 2.1 shows these in place of content kept outside the input text; its own
@@ -39,9 +42,9 @@ const COLLAPSED: [&str; 5] = [
 /// The input box is the last block on screen between two horizontal rules drawn from
 /// column 0, whose first row starts at column 0 and whose other rows are indented by two
 /// spaces, so a draft row of `─` never closes it. Dim text inside it is Claude Code's own
-/// placeholder or hint, never typed text. `None` when the screen shows no such box, as
-/// while a dialog replaces it or once a draft taller than the screen pushed its top rule
-/// off.
+/// placeholder, hint or suggestion, never typed text. `None` when the screen shows no such
+/// box, as while a dialog replaces it or once a draft taller than the screen pushed its top
+/// rule off.
 pub fn parse(ansi: &str) -> Option<InputBox> {
     let (rows, plain) = screen(ansi);
     let (top, bottom) = bounds(&plain)?;
@@ -55,12 +58,22 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
     if !plain[top + 1].starts_with('❯') || COLLAPSED.iter().any(|p| shown.contains(p)) {
         return Some(InputBox::Opaque);
     }
-    let lines = lines(&rows[top + 1..bottom]);
+    let width = plain[bottom].width().saturating_sub(4);
+    let typed = lines(&rows[top + 1..bottom], false);
+    let text = joined(&typed, width);
+    let suggestion = Some(joined(&lines(&rows[top + 1..bottom], true), width))
+        .filter(|s| text.is_empty() && !s.is_empty() && !placeholder(s));
+    Some(InputBox::Draft(Draft {
+        text,
+        lines: typed.len(),
+        suggestion,
+    }))
+}
+
+/// `lines` read as [`parse`] reads a draft, normalized and capped.
+fn joined(lines: &[String], width: usize) -> String {
     let mut text = String::new();
-    for (sep, line) in joins(&lines, plain[bottom].width().saturating_sub(4))
-        .into_iter()
-        .zip(&lines)
-    {
+    for (sep, line) in joins(lines, width).into_iter().zip(lines) {
         text.push_str(sep);
         text.push_str(line);
     }
@@ -72,10 +85,17 @@ pub fn parse(ansi: &str) -> Option<InputBox> {
         }
         text = normalize(&text[..end]);
     }
-    Some(InputBox::Draft(Draft {
-        text,
-        lines: lines.len(),
-    }))
+    text
+}
+
+/// Dim text Claude Code 2.1.321 draws in its empty box other than a suggestion: its example
+/// prompt, shown until the first one is sent, the box of an agent it is showing, and the
+/// hints while prompts are queued.
+fn placeholder(text: &str) -> bool {
+    (text.starts_with("Try \"") && text.ends_with('"'))
+        || (text.starts_with("Message @") && text.ends_with('\u{2026}'))
+        || text.starts_with("Press up to ")
+        || text.starts_with("Press Enter to edit ")
 }
 
 /// The rows of the input box's `❯` text that continue the row above, as `(wraps, splits)` of
@@ -88,7 +108,7 @@ pub(crate) fn wraps(ansi: &str) -> (Vec<u32>, Vec<u32>) {
     else {
         return (wraps, splits);
     };
-    let lines = lines(&rows[top + 1..bottom]);
+    let lines = lines(&rows[top + 1..bottom], false);
     let joins = joins(&lines, plain[bottom].width().saturating_sub(4));
     for (i, sep) in joins.into_iter().enumerate().skip(1) {
         let at = u32::try_from(top + 1 + i).unwrap_or(u32::MAX);
@@ -139,8 +159,9 @@ fn bounds(plain: &[String]) -> Option<(usize, usize)> {
         })
 }
 
-/// The typed text of each row inside the box, after the prompt or the two-space indent.
-fn lines(rows: &[Vec<(char, bool)>]) -> Vec<String> {
+/// The typed text of each row inside the box, or its `dim` text, after the prompt or the
+/// two-space indent.
+fn lines(rows: &[Vec<(char, bool)>], dim: bool) -> Vec<String> {
     rows.iter()
         .enumerate()
         .map(|(i, row)| {
@@ -151,7 +172,7 @@ fn lines(rows: &[Vec<(char, bool)>]) -> Vec<String> {
             };
             row.iter()
                 .skip(skip)
-                .filter(|(c, dim)| !dim && !c.is_control() && !protocol::is_format(*c))
+                .filter(|&&(c, d)| d == dim && !c.is_control() && !protocol::is_format(c))
                 .map(|(c, _)| *c)
                 .collect::<String>()
                 .trim_end()
@@ -625,6 +646,7 @@ mod tests {
         Some(InputBox::Draft(Draft {
             text: text.into(),
             lines,
+            suggestion: None,
         }))
     }
 
@@ -856,6 +878,115 @@ mod tests {
         ] {
             assert_eq!(read(&screen(RULE, rows)), Some(InputBox::Opaque), "{rows}");
         }
+    }
+
+    // Claude Code 2.1.321 in herdr 0.9.5 (the working directory and branch renamed), each
+    // ruled idle (live_prompt_box) by `herdr agent explain --file`, in the default and the
+    // fullscreen renderer: a suggestion after the third turn, the box after Tab, after typing
+    // over the suggestion, the placeholder of a new session, and a turn that got no
+    // suggestion.
+    macro_rules! suggestions {
+        ($renderer:literal) => {
+            [
+                (
+                    include_str!(concat!(
+                        "../tests/fixtures/claude-2.1.321/",
+                        $renderer,
+                        "suggestion.ansi.txt"
+                    )),
+                    "",
+                    Some("yes"),
+                ),
+                (
+                    include_str!(concat!(
+                        "../tests/fixtures/claude-2.1.321/",
+                        $renderer,
+                        "tabbed.ansi.txt"
+                    )),
+                    "yes",
+                    None,
+                ),
+                (
+                    include_str!(concat!(
+                        "../tests/fixtures/claude-2.1.321/",
+                        $renderer,
+                        "typed-over.ansi.txt"
+                    )),
+                    "n",
+                    None,
+                ),
+                (
+                    include_str!(concat!(
+                        "../tests/fixtures/claude-2.1.321/",
+                        $renderer,
+                        "placeholder.ansi.txt"
+                    )),
+                    "",
+                    None,
+                ),
+                (
+                    include_str!(concat!(
+                        "../tests/fixtures/claude-2.1.321/",
+                        $renderer,
+                        "skipped.ansi.txt"
+                    )),
+                    "",
+                    None,
+                ),
+            ]
+        };
+    }
+
+    #[test]
+    fn a_suggestion_shows_only_in_an_otherwise_empty_box() {
+        for (ansi, text, suggestion) in suggestions!("")
+            .into_iter()
+            .chain(suggestions!("fullscreen-"))
+        {
+            assert_eq!(
+                read(ansi),
+                Some(InputBox::Draft(Draft {
+                    text: text.into(),
+                    lines: 1,
+                    suggestion: suggestion.map(Into::into),
+                })),
+                "{text:?} {suggestion:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_suggestion_needs_a_box_that_takes_it() {
+        let [(suggested, ..), ..] = suggestions!("");
+        let pill = "  ⏸ manual mode on · \u{1b}[0m\u{1b}[7m\u{1b}[38;2;0;204;204m1 shell\u{1b}[0m";
+        assert_eq!(
+            read(&format!("{suggested}{pill}\n")),
+            Some(InputBox::Unfocused)
+        );
+        let box_row = "❯\u{a0}\u{1b}[0m\u{1b}[2myes\u{1b}[0m";
+        assert!(suggested.contains(box_row));
+        let pasted = suggested.replace(box_row, "❯\u{a0}[Pasted text #1 +3 lines]");
+        assert_eq!(read(&pasted), Some(InputBox::Opaque));
+        let viewing = suggested.replace(
+            box_row,
+            "❯\u{a0}\u{1b}[0m\u{1b}[2mMessage @reviewer\u{2026}\u{1b}[0m",
+        );
+        assert_eq!(read(&viewing), draft("", 1));
+    }
+
+    #[test]
+    fn a_wrapped_suggestion_reads_as_one_line() {
+        assert_eq!(
+            read(&screen(
+                RULE,
+                "❯ \u{1b}[2mthe quick brown fox jumps over the\u{1b}[22m\n  \u{1b}[2mlazy dog\u{1b}[22m"
+            )),
+            Some(InputBox::Draft(Draft {
+                text: String::new(),
+                lines: 2,
+                suggestion: Some("the quick brown fox jumps over the lazy dog".into()),
+            }))
+        );
     }
 
     #[test]

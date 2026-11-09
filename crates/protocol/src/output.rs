@@ -31,6 +31,9 @@ pub struct OutputPatch {
     pub splits: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copilot_scrollbar: Option<bool>,
+    /// [`TerminalRead::suggestion`] of the new text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
 }
 
 impl OutputPatch {
@@ -65,6 +68,7 @@ impl OutputPatch {
             splits: (next.splits != prev.splits).then(|| next.splits.clone()),
             copilot_scrollbar: (next.copilot_scrollbar != prev.copilot_scrollbar)
                 .then_some(next.copilot_scrollbar),
+            suggestion: next.suggestion.clone(),
         })
     }
 
@@ -97,6 +101,7 @@ impl OutputPatch {
             wraps: self.wraps.clone().unwrap_or_else(|| prev.wraps.clone()),
             splits: self.splits.clone().unwrap_or_else(|| prev.splits.clone()),
             copilot_scrollbar: self.copilot_scrollbar.unwrap_or(prev.copilot_scrollbar),
+            suggestion: self.suggestion.clone(),
         })
     }
 }
@@ -153,6 +158,7 @@ mod tests {
             wraps: Vec::new(),
             splits: Vec::new(),
             copilot_scrollbar: false,
+            suggestion: None,
         }
     }
 
@@ -240,6 +246,22 @@ mod tests {
         );
         assert!(!serde_json::to_string(&patch).unwrap().contains("wraps"));
         assert_eq!(patch.apply(&next), Some(tick));
+    }
+
+    #[test]
+    fn every_patch_carries_the_suggestion_of_its_text() {
+        let prev = read(&(history(0..100) + "❯"));
+        let next = TerminalRead {
+            suggestion: Some("run the tests".into()),
+            ..read(&(history(0..100) + "❯ run the tests"))
+        };
+        let patch = OutputPatch::between(&prev, &next).unwrap();
+        assert_eq!(patch.suggestion.as_deref(), Some("run the tests"));
+        assert_eq!(patch.apply(&prev), Some(next.clone()));
+        let accepted = read(&(history(0..100) + "❯ run the tests "));
+        let patch = OutputPatch::between(&next, &accepted).unwrap();
+        assert_eq!(patch.suggestion, None);
+        assert_eq!(patch.apply(&next), Some(accepted));
     }
 
     #[test]
@@ -361,6 +383,7 @@ mod tests {
                 wraps: None,
                 splits: None,
                 copilot_scrollbar: None,
+                suggestion: None,
             };
             let end = u64::from(skip) + u64::from(keep);
             let valid = end <= n && u64::from(trail) <= n - end;
