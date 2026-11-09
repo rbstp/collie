@@ -2011,6 +2011,23 @@ private func suggesting(_ core: FakeCore, kind: String = "claude") -> AgentModel
 }
 
 @MainActor
+@Test func aScrolledUpTranscriptHidesTheSuggestion() {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.kind = "claude"
+        $0.output = TerminalSnapshot(
+            terminalId: "term_1", source: .recent, ansi: "Jump to bottom ↓\n❯ run the tests", truncated: false, jumpBanner: true,
+            suggestion: "run the tests"
+        )
+    }
+    let model = agentModel(core)
+    model.poll()
+    #expect(model.jumpBanner && model.suggestion == nil)
+    model.acceptSuggestion()
+    #expect(core.snapshot.keys.isEmpty)
+}
+
+@MainActor
 @Test func aSuggestionFillsOnlyAnEmptyPrompt() async {
     let core = FakeCore()
     let model = suggesting(core)

@@ -218,8 +218,8 @@ final class AgentModel {
         mode == .agent && agent?.kind == "claude" && !answering && !jumpBanner ? screenSuggestion : nil
     }
 
-    /// Tab takes the suggestion into the input box. The key hides until a new screen, so a second tap
-    /// never sends Tab to the text the first one left there.
+    /// Tab takes the suggestion into the input box. The key hides until the next screen, so a second tap
+    /// waits for a screen showing a suggestion again.
     func acceptSuggestion() {
         guard suggestion != nil, canTap(.tab) else { return }
         screenSuggestion = nil

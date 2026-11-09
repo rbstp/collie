@@ -972,6 +972,11 @@ mod tests {
             "❯\u{a0}\u{1b}[0m\u{1b}[2mMessage @reviewer\u{2026}\u{1b}[0m",
         );
         assert_eq!(read(&viewing), draft("", 1));
+        let queued = suggested.replace(
+            box_row,
+            "❯\u{a0}\u{1b}[0m\u{1b}[2mPress Enter to edit the selected message, or up again for history\u{1b}[0m",
+        );
+        assert_eq!(read(&queued), draft("", 1));
     }
 
     #[test]
