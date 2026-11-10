@@ -1,0 +1,76 @@
+name: ios-test-budget
+run-name: "[ios-test-budget] - reporting ${{ github.event.workflow_run.head_sha }}"
+
+# Runs from master with a token that writes to pull requests: it never runs a pull request's code and reads its metrics only through scripts/ios-test-budget.py.
+on:
+  workflow_run:
+    workflows:
+      - ci
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  comment:
+    if: ${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0] != null }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      pull-requests: write
+
+    steps:
+      - name: check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+          sparse-checkout: scripts/ios-test-budget.py
+          sparse-checkout-cone-mode: false
+
+      - name: fetch the metrics
+        id: metrics
+        run: |
+          artifact() {
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$1/artifacts?name=ios-test-metrics" \
+              --jq '[.artifacts[] | select(.expired == false and .size_in_bytes <= 65536)][0].id // empty'
+          }
+          id="$(artifact "$RUN_ID")"
+          [ -n "$id" ] || { echo "no metrics: the ios job did not run"; exit 0; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$RUNNER_TEMP/pr.zip"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          # The baseline: the latest successful ci run on master that has metrics, since some pushes skip the ios job.
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=master&event=push&status=success&per_page=20" \
+            --jq '.workflow_runs[] | "\(.id) \(.head_sha)"' > "$RUNNER_TEMP/runs.txt"
+          while read -r run sha; do
+            id="$(artifact "$run")"
+            [ -n "$id" ] || continue
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$RUNNER_TEMP/baseline.zip"
+            echo "baseline_sha=$sha" >> "$GITHUB_OUTPUT"
+            break
+          done < "$RUNNER_TEMP/runs.txt"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+
+      - name: comment on the pull request
+        if: ${{ steps.metrics.outputs.found == 'true' }}
+        run: |
+          [[ $PR =~ ^[0-9]+$ ]] || { echo "no pull request number"; exit 1; }
+          python3 scripts/ios-test-budget.py comment --pr "$RUNNER_TEMP/pr.zip" --baseline "$RUNNER_TEMP/baseline.zip" \
+            --pr-sha "$PR_SHA" --baseline-sha "$BASELINE_SHA" --conclusion "$CONCLUSION" > "$RUNNER_TEMP/comment.md"
+          jq -Rs '{body: .}' "$RUNNER_TEMP/comment.md" > "$RUNNER_TEMP/comment.json"
+          # One comment per pull request, updated in place.
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- ios-test-budget -->"))) | .id' | head -n 1)"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input "$RUNNER_TEMP/comment.json" > /dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input "$RUNNER_TEMP/comment.json" > /dev/null
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_SHA: ${{ github.event.workflow_run.head_sha }}
+          BASELINE_SHA: ${{ steps.metrics.outputs.baseline_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
