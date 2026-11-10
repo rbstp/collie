@@ -85,6 +85,7 @@ Keep published iOS, collied, CollieBar and CollieTray releases on the same versi
 - Merging a pull request into `master` ships a build unless its title contains `[skip-release]` or it changes only `.github/`, `docs/` (the site included), `Mac/`, `README.md`, `AGENTS.md` or `CLAUDE.md`. The site deploys separately ([deploy-pages.md](deploy-pages.md)).
 - Version: the latest `v*` tag with its minor number bumped when any commit since that tag, or the pull request title, is a `feat`, otherwise its patch number. Build number: the workflow run number.
 - A manual run (Actions, testflight, Run workflow, on `master` only) ships the given version, for example `1.0.0`.
+- Before it archives, the workflow runs the unit tests (`CollieTests` and the GhosttyTerminal package) on the revision it ships, and keeps the result bundle of a failed run for 7 days. It does not run the UI suite: `ci` runs it on the pull request and on the push to `master`, so a UI regression shows on master's `ci` run and does not hold back a build.
 - After the upload, the workflow creates the tag `v<version>` and starts the [desktop release](#desktop-github-releases) and the [documentation screenshots](#documentation-screenshots) refresh.
 
 ## iOS release notes
