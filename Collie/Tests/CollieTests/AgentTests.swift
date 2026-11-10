@@ -228,7 +228,7 @@ final class FakeCore: AgentCore {
         )
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String, pullRequest: UInt64?) async throws -> GitDiff {
-        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)" + (pullRequest.map { "|#\($0)" } ?? "")) }
+        try await call { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)" + (pullRequest.map { "|#\($0)" } ?? "")) }
         try await Task.sleep(for: snapshot.gitDiffDelay)
         return GitDiff(patch: snapshot.gitPatch, truncated: false)
     }

@@ -145,19 +145,27 @@ func prominentButtonsTakeADarkLabelOnlyOnALightAccentFill(_ scheme: ColorScheme)
     #expect(try dir.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
 }
 
-/// Needs the App Group entitlement, which an unsigned simulator build lacks.
-@Test(.enabled(if: AppGroup.container != nil))
-func notificationKeyMirrorIsPrivateAndNotBackedUp() throws {
-    let nodeId = "nTEST\(UUID().uuidString.prefix(8))"
-    let url = try #require(NotificationKey.Mirror.url(nodeId: nodeId))
-    defer { NotificationKey.Mirror.delete(nodeId: nodeId) }
-    try NotificationKey.Mirror.write(vectorKey, nodeId: nodeId)
-    let dir = url.deletingLastPathComponent()
+@Test func notificationKeyMirrorIsPrivateAndNotBackedUp() throws {
+    let base = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: base) }
+    let dir = base.appending(path: NotificationKey.Mirror.directory, directoryHint: .isDirectory)
+    let url = dir.appending(path: "nTEST.key")
+    try NotificationKey.Mirror.write(vectorKey, to: url)
     let file = try FileManager.default.attributesOfItem(atPath: url.path)
     #expect((try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     #expect((file[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     #expect(try dir.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
     #expect(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    #expect(try Data(contentsOf: url) == vectorKey.withUnsafeBytes { Data($0) })
+}
+
+/// Needs the App Group entitlement, which an unsigned simulator build lacks.
+@Test(.enabled(if: AppGroup.container != nil))
+func notificationKeyMirrorIsReadAndDeletedByNodeId() throws {
+    let nodeId = "nTEST\(UUID().uuidString.prefix(8))"
+    let url = try #require(NotificationKey.Mirror.url(nodeId: nodeId))
+    defer { NotificationKey.Mirror.delete(nodeId: nodeId) }
+    try NotificationKey.Mirror.write(vectorKey, nodeId: nodeId)
     #expect(NotificationKey.Mirror.read(nodeId: nodeId).map { $0.withUnsafeBytes { Data($0) } } == vectorKey.withUnsafeBytes { Data($0) })
     NotificationKey.Mirror.delete(nodeId: nodeId)
     #expect(!FileManager.default.fileExists(atPath: url.path))

@@ -223,6 +223,7 @@ final class GitDiffViewTests: XCTestCase {
         let core = FakeCore()
         let model = AgentModel(core: core, route: route, prefsFile: nil, viewedFile: file)
         for (gitFile, collapsed) in [(second, false), (first, true)] {
+            core.set(hold: collapsed)
             let host = UIHostingController(rootView: NavigationStack {
                 GitDiffView(agent: model, root: "/worktree", file: gitFile, sent: {}, review: model.gitReview)
             })
@@ -232,8 +233,14 @@ final class GitDiffViewTests: XCTestCase {
                 }
                 let shown = { descendants(host.view).contains { ($0 as? UITextView)?.text.contains("new") == true } }
                 if collapsed {
-                    try await Task.sleep(for: .milliseconds(500))
-                    host.view.layoutIfNeeded()
+                    // The diff arrives in the update that ends the loading state, so it is on screen by then unless collapsed.
+                    let loading = {
+                        host.view.layoutIfNeeded()
+                        return descendants(host.view).contains { $0 is UIActivityIndicatorView }
+                    }
+                    _ = try await waitFor("\(gitFile.path) loading") { loading() ? true : nil }
+                    core.release()
+                    _ = try await waitFor("\(gitFile.path) loaded") { loading() ? nil : true }
                     XCTAssertFalse(shown(), gitFile.path)
                 } else {
                     _ = try await waitFor("\(gitFile.path) expanded") {
