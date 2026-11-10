@@ -28,11 +28,12 @@ With extra usage turned on for your account, Claude Code keeps working past your
 - When an agent uses 99% of its 5-hour or weekly limit, `collied` stops it before its next tool call and notifies you once, for example "Stopped at the 5-hour limit, resumes in 2 h 5 min". Stopping at 99% normally leaves the agent short of extra usage, but one large request can still cross the limit. When both limits are reached, it waits for the later reset.
 - The agent shows an hourglass with the time it resumes. A minute after the reset, `collied` types **Continue.** into it and notifies you.
 - To change that, tap the hourglass on the agent's screen: **Cancel resume** leaves the agent stopped, and **Continue now** sends **Continue.** at once, on extra usage.
-- A prompt you type on the machine or send from the phone goes through, on extra usage, and cancels the resume.
+- A prompt you type on the machine or send from the phone goes through, on extra usage, and cancels the resume, even when the agent only replies.
 - Nothing else wakes a stopped agent: a background task that finishes, a subagent that reports back, a scheduled or `/loop` prompt and a message from another session are stopped again, and a pull request watch waits for the resume.
 - `collied` does not resume an agent you closed, that started another session, or that is busy at the reset; it tells you when it does not resume one. When an agent hits the limit again right after resuming, `collied` waits once more, then leaves it stopped and tells you.
 - Keep the machine awake at the reset. When it wakes later, `collied` resumes the agent then, unless the reset is more than 3 hours past; then it tells you and leaves the agent stopped.
 - Each session stops only at its own account's limit, so a session signed in to another account, or using an API key, is not stopped.
+- A session that sits idle while its background subagents work reports no new usage, so after 15 minutes `collied` no longer knows the limit is reached and lets the subagents' calls go on.
 
 ## Approvals
 
