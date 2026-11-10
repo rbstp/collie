@@ -52,12 +52,17 @@ class MeasureTests(unittest.TestCase):
         retried_ui = case('Suite/testRetried()', 35.25)
         retried_ui['children'] = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 40},
                                   {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 30.5}]
+        # What Xcode 27.2 writes when argument "1" of a parameterized test fails once: the argument and its test stay marked
+        # failed, the argument has no duration of its own, and the passing argument has no attempts.
+        retried_argument = case('retriedArgument(x:)', 1.67, result='Failed', arguments=[('1', None, retried), ('2', 3, [])])
+        retried_argument['children'][0]['result'] = 'Failed'
+        retried_argument['children'][1]['result'] = 'Passed'
         tests = tree(
             ui=[case('Suite/testOne()', 10), retried_ui, case('Suite/testSkipped()', 0, result='Skipped')],
             unit=[
                 case('Suite/testUnit()', 5),
                 case('unit(phase:)', 3.5, arguments=[('.a', 3, []), ('.b', 4, [])]),
-                case('retriedArgument(x:)', 1.5, arguments=[('1', 1.5, retried), ('2', 3, [])]),
+                retried_argument,
             ],
         )
         launch = {'title': 'Open dev.rbstp.collie', 'childActivities': [{'title': 'Launch dev.rbstp.collie'}]}
@@ -68,6 +73,14 @@ class MeasureTests(unittest.TestCase):
         measured = budget.measure(tests, activities.__getitem__)
         self.assertEqual(measured, {'metrics': VALUES, 'retried': ['CollieTests/retriedArgument', 'CollieUITests/Suite/testRetried']})
         budget.validate({**measured, 'ceilings': CEILINGS})
+
+    def test_an_expected_failure_attempt_counts_and_is_no_retry(self):
+        expected = case('Suite/testExpected()', 1.5)
+        expected['children'] = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Expected Failure', 'durationInSeconds': 2},
+                                {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 1}]
+        measured = budget.measure(tree(ui=[expected]), lambda _: {'testRuns': []})
+        self.assertEqual(measured['metrics']['ui_seconds'], 3)
+        self.assertEqual(measured['retried'], [])
 
     def test_a_test_that_passed_on_the_retry_counts_only_its_passing_attempt(self):
         attempts = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 115.2},
