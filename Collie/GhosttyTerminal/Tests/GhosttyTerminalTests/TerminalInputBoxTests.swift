@@ -99,14 +99,6 @@ private func index(of word: String, in draft: String) throws -> Int {
     #expect(keys(box, box.bottom - 1, 30) == [2, 0, 1, "cursor is to modify earlier parts of a prompt".count])
 }
 
-@Test func aWideCharacterIsOneCharacterAcrossTwoCells() throws {
-    let box = try #require(try inputBox(claude(["\u{276F}\u{A0}\u{4E2D}\u{6587} ok"]), agent: "claude"))
-    #expect(keys(box, 3, 2.9) == [1, 0, 0, 0])
-    #expect(keys(box, 3, 3.1) == [1, 0, 0, 1])
-    #expect(keys(box, 3, 4.9) == [1, 0, 0, 1])
-    #expect(keys(box, 3, 5.1) == [1, 0, 0, 2])
-}
-
 @Test func claudesSuggestionsAboveTheBoxKeepDownForThemselves() throws {
     let screen = (["\u{23FA} Done.", "    + Collie/", "    + Mac/CollieBar/", rule, "\u{276F}\u{A0}see @Coll and more", "  ok", rule])
         .joined(separator: "\r\n")

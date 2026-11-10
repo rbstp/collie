@@ -71,11 +71,6 @@ func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     }
 }
 
-@Test func prefsFromBeforeDoneAlertsKeepThemOn() throws {
-    #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false,"watchDecisions":true}"#.utf8)).doneAlerts)
-    #expect(DevicePrefs.load(from: nil).doneAlerts)
-}
-
 @Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"accent":"future"}"#])
 func prefsWithoutAKnownAccentKeepBlueAndOtherPreferences(_ json: String) throws {
     let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))

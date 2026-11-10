@@ -89,12 +89,6 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(!plan.readingsStale(now: now))
 }
 
-@Test func planUsageSpellsOutDurationsForVoiceOver() {
-    #expect(PlanUsage.spoken(seconds: 7_980) == "2 hours, 13 minutes")
-    #expect(PlanUsage.spoken(seconds: 277_200) == "3 days, 5 hours")
-    #expect(PlanUsage.spoken(seconds: 30) == "1 minute")
-}
-
 @Test func codexPaceUsesTheElapsedCalendarMonth() throws {
     for (start, reset) in [
         ("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z"),

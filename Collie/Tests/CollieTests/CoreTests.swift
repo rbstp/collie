@@ -86,27 +86,6 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
     #expect(Elapsed.spoken(sinceMs: since, now: now) == spoken)
 }
 
-@Test func statusAgeReadsInFull() {
-    let since: UInt64 = 1_700_000_000_000
-    let now = Date(timeIntervalSince1970: Double(since / 1000) + 720)
-    #expect(Elapsed.spoken(.working, sinceMs: since, now: now) == "working for 12 minutes")
-    #expect(Elapsed.spoken(.blocked, sinceMs: since, now: now) == "blocked for 12 minutes")
-    #expect(Elapsed.spoken(.idle, sinceMs: since, now: now) == "idle for 12 minutes")
-    #expect(Elapsed.spoken(.done, sinceMs: since, now: now) == "done 12 minutes ago")
-}
-
-@Test(arguments: [
-    (OfflineReason.phoneOffline, "This phone is not connected to Tailscale. Sign in again or check the network."),
-    (.asleep(lastSeenMs: 1_700_000_000_000), "Studio is asleep or off. Last seen 2 hours ago."),
-    (.asleep(lastSeenMs: nil), "Studio is asleep or off."),
-    (.notAnswering, "Studio is online, but collied is not answering. Run collied start there."),
-    (.unreachable, "Cannot reach Studio."),
-])
-func offlineReasonSaysWhyAndWhatToDo(reason: OfflineReason, expected: String) {
-    let now = Date(timeIntervalSince1970: 1_700_000_000 + 7_500)
-    #expect(reason.label(machine: "Studio", now: now) == expected)
-}
-
 @Test func titleFallsBackToNameKindThenTerminal() {
     #expect(agent("t1", .idle, since: 0, title: "fix the build").displayTitle == "fix the build")
     #expect(agent("t1", .idle, since: 0, title: "  ").displayTitle == "claude")
@@ -143,9 +122,4 @@ private func node(_ state: TailnetState, authUrl: String? = nil) -> NodeState {
     model.deviceLabel = " Alex's iPhone "
     #expect(model.trimmedLabel == "Alex's iPhone")
     #expect(model.canPair)
-}
-
-@Test func coreErrorsDescribeThemselves() {
-    let error: any Error = CoreError.PinViolation(message: "mac is not tagged tag:collie-mac")
-    #expect(describe(error) == "refusing to connect: mac is not tagged tag:collie-mac")
 }

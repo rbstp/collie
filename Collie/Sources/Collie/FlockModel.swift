@@ -53,11 +53,6 @@ final class FlockModel {
     private(set) var archiving = false
     private(set) var archiveNotice: String?
     private var archiveNoticeTask: Task<Void, Never>?
-    private let archiveNoticeLifetime: Duration
-
-    init(archiveNoticeLifetime: Duration = .seconds(10)) {
-        self.archiveNoticeLifetime = archiveNoticeLifetime
-    }
 
     func beginClose(_ target: CloseTarget, route: AgentRoute) {
         guard !archiving else { return }
@@ -89,9 +84,9 @@ final class FlockModel {
         closeNotice = nil
         clearArchiveNotice()
         archiveNotice = ArchiveSummary.message(message)
-        archiveNoticeTask = Task { [weak self, archiveNoticeLifetime] in
+        archiveNoticeTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: archiveNoticeLifetime)
+                try await Task.sleep(for: .seconds(10))
             } catch {
                 return
             }

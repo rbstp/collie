@@ -7,7 +7,7 @@ import UIKit
 import UserNotifications
 import os
 
-enum AppTab: CaseIterable, Hashable {
+enum AppTab: Hashable {
     case agents, machines, settings
 }
 

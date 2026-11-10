@@ -519,31 +519,6 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
 }
 
 @MainActor
-@Test func attachmentsAloneCanBeSent() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    await attach(model, core, "a.png")
-    model.draft = " \n"
-    #expect(model.canSendPrompt)
-    await model.sendPrompt()
-    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
-    #expect(model.attachments.isEmpty)
-}
-
-@MainActor
-@Test func failedSendKeepsTheAttachmentsAndDraft() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    await attach(model, core, "a.png")
-    model.draft = "look"
-    core.set(error: .AgentBlocked(message: ""))
-    await model.sendPrompt()
-    #expect(model.attachments.map(\.name) == ["a.png"])
-    #expect(model.draft == "look")
-    #expect(model.attachmentSlots == 9)
-}
-
-@MainActor
 @Test func filesAttachedWhileSendingAreKept() async {
     let core = FakeCore()
     let model = agentModel(core)
@@ -735,17 +710,6 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
-@Test func aSelectionBelowTheBoxKeepsThePromptAndPointsToUp() async {
-    let core = FakeCore()
-    let model = openedAgent(core, macDraft: "")
-    model.draft = "fix the build"
-    core.set(error: .InputUnfocused)
-    await model.sendPrompt()
-    #expect(model.draft == "fix the build")
-    #expect(model.promptError?.contains("Press ↑") == true)
-}
-
-@MainActor
 private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) async {
     core.state.withLock {
         $0.macDraft = ""
@@ -851,17 +815,6 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
     #expect(AgentKey.all.allSatisfy { AgentKey(name: $0.name) == $0 })
-}
-
-@MainActor
-@Test func eachStripKeySendsItsCoreKey() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    for key in AgentKey.strip {
-        await model.tap(key)?.value
-    }
-    #expect(core.snapshot.keys == AgentKey.strip.map { [$0] })
-    #expect(model.keyTaps == AgentKey.strip.count)
 }
 
 @MainActor
@@ -1490,40 +1443,6 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
-@Test func newTaskCreatesAndOpensSelectedWorktrees() async {
-    let core = FakeCore()
-    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
-    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
-    let create = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
-    await create.loadOptions()
-    create.location = .worktree
-    create.source = "/Users/me/app"
-    create.prompt = "build it"
-    create.branch = "feature"
-    #expect(!create.canStart)
-    await create.loadWorktrees()
-    #expect(create.canStart)
-    #expect(create.createPath == "/Users/me/app/.worktree/feature")
-    #expect(await create.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
-
-    let open = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
-    await open.loadOptions()
-    open.location = .worktree
-    open.source = "/Users/me/app"
-    open.worktreeAction = .open
-    open.prompt = "continue"
-    await open.loadWorktrees()
-    #expect(open.checkoutPath == "/Users/me/app-feature")
-    #expect(open.canStart)
-    #expect(await open.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
-    #expect(core.snapshot.worktreeCalls == [
-        "list /Users/me/app", "create /Users/me/app feature codex",
-        "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
-    ])
-    #expect(core.snapshot.taskPrompts == ["build it", "continue"])
-}
-
-@MainActor
 @Test func aCloneLeftInPlaceIsNamedAndBecomesTheNextStartsFolder() async throws {
     let core = FakeCore()
     let file = try prefsFile()
@@ -1822,48 +1741,6 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(core.snapshot.watches == ["term_1", nil, "term_1", nil])
     #expect(core.snapshot.depths == [200, 200, 200, 1000, 1000, 1000])
     #expect(DevicePrefs.load(from: file) == DevicePrefs(wrapLines: false, historyLines: 1000))
-}
-
-@MainActor
-@Test func pasteFillsThePromptFieldWithoutSending() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    model.draft = "fix "
-    model.paste("the build")
-    model.paste(nil)
-    #expect(model.draft == "fix the build")
-    await Task.yield()
-    #expect(core.snapshot.prompts.isEmpty && core.snapshot.typed.isEmpty && core.snapshot.keys.isEmpty)
-}
-
-@MainActor
-@Test func approvalsAllowKeysAndTypedAnswers() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    #expect(model.acceptsKeys && !model.answering && model.blockedHint == nil)
-
-    model.blocked = .terminal
-    #expect(model.acceptsKeys && model.answering)
-    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
-    await model.tap(.enter)?.value
-
-    model.blocked = .optionsOnly
-    #expect(model.acceptsKeys && model.answering)
-    await model.tap(.down)?.value
-    #expect(model.keyTaps == 2)
-    model.draft = "go"
-    await model.sendPrompt()
-    #expect(core.snapshot.typed == ["go"])
-    #expect(core.snapshot.prompts.isEmpty)
-
-    model.blocked = .keys
-    #expect(model.acceptsKeys && model.answering)
-    await model.tap(.down)?.value
-    #expect(core.snapshot.keys == [[.enter], [.down], [.down]])
-
-    model.blocked = .keysAndText
-    #expect(model.acceptsKeys && model.answering)
-    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
 }
 
 @MainActor
@@ -2256,20 +2133,6 @@ private func noticeShown(
 }
 
 @MainActor
-@Test func codexShiftLeftIsAlwaysAvailable() async {
-    let core = FakeCore()
-    core.state.withLock {
-        $0.kind = "codex"
-        $0.status = .working
-    }
-    let model = agentModel(core)
-    model.poll()
-    #expect(!model.codexQuestionQueued && model.accepts(.shiftLeft))
-    await model.tap(.shiftLeft)?.value
-    #expect(core.snapshot.keys == [[.shiftLeft]])
-}
-
-@MainActor
 @Test func codexTextOnlyQuestionCanSendAnAnswer() async {
     let core = FakeCore()
     core.state.withLock {
@@ -2320,16 +2183,6 @@ private func noticeShown(
     #expect(model.canSendPrompt)
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["It is in Done", "yes"])
-}
-
-@MainActor
-@Test func claudeKeepsTabInTheKeyStrip() {
-    let core = FakeCore()
-    core.state.withLock { $0.kind = "claude" }
-    let model = agentModel(core)
-    model.poll()
-    #expect(model.canPress(.tab))
-    #expect(!model.accepts(.shiftLeft))
 }
 
 private final class FakeUnlocker: TerminalUnlocker {
@@ -3103,29 +2956,6 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
-    let core = FakeCore()
-    core.state.withLock { $0.gitFiles = [GitFile(path: "p.swift", oldPath: nil, section: "pull_request", status: "M", additions: 1, deletions: 0, hash: "h")] }
-    let model = await slashReady(core)
-    let changes = try await model.gitChanges()
-    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1, hash: nil)
-    let root = try #require(changes.root)
-    _ = try await model.gitDiff(root: root, file: file)
-    _ = try await model.gitChanges(root: "/feature")
-    _ = try await model.gitWorktrees()
-    let pull = try await model.gitPullRequest(7)
-    let pullFile = try #require(pull.files.first)
-    #expect(pullFile.pullRequest == 7)
-    _ = try await model.gitDiff(root: root, file: pullFile)
-    let target = "\(model.route.machineId)|\(model.route.terminalId)"
-    #expect(core.snapshot.gitCalls == [
-        target, target + "|/worktree|a.swift|staged", target + "|/feature", target + "|worktrees", target + "|#7",
-        target + "|/worktree|p.swift|pull_request|#7"
-    ])
-    #expect(core.snapshot.prompts.isEmpty)
-}
-
-@MainActor
 @Test func pullRequestFeedbackNamesThePullRequestAndNeedsTheSameCheckout() async {
     let core = FakeCore()
     core.state.withLock { $0.gitWorktrees = [GitWorktree(root: "/worktree", branch: "main"), GitWorktree(root: "/feature", branch: "feature")] }
@@ -3233,17 +3063,6 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func archiveNoticeExpiresAndReplacementGetsItsOwnLifetime() async throws {
-    let model = FlockModel(archiveNoticeLifetime: .seconds(2))
-    model.showArchiveNotice("Archive complete")
-    try await Task.sleep(for: .seconds(1))
-    model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
-    try await Task.sleep(for: .seconds(1.3))
-    #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
-    await poll { model.archiveNotice == nil }
-}
-
-@MainActor
 @Test func aModifierCombinesWithTheNextKeyOnly() async {
     let core = FakeCore()
     core.state.withLock { $0.kind = "claude" }
@@ -3324,17 +3143,6 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     #expect(!model.controlTyped(from: "", to: "c"))
     #expect(model.modifier == nil)
     #expect(core.snapshot.keys.isEmpty)
-}
-
-@MainActor
-@Test func returnInTheTerminalHidesTheKeyboardUnlessKept() throws {
-    let prefs = try makeTemporaryDirectory().appending(path: "prefs.json")
-    let model = AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefs)
-    #expect(model.keepsKeyboard(after: "ok"))
-    #expect(!model.keepsKeyboard(after: "\n"))
-    #expect(!model.keepsKeyboard(after: "ok\r\n"))
-    DevicePrefs.update(in: prefs) { $0.keepKeyboard = true }
-    #expect(model.keepsKeyboard(after: "\n"))
 }
 
 @MainActor

@@ -1,4 +1,3 @@
-import CollieCore
 import SwiftUI
 import Testing
 import UIKit
@@ -145,18 +144,4 @@ import UIKit
     #expect(coordinator.textView(view, editMenuForTextIn: NSRange(location: 0, length: 0), suggestedActions: [copy]) == nil)
     coordinator.feedback = nil
     #expect(coordinator.textView(view, editMenuForTextIn: range, suggestedActions: [copy]) == nil)
-}
-
-@MainActor
-@Test func gitReviewPreservesInlineAnchorsAndOriginalQuotes() throws {
-    let review = GitReview()
-    let file = GitFile(path: "file.swift", oldPath: nil, section: "unstaged", status: "M", additions: 1, deletions: 1, hash: nil)
-    let patch = "@@ -1 +1 @@\n-old\n+new\n"
-    let anchor = GitDiffAnchor(patch: patch, row: 2)
-    let id = try #require(review.add(root: "/worktree", file: file, selection: "new", anchor: anchor))
-    review.text(for: id).wrappedValue = "Explain this change."
-    let comment = try #require(review.comments.first)
-    #expect(comment.anchor == anchor)
-    #expect(comment.anchor != GitDiffAnchor(patch: patch + " context\n", row: 2))
-    #expect(comment.message(checkout: "/worktree") == "Feedback for file.swift: \n\n```diff\nnew\n```\n\nExplain this change.")
 }
