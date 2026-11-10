@@ -10,7 +10,7 @@ final class LandscapeTests: XCTestCase {
         MainActor.assumeIsolated { XCUIDevice.shared.orientation = .portrait }
     }
 
-    func testAgentsLayoutsAndUsage() throws {
+    func testAgentsLayoutsUsageAndANewTaskPromptAcrossRotation() throws {
         continueAfterFailure = false
         let app = try demoApp("landscape-demo")
         app.launch()
@@ -48,15 +48,67 @@ final class LandscapeTests: XCTestCase {
             XCTAssertEqual(cardFrame.maxX, rowFrame.maxX, "\(orientation.rawValue)\n\(app.debugDescription)")
             if orientation.isLandscape { view.buttons["Usage"].tap() }
         }
+
+        let newTask = app.buttons["New task"]
+        newTask.tap()
+        let prompt = app.textFields["What should the agent do?"]
+        XCTAssertTrue(prompt.appears(within: 10), app.debugDescription)
+        prompt.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        let typed = app.type("keep this prompt", into: prompt)
+        let attachment = Match(.button, "Attachments and saved prompts")
+        let controls = [Match(.any, NSPredicate(format: "value == %@", "keep this prompt")), Match(.button, "Hide keyboard"), attachment]
+        // The second landscape pass is the one that left the prompt row under the navigation bar.
+        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight, .portrait] {
+            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(app.navigationBars["New task"].exists, app.debugDescription)
+            XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertTrue(shown(controls, app) { _, frames in aboveKeyboard(frames, app) }, "\(orientation.rawValue)\n\(app.debugDescription)")
+        }
+        app.choose(app.buttons["Saved prompts"].firstMatch) { app.element(attachment).tap() }
+        let saved = app.navigationBars["Saved prompts"]
+        XCTAssertTrue(saved.appears(within: 10), app.debugDescription)
+        saved.buttons["Cancel"].tap()
+        XCTAssertTrue(saved.disappears(within: 10), app.debugDescription)
+        XCTAssertTrue(typed.exists, app.debugDescription)
     }
 
-    func testSessionKeepsKeyboardAndLatestOutputAcrossRotation() throws {
+    func testChatOpensAFileAndScrollsBackAndTheTerminalKeepsTheKeyboardAcrossRotation() throws {
         continueAfterFailure = false
         let app = try demoApp("landscape-demo")
         try app.launch(onSession: "term_demo")
         defer { app.terminate() }
+        let round20 = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
+        XCTAssertTrue(round20.appears(within: 10), app.debugDescription)
+        // The approval band test checks that the header leaves the elapsed time out while an approval shows.
+        XCTAssertTrue(app.elapsedTimes.firstMatch.exists, app.debugDescription)
+
+        let link = app.links["tests/approvals.rs"]
+        XCTAssertTrue(link.exists, app.debugDescription)
+        link.tap()
+        let content = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "// Sample of approvals.rs")).firstMatch
+        XCTAssertTrue(content.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["Copy"].exists, app.debugDescription)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(content.disappears(within: 5), app.debugDescription)
+
+        let button = app.buttons["Latest messages"]
+        XCTAssertFalse(button.exists, app.debugDescription)
+        let start = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 250)))
+        XCTAssertTrue(button.appears(within: 5), app.debugDescription)
+        button.tap()
+        XCTAssertTrue(button.disappears(within: 5), app.debugDescription)
+
+        let wake = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "PR watch: CI failed on #264")).firstMatch
+        XCTAssertTrue(wake.appears(within: 5), app.debugDescription)
+        let wakePrompt = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Pull request #264")).firstMatch
+        XCTAssertFalse(wakePrompt.exists, app.debugDescription)
+        wake.tap()
+        XCTAssertTrue(wakePrompt.appears(within: 5), app.debugDescription)
+
         let terminalView = app.buttons["Terminal"].firstMatch
-        XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
         terminalView.tap()
         // The keyboard's candidate bar is a scroll view too, in its own window.
         let terminal = Match(.scrollView, NSPredicate(value: true))
@@ -94,41 +146,10 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(shown([latest], app), app.debugDescription)
     }
 
-    func testSheetsKeepPromptAcrossRotation() throws {
-        continueAfterFailure = false
-        let app = try demoApp("landscape-demo")
-        app.launch()
-        defer { app.terminate() }
-        let newTask = app.buttons["New task"]
-        XCTAssertTrue(newTask.appears(within: 10), app.debugDescription)
-        newTask.tap()
-        let prompt = app.textFields["What should the agent do?"]
-        XCTAssertTrue(prompt.appears(within: 10), app.debugDescription)
-        prompt.tap()
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        let typed = app.type("keep this prompt", into: prompt)
-        let attachment = Match(.button, "Attachments and saved prompts")
-        let controls = [Match(.any, NSPredicate(format: "value == %@", "keep this prompt")), Match(.button, "Hide keyboard"), attachment]
-        // The second landscape pass is the one that left the prompt row under the navigation bar.
-        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight, .portrait] {
-            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
-            XCTAssertTrue(app.navigationBars["New task"].exists, app.debugDescription)
-            XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
-            XCTAssertTrue(shown(controls, app) { _, frames in aboveKeyboard(frames, app) }, "\(orientation.rawValue)\n\(app.debugDescription)")
-        }
-        app.choose(app.buttons["Saved prompts"].firstMatch) { app.element(attachment).tap() }
-        let saved = app.navigationBars["Saved prompts"]
-        XCTAssertTrue(saved.appears(within: 10), app.debugDescription)
-        saved.buttons["Cancel"].tap()
-        XCTAssertTrue(saved.disappears(within: 10), app.debugDescription)
-        XCTAssertTrue(typed.exists, app.debugDescription)
-    }
-
     func testApprovalBandLeavesTheComposerReachableAndTheReviewSheetReportsAFailedDecision() throws {
         let app = try launchApproval()
         defer { app.terminate() }
-        // ChatScrollTests checks that a session without an approval shows it.
+        // The Chat test above checks that a session without an approval shows it.
         XCTAssertEqual(app.elapsedTimes.count, 0, app.debugDescription)
         // Chat's scroll view takes accessibility hit tests under the header and the band.
         app.buttons["Terminal"].firstMatch.tap()
@@ -163,15 +184,10 @@ final class LandscapeTests: XCTestCase {
         // At half height the card above still shows the command: the sheet leaves it there. Landscape shows it in both.
         let commands = app.staticTexts.matching(NSPredicate(format: "label == %@", command))
         XCTAssertEqual(commands.count, 1, app.debugDescription)
-        // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
-        // only on the band behind it.
+        // The demo's authentication fails and nothing is sent: the notice must show in the sheet, not only on the band behind it.
         try XCTUnwrap(hittable("Approve"), app.debugDescription).tap()
-        let cancel = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Cancel"]
         let notice = app.staticTexts.matching(NSPredicate(format: "label == %@", "Not authenticated. Nothing was sent."))
-        XCTAssertTrue(eventually(within: 15) {
-            if cancel.exists { cancel.tap() }
-            return notice.allElementsBoundByIndex.contains { $0.isHittable }
-        }, app.debugDescription)
+        XCTAssertTrue(eventually { notice.allElementsBoundByIndex.contains { $0.isHittable } }, app.debugDescription)
         // The card's copy hides while the sheet shows its own, which it used to peek above.
         XCTAssertEqual(notice.count, 1, app.debugDescription)
         // In landscape Add note leads the decisions' row, which leaves the output more room.

@@ -106,7 +106,9 @@ extension XCUIApplication {
         let clear = windows.firstMatch.buttons["Clear text"]
         if clear.exists { clear.tap() }
         field.typeText(text)
-        for _ in 0..<3 where !typed.appears(within: 10) {
+        // A `where` clause would query again on every pass left once the text is there.
+        for _ in 0..<3 {
+            guard !typed.appears(within: 10) else { break }
             if clear.exists { clear.tap() }
             field.typeText(text)
         }

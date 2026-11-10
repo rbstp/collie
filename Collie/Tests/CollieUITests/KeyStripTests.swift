@@ -53,7 +53,8 @@ final class KeyStripTests: XCTestCase {
         // Shortcuts are kept on the simulator, so a failed run, or the failed first iteration before a retry, leaves its own.
         let empty = app.staticTexts["No key shortcuts"]
         let removeShortcuts = {
-            for _ in 0..<20 where !empty.exists {
+            for _ in 0..<20 {
+                guard !empty.exists else { break }
                 app.cells.firstMatch.swipeLeft()
                 let delete = app.buttons["Delete"]
                 XCTAssertTrue(delete.appears(within: 5), app.debugDescription)
