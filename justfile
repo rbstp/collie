@@ -144,11 +144,11 @@ ios-project: ios-ghostty
 ios-build-sim: ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' CODE_SIGNING_ALLOWED=NO build
 
-# `only` limits the app's tests as xcodebuild's -only-testing does: CollieTests, or CollieUITests/KeyStripTests.
-ios-test diagnostics="on-failure" only="": ios-framework ios-project
-    cd Collie/GhosttyTerminal && xcodebuild -scheme GhosttyTerminal -destination 'platform=iOS Simulator,name={{ sim }}' -derivedDataPath ../../target/ios/GhosttyTerminal CODE_SIGNING_ALLOWED=NO test
+# The GhosttyTerminal package's tests, then the app's unit and UI tests. `skip` leaves some out as xcodebuild's -skip-testing
+# does: CollieUITests, or CollieUITests/KeyStripTests.
+ios-test diagnostics="on-failure" skip="": ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' \
-        {{ if only == "" { "" } else { "-only-testing " + only } }} \
+        {{ if skip == "" { "" } else { "-skip-testing " + skip } }} \
         {{ if test_iterations == "1" { "" } else { "-retry-tests-on-failure -test-iterations " + test_iterations } }} CODE_SIGNING_ALLOWED=NO test
 
 # The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
