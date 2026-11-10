@@ -26,8 +26,7 @@ METRICS = {
     "slowest_ui_test_seconds": ("Slowest UI test", " s"),
     "unit_seconds": ("Unit tests (CollieTests), summed", " s"),
 }
-# Reported, never enforced: a test's time includes a failed first attempt, so one 60 s idle stall and a passing retry
-# would fail the job with no regression.
+# Reported, never enforced: one 60 s idle stall (#694) in a passing attempt would fail the job with no regression.
 REPORTED = {"slowest_ui_test_seconds"}
 ENFORCED = set(METRICS) - REPORTED
 MAX_BYTES = 64 * 1024
@@ -66,17 +65,36 @@ def launches(activities):
 
 
 def runs(node):
-    """A test's retries and arguments, nested either way."""
+    """A test's retries and arguments. Xcode nests a parameterized test's retries under the argument that failed."""
     return [c for c in node.get("children", []) if c.get("nodeType") in ("Repetition", "Arguments")]
 
 
+def failed(attempt):
+    return attempt.get("nodeType") == "Repetition" and attempt.get("result") == "Failed"
+
+
 def seconds(node):
-    """A retried or parameterized test's own duration is the mean of its runs: its cost is their sum."""
-    return sum(seconds(c) for c in runs(node)) if runs(node) else node.get("durationInSeconds", 0)
+    """A parameterized test's own duration is the mean of its arguments: its cost is their sum. A retried test's cost leaves
+    out its failed attempts: the retry absorbed them, and the table names the test."""
+    children = runs(node)
+    kept = [c for c in children if not failed(c)]
+    return sum(seconds(c) for c in kept or children) if children else node.get("durationInSeconds") or 0
 
 
 def failed_once(node):
-    return any(c.get("nodeType") == "Repetition" and c.get("result") == "Failed" or failed_once(c) for c in runs(node))
+    return any(failed(c) or failed_once(c) for c in runs(node))
+
+
+def ended_passing(node):
+    """Xcode marks a retried argument, and its test, failed even when the retry passed (Arguments, then a failed and a
+    passing Repetition): what counts is each argument's last attempt."""
+    attempts = [c for c in node.get("children", []) if c.get("nodeType") == "Repetition"]
+    if attempts:
+        return attempts[-1].get("result") in ("Passed", "Expected Failure")
+    arguments = [c for c in node.get("children", []) if c.get("nodeType") == "Arguments"]
+    if arguments:
+        return all(ended_passing(a) for a in arguments)
+    return node.get("result") in ("Passed", "Expected Failure")
 
 
 def measure(tests, activities):
@@ -86,7 +104,7 @@ def measure(tests, activities):
         for bundle, case in cases(node):
             if case.get("result") == "Skipped":
                 continue
-            if case.get("result") == "Passed" and failed_once(case):
+            if failed_once(case) and ended_passing(case):
                 name = re.sub(r"\(.*", "", f"{bundle}/{case.get('nodeIdentifier', case['name'])}")
                 retried.append(re.sub(r"[^A-Za-z0-9_/]", "_", name))
             if bundle == "CollieUITests":
