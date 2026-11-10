@@ -49,7 +49,7 @@ Fast tests that fail only for regressions are a priority: every pull request wai
 - No sleeps and no waits that outlast their condition: poll with `eventually` and the other helpers in `ElementWaits.swift`.
 - A flaky test is fixed at its cause or removed, never given a longer timeout or left to the retry. CI's one retry keeps a runner fault from failing a run, and the budget table names every test that needed it.
 - Remove a test that stops earning its time: one that duplicates another, checks what a unit test covers, or fails for the OS or the runner more than for regressions. Remove the helpers, fixtures and demo switches only it used.
-- `Collie/Tests/budget.json` is the enforced bar: the `ios` job fails when the UI tests, their app launches, the suites' times or the slowest UI test pass a ceiling (`scripts/ios-test-budget.py`). Raising a ceiling needs a reason in the pull request.
+- `Collie/Tests/budget.json` is the enforced bar: the `ios` job fails when the UI tests, their app launches, the UI suite's time or the unit tests' time pass a ceiling (`scripts/ios-test-budget.py`). Raising a ceiling needs a reason in the pull request.
 
 ## Protocol
 

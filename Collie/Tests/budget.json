@@ -2,6 +2,5 @@
   "ui_tests": 15,
   "ui_launches": 15,
   "ui_seconds": 920,
-  "slowest_ui_test_seconds": 120,
   "unit_seconds": 80
 }

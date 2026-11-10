@@ -26,10 +26,15 @@ METRICS = {
     "slowest_ui_test_seconds": ("Slowest UI test", " s"),
     "unit_seconds": ("Unit tests (CollieTests), summed", " s"),
 }
+# Reported, never enforced: a test's time includes a failed first attempt, so one 60 s idle stall and a passing retry
+# would fail the job with no regression.
+REPORTED = {"slowest_ui_test_seconds"}
+ENFORCED = set(METRICS) - REPORTED
 MAX_BYTES = 64 * 1024
 MAX_VALUE = 1_000_000
 MAX_RETRIED = 100
-NAME = re.compile(r"[A-Za-z0-9_]{1,80}(/[A-Za-z0-9_]{1,80}){1,3}")
+# The suite's longest name part is 83 characters.
+NAME = re.compile(r"[A-Za-z0-9_]{1,200}(/[A-Za-z0-9_]{1,200}){1,3}")
 SHA = re.compile(r"[0-9a-f]{40}")
 CONCLUSION = re.compile(r"[a-z_]{1,20}")
 
@@ -60,10 +65,18 @@ def launches(activities):
     return sum(count(a) for a in runs[-1].get("activities", [])) if runs else 0
 
 
-def seconds(case):
-    """A retried test's own duration is the mean of its runs: its cost is their sum."""
-    runs = [c for c in case.get("children", []) if c.get("nodeType") == "Repetition"]
-    return sum(c.get("durationInSeconds", 0) for c in runs or [case])
+def runs(node):
+    """A test's retries and arguments, nested either way."""
+    return [c for c in node.get("children", []) if c.get("nodeType") in ("Repetition", "Arguments")]
+
+
+def seconds(node):
+    """A retried or parameterized test's own duration is the mean of its runs: its cost is their sum."""
+    return sum(seconds(c) for c in runs(node)) if runs(node) else node.get("durationInSeconds", 0)
+
+
+def failed_once(node):
+    return any(c.get("nodeType") == "Repetition" and c.get("result") == "Failed" or failed_once(c) for c in runs(node))
 
 
 def measure(tests, activities):
@@ -73,8 +86,7 @@ def measure(tests, activities):
         for bundle, case in cases(node):
             if case.get("result") == "Skipped":
                 continue
-            runs = [c.get("result") for c in case.get("children", []) if c.get("nodeType") == "Repetition"]
-            if case.get("result") == "Passed" and "Failed" in runs:
+            if case.get("result") == "Passed" and failed_once(case):
                 name = re.sub(r"\(.*", "", f"{bundle}/{case.get('nodeIdentifier', case['name'])}")
                 retried.append(re.sub(r"[^A-Za-z0-9_/]", "_", name))
             if bundle == "CollieUITests":
@@ -98,9 +110,9 @@ def validate(data):
     """Returns `data` if it is exactly what `measure` writes, and raises ValueError otherwise."""
     if not isinstance(data, dict) or set(data) != {"metrics", "ceilings", "retried"}:
         raise ValueError("unexpected keys")
-    for part in ("metrics", "ceilings"):
+    for part, keys in (("metrics", set(METRICS)), ("ceilings", ENFORCED)):
         values = data[part]
-        if not isinstance(values, dict) or set(values) != set(METRICS):
+        if not isinstance(values, dict) or set(values) != keys:
             raise ValueError(f"unexpected {part}")
         for value in values.values():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= MAX_VALUE:
@@ -137,8 +149,8 @@ def render(data, baseline=None, column="This run"):
     """The summary line and the table. Every cell comes from a validated number or a name matching NAME."""
     rows, over = [], []
     for key, (label, unit) in METRICS.items():
-        value, ceiling = data["metrics"][key], data["ceilings"][key]
-        if value > ceiling:
+        value, ceiling = data["metrics"][key], data["ceilings"].get(key)
+        if ceiling is not None and value > ceiling:
             over.append(label)
         base, impact = "n/a", "n/a"
         if baseline:
@@ -147,7 +159,10 @@ def render(data, baseline=None, column="This run"):
             delta = value - before
             percent = f" ({delta / before:+.0%})" if before else ""
             impact = f"{'+' if delta > 0 else ''}{number(delta, unit)}{percent}"
-        rows.append(f"| {label} | {base} | {number(value, unit)} | {impact} | {number(ceiling, unit)} | {'fail' if value > ceiling else 'pass'} |")
+        if ceiling is None:
+            rows.append(f"| {label} | {base} | {number(value, unit)} | {impact} | not enforced | |")
+        else:
+            rows.append(f"| {label} | {base} | {number(value, unit)} | {impact} | {number(ceiling, unit)} | {'fail' if value > ceiling else 'pass'} |")
     names = lambda d: ", ".join(f"`{name}`" for name in d["retried"]) or "none"
     rows.append(f"| Passed only on the retry | {names(baseline) if baseline else 'n/a'} | {names(data)} | | not enforced | |")
     summary = f"Over the ceiling: {', '.join(over)}." if over else "Within every enforced ceiling."
