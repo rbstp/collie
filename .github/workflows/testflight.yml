@@ -157,7 +157,7 @@ jobs:
 
       # ci.yml tests the pull request, not the revision shipped. Unit tests only: a UI regression shows on master's ci run and holds back no build.
       - name: test the revision being shipped
-        run: just --no-deps test_iterations=2 ios-test on-failure CollieTests
+        run: just --no-deps test_iterations=2 ios-test on-failure CollieUITests
 
       - name: keep the test results
         if: ${{ failure() }}

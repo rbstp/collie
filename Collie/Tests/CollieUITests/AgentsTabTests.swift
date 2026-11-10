@@ -64,17 +64,19 @@ final class AgentsTabTests: XCTestCase {
                 // A working agent's card lists its first subagent and counts the rest, four once starred; a blocked agent's lists none.
                 let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
                 XCTAssertTrue(card.appears(within: 5), app.debugDescription)
-                XCTAssertTrue(card.label.contains("Review approval flow") && card.label.contains("+4 more"), app.debugDescription)
-                XCTAssertFalse(card.label.contains("Run approval tests"), app.debugDescription)
+                let label = card.label
+                XCTAssertTrue(label.contains("Review approval flow") && label.contains("+4 more"), app.debugDescription)
+                XCTAssertFalse(label.contains("Run approval tests"), app.debugDescription)
                 let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch
                 XCTAssertTrue(blocked.exists, app.debugDescription)
                 XCTAssertFalse(blocked.label.contains("Review deny path"), app.debugDescription)
                 app.choose(app.buttons["Star"]) { card.press(forDuration: 1) }
                 XCTAssertTrue(eventually { card.label.contains("+1 more") }, app.debugDescription)
+                let starred = card.label
                 for title in ["Review approval flow", "Run approval tests", "Check retry handling", "Inspect test fixtures"] {
-                    XCTAssertTrue(card.label.contains(title), app.debugDescription)
+                    XCTAssertTrue(starred.contains(title), app.debugDescription)
                 }
-                XCTAssertFalse(card.label.contains("Review documentation"), app.debugDescription)
+                XCTAssertFalse(starred.contains("Review documentation"), app.debugDescription)
             }
             XCTAssertTrue(agents.isSelected, app.debugDescription)
             if name == "Inbox" {
