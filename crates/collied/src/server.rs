@@ -361,16 +361,8 @@ impl State {
             subagent,
             prompt_id: prompt_id.filter(|p| crate::transcript::is_session_id(p)),
         };
-        let reading = lock(&self.transcripts).reached(session_id);
-        let agent = lock(&self.limits).typed_check(session_id, &call);
-        let path = agent.and_then(|a| lock(&self.transcripts).claude_transcript(&a, session_id));
-        // Read with no lock held: the transcript can take a while.
-        let typed = path
-            .zip(call.prompt_id)
-            .and_then(|(path, prompt)| crate::transcript::turn_origin(&path, prompt))
-            .is_some_and(|origin| origin == "human");
         let now = crate::now_ms();
-        let verdict = lock(&self.limits).check(session_id, &call, reading.as_ref(), now, typed);
+        let verdict = limit_verdict(&self.limits, &self.transcripts, session_id, &call, now);
         match verdict {
             Verdict::Go => None,
             Verdict::Hold(window) => Some(limits::reason(window)),
@@ -1049,6 +1041,27 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
+/// Only a prompt typed on the machine at or after the stop releases a held agent: one typed
+/// earlier names another turn of the same session, such as a background subagent's.
+fn limit_verdict(
+    limits: &Mutex<Limits>,
+    transcripts: &Mutex<Transcripts>,
+    session_id: &str,
+    call: &limits::Call,
+    now_ms: u64,
+) -> Verdict {
+    let reading = lock(transcripts).reached(session_id);
+    let asked = lock(limits).typed_check(session_id, call);
+    let typed = asked.is_some_and(|(agent, stopped_ms)| {
+        let path = lock(transcripts).claude_transcript(&agent, session_id);
+        // Read with no lock held: the transcript can take a while.
+        path.zip(call.prompt_id)
+            .and_then(|(path, prompt)| crate::transcript::turn_origin(&path, prompt))
+            .is_some_and(|(origin, at)| origin == "human" && at >= stopped_ms)
+    });
+    lock(limits).check(session_id, call, reading.as_ref(), now_ms, typed)
+}
+
 /// Prompts agents stopped at the plan limit once their resume time comes, with or
 /// without a phone.
 async fn limit_resumes(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
@@ -1090,6 +1103,10 @@ async fn limit_resumes(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
                             format!("not resumed: {reason}"),
                             Some(format!("Did not resume: {reason}")),
                         )
+                    }
+                    (limits::Attempt::Prompt, Some(agent)) if typed_since(&state, agent, &stop) => {
+                        lock(&state.limits).cancel(&terminal_id);
+                        ("not resumed: prompted on the machine".to_owned(), None)
                     }
                     (limits::Attempt::Prompt, Some(agent)) => {
                         if !lock(&state.limits).begin_resume(&terminal_id, &stop, now) {
@@ -1153,6 +1170,12 @@ async fn limit_resumes(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let _ = state.events.send(Event::FlockChanged {});
         }
     }
+}
+
+/// A prompt typed since the stop, even one that made no tool call, means someone took over.
+fn typed_since(state: &State, agent: &runtime::AgentInfo, stop: &limits::Stop) -> bool {
+    let path = lock(&state.transcripts).claude_transcript(agent, &stop.session_id);
+    path.is_some_and(|p| crate::transcript::typed_since(&p, stop.stopped_ms))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -3202,6 +3225,74 @@ impl<'a> Herdr<'a> {
 mod tests {
     use super::*;
     use protocol::TerminalId;
+
+    #[test]
+    fn only_a_prompt_typed_after_the_stop_releases_a_held_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        let session = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+        let at = |t: &str| crate::transcript::timestamp_ms(t).unwrap();
+        let stop_ms = at("2026-11-09T23:50:00.000Z");
+        let status_line = serde_json::json!({"session_id": session, "rate_limits": {
+            "five_hour": {"used_percentage": 99.4, "resets_at": stop_ms / 1000 + 3_600},
+        }});
+        crate::usage::record(&data, status_line.to_string().as_bytes(), stop_ms - 1_000).unwrap();
+        let projects = dir.path().join("projects");
+        let project = projects.join("-Users-me-src-app");
+        std::fs::create_dir_all(&project).unwrap();
+        let (h, m, wake, n) = (
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+        );
+        let record = |prompt: &str, origin: &str, ts: &str| {
+            serde_json::json!({"type": "user", "sessionId": session, "promptId": prompt,
+                "turnOrigin": origin, "timestamp": ts, "message": {"role": "user", "content": "x"}})
+            .to_string()
+        };
+        let lines = [
+            record(h, "human", "2026-11-09T23:40:00.000Z"),
+            record(m, "human", "2026-11-09T23:45:00.000Z"),
+            record(wake, "task_notification", "2026-11-09T23:52:00.000Z"),
+            record(n, "human", "2026-11-09T23:55:00.000Z"),
+        ];
+        std::fs::write(
+            project.join(format!("{session}.jsonl")),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+        let transcripts = Mutex::new(
+            Transcripts::new(Some(projects), None).with_usage(data.join(crate::usage::USAGE_FILE)),
+        );
+        let limits = Mutex::new(Limits::load(data.join("limits.json"), limits::GRACE, 0));
+        lock(&limits).set_enabled(true);
+        let agent: runtime::AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "w1:p1", "workspace_id": "w1", "pane_id": "w1:p1",
+            "agent_status": "working", "agent": "claude", "cwd": "/Users/me/src/app",
+            "agent_session": {"value": session},
+        }))
+        .unwrap();
+        lock(&limits).observe(&[agent], stop_ms);
+        let verdict = |subagent, prompt, now| {
+            let call = limits::Call {
+                subagent,
+                prompt_id: Some(prompt),
+            };
+            limit_verdict(&limits, &transcripts, session, &call, now)
+        };
+        // A background subagent launched by H trips the stop.
+        assert!(matches!(verdict(true, h, stop_ms), Verdict::Stopped(..)));
+        let held = Verdict::Hold(protocol::LimitWindow::FiveHour);
+        // The main session's turn M was typed before the stop, and a wakeup is not typed.
+        assert_eq!(verdict(false, m, stop_ms + 1), held);
+        assert_eq!(verdict(false, wake, stop_ms + 2), held);
+        // N, typed after the stop, goes on.
+        assert_eq!(
+            verdict(false, n, stop_ms + 3),
+            Verdict::Continued("w1:p1".into())
+        );
+    }
 
     fn info(id: &str, status: &str) -> runtime::AgentInfo {
         serde_json::from_value(serde_json::json!({

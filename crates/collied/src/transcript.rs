@@ -709,20 +709,44 @@ pub(crate) fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
     Some((file, meta.len(), meta.modified().ok()?))
 }
 
-/// Claude Code's `turnOrigin` for the prompt `prompt_id`, read from the end of the transcript:
-/// `human` for a prompt typed or pasted into the input box; a background task, a subagent's
-/// report, a scheduled prompt or another session's message has its own. The `UserPromptSubmit`
-/// hook cannot tell a scheduled prompt from a typed one (`claude-2.1.321` fixtures).
-pub fn turn_origin(path: &Path, prompt_id: &str) -> Option<String> {
+/// Claude Code's `turnOrigin` for the prompt `prompt_id`, with when it was written, read from
+/// the end of the transcript: `human` for a prompt typed or pasted into the input box; a
+/// background task, a subagent's report, a scheduled prompt or another session's message has
+/// its own. The `UserPromptSubmit` hook cannot tell a scheduled prompt from a typed one
+/// (`claude-2.1.321` fixtures).
+pub fn turn_origin(path: &Path, prompt_id: &str) -> Option<(String, u64)> {
+    let needle = format!("\"promptId\":\"{prompt_id}\"");
+    prompts(path, &needle)?
+        .into_iter()
+        .rev()
+        .filter(|v| v["promptId"] == prompt_id)
+        .find_map(|v| origin(&v))
+}
+
+/// Whether a prompt typed on the machine was written at or after `since_ms`.
+pub fn typed_since(path: &Path, since_ms: u64) -> bool {
+    prompts(path, "\"turnOrigin\":\"human\"")
+        .into_iter()
+        .flatten()
+        .filter_map(|v| origin(&v))
+        .any(|(origin, at)| origin == "human" && at >= since_ms)
+}
+
+fn prompts(path: &Path, needle: &str) -> Option<Vec<Value>> {
     let (file, len, _) = open(path)?;
     let text = tail(file, len).ok()?;
-    let needle = format!("\"promptId\":\"{prompt_id}\"");
-    text.lines()
-        .rev()
-        .filter(|l| l.contains(&needle))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| v["type"] == "user" && v["promptId"] == prompt_id)
-        .find_map(|v| v["turnOrigin"].as_str().map(str::to_owned))
+    Some(
+        text.lines()
+            .filter(|l| l.contains(needle))
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|v| v["type"] == "user")
+            .collect(),
+    )
+}
+
+fn origin(v: &Value) -> Option<(String, u64)> {
+    let at = timestamp_ms(v["timestamp"].as_str()?)?;
+    Some((v["turnOrigin"].as_str()?.to_owned(), at))
 }
 
 fn tail(mut file: File, len: u64) -> std::io::Result<String> {
@@ -1307,8 +1331,15 @@ mod tests {
             ("c8160e60-97b2-4da9-8c82-46d043af4a4e", None),
             ("00000000-0000-4000-8000-000000000000", None),
         ] {
-            assert_eq!(turn_origin(&path, prompt).as_deref(), origin, "{prompt}");
+            let found = turn_origin(&path, prompt);
+            assert_eq!(found.as_ref().map(|(o, _)| o.as_str()), origin, "{prompt}");
         }
+        let (_, typed_at) = turn_origin(&path, "e0b2b751-3d45-4851-a48a-5566c8441154").unwrap();
+        assert_eq!(Some(typed_at), timestamp_ms("2026-11-09T23:49:19.694Z"));
+        // The last typed prompt is the /loop command; the scheduled ones after it are not typed.
+        let (_, last) = turn_origin(&path, "a9bfdc2e-5747-4538-9386-fe4afbfdc907").unwrap();
+        assert!(typed_since(&path, last));
+        assert!(!typed_since(&path, last + 1));
         // The UserPromptSubmit hook gets the same fields for a typed and a scheduled prompt.
         let hooks: Vec<Value> =
             include_str!("../tests/fixtures/claude-2.1.321/user-prompt-submit.hook.jsonl")

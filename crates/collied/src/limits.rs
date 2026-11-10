@@ -162,10 +162,16 @@ fn same_reset(a: u64, b: u64) -> bool {
 
 impl Limits {
     pub fn load(path: PathBuf, grace: Duration, started_ms: u64) -> Self {
-        let saved = peers::load_json(&path).unwrap_or_else(|e| {
+        let mut saved: Saved = peers::load_json(&path).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "could not read the plan limit stops");
             Saved::default()
         });
+        // Stopped while typing a resume: it is due again, under the resume's own checks.
+        for s in saved.stops.values_mut() {
+            if s.resume_at_ms.is_some() {
+                s.resumed_ms = None;
+            }
+        }
         let mut limits = Self {
             saved,
             path: Some(path),
@@ -232,15 +238,17 @@ impl Limits {
             .filter(|s| s.session_id == session_id && s.held())
     }
 
-    /// The agent whose transcript says whether the call's prompt was typed: asked only of
-    /// a held agent's own call from another prompt than the stopped one.
-    pub fn typed_check(&self, session_id: &str, call: &Call) -> Option<AgentInfo> {
+    /// The agent whose transcript says whether the call's prompt was typed, and when it was
+    /// stopped: a prompt typed before the stop (another turn of a background subagent's
+    /// session, say) releases nothing. Asked only of a held agent's own call from another
+    /// prompt than the stopped one.
+    pub fn typed_check(&self, session_id: &str, call: &Call) -> Option<(AgentInfo, u64)> {
         let s = self.held(session_id).filter(|_| self.saved.enabled)?;
         let other = call
             .prompt_id
             .is_some_and(|p| s.prompt_id.as_deref() != Some(p));
         (other && !call.subagent)
-            .then(|| self.sessions.get(session_id).cloned())
+            .then(|| Some((self.sessions.get(session_id)?.clone(), s.stopped_ms)))
             .flatten()
     }
 
@@ -274,9 +282,11 @@ impl Limits {
             if now_ms >= s.resets_at_ms {
                 let Some((window, resets_at_ms)) = reading.and_then(|r| exhausted(r, now_ms))
                 else {
-                    s.resumed_ms = Some(now_ms);
-                    s.resume_at_ms = None;
-                    self.save();
+                    // An armed resume still runs: it types or says the agent was not idle.
+                    if s.resume_at_ms.is_none() {
+                        s.resumed_ms = Some(now_ms);
+                        self.save();
+                    }
                     return Verdict::Go;
                 };
                 s.window = window;
@@ -447,13 +457,14 @@ impl Limits {
         self.save();
     }
 
-    /// Cancels an armed resume; the agent stays stopped until someone prompts it.
+    /// Cancels an armed resume, also one being typed, whose write it then refuses; the agent
+    /// stays stopped until someone prompts it.
     pub fn cancel(&mut self, terminal_id: &str) -> bool {
         let Some(s) = self
             .saved
             .stops
             .get_mut(terminal_id)
-            .filter(|s| s.held() && s.resume_at_ms.is_some())
+            .filter(|s| !s.continued && s.resume_at_ms.is_some())
         else {
             return false;
         };
@@ -462,9 +473,15 @@ impl Limits {
         true
     }
 
-    /// A prompt from the phone goes through like one typed on the machine.
+    /// A prompt from the phone goes through like one typed on the machine, and withdraws a
+    /// resume being typed.
     pub fn prompted(&mut self, terminal_id: &str) -> bool {
-        let Some(s) = self.saved.stops.get_mut(terminal_id).filter(|s| s.held()) else {
+        let Some(s) = self
+            .saved
+            .stops
+            .get_mut(terminal_id)
+            .filter(|s| !s.continued && (s.resumed_ms.is_none() || s.resume_at_ms.is_some()))
+        else {
             return false;
         };
         s.continued = true;
@@ -832,11 +849,20 @@ mod tests {
         );
         assert_eq!(l.due(RESET + 60_000).len(), 0);
         assert_eq!(l.due(WEEK + 60_000).len(), 1);
+        // A wakeup between the reset and the resume goes on and leaves the resume due.
         let dir = tempfile::tempdir().unwrap();
         let mut l = limits(&dir);
         stopped(&mut l, START + 1_000);
         assert_eq!(
-            l.check(SESSION, &call(LATER), None, RESET, false),
+            l.check(SESSION, &call(LATER), None, RESET + 10_000, false),
+            Verdict::Go
+        );
+        assert_eq!(l.due(RESET + 60_000).len(), 1);
+        assert!(l.shown(T, RESET + 10_000).is_some());
+        // With no resume armed, the reset ends the stop.
+        assert!(l.cancel(T));
+        assert_eq!(
+            l.check(SESSION, &call(LATER), None, RESET + 20_000, false),
             Verdict::Go
         );
         assert!(!l.holds(T));
@@ -966,7 +992,7 @@ mod tests {
         l.finish_resume(T, s.stopped_ms, Finish::Cancel);
         assert!(l.due(at).is_empty());
         assert!(l.holds(T));
-        // Turned off while typing: the write is refused.
+        // Turned off, cancelled or prompted from the phone while typing: the write is refused.
         let dir = tempfile::tempdir().unwrap();
         let mut l = limits(&dir);
         let s = stopped(&mut l, START + 1_000);
@@ -974,6 +1000,22 @@ mod tests {
         l.set_enabled(false);
         assert!(!l.resuming(T, s.stopped_ms));
         assert!(!l.begin_resume(T, &s, at));
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = limits(&dir);
+        let s = stopped(&mut l, START + 1_000);
+        assert!(l.begin_resume(T, &s, at));
+        assert!(l.cancel(T));
+        assert!(!l.resuming(T, s.stopped_ms));
+        l.finish_resume(T, s.stopped_ms, Finish::Cancel);
+        assert!(l.holds(T) && l.due(at).is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let mut l = limits(&dir);
+        let s = stopped(&mut l, START + 1_000);
+        assert!(l.begin_resume(T, &s, at));
+        assert!(l.prompted(T));
+        assert!(!l.resuming(T, s.stopped_ms));
+        l.finish_resume(T, s.stopped_ms, Finish::Cancel);
+        assert!(!l.holds(T));
     }
 
     #[test]
@@ -1068,7 +1110,10 @@ mod tests {
     fn stops_survive_a_restart() {
         let dir = tempfile::tempdir().unwrap();
         let mut l = limits(&dir);
-        stopped(&mut l, START + 1_000);
+        let s = stopped(&mut l, START + 1_000);
+        // collied stopped while it typed the resume.
+        assert!(l.begin_resume(T, &s, RESET + 60_000));
+        assert!(l.due(RESET + 60_000).is_empty());
         drop(l);
         let path = dir.path().join("limits.json");
         let mode = std::os::unix::fs::PermissionsExt::mode(

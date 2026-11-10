@@ -159,7 +159,6 @@ pub enum Reply {
         pending_approvals: usize,
         #[serde(default)]
         collied_version: Option<String>,
-        /// Agents stopped at the plan limit.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         limited: Vec<crate::limits::Limited>,
     },
