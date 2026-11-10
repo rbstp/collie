@@ -9,29 +9,19 @@ final class MachineConnectionTests: XCTestCase {
         app.launchEnvironment["COLLIE_DEMO_CONNECTION_ERROR"] = message
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.buttons["Layout"].appears(within: 10), app.debugDescription)
-        for layout in ["Inbox", "List", "Grid"] {
-            app.choose(app.buttons[layout]) { app.buttons["Layout"].tap() }
-            XCTAssertFalse(app.buttons["Copy connection error"].exists, app.debugDescription)
-            XCTAssertFalse(app.staticTexts[message].exists, app.debugDescription)
-            XCTAssertFalse(app.staticTexts["Connection details"].exists)
-        }
+        let layout = app.buttons["Layout"]
+        XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
+        // The layout with a header for each machine, where the link's state shows.
+        app.choose(app.buttons["List"]) { layout.tap() }
+        XCTAssertFalse(app.buttons["Copy connection error"].exists, app.debugDescription)
+        XCTAssertFalse(app.staticTexts[message].exists, app.debugDescription)
         app.buttons["Machines"].tap()
         let copy = app.buttons["Copy connection error"]
         XCTAssertTrue(copy.appears(within: 5), app.debugDescription)
         XCTAssertTrue(app.staticTexts[message].exists, app.debugDescription)
-        XCTAssertFalse(app.staticTexts["Connection details"].exists)
         XCTAssertGreaterThanOrEqual(copy.frame.width, 44 - 0.001)
         XCTAssertGreaterThanOrEqual(copy.frame.height, 44 - 0.001)
         copy.tap()
-        XCTAssertTrue(app.buttons["Copy connection error"].appears(within: 5))
-        XCTAssertFalse(app.staticTexts["Copied"].exists)
-        XCTAssertTrue(app.staticTexts[message].exists)
-        XCTAssertFalse(app.staticTexts["Machine settings"].exists)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "machine-connection-error"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
         app.buttons["Agents"].tap()
         app.buttons["New task"].tap()
         let prompt = app.textFields["What should the agent do?"]

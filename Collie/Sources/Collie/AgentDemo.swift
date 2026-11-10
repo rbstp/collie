@@ -26,8 +26,7 @@ struct AgentDemo: View {
         let json = try? JSONSerialization.jsonObject(with: data)
         core = DemoAgentCore(
             snapshot: json.flatMap(Self.firstText) ?? String(decoding: data, as: UTF8.self),
-            connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"],
-            subagentDemo: arguments.contains("--subagent-demo")
+            connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"]
         )
         _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, dismissResolved: { _, _ in }) : nil)
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))

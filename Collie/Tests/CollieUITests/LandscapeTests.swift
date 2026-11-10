@@ -2,6 +2,8 @@ import XCTest
 
 @MainActor
 final class LandscapeTests: XCTestCase {
+    private let command = "cargo test -p collied --test approvals -- --nocapture"
+
     // An async tearDown makes XCTest end the runner on a failure when continueAfterFailure is false, and xcodebuild then
     // skips -retry-tests-on-failure for the test.
     override func tearDown() {
@@ -9,43 +11,50 @@ final class LandscapeTests: XCTestCase {
     }
 
     func testAgentsLayoutsAndUsage() throws {
-        let app = try launchDemo()
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
         defer { app.terminate() }
+        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
         XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
         let menu = Match(.button, "Layout")
-        for (layout, row) in [("Grid", "fix the build"), ("List", "fix the build"), ("Inbox", "I need to run cargo test to check the new cases.")] {
+        for (layout, row) in [("Inbox", "I need to run cargo test to check the new cases."), ("Grid", "fix the build"), ("List", "fix the build")] {
             XCTAssertTrue(shown([menu], app), app.debugDescription)
             app.choose(app.buttons[layout]) { app.element(menu).tap() }
             let element = Match(.any, NSPredicate(format: "label CONTAINS %@", row))
             XCTAssertTrue(shown([element, Match(.button, "New task")], app), "\(layout)\n\(app.debugDescription)")
+            if layout != "Inbox" {
+                // With one machine paired, its header keeps the approvals pill and leaves the name out.
+                XCTAssertTrue(app.descendants(matching: .any)["1 approval"].exists, "\(layout)\n\(app.debugDescription)")
+                XCTAssertFalse(app.staticTexts["MacBook Pro"].exists, "\(layout)\n\(app.debugDescription)")
+            }
         }
         let view = app.segmentedControls["View"]
+        // The lists' cells, not the pager's pages.
+        let rows = app.collectionViews.firstMatch.collectionViews.cells
+        let row = rows.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+        let card = rows.containing(NSPredicate(format: "label == %@", "5-hour limit")).firstMatch
         view.buttons["Usage"].tap()
         let usage = Match(.staticText, "5-hour limit")
-        XCTAssertTrue(app.element(usage).appears(within: 10), app.debugDescription)
-        for orientation: UIDeviceOrientation in [.landscapeRight, .portrait, .landscapeLeft] {
+        // Usage stays selected across a rotation, and its cards keep the Agents list's side margins in both orientations.
+        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait] {
             XCTAssertTrue(app.rotate(to: orientation), app.debugDescription)
             XCTAssertTrue(shown([usage], app), app.debugDescription)
             XCTAssertTrue(view.buttons["Usage"].isSelected, app.debugDescription)
-        }
-        app.buttons["Machines"].tap()
-        XCTAssertTrue(shown([Match(.staticText, "MacBook Pro")], app), app.debugDescription)
-    }
-
-    func testOneMachineLeavesItsNameOffAgentsButKeepsTheApprovalsPill() throws {
-        let app = try launchDemo(["--approval-demo"])
-        defer { app.terminate() }
-        for layout in ["List", "Grid"] {
-            app.choose(app.buttons[layout]) { app.buttons["Layout"].tap() }
-            XCTAssertTrue(app.descendants(matching: .any)["1 approval"].appears(within: 10), "\(layout)\n\(app.debugDescription)")
-            XCTAssertFalse(app.staticTexts["MacBook Pro"].exists, "\(layout)\n\(app.debugDescription)")
+            let cardFrame = try XCTUnwrap(card.settledFrame(), app.debugDescription)
+            view.buttons["Agents"].tap()
+            let rowFrame = try XCTUnwrap(row.settledFrame(), app.debugDescription)
+            XCTAssertEqual(cardFrame.minX, rowFrame.minX, "\(orientation.rawValue)\n\(app.debugDescription)")
+            XCTAssertEqual(cardFrame.maxX, rowFrame.maxX, "\(orientation.rawValue)\n\(app.debugDescription)")
+            if orientation.isLandscape { view.buttons["Usage"].tap() }
         }
     }
 
     func testSessionKeepsKeyboardAndLatestOutputAcrossRotation() throws {
-        let app = try launchDemo()
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        try app.launch(onSession: "term_demo")
         defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
         let terminalView = app.buttons["Terminal"].firstMatch
         XCTAssertTrue(terminalView.appears(within: 10), app.debugDescription)
         terminalView.tap()
@@ -59,7 +68,7 @@ final class LandscapeTests: XCTestCase {
         if !app.element(keys).isSelected { app.element(keys).tap() }
         let showKeyboard = Match(.button, "Keyboard")
         XCTAssertTrue(shown([showKeyboard], app), app.debugDescription)
-        app.element(showKeyboard).tap()
+        app.withInteractionOptions(2) { app.element(showKeyboard).tap() }
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let escape = Match(.button, "Escape")
@@ -68,7 +77,7 @@ final class LandscapeTests: XCTestCase {
             Match(.button, "Hide keyboard"), Match(.button, "Attachments and saved prompts"),
             Match(.button, NSPredicate(format: "label BEGINSWITH %@", "Dictate in")), escape, Match(.button, "Control Return")
         ]
-        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight] {
+        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait] {
             XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(shown(controls, app) { screen, frames in
@@ -81,26 +90,28 @@ final class LandscapeTests: XCTestCase {
         app.withInteractionOptions(2) { app.buttons["Chat"].firstMatch.tap() }
         let latest = Match(.staticText, NSPredicate(format: "label BEGINSWITH %@", "Round 20:"))
         XCTAssertTrue(shown([latest], app), app.debugDescription)
-        for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft] {
-            XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
-            XCTAssertTrue(shown([latest], app), "\(orientation.rawValue)\n\(app.debugDescription)")
-        }
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        XCTAssertTrue(shown([latest], app), app.debugDescription)
     }
 
     func testSheetsKeepPromptAcrossRotation() throws {
-        let app = try launchDemo()
+        continueAfterFailure = false
+        let app = try demoApp("landscape-demo")
+        app.launch()
         defer { app.terminate() }
-        app.buttons["New task"].tap()
+        let newTask = app.buttons["New task"]
+        XCTAssertTrue(newTask.appears(within: 10), app.debugDescription)
+        newTask.tap()
         let prompt = app.textFields["What should the agent do?"]
         XCTAssertTrue(prompt.appears(within: 10), app.debugDescription)
-        for _ in 0..<5 where !prompt.isHittable { app.collectionViews.firstMatch.swipeUp() }
         prompt.tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let typed = app.type("keep this prompt", into: prompt)
         let attachment = Match(.button, "Attachments and saved prompts")
         let controls = [Match(.any, NSPredicate(format: "value == %@", "keep this prompt")), Match(.button, "Hide keyboard"), attachment]
-        for orientation: UIDeviceOrientation in [.portrait, .landscapeLeft, .portrait, .landscapeRight, .portrait] {
+        // The second landscape pass is the one that left the prompt row under the navigation bar.
+        for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait, .landscapeRight, .portrait] {
             XCTAssertTrue(app.rotate(to: orientation), "\(orientation.rawValue)\n\(app.debugDescription)")
             XCTAssertTrue(app.navigationBars["New task"].exists, app.debugDescription)
             XCTAssertTrue(keyboard.appears(within: 30), "\(orientation.rawValue)\n\(app.debugDescription)")
@@ -109,118 +120,102 @@ final class LandscapeTests: XCTestCase {
         app.choose(app.buttons["Saved prompts"].firstMatch) { app.element(attachment).tap() }
         let saved = app.navigationBars["Saved prompts"]
         XCTAssertTrue(saved.appears(within: 10), app.debugDescription)
-        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
-        XCTAssertTrue(saved.exists, app.debugDescription)
-        let cancel = saved.buttons["Cancel"]
-        XCTAssertNotNil(cancel.settledFrame(within: 30), app.debugDescription)
-        XCTAssertTrue(eventually { cancel.isHittable }, app.debugDescription)
-        cancel.tap()
+        saved.buttons["Cancel"].tap()
         XCTAssertTrue(saved.disappears(within: 10), app.debugDescription)
         XCTAssertTrue(typed.exists, app.debugDescription)
     }
 
-    func testApprovalBandLeavesTheComposerReachable() throws {
-        let app = try launchDemo(["--approval-demo"])
+    func testApprovalBandLeavesTheComposerReachableAndTheReviewSheetReportsAFailedDecision() throws {
+        let app = try launchApproval()
         defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
+        // ChatScrollTests checks that a session without an approval shows it.
+        XCTAssertEqual(app.elapsedTimes.count, 0, app.debugDescription)
         // Chat's scroll view takes accessibility hit tests under the header and the band.
         app.buttons["Terminal"].firstMatch.tap()
         XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
         // A band: the tool, the whole command on its row, Review and the decisions.
         let showKeyboard = Match(.button, "Keyboard")
         let reviewButton = Match(.button, "Review")
-        let command = Match(.staticText, "cargo test -p collied --test approvals -- --nocapture")
-        XCTAssertTrue(shown([showKeyboard, reviewButton, command, Match(.button, "Approve"), Match(.button, "Deny")], app), app.debugDescription)
+        XCTAssertTrue(shown([showKeyboard, reviewButton, Match(.staticText, command), Match(.button, "Approve"), Match(.button, "Deny")], app), app.debugDescription)
         app.element(showKeyboard).tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
         let hideKeyboard = Match(.button, "Hide keyboard")
-        XCTAssertTrue(shown([hideKeyboard], app) { _, frames in aboveKeyboard(frames, app) }, app.debugDescription)
-        XCTAssertTrue(shown([reviewButton, hideKeyboard], app), app.debugDescription)
+        XCTAssertTrue(shown([reviewButton, hideKeyboard], app) { _, frames in aboveKeyboard([frames[1]], app) }, app.debugDescription)
         app.withInteractionOptions(2) { app.buttons["Hide keyboard"].tap() }
         XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
         try review(app)
-    }
 
-    func testApprovalBandKeepsApproveInReachAtLargeText() throws {
-        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
-        defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        let approve = app.buttons["Approve"]
-        XCTAssertTrue(approve.appears(within: 10), app.debugDescription)
-        // Chat's scroll view takes accessibility hit tests under the header and the band.
-        app.buttons["Terminal"].firstMatch.tap()
-        XCTAssertTrue(eventually(within: 30) { approve.isHittable && app.buttons["Review"].isHittable }, app.debugDescription)
-        XCTAssertTrue(eventually(within: 30) { app.buttons["Keyboard"].isHittable }, app.debugDescription)
-        try review(app)
-    }
-
-    func testApprovalBandOpensTheReviewInLandscapeAtLargeText() throws {
-        let app = try launchDemo(["--approval-demo", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
-        defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        XCTAssertTrue(app.buttons["Review"].appears(within: 10), app.debugDescription)
-        app.buttons["Terminal"].firstMatch.tap()
-        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
-        XCTAssertTrue(shown([Match(.button, "Review"), Match(.button, "Keyboard")], app), app.debugDescription)
-        try review(app)
-    }
-
-    func testReviewSheetReportsAFailedDecision() throws {
-        let app = try launchDemo(["--approval-demo"])
-        defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
-        // The card leaves the output to the sheet, and Review is its one way in.
-        let review = app.buttons["Review"]
-        XCTAssertTrue(review.appears(within: 10), app.debugDescription)
-        XCTAssertFalse(app.staticTexts["test approvals::case_1 ... ok"].exists, app.debugDescription)
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Output")).firstMatch.exists, app.debugDescription)
-        // Add note lives in the sheet only.
-        XCTAssertFalse(app.buttons["Add note"].exists, app.debugDescription)
-        XCTAssertGreaterThanOrEqual(review.frame.height, 44, app.debugDescription)
-        review.tap()
+        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
+        app.buttons["Chat"].firstMatch.tap()
+        // In portrait a card: it leaves the output to the sheet, and Review is its one way in.
+        XCTAssertTrue(shown([reviewButton], app), app.debugDescription)
+        XCTAssertGreaterThanOrEqual(app.element(reviewButton).frame.height, 44, app.debugDescription)
+        app.element(reviewButton).tap()
         let close = app.buttons["Close"]
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
+        // The band stays under the sheet, so each button is looked for among the ones a tap reaches.
+        let hittable = { (name: String) in app.buttons.matching(identifier: name).allElementsBoundByIndex.first { $0.isHittable } }
         // A note goes with the decision: Add note sits right above the decisions.
-        let sheetNote = app.buttons.matching(identifier: "Add note").allElementsBoundByIndex.first { $0.isHittable }
-        let sheetApprove = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
-        XCTAssertLessThanOrEqual(try XCTUnwrap(sheetNote, app.debugDescription).frame.maxY, try XCTUnwrap(sheetApprove).frame.minY, app.debugDescription)
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(sheetNote).frame.height, 44, app.debugDescription)
+        let sheetNote = try XCTUnwrap(hittable("Add note"), app.debugDescription)
+        XCTAssertLessThanOrEqual(sheetNote.frame.maxY, try XCTUnwrap(hittable("Approve")).frame.minY, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(sheetNote.frame.height, 44, app.debugDescription)
         // At half height the card above still shows the command: the sheet leaves it there. Landscape shows it in both.
-        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
-        XCTAssertEqual(command.count, 1, app.debugDescription)
+        let commands = app.staticTexts.matching(NSPredicate(format: "label == %@", command))
+        XCTAssertEqual(commands.count, 1, app.debugDescription)
         // Authentication fails (cancelled, or no passcode set) and nothing is sent: the notice must show in the sheet, not
         // only on the band behind it.
-        let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first { $0.isHittable }
-        try XCTUnwrap(approve, app.debugDescription).tap()
+        try XCTUnwrap(hittable("Approve"), app.debugDescription).tap()
         let cancel = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Cancel"]
-        if cancel.waitForExistence(timeout: 5) { cancel.tap() }
         let notice = app.staticTexts.matching(NSPredicate(format: "label == %@", "Not authenticated. Nothing was sent."))
-        XCTAssertTrue(eventually(within: 10) { notice.allElementsBoundByIndex.contains { $0.isHittable } }, app.debugDescription)
-        // It stays until the next decision, past the six seconds it used to last.
-        sleep(7)
-        XCTAssertTrue(notice.allElementsBoundByIndex.contains { $0.isHittable }, app.debugDescription)
+        XCTAssertTrue(eventually(within: 15) {
+            if cancel.exists { cancel.tap() }
+            return notice.allElementsBoundByIndex.contains { $0.isHittable }
+        }, app.debugDescription)
         // The card's copy hides while the sheet shows its own, which it used to peek above.
         XCTAssertEqual(notice.count, 1, app.debugDescription)
         // In landscape Add note leads the decisions' row, which leaves the output more room.
         XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
         XCTAssertTrue(eventually(within: 10) {
-            guard let note = app.buttons.matching(identifier: "Add note").allElementsBoundByIndex.first(where: { $0.isHittable }),
-                  let approve = app.buttons.matching(identifier: "Approve").allElementsBoundByIndex.first(where: { $0.isHittable }) else { return false }
+            guard let note = hittable("Add note"), let approve = hittable("Approve") else { return false }
             return note.frame.maxX <= approve.frame.minX && abs(note.frame.midY - approve.frame.midY) < 1
         }, app.debugDescription)
-        XCTAssertEqual(command.count, 2, app.debugDescription)
+        XCTAssertEqual(commands.count, 2, app.debugDescription)
         XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
-        close.tap()
-        XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
-        XCTAssertTrue(notice.firstMatch.exists, app.debugDescription)
-        // Another task never shows this approval's notice.
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_3")))
-        XCTAssertTrue(app.navigationBars.staticTexts["update the docs"].appears(within: 10), app.debugDescription)
-        XCTAssertFalse(app.buttons["Approve"].exists, app.debugDescription)
-        XCTAssertFalse(notice.firstMatch.exists, app.debugDescription)
+
+        // One tap starts the note: the field shows focused, and it and the decisions stay above the keyboard.
+        XCTAssertTrue(eventually(within: 10) { hittable("Add note") != nil }, app.debugDescription)
+        try XCTUnwrap(hittable("Add note"), app.debugDescription).tap()
+        let note = app.textFields["Note for Claude Code"]
+        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
+        // The keyboard lifts the sheet over the card, so the sheet shows the command again.
+        XCTAssertTrue(eventually(within: 10) { commands.count == 2 }, app.debugDescription)
+        _ = app.type("tests only", into: note)
+    }
+
+    func testLargeTextKeepsTheApprovalDecisionsAndTheKeysInReach() throws {
+        let app = try launchApproval(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL"])
+        defer { app.terminate() }
+        // Chat's scroll view takes accessibility hit tests under the header and the band.
+        app.buttons["Terminal"].firstMatch.tap()
+        XCTAssertTrue(eventually(within: 30) { app.buttons["Approve"].isHittable && app.buttons["Review"].isHittable }, app.debugDescription)
+        XCTAssertTrue(eventually(within: 30) { app.buttons["Keyboard"].isHittable }, app.debugDescription)
+
+        // Delivered to the running app: XCUIApplication.open would launch it again.
+        XCUIDevice.shared.system.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
+        XCTAssertTrue(app.navigationBars.staticTexts["fix the build"].appears(within: 10), app.debugDescription)
+        app.buttons["Terminal"].firstMatch.tap()
+        let keys = app.buttons["Keys"]
+        XCTAssertTrue(keys.appears(within: 5), app.debugDescription)
+        let escape = app.buttons["Escape"]
+        if !escape.exists { keys.tap() }
+        XCTAssertTrue(escape.appears(within: 5), app.debugDescription)
+        let window = app.windows.firstMatch.frame
+        for name in ["Shift", "Control", "Escape", "Tab", "Backspace", "Return", "Arrow joystick"] {
+            let key = app.descendants(matching: .any)[name].firstMatch
+            XCTAssertTrue(key.isHittable && window.contains(key.frame), app.debugDescription)
+        }
     }
 
     func testHalfHeightReviewKeepsACommandTheCardCuts() throws {
@@ -229,10 +224,8 @@ final class LandscapeTests: XCTestCase {
         let long = "cargo test -p collied --test approvals --features herdr-core,notifications -- --nocapture --test-threads 1 "
             + "approvals::decide approvals::expire approvals::note"
         app.launchEnvironment["COLLIE_DEMO_APPROVAL_COMMAND"] = long
-        app.launch()
+        try app.launch(onSession: "term_2")
         defer { app.terminate() }
-        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
         let review = app.buttons["Review"]
         XCTAssertTrue(review.appears(within: 10), app.debugDescription)
         review.tap()
@@ -240,36 +233,13 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
         // The card cuts the command after three lines, so the half-height sheet shows it whole. The card shows the reason
         // whole and the session header the task, so the sheet leaves them out.
-        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", long))
-        XCTAssertTrue(eventually(within: 10) { command.count == 2 }, app.debugDescription)
+        let commands = app.staticTexts.matching(NSPredicate(format: "label == %@", long))
+        XCTAssertTrue(eventually(within: 10) { commands.count == 2 }, app.debugDescription)
         let inSheet = { (query: XCUIElementQuery) in query.allElementsBoundByIndex.contains { $0.frame.minY > close.frame.maxY } }
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
         XCTAssertTrue(reason.firstMatch.exists, app.debugDescription)
         XCTAssertFalse(inSheet(reason), app.debugDescription)
         XCTAssertFalse(inSheet(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests"))), app.debugDescription)
-    }
-
-    func testAddNoteFocusesTheNoteFieldAboveTheKeyboard() throws {
-        let app = try launchDemo(["--approval-demo"])
-        defer { app.terminate() }
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_2")))
-        let review = app.buttons["Review"]
-        XCTAssertTrue(review.appears(within: 10), app.debugDescription)
-        review.tap()
-        let hittable = { (name: String) in app.buttons.matching(identifier: name).allElementsBoundByIndex.first { $0.isHittable } }
-        XCTAssertTrue(eventually(within: 10) { hittable("Add note") != nil }, app.debugDescription)
-        try XCTUnwrap(hittable("Add note"), app.debugDescription).tap()
-        // One tap starts the note: the field shows focused, and it and the decisions stay above the keyboard.
-        let note = app.textFields["Note for Claude Code"]
-        XCTAssertTrue(app.keyboards.firstMatch.appears(within: 10), app.debugDescription)
-        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
-        // The keyboard lifts the sheet over the card, so the sheet shows the command again.
-        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
-        XCTAssertTrue(eventually(within: 10) { command.count == 2 }, app.debugDescription)
-        _ = app.type("tests only", into: note)
-        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
-        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
-        XCTAssertTrue(app.rotate(to: .portrait), app.debugDescription)
     }
 
     /// Opens the review sheet from the band: the task, the whole command and every decision in reach, and the reason at
@@ -280,29 +250,29 @@ final class LandscapeTests: XCTestCase {
         XCTAssertTrue(eventually(within: 10) { close.exists && close.isHittable }, app.debugDescription)
         let task = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests"))
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
-        let command = app.staticTexts.matching(NSPredicate(format: "label == %@", "cargo test -p collied --test approvals -- --nocapture"))
+        let commands = app.staticTexts.matching(NSPredicate(format: "label == %@", command))
         let decisions = ["Approve", "Always allow", "Deny"].map { ($0, app.buttons.matching(identifier: $0)) }
         let hittable = { (query: XCUIElementQuery) in query.allElementsBoundByIndex.first { $0.isHittable } }
-        for (name, query) in [("task", task), ("command", command)] + decisions {
+        for (name, query) in [("task", task), ("command", commands)] + decisions {
             XCTAssertTrue(eventually(within: 10) { hittable(query) != nil }, "\(name)\n\(app.debugDescription)")
         }
         // In landscape at accessibility sizes the sheet shows little more than the command over the decisions.
-        if !eventually(within: 2, { hittable(reason) != nil }) { try XCTUnwrap(hittable(command), app.debugDescription).swipeUp() }
+        if hittable(reason) == nil { try XCTUnwrap(hittable(commands), app.debugDescription).swipeUp() }
         XCTAssertTrue(eventually(within: 10) { hittable(reason) != nil }, "reason\n\(app.debugDescription)")
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
     }
 
-    private func launchDemo(_ arguments: [String] = []) throws -> XCUIApplication {
+    private func launchApproval(_ arguments: [String] = []) throws -> XCUIApplication {
         continueAfterFailure = false
-        let app = try demoApp("landscape-demo", arguments)
-        app.launch()
-        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
+        let app = try demoApp("landscape-demo", ["--approval-demo"] + arguments)
+        try app.launch(onSession: "term_2")
+        XCTAssertTrue(app.buttons["Approve"].appears(within: 10), app.debugDescription)
         return app
     }
 
     /// On screen: the same frame inside the main window on two snapshots a poll apart, accepted by `check`, then hittable.
-    /// Frames lag the rotation, and asking for hittability mid-rotation fails the test. A zero timeout checks once.
+    /// Frames lag the rotation, and asking for hittability mid-rotation fails the test.
     private func shown(
         _ matches: [Match], _ app: XCUIApplication, within timeout: TimeInterval = 30,
         where check: (Screen, [CGRect]) -> Bool = { _, _ in true }

@@ -2,15 +2,25 @@ import XCTest
 
 @MainActor
 final class ChatScrollTests: XCTestCase {
-    func testLatestMessagesShowsOnceScrolledUp() throws {
+    func testChatOpensAFileOffersLatestMessagesAndExpandsAPullRequestWake() throws {
         continueAfterFailure = false
         let app = try demoApp("landscape-demo")
-        app.launch()
+        try app.launch(onSession: "term_demo")
         defer { app.terminate() }
-        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
         let latest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Round 20:")).firstMatch
         XCTAssertTrue(latest.appears(within: 10), app.debugDescription)
+        // LandscapeTests checks that the header leaves the elapsed time out while an approval shows.
+        XCTAssertTrue(app.elapsedTimes.firstMatch.exists, app.debugDescription)
+
+        let link = app.links["tests/approvals.rs"]
+        XCTAssertTrue(link.exists, app.debugDescription)
+        link.tap()
+        let content = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "// Sample of approvals.rs")).firstMatch
+        XCTAssertTrue(content.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["Copy"].exists, app.debugDescription)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(content.disappears(within: 5), app.debugDescription)
+
         let button = app.buttons["Latest messages"]
         XCTAssertFalse(button.exists, app.debugDescription)
         let start = app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
@@ -18,37 +28,12 @@ final class ChatScrollTests: XCTestCase {
         XCTAssertTrue(button.appears(within: 5), app.debugDescription)
         button.tap()
         XCTAssertTrue(button.disappears(within: 5), app.debugDescription)
-    }
 
-    func testPullRequestWakeIsACompactRowThatExpands() throws {
-        continueAfterFailure = false
-        let app = try demoApp("landscape-demo")
-        app.launch()
-        defer { app.terminate() }
-        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "PR watch: CI failed on #264")).firstMatch
-        XCTAssertTrue(row.appears(within: 10), app.debugDescription)
+        XCTAssertTrue(row.appears(within: 5), app.debugDescription)
         let prompt = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Pull request #264")).firstMatch
         XCTAssertFalse(prompt.exists, app.debugDescription)
         row.tap()
         XCTAssertTrue(prompt.appears(within: 5), app.debugDescription)
-    }
-
-    func testFileLinkOpensTheViewer() throws {
-        continueAfterFailure = false
-        let app = try demoApp("landscape-demo")
-        app.launch()
-        defer { app.terminate() }
-        XCTAssertTrue(app.buttons["New task"].appears(within: 10), app.debugDescription)
-        app.open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=term_demo")))
-        let link = app.links["tests/approvals.rs"]
-        XCTAssertTrue(link.appears(within: 10), app.debugDescription)
-        link.tap()
-        let content = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "// Sample of approvals.rs")).firstMatch
-        XCTAssertTrue(content.appears(within: 10), app.debugDescription)
-        XCTAssertTrue(app.buttons["Copy"].exists, app.debugDescription)
-        app.buttons["Done"].tap()
-        XCTAssertTrue(content.disappears(within: 5), app.debugDescription)
     }
 }

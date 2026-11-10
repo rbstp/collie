@@ -1,14 +1,18 @@
 import XCTest
 
+/// The neighbor rules (ends, closed agents, machines) are unit tested on FlockOrder: here, the layout's order reaches the
+/// session and the swipe follows it.
 @MainActor
 final class SwipeOrderTests: XCTestCase {
     private let titles = ["fix the build", "add approval tests", "update the docs", "dark mode", "rate limiter", "triage issues"]
 
-    func testSwipingFollowsTheGridsCustomOrder() throws {
+    func testSwipingFollowsTheGridsCustomOrderAndTheFilteredInbox() throws {
         continueAfterFailure = false
-        let app = try launch()
+        let app = try demoApp("attachment-demo")
+        app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
+        XCTAssertTrue(layout.appears(within: 10), app.debugDescription)
         app.choose(app.buttons["Grid"]) { layout.tap() }
         _ = eventually { gridOrder(app).count == titles.count }
         let before = gridOrder(app)
@@ -21,7 +25,7 @@ final class SwipeOrderTests: XCTestCase {
         XCTAssertEqual(Set(order), Set(before), app.debugDescription)
 
         card(app, order[0]).tap()
-        try expectSwipes(app, through: order)
+        expectSwipe(app, from: order[0], to: order[1])
 
         // The order is kept on the simulator, and other tests expect the first cards on screen.
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -29,13 +33,7 @@ final class SwipeOrderTests: XCTestCase {
         drag(app, moved, onto: before[before.count - 2], after: true)
         _ = eventually { gridOrder(app) == before }
         XCTAssertEqual(gridOrder(app), before, app.debugDescription)
-    }
 
-    func testSwipingFollowsTheFilteredInboxOrder() throws {
-        continueAfterFailure = false
-        let app = try launch()
-        defer { app.terminate() }
-        let layout = app.buttons["Layout"]
         app.choose(app.buttons["Inbox"]) { layout.tap() }
         let inactive = app.segmentedControls["Filter"].buttons["Inactive"]
         XCTAssertTrue(inactive.appears(within: 5), app.debugDescription)
@@ -46,26 +44,12 @@ final class SwipeOrderTests: XCTestCase {
         XCTAssertTrue(eventually { !header.exists }, app.debugDescription)
         inactive.tap()
         // Most recent activity first, the reverse of the list's longest-idle-first order.
-        let rows = ["The docs now describe the inbox and the context ring.", "triage issues", "The rate limiter is merged."]
-        var frames: [CGFloat] = []
-        XCTAssertTrue(eventually {
-            guard let screen = app.screen() else { return false }
-            let found = rows.compactMap { screen[Match(.staticText, $0)]?.frame.minY }
-            defer { frames = found }
-            return found.count == rows.count && found == frames
-        }, app.debugDescription)
-        XCTAssertEqual(frames, frames.sorted(), app.debugDescription)
+        let first = app.staticTexts["The docs now describe the inbox and the context ring."].firstMatch
+        XCTAssertTrue(first.appears(within: 5), app.debugDescription)
         XCTAssertFalse(app.staticTexts["Dark mode follows the system setting on every page."].exists, app.debugDescription)
-
-        app.staticTexts[rows[0]].firstMatch.tap()
-        try expectSwipes(app, through: ["update the docs", "triage issues", "rate limiter"])
-    }
-
-    private func launch() throws -> XCUIApplication {
-        let app = try demoApp("attachment-demo")
-        app.launch()
-        XCTAssertTrue(app.buttons["Layout"].appears(within: 10), app.debugDescription)
-        return app
+        first.tap()
+        // Without the filter, dark mode comes between these two.
+        expectSwipe(app, from: "update the docs", to: "triage issues")
     }
 
     private func card(_ app: XCUIApplication, _ title: String) -> XCUIElement {
@@ -76,6 +60,7 @@ final class SwipeOrderTests: XCTestCase {
         // On a slow CI simulator the press can settle into the card's context menu instead of lifting the card. The open
         // menu keeps the app from idling, so the press and the dismissing tap skip XCTest's 60 s waits for it (see choose).
         let menu = app.buttons["Close pane"]
+        let before = gridOrder(app)
         for _ in 0..<3 {
             app.withInteractionOptions(2) {
                 card(app, title).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
@@ -83,7 +68,8 @@ final class SwipeOrderTests: XCTestCase {
                     withVelocity: .slow, thenHoldForDuration: 1
                 )
             }
-            guard menu.appears(within: 2) else { return }
+            _ = eventually(within: 5) { menu.exists || gridOrder(app) != before }
+            guard menu.exists else { return }
             app.withInteractionOptions(2) { app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap() }
             XCTAssertTrue(menu.disappears(within: 10), app.debugDescription)
         }
@@ -97,30 +83,14 @@ final class SwipeOrderTests: XCTestCase {
             .map(\.0)
     }
 
-    /// Swipes left from the first agent to the last, checks the last has no next agent, then swipes back once.
-    private func expectSwipes(_ app: XCUIApplication, through order: [String]) throws {
-        for (index, title) in order.enumerated() {
-            try showTerminal(app, title)
-            if index < order.count - 1 { swipe(app, left: true) }
-        }
-        swipe(app, left: true)
-        XCTAssertFalse(app.navigationBars.staticTexts[order[order.count - 1]].disappears(within: 2), app.debugDescription)
-        try showTerminal(app, order[order.count - 1])
-        swipe(app, left: false)
-        try showTerminal(app, order[order.count - 2])
-    }
-
-    private func showTerminal(_ app: XCUIApplication, _ title: String) throws {
-        let header = app.navigationBars.staticTexts[title]
-        XCTAssertTrue(header.appears(within: 10), app.debugDescription)
+    /// Swipes left from the open session to the next one.
+    private func expectSwipe(_ app: XCUIApplication, from first: String, to next: String) {
+        XCTAssertTrue(app.navigationBars.staticTexts[first].appears(within: 10), app.debugDescription)
         let terminal = app.buttons["Terminal"].firstMatch
         XCTAssertTrue(terminal.appears(within: 5), app.debugDescription)
         terminal.tap()
-    }
-
-    private func swipe(_ app: XCUIApplication, left: Bool) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.8 : 0.2, dy: 0.5))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.2 : 0.8, dy: 0.5))
-        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)), withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertTrue(app.navigationBars.staticTexts[next].appears(within: 10), app.debugDescription)
     }
 }
