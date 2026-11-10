@@ -154,6 +154,27 @@ jobs:
           persist-credentials: false
           submodules: true
 
+      # Every input of the simulator xcframework and the acknowledgements, libtailscale's pin included: a hit skips Go and Rust.
+      - name: key the native build
+        id: native
+        run: |
+          key="$({ xcodebuild -version; git rev-parse HEAD:Cargo.lock HEAD:Cargo.toml HEAD:rust-toolchain.toml HEAD:about.toml \
+            HEAD:justfile HEAD:.github/workflows/ci.yml HEAD:scripts/notices.py HEAD:scripts/ghostty HEAD:crates/collie-core \
+            HEAD:crates/protocol HEAD:crates/tailnet HEAD:crates/tls HEAD:crates/tailscale-sys HEAD:crates/uniffi-bindgen \
+            HEAD:Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts HEAD:Collie/Resources/Octicons-LICENSE.txt; } | shasum -a 256)"
+          echo "key=ios-native-${key%% *}" >> "$GITHUB_OUTPUT"
+
+      # Before the boot below, which slows every restore for minutes.
+      - name: cache the native build
+        id: native-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            Collie/CollieCore/CollieCore.xcframework
+            Collie/CollieCore/Sources/CollieCore/collie_core.swift
+            Collie/Resources/Acknowledgements.json
+          key: ${{ steps.native.outputs.key }}
+
       # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot
       # saturates the runner for minutes: set up go has taken 8 to 338 s here against 2 to 5 s in rust,
       # and with the boot started after the rust toolchain, restoring the cargo cache took 369 s.
@@ -162,6 +183,7 @@ jobs:
 
       # setup-go otherwise unpacks Go from scratch on every macOS runner.
       - name: cache the Go toolchain
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -170,15 +192,18 @@ jobs:
           key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-1.27.3
 
       - name: set up go
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.27.3
           cache: false
 
       - name: install the rust toolchain
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         run: rustup toolchain install
 
       - name: cache cargo and go builds
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -219,10 +244,16 @@ jobs:
         run: just ios-ghostty
 
       - name: build the simulator xcframework
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         run: just ios-framework sim
 
+      # The ios-project recipe's two halves, so a hit runs only XcodeGen.
+      - name: write the acknowledgements
+        if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
+        run: python3 scripts/notices.py ios Collie/Resources/Acknowledgements.json
+
       - name: generate the project
-        run: just --no-deps ios-project
+        run: xcodegen generate --spec Collie/project.yml
 
       # The iOS app embeds the watch app, so every iOS build also builds for watchOS.
       - name: install the watchOS platform
