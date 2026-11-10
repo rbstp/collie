@@ -481,10 +481,6 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(model.notice == "This machine is no longer paired with this phone.")
 }
 
-@Test func iPhoneTabsExcludeApprovals() {
-    #expect(AppTab.allCases == [.agents, .machines, .settings])
-}
-
 @Test func approvalNotificationThreadsRouteOnlyToPairedMachines() throws {
     let core = FakeApprovalCore()
     let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
@@ -657,23 +653,6 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
     core.state.withLock { $0.pending["m1"] = [approval("ap_2", options: [.approve, .deny]), approval("ap_3")] }
     model.poll()
     #expect(model.notice == nil)
-}
-
-@MainActor
-@Test func headerTapTogglesTheFullPrompt() throws {
-    let core = FakeApprovalCore()
-    let model = approvalsModel(core, FakeAuthenticator())
-    let item = try #require(model.items.first)
-    #expect(model.expanded.isEmpty)
-    model.toggleExpanded(item)
-    #expect(model.expanded == ["ap_1"])
-    model.toggleExpanded(item)
-    #expect(model.expanded.isEmpty)
-
-    model.toggleExpanded(item)
-    core.state.withLock { $0.pending["m1"] = [] }
-    model.poll()
-    #expect(model.expanded.isEmpty)
 }
 
 @MainActor

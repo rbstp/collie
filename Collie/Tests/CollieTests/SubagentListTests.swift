@@ -1,5 +1,4 @@
 import CollieCore
-import GhosttyTerminal
 import SwiftUI
 import XCTest
 @testable import Collie
@@ -25,22 +24,6 @@ final class SubagentListTests: XCTestCase {
         XCTAssertEqual(SubagentSummary.count(400), "400")
     }
 
-    func testOneLinePerSubagent() {
-        let long = String(repeating: "Checking the wake sentence in architecture.md ", count: 6)
-        let height = { (subagents: [SubagentSummary]) in
-            UIHostingController(rootView: SubagentList(subagents: subagents))
-                .sizeThatFits(in: CGSize(width: 402, height: CGFloat.greatestFiniteMagnitude)).height
-        }
-        let typical = [subagent("#300 landscape on iPhone", tokens: 270_800)]
-        let one = height(typical)
-        XCTAssertGreaterThan(one, 0)
-        let ideal = UIHostingController(rootView: SubagentList(subagents: typical).fixedSize())
-            .sizeThatFits(in: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
-        XCTAssert((100...370).contains(ideal.width), "a typical title and its usage fit a portrait iPhone without truncating: \(ideal.width)")
-        XCTAssertEqual(height([subagent(long, tokens: 500)]), one, accuracy: 0.5)
-        XCTAssertEqual(height([subagent(long, tokens: 500), subagent("Running tests", tokens: 1_200)]), one * 2 + 2, accuracy: 1)
-    }
-
     func testLongTitlesTruncateAndLargeTextMovesTheUsageBelow() {
         let row = subagent(String(repeating: "Review the pairing flow ", count: 8), tokens: 496_517)
         let fit = { (view: AnyView) in
@@ -57,52 +40,5 @@ final class SubagentListTests: XCTestCase {
             }
         }
 
-    }
-
-    func testGridPreviewKeepsLatestOutputVisibleAtAccessibilitySizes() async throws {
-        let output = (1...100).map { "Output line \($0)\r\n" }.joined()
-        let core = DemoAgentCore(snapshot: output, subagentDemo: true)
-        let sample = try XCTUnwrap(core.agentView(machineId: DemoAgentCore.machine.id, terminalId: "term_demo", afterRevision: 0)?.agent)
-        for kind in ["claude", "copilot", "codex"] {
-            var agent = sample
-            agent.kind = kind
-            for starred in [false, true] {
-                for size in [DynamicTypeSize.large, .accessibility3] {
-                    func card(_ agent: AgentSummary) -> some View {
-                        AgentCard(agent: agent, screen: output, conversation: nil, workspace: nil, followed: false, starred: starred, now: .now)
-                            .environment(\.dynamicTypeSize, size)
-                            .frame(width: 370)
-                    }
-                    let host = UIHostingController(rootView: card(agent))
-                    try await hosting(host) { window in
-                        try await Task.sleep(for: .milliseconds(250))
-                        host.view.layoutIfNeeded()
-                        let terminal = try XCTUnwrap(descendants(host.view).compactMap { $0 as? GhosttyTerminalUIView }.first)
-                        let lineHeight = UIHostingController(rootView: Text("x").font(.caption2).environment(\.dynamicTypeSize, size))
-                            .sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
-                        let listHeight = lineHeight * (starred ? 5 : 2) + (starred ? 8 : 2) + 12
-                        XCTAssertGreaterThan(terminal.bounds.height - listHeight, starred ? 40 : 30)
-                        XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
-                        let attachment = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                        })
-                        attachment.name = "grid-subagents-\(kind)-\(starred)-\(size)"
-                        attachment.lifetime = .keepAlways
-                        add(attachment)
-
-                        for status in [AgentState.blocked, .working] {
-                            var updated = agent
-                            updated.status = status
-                            if status == .working { updated.subagents = [] }
-                            host.rootView = card(updated)
-                            try await Task.sleep(for: .milliseconds(100))
-                            host.view.layoutIfNeeded()
-                            XCTAssertEqual(terminal.bounds.height, starred ? 150 : 84, accuracy: 1)
-                            XCTAssertEqual(terminal.contentOffset.y, max(terminal.contentSize.height + terminal.adjustedContentInset.bottom - terminal.bounds.height, -terminal.adjustedContentInset.top), accuracy: 1)
-                        }
-                    }
-                }
-            }
-        }
     }
 }

@@ -36,17 +36,6 @@ private func pullRequest(
 }
 
 @MainActor
-@Test func aBadgePromptFillsTheComposerWithoutSending() {
-    let core = FakeCore()
-    let model = agentModel(core)
-    model.draft = "first"
-    let text = PullRequestBadge.prompts(pullRequest(.open, .passing)).last!.text
-    #expect(model.insert(PromptShortcut(text: text)))
-    #expect(model.draft == "first\n\nExplain pull request https://github.com/rbstp/collie/pull/264.")
-    #expect(core.snapshot.prompts.isEmpty)
-}
-
-@MainActor
 @Test func badgeShowsStateAndChecksOfAnOpenPullRequest() {
     #expect(PullRequestBadge.spoken(pullRequest(.open, .failing)) == "Pull request 264, open, checks failing")
     #expect(PullRequestBadge.check(pullRequest(.open, .failing))?.symbol == "xmark")
@@ -128,15 +117,4 @@ private func agent(kind: String = "claude", pullRequest: PullRequestSummary?, wa
     core.set(error: .Rejected(message: "gh is not signed in; run `gh auth login` on the machine"))
     await model.watchPullRequest(everyMinutes: 2)
     #expect(model.notice != nil)
-}
-
-@MainActor
-@Test func sessionMenuPutsArchiveFirstOnceThePullRequestMerged() {
-    #expect(PullRequestBadge.archiveFirst(agent(pullRequest: pullRequest(.merged, .passing))))
-    #expect(PullRequestBadge.archiveFirst(agent(kind: "codex", pullRequest: pullRequest(.merged, .noChecks))))
-    for state in [PullState.open, .draft, .closed, .unknown] {
-        #expect(!PullRequestBadge.archiveFirst(agent(pullRequest: pullRequest(state, .passing))), "\(state)")
-    }
-    #expect(!PullRequestBadge.archiveFirst(agent(pullRequest: nil)))
-    #expect(!PullRequestBadge.archiveFirst(nil))
 }

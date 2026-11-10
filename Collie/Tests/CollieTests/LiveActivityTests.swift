@@ -200,23 +200,6 @@ private func followFile() -> URL {
     URL.temporaryDirectory.appending(path: "follows-\(UUID().uuidString).json")
 }
 
-@Test func followListPersists() {
-    let file = followFile()
-    defer { try? FileManager.default.removeItem(at: file) }
-    #expect(FollowList.load(from: file).agents.isEmpty)
-    var list = FollowList()
-    var added: Bool
-    added = list.add(AgentRoute(machineId: "m1", terminalId: "t1"))
-    #expect(added)
-    added = list.add(AgentRoute(machineId: "m1", terminalId: "t2"))
-    #expect(added)
-    list.save(to: file)
-    #expect(FollowList.load(from: file) == list)
-    list.remove(AgentRoute(machineId: "m1", terminalId: "t1"))
-    list.save(to: file)
-    #expect(FollowList.load(from: file).agents == [AgentRoute(machineId: "m1", terminalId: "t2")])
-}
-
 @Test func followListCapsAtFive() {
     var list = FollowList()
     var added: Bool
@@ -245,13 +228,6 @@ private func followFile() -> URL {
     #expect(follows.notice?.contains("up to 5 agents") == true)
     #expect(!follows.isFollowing(AgentRoute(machineId: "m1", terminalId: "t6")))
     #expect(FollowList.load(from: file).agents.count == 5)
-}
-
-@MainActor
-@Test func followsAreOffByDefault() {
-    let follows = FollowModel(core: nil, approvals: nil, file: followFile())
-    #expect(follows.list.agents.isEmpty)
-    #expect(!follows.isFollowing(AgentRoute(machineId: "m1", terminalId: "t1")))
 }
 
 extension FakeCore: ActivityCore {

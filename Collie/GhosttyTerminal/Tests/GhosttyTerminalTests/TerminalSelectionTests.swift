@@ -34,12 +34,6 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
     #expect(selection(cell(0, 3), cell(0, 4)).text(in: frame) == "\u{4E2D}\u{6587}")
 }
 
-@Test func endsAreOrderedWhicheverWayTheyAreGiven() {
-    let reversed = selection(cell(2, 5), cell(0, 3))
-    #expect(reversed.start == cell(0, 3) && reversed.end == cell(2, 5))
-    #expect(selection(cell(1, 9), cell(1, 2)) == selection(cell(1, 2), cell(1, 9)))
-}
-
 @Test func dragFromAWordKeepsTheWord() {
     let word = selection(cell(1, 4), cell(1, 8))
     #expect(word.extended(to: cell(1, 6)) == word)

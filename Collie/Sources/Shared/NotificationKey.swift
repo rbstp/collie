@@ -87,6 +87,10 @@ enum NotificationKey {
 
         static func write(_ key: SymmetricKey, nodeId: String) throws {
             guard let url = url(nodeId: nodeId) else { throw CocoaError(.fileWriteInvalidFileName) }
+            try write(key, to: url)
+        }
+
+        static func write(_ key: SymmetricKey, to url: URL) throws {
             var dir = url.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             var noBackup = URLResourceValues()

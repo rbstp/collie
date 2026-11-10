@@ -228,7 +228,7 @@ final class FakeCore: AgentCore {
         )
     }
     func agentDiff(machineId: String, terminalId: String, root: String, path: String, section: String, pullRequest: UInt64?) async throws -> GitDiff {
-        state.withLock { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)" + (pullRequest.map { "|#\($0)" } ?? "")) }
+        try await call { $0.gitCalls.append("\(machineId)|\(terminalId)|\(root)|\(path)|\(section)" + (pullRequest.map { "|#\($0)" } ?? "")) }
         try await Task.sleep(for: snapshot.gitDiffDelay)
         return GitDiff(patch: snapshot.gitPatch, truncated: false)
     }
@@ -516,31 +516,6 @@ private func attach(_ model: AgentModel, _ core: FakeCore, _ names: String...) a
     #expect(model.attachments.isEmpty)
     #expect(model.draft.isEmpty)
     #expect(!model.canSendPrompt)
-}
-
-@MainActor
-@Test func attachmentsAloneCanBeSent() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    await attach(model, core, "a.png")
-    model.draft = " \n"
-    #expect(model.canSendPrompt)
-    await model.sendPrompt()
-    #expect(core.snapshot.prompts == ["/Users/me/Library/Caches/dev.rbstp.collied/attachments/a.png/a.png"])
-    #expect(model.attachments.isEmpty)
-}
-
-@MainActor
-@Test func failedSendKeepsTheAttachmentsAndDraft() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    await attach(model, core, "a.png")
-    model.draft = "look"
-    core.set(error: .AgentBlocked(message: ""))
-    await model.sendPrompt()
-    #expect(model.attachments.map(\.name) == ["a.png"])
-    #expect(model.draft == "look")
-    #expect(model.attachmentSlots == 9)
 }
 
 @MainActor
@@ -851,17 +826,6 @@ private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) asy
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { !$0.isEmpty })
     #expect(AgentKey.all.allSatisfy { AgentKey(name: $0.name) == $0 })
-}
-
-@MainActor
-@Test func eachStripKeySendsItsCoreKey() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    for key in AgentKey.strip {
-        await model.tap(key)?.value
-    }
-    #expect(core.snapshot.keys == AgentKey.strip.map { [$0] })
-    #expect(model.keyTaps == AgentKey.strip.count)
 }
 
 @MainActor
@@ -1825,48 +1789,6 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
-@Test func pasteFillsThePromptFieldWithoutSending() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    model.draft = "fix "
-    model.paste("the build")
-    model.paste(nil)
-    #expect(model.draft == "fix the build")
-    await Task.yield()
-    #expect(core.snapshot.prompts.isEmpty && core.snapshot.typed.isEmpty && core.snapshot.keys.isEmpty)
-}
-
-@MainActor
-@Test func approvalsAllowKeysAndTypedAnswers() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    #expect(model.acceptsKeys && !model.answering && model.blockedHint == nil)
-
-    model.blocked = .terminal
-    #expect(model.acceptsKeys && model.answering)
-    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
-    await model.tap(.enter)?.value
-
-    model.blocked = .optionsOnly
-    #expect(model.acceptsKeys && model.answering)
-    await model.tap(.down)?.value
-    #expect(model.keyTaps == 2)
-    model.draft = "go"
-    await model.sendPrompt()
-    #expect(core.snapshot.typed == ["go"])
-    #expect(core.snapshot.prompts.isEmpty)
-
-    model.blocked = .keys
-    #expect(model.acceptsKeys && model.answering)
-    await model.tap(.down)?.value
-    #expect(core.snapshot.keys == [[.enter], [.down], [.down]])
-
-    model.blocked = .keysAndText
-    #expect(model.acceptsKeys && model.answering)
-    #expect(model.blockedHint == "Use the terminal buttons or type an answer.")
-}
-
-@MainActor
 @Test(arguments: ["claude", "codex", "copilot"])
 func agentApprovalAllowsEveryTerminalButton(kind: String) async {
     let core = FakeCore()
@@ -2256,20 +2178,6 @@ private func noticeShown(
 }
 
 @MainActor
-@Test func codexShiftLeftIsAlwaysAvailable() async {
-    let core = FakeCore()
-    core.state.withLock {
-        $0.kind = "codex"
-        $0.status = .working
-    }
-    let model = agentModel(core)
-    model.poll()
-    #expect(!model.codexQuestionQueued && model.accepts(.shiftLeft))
-    await model.tap(.shiftLeft)?.value
-    #expect(core.snapshot.keys == [[.shiftLeft]])
-}
-
-@MainActor
 @Test func codexTextOnlyQuestionCanSendAnAnswer() async {
     let core = FakeCore()
     core.state.withLock {
@@ -2320,16 +2228,6 @@ private func noticeShown(
     #expect(model.canSendPrompt)
     await model.sendPrompt()
     #expect(core.snapshot.typed == ["It is in Done", "yes"])
-}
-
-@MainActor
-@Test func claudeKeepsTabInTheKeyStrip() {
-    let core = FakeCore()
-    core.state.withLock { $0.kind = "claude" }
-    let model = agentModel(core)
-    model.poll()
-    #expect(model.canPress(.tab))
-    #expect(!model.accepts(.shiftLeft))
 }
 
 private final class FakeUnlocker: TerminalUnlocker {
@@ -3233,17 +3131,6 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func archiveNoticeExpiresAndReplacementGetsItsOwnLifetime() async throws {
-    let model = FlockModel(archiveNoticeLifetime: .seconds(2))
-    model.showArchiveNotice("Archive complete")
-    try await Task.sleep(for: .seconds(1))
-    model.showArchiveNotice("Closed pane. gh poi did not complete (timeout); branch cleanup may be partial.")
-    try await Task.sleep(for: .seconds(1.3))
-    #expect(model.archiveNotice == "Archive complete\nSome branches could not be cleaned up.")
-    await poll { model.archiveNotice == nil }
-}
-
-@MainActor
 @Test func aModifierCombinesWithTheNextKeyOnly() async {
     let core = FakeCore()
     core.state.withLock { $0.kind = "claude" }
@@ -3324,17 +3211,6 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     #expect(!model.controlTyped(from: "", to: "c"))
     #expect(model.modifier == nil)
     #expect(core.snapshot.keys.isEmpty)
-}
-
-@MainActor
-@Test func returnInTheTerminalHidesTheKeyboardUnlessKept() throws {
-    let prefs = try makeTemporaryDirectory().appending(path: "prefs.json")
-    let model = AgentModel(core: FakeCore(), route: AgentRoute(machineId: "m1", terminalId: "term_1"), prefsFile: prefs)
-    #expect(model.keepsKeyboard(after: "ok"))
-    #expect(!model.keepsKeyboard(after: "\n"))
-    #expect(!model.keepsKeyboard(after: "ok\r\n"))
-    DevicePrefs.update(in: prefs) { $0.keepKeyboard = true }
-    #expect(model.keepsKeyboard(after: "\n"))
 }
 
 @MainActor

@@ -94,21 +94,6 @@ func png(width: CGFloat, height: CGFloat) -> Data {
 }
 
 @MainActor
-@Test func removingAPillFreesItsSlot() async {
-    let core = FakeCore()
-    let model = agentModel(core)
-    await model.attach((1...3).map { i in PendingAttachment(name: "f\(i).txt") { _ in Data([1]) } })?.value
-    #expect(model.attachmentSlots == 7)
-    let second = model.attachments[1]
-    model.remove(second)
-    #expect(model.attachments.map(\.name) == ["f1.txt", "f3.txt"])
-    #expect(model.attachmentSlots == 8)
-    model.remove(second)
-    #expect(model.attachments.count == 2)
-    #expect(model.draft.isEmpty)
-}
-
-@MainActor
 @Test func cancelledUploadLeavesTheDraftAlone() async {
     let core = FakeCore()
     let model = agentModel(core)

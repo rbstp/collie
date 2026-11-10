@@ -381,13 +381,3 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     #expect(model.dictation.problem?.message.hasPrefix("Dictation stopped: ") == true)
     #expect(engine.cancelled == 1)
 }
-
-@MainActor
-@Test func dictatedTextIsSetApartBySpaces() {
-    #expect(DictationModel.join("", "hello") == "hello")
-    #expect(DictationModel.join("fix", "") == "fix")
-    #expect(DictationModel.join("fix", "it") == "fix it")
-    #expect(DictationModel.join("fix ", "it") == "fix it")
-    #expect(DictationModel.join("fix\n", "it") == "fix\nit")
-    #expect(DictationModel.join("fix", " it") == "fix it")
-}

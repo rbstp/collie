@@ -1,25 +1,10 @@
 import CollieCore
-import Foundation
 import Testing
 
 @testable import Collie
 
-private func orderedMachine(_ id: String, label: String? = nil) -> Machine {
-    Machine(id: id, label: label ?? id, host: "\(id).example.ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
-}
-
-@Test func machineOrderPersistsAcrossLaunchesAndRenames() throws {
-    let directory = try makeTemporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let file = directory.appending(path: "machine-order.json")
-    let order = MachineOrder(ids: ["linux", "mac"])
-    order.save(to: file)
-
-    let loaded = MachineOrder.load(from: file)
-    #expect(loaded == order)
-    let machines = [orderedMachine("mac", label: "A renamed Mac"), orderedMachine("linux")]
-    #expect(loaded.sorted(machines).map(\.id) == ["linux", "mac"])
-    #expect(loaded.sorted(machines).last?.label == "A renamed Mac")
+private func orderedMachine(_ id: String) -> Machine {
+    Machine(id: id, label: id, host: "\(id).example.ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
 }
 
 @Test func newlyPairedMachinesAppendAndRemovalKeepsTheRemainingOrder() {

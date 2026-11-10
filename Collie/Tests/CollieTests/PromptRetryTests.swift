@@ -153,7 +153,11 @@ private func waitingModel(
     _ core: FakeCore, resends: PromptResends = PromptResends(), draftsFile: URL? = nil
 ) async -> (AgentModel, Task<Void, Never>) {
     core.set(error: unreachable)
-    let model = await retryingModel(core, TestClock(), resends: resends, draftsFile: draftsFile) { try await Task.sleep(for: $0) }
+    // Only a wake or a stop may end this wait: one that runs out would resend and pass anyway.
+    let model = await retryingModel(core, TestClock(), resends: resends, draftsFile: draftsFile) { _ in
+        try await Task.sleep(for: .seconds(5))
+        Issue.record("nothing woke or stopped the wait")
+    }
     model.draft = "fix the build"
     let send = Task { await model.sendPrompt() }
     await poll { model.retrying }
