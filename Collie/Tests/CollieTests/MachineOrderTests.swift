@@ -3,8 +3,8 @@ import Testing
 
 @testable import Collie
 
-private func orderedMachine(_ id: String, label: String? = nil) -> Machine {
-    Machine(id: id, label: label ?? id, host: "\(id).example.ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
+private func orderedMachine(_ id: String) -> Machine {
+    Machine(id: id, label: id, host: "\(id).example.ts.net", port: 8457, nodeId: "n\(id)", kind: .mac, key: "")
 }
 
 @Test func newlyPairedMachinesAppendAndRemovalKeepsTheRemainingOrder() {

@@ -710,6 +710,17 @@ private func openedAgent(_ core: FakeCore, kind: String = "claude", macDraft: St
 }
 
 @MainActor
+@Test func aSelectionBelowTheBoxKeepsThePromptAndPointsToUp() async {
+    let core = FakeCore()
+    let model = openedAgent(core, macDraft: "")
+    model.draft = "fix the build"
+    core.set(error: .InputUnfocused)
+    await model.sendPrompt()
+    #expect(model.draft == "fix the build")
+    #expect(model.promptError?.contains("Press ↑") == true)
+}
+
+@MainActor
 private func macSends(_ core: FakeCore, _ model: AgentModel, prompt: String) async {
     core.state.withLock {
         $0.macDraft = ""
@@ -1440,6 +1451,40 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(await model.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
     #expect(model.createBranch == branch)
     #expect(core.snapshot.worktreeCalls == ["list /Users/me/app", "list /Users/me/app", "create /Users/me/app \(branch) codex"])
+}
+
+@MainActor
+@Test func newTaskCreatesAndOpensSelectedWorktrees() async {
+    let core = FakeCore()
+    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let create = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await create.loadOptions()
+    create.location = .worktree
+    create.source = "/Users/me/app"
+    create.prompt = "build it"
+    create.branch = "feature"
+    #expect(!create.canStart)
+    await create.loadWorktrees()
+    #expect(create.canStart)
+    #expect(create.createPath == "/Users/me/app/.worktree/feature")
+    #expect(await create.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+
+    let open = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
+    await open.loadOptions()
+    open.location = .worktree
+    open.source = "/Users/me/app"
+    open.worktreeAction = .open
+    open.prompt = "continue"
+    await open.loadWorktrees()
+    #expect(open.checkoutPath == "/Users/me/app-feature")
+    #expect(open.canStart)
+    #expect(await open.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
+    #expect(core.snapshot.worktreeCalls == [
+        "list /Users/me/app", "create /Users/me/app feature codex",
+        "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
+    ])
+    #expect(core.snapshot.taskPrompts == ["build it", "continue"])
 }
 
 @MainActor
@@ -2953,6 +2998,29 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     review.comments[1].text = "Keep this."
     #expect(await review.send(using: model))
     #expect(core.snapshot.prompts == ["Feedback for file.swift in /feature: Please simplify.\n\nFeedback for file.swift: Keep this."])
+}
+
+@MainActor
+@Test func gitReadsStayOnTheAgentRouteAndSelectedCheckout() async throws {
+    let core = FakeCore()
+    core.state.withLock { $0.gitFiles = [GitFile(path: "p.swift", oldPath: nil, section: "pull_request", status: "M", additions: 1, deletions: 0, hash: "h")] }
+    let model = await slashReady(core)
+    let changes = try await model.gitChanges()
+    let file = GitFile(path: "a.swift", oldPath: nil, section: "staged", status: "M", additions: 1, deletions: 1, hash: nil)
+    let root = try #require(changes.root)
+    _ = try await model.gitDiff(root: root, file: file)
+    _ = try await model.gitChanges(root: "/feature")
+    _ = try await model.gitWorktrees()
+    let pull = try await model.gitPullRequest(7)
+    let pullFile = try #require(pull.files.first)
+    #expect(pullFile.pullRequest == 7)
+    _ = try await model.gitDiff(root: root, file: pullFile)
+    let target = "\(model.route.machineId)|\(model.route.terminalId)"
+    #expect(core.snapshot.gitCalls == [
+        target, target + "|/worktree|a.swift|staged", target + "|/feature", target + "|worktrees", target + "|#7",
+        target + "|/worktree|p.swift|pull_request|#7"
+    ])
+    #expect(core.snapshot.prompts.isEmpty)
 }
 
 @MainActor

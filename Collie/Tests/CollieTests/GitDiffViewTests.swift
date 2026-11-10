@@ -233,12 +233,14 @@ final class GitDiffViewTests: XCTestCase {
                 }
                 let shown = { descendants(host.view).contains { ($0 as? UITextView)?.text.contains("new") == true } }
                 if collapsed {
+                    defer { core.release() }
                     // The diff arrives in the update that ends the loading state, so it is on screen by then unless collapsed.
                     let loading = {
                         host.view.layoutIfNeeded()
                         return descendants(host.view).contains { $0 is UIActivityIndicatorView }
                     }
                     _ = try await waitFor("\(gitFile.path) loading") { loading() ? true : nil }
+                    await core.waitHeld(1)
                     core.release()
                     _ = try await waitFor("\(gitFile.path) loaded") { loading() ? nil : true }
                     XCTAssertFalse(shown(), gitFile.path)

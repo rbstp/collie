@@ -42,6 +42,21 @@ private func retryingModel(
     return model
 }
 
+@Test func onlyAnUnreachableMachineIsRetried() {
+    #expect(PromptRetry.retries(unreachable))
+    #expect(PromptRetry.retries(CoreError.NotRunning))
+    let refusals: [CoreError] = [
+        .AgentBlocked(message: ""), .AgentNotReady, .DraftChanged(current: "x"), .DraftNotCleared, .InputUnfocused,
+        .InvalidInput(field: "text", message: "too long"), .RateLimited, .NotFound, .HerdrUnavailable,
+        .Rejected(message: ""), .Internal(message: "unexpected reply from the machine: flock"),
+        .Unauthorized(message: ""),
+    ]
+    for error in refusals {
+        #expect(!PromptRetry.retries(error), "\(error)")
+    }
+    #expect(!PromptRetry.retries(CancellationError()))
+}
+
 @Test func fiveAttemptsAMinuteApart() throws {
     let start = ContinuousClock.now
     var retry = PromptRetry(started: start)
