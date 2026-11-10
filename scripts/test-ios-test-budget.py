@@ -47,14 +47,17 @@ def artifact(content, name=budget.ARTIFACT_FILE):
 
 class MeasureTests(unittest.TestCase):
     def test_counts_tests_launches_time_and_retries(self):
-        retried = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 1},
+        retried = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 2},
                    {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 1}]
+        retried_ui = case('Suite/testRetried()', 35.25)
+        retried_ui['children'] = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 40},
+                                  {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 30.5}]
         tests = tree(
-            ui=[case('Suite/testOne()', 10), case('Suite/testRetried()', 15.25, runs=('Failed', 'Passed')), case('Suite/testSkipped()', 0, result='Skipped')],
+            ui=[case('Suite/testOne()', 10), retried_ui, case('Suite/testSkipped()', 0, result='Skipped')],
             unit=[
                 case('Suite/testUnit()', 5),
                 case('unit(phase:)', 3.5, arguments=[('.a', 3, []), ('.b', 4, [])]),
-                case('retriedArgument(x:)', 1.5, arguments=[('1', 1, retried), ('2', 2, [])]),
+                case('retriedArgument(x:)', 1.5, arguments=[('1', 1.5, retried), ('2', 3, [])]),
             ],
         )
         launch = {'title': 'Open dev.rbstp.collie', 'childActivities': [{'title': 'Launch dev.rbstp.collie'}]}
@@ -65,6 +68,16 @@ class MeasureTests(unittest.TestCase):
         measured = budget.measure(tests, activities.__getitem__)
         self.assertEqual(measured, {'metrics': VALUES, 'retried': ['CollieTests/retriedArgument', 'CollieUITests/Suite/testRetried']})
         budget.validate({**measured, 'ceilings': CEILINGS})
+
+    def test_a_test_that_passed_on_the_retry_counts_only_its_passing_attempt(self):
+        attempts = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 115.2},
+                    {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 101.1}]
+        retried = case('LandscapeTests/testRetried()', 108.15)
+        retried['children'] = attempts
+        measured = budget.measure(tree(ui=[retried, case('LandscapeTests/testOther()', 20)]), lambda _: {'testRuns': []})
+        self.assertEqual(measured['metrics']['ui_seconds'], 121.1)
+        self.assertEqual(measured['metrics']['slowest_ui_test_seconds'], 101.1)
+        self.assertEqual(measured['retried'], ['CollieUITests/LandscapeTests/testRetried'])
 
     def test_the_suites_longest_names_pass_on_the_retry_path(self):
         identifiers = []

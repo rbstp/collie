@@ -26,8 +26,7 @@ METRICS = {
     "slowest_ui_test_seconds": ("Slowest UI test", " s"),
     "unit_seconds": ("Unit tests (CollieTests), summed", " s"),
 }
-# Reported, never enforced: a test's time includes a failed first attempt, so one 60 s idle stall and a passing retry
-# would fail the job with no regression.
+# Reported, never enforced: one 60 s idle stall (#694) in a passing attempt would fail the job with no regression.
 REPORTED = {"slowest_ui_test_seconds"}
 ENFORCED = set(METRICS) - REPORTED
 MAX_BYTES = 64 * 1024
@@ -71,8 +70,11 @@ def runs(node):
 
 
 def seconds(node):
-    """A retried or parameterized test's own duration is the mean of its runs: its cost is their sum."""
-    return sum(seconds(c) for c in runs(node)) if runs(node) else node.get("durationInSeconds", 0)
+    """A parameterized test's own duration is the mean of its arguments: its cost is their sum. A retried test's cost is its
+    passing attempt: the retry absorbed the failed one, which `failed_once` reports."""
+    children = runs(node)
+    passed = [c for c in children if c.get("nodeType") == "Repetition" and c.get("result") == "Passed"]
+    return sum(seconds(c) for c in passed or children) if children else node.get("durationInSeconds", 0)
 
 
 def failed_once(node):
