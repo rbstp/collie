@@ -192,6 +192,8 @@ final class LandscapeTests: XCTestCase {
         // The keyboard lifts the sheet over the card, so the sheet shows the command again.
         XCTAssertTrue(eventually(within: 10) { commands.count == 2 }, app.debugDescription)
         _ = app.type("tests only", into: note)
+        XCTAssertTrue(app.rotate(to: .landscapeLeft), app.debugDescription)
+        XCTAssertTrue(eventually(within: 10) { note.isHittable && hittable("Approve") != nil }, app.debugDescription)
     }
 
     func testLargeTextKeepsTheApprovalDecisionsAndTheKeysInReach() throws {

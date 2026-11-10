@@ -4,7 +4,7 @@ import XCTest
 final class AgentsTabTests: XCTestCase {
     func testInboxSnoozesAndSearchesAndEveryLayoutSwipesToUsage() throws {
         continueAfterFailure = false
-        let app = try demoApp("attachment-demo")
+        let app = try demoApp("attachment-demo", ["--subagent-demo"])
         app.launch()
         defer { app.terminate() }
         let layout = app.buttons["Layout"]
@@ -60,6 +60,22 @@ final class AgentsTabTests: XCTestCase {
         // Back to layouts already shown too: the grid's page lock once left the pager unable to swipe after a switch.
         for (index, name) in ["Inbox", "Grid", "List", "Inbox", "Grid"].enumerated() {
             if index > 0 { app.choose(app.buttons[name]) { layout.tap() } }
+            if index == 1 {
+                // A working agent's card lists its first subagent and counts the rest, four once starred; a blocked agent's lists none.
+                let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
+                XCTAssertTrue(card.appears(within: 5), app.debugDescription)
+                XCTAssertTrue(card.label.contains("Review approval flow") && card.label.contains("+4 more"), app.debugDescription)
+                XCTAssertFalse(card.label.contains("Run approval tests"), app.debugDescription)
+                let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch
+                XCTAssertTrue(blocked.exists, app.debugDescription)
+                XCTAssertFalse(blocked.label.contains("Review deny path"), app.debugDescription)
+                app.choose(app.buttons["Star"]) { card.press(forDuration: 1) }
+                XCTAssertTrue(eventually { card.label.contains("+1 more") }, app.debugDescription)
+                for title in ["Review approval flow", "Run approval tests", "Check retry handling", "Inspect test fixtures"] {
+                    XCTAssertTrue(card.label.contains(title), app.debugDescription)
+                }
+                XCTAssertFalse(card.label.contains("Review documentation"), app.debugDescription)
+            }
             XCTAssertTrue(agents.isSelected, app.debugDescription)
             if name == "Inbox" {
                 view.buttons["Usage"].tap()
