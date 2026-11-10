@@ -32,7 +32,7 @@ To have `collied` [stop agents at the plan limit](../agents/claude-code.md#plan-
 }
 ```
 
-Put it beside `PermissionRequest` in the same `hooks` object. The hook asks `collied` whether the plan is at its limit and stops the agent only while **Stop at the plan limit** is on and a limit is reached. When `collied` is off or does not answer within 2 seconds, the agent goes on. It needs the status line tap below, which tells `collied` that a limit is reached.
+Put it beside `PermissionRequest` in the same `hooks` object, without a `matcher`, so it runs for every tool. The hook asks `collied` whether the plan is at its limit and stops the agent only while **Stop at the plan limit** is on and a limit is reached. When `collied` is off or does not answer within 2 seconds, the agent goes on. It needs the status line tap below, which tells `collied` that a limit is reached.
 
 ## Plan usage
 

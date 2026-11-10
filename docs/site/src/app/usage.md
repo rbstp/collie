@@ -21,7 +21,7 @@ Each limit leads with its figure, then a bar and its reset time. The bar turns o
 
 ## Stop at the plan limit
 
-Under Claude Code's limits, **Stop at the plan limit** has the machine stop its Claude Code agents at the 5-hour or weekly limit instead of letting them run on extra usage, and continue them a minute after the reset. The machine keeps the setting, so every phone paired with it shows the same. It is off by default and needs the [PreToolUse hook](../install/claude-code.md#the-pretooluse-hook). Turning it off also cancels the resumes of agents it already stopped. While agents wait, each limit says how many, such as "2 agents wait". [Plan limits](../agents/claude-code.md#plan-limits) explains what the agents do.
+Under Claude Code's limits, **Stop at the plan limit** has the machine stop its Claude Code agents at 99% of the 5-hour or weekly limit instead of letting them run on extra usage, and continue them a minute after the reset. The machine keeps the setting, so every phone paired with it shows the same. It is off by default and needs the [PreToolUse hook](../install/claude-code.md#the-pretooluse-hook). Turning it off also cancels the resumes of agents it already stopped. While agents wait, each limit says how many, such as "2 agents wait". [Plan limits](../agents/claude-code.md#plan-limits) explains what the agents do.
 
 ## Tokens and cost
 
