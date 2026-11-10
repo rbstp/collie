@@ -1,6 +1,6 @@
 {
-  "ui_tests": 15,
-  "ui_launches": 15,
-  "ui_seconds": 1205,
-  "unit_seconds": 81
+  "ui_tests": 13,
+  "ui_launches": 13,
+  "ui_seconds": 945,
+  "unit_seconds": 79
 }
