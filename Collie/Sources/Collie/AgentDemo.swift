@@ -29,7 +29,7 @@ struct AgentDemo: View {
             connectionError: ProcessInfo.processInfo.environment["COLLIE_DEMO_CONNECTION_ERROR"],
             subagentDemo: arguments.contains("--subagent-demo")
         )
-        _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, dismissResolved: { _, _ in }) : nil)
+        _approvals = State(initialValue: arguments.contains("--approval-demo") ? ApprovalsModel(core: core, auth: Refused(), dismissResolved: { _, _ in }) : nil)
         _follows = State(initialValue: FollowModel(core: core, approvals: nil, file: nil))
         followed = arguments.firstIndex(of: "--follow-demo").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
     }
@@ -88,6 +88,12 @@ struct AgentDemo: View {
                 await activity.update(content)
             }
         }
+    }
+
+    // The demo's core decides nothing. The system's passcode sheet comes from another process, and UI tests could not always
+    // reach its Cancel.
+    private struct Refused: Authenticator {
+        func authenticate(reason: String) async -> Bool { false }
     }
 
     private static func firstText(_ value: Any) -> String? {
