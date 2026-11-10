@@ -39,6 +39,18 @@ When the CollieCore framework and the Xcode project are already current, `just -
 - When a test needs a live herdr, create a scratch workspace (`herdr workspace create ... --label <name>`) and close it afterwards. Never send input to panes you did not create, and do not modify the user's agent CLI configuration.
 - When a test or check needs a live herdr-core, start a core of its own (`CoreSession` in `crates/e2e/tests/common` does): its own `HC_SESSION`, scratch `HOME`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME` and `XDG_RUNTIME_DIR`, a clean environment (no `HERDR_*`, `CLAUDECODE`, `CLAUDE_CODE_*` or plugin variables, except dummy values a test sets to check they never reach an agent), and stop only that core. Skip when `hc` is not on `PATH`, found without running it. Never run `hc` against the user's default session (`hc server status` starts a core), never stop or restart the user's core, and never attach to, read or send input to a terminal you did not create. collied under test is pointed at the scratch socket (`ServerConfig.herdr_core`), never left to discover the user's core.
 
+## Tests
+
+Fast tests that fail only for regressions are a priority: every pull request waits on the iOS suite.
+
+- A new test names a behavior or a past bug it would catch. If it would still pass with that behavior broken, do not add it.
+- Write a unit test when one can show it (`Collie/Tests/CollieTests`). A UI test (`Collie/Tests/CollieUITests`) is for what only the running app shows: gestures, the keyboard, rotation, navigation.
+- A UI test costs about 10 s on CI for its launch alone, against about 0.1 s for a whole unit test. Keep one launch per UI test: extend a test that already launches with the same fixture and arguments, open a session with `launch(onSession:)`, and deliver a later link with `XCUIDevice.shared.system.open`, since `XCUIApplication.open` launches the app again.
+- No sleeps and no waits that outlast their condition: poll with `eventually` and the other helpers in `ElementWaits.swift`.
+- A flaky test is fixed at its cause or removed, never given a longer timeout or left to the retry. CI's one retry keeps a runner fault from failing a run, and the budget table names every test that needed it.
+- Remove a test that stops earning its time: one that duplicates another, checks what a unit test covers, or fails for the OS or the runner more than for regressions. Remove the helpers, fixtures and demo switches only it used.
+- `Collie/Tests/budget.json` is the enforced bar: the `ios` job fails when the UI tests, their app launches, the UI suite's time or the unit tests' time pass a ceiling (`scripts/ios-test-budget.py`). Raising a ceiling needs a reason in the pull request.
+
 ## Protocol
 
 - Bump `PROTOCOL_VERSION` (`crates/protocol/src/lib.rs`) only for wire changes an older peer would refuse or misread, and add a line to the version history in `docs/architecture.md`.
@@ -76,8 +88,10 @@ docs/site/check-site.sh /tmp/collie-site
 - Planned work is a GitHub issue in the current phase milestone (for example "Phase 7: Improvements"). The pull request body says `Closes #N`.
 - Commit messages and pull request titles are plain sentences: imperative, sentence case, no type prefix, no trailing period, like the existing history ("Keep a merged pull request until the branch moves").
 - Merging a pull request into `master` uploads a TestFlight build. Put `[skip-release]` in the title of a pull request that should not ship one (docs, CI, tests only).
+- `testflight` runs the unit tests only before it ships. The UI suite runs in `ci` on the pull request and on the push to `master`, so a UI regression shows on master's `ci` run and does not block a build.
 - Pull requests that change only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` skip the macOS `rust` and `ios` CI jobs (the `changes` job in `.github/workflows/ci.yml`). Any other path runs `rust`, and `ios` as the next rule says; tests read `docs/protocol/` and `docs/tailnet.md`.
-- The `ios` job also runs only for pull requests that touch what the app builds from or its tests read: `Collie/`, `crates/collie-core`, `crates/protocol`, `crates/tailnet`, `crates/tls`, `crates/tailscale-sys`, `crates/uniffi-bindgen`, `crates/collied/tests/fixtures/`, `docs/protocol/`, `scripts/ghostty/`, `scripts/notices.py`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `about.toml`, `.gitmodules`, the `justfile` and `ci.yml`. A collied-only pull request skips it; pushes to `master` run it. When the app starts reading another path, add it to that list in the `changes` job.
+- The `ios` job also runs only for pull requests that touch what the app builds from or its tests read: `Collie/`, `crates/collie-core`, `crates/protocol`, `crates/tailnet`, `crates/tls`, `crates/tailscale-sys`, `crates/uniffi-bindgen`, `crates/collied/tests/fixtures/`, `docs/protocol/`, `scripts/ghostty/`, `scripts/notices.py`, `scripts/ios-test-budget.py` and its test, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `about.toml`, `.gitmodules`, the `justfile` and `ci.yml`. A collied-only pull request skips it; pushes to `master` run it. When the app starts reading another path, add it to that list in the `changes` job.
+- After a pull request's `ci` run, `ios-test-budget` comments the budget table on it, beside master's last values. It runs from `master` with a token that writes to pull requests, so it must never check out or run a pull request's code.
 - Keep published iOS, collied, CollieBar and CollieTray releases on the same version, tag and source commit, including UI-only changes.
 - Release details, signing and secrets: `docs/release.md`.
 

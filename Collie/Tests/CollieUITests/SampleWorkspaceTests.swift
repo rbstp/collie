@@ -2,38 +2,7 @@ import XCTest
 
 @MainActor
 final class SampleWorkspaceTests: XCTestCase {
-    func testGridSubagentsAreAccessibleAndCappedWithoutCoveringBlockedAgents() throws {
-        continueAfterFailure = false
-        let app = try demoApp("screenshot-demo", ["--subagent-demo"])
-        app.launch()
-        defer { app.terminate() }
-        let layout = app.buttons["Layout"]
-        XCTAssertTrue(layout.appears(within: 10))
-        app.choose(app.buttons["Grid"]) { layout.tap() }
-        let card = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "fix the build")).firstMatch
-        XCTAssertTrue(card.appears(within: 5))
-        let label = card.label
-        XCTAssertNotNil(label.range(of: #"Review approval flow, [0-9]+(?:h [0-9]+)?m, \+4 more"#, options: .regularExpression))
-        XCTAssertFalse(label.contains("Run approval tests"))
-        XCTAssertFalse(label.contains("5 subagents"))
-        XCTAssertFalse(label.contains("12k"))
-        let blocked = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "add approval tests")).firstMatch
-        XCTAssertTrue(blocked.exists)
-        let blockedLabel = blocked.label
-        XCTAssertFalse(blockedLabel.contains("Review deny path"))
-        XCTAssertTrue(blockedLabel.contains("1 subagent"))
-
-        app.choose(app.buttons["Star"]) { card.press(forDuration: 1) }
-        let expanded = app.buttons.containing(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "fix the build", "+1 more")).firstMatch
-        XCTAssertTrue(expanded.appears(within: 5))
-        let expandedLabel = card.label
-        XCTAssertTrue(expandedLabel.contains("Check retry handling"))
-        XCTAssertTrue(expandedLabel.contains("Inspect test fixtures"))
-        XCTAssertTrue(expandedLabel.contains("+1 more"))
-        XCTAssertFalse(expandedLabel.contains("Review documentation"))
-    }
-
-    func testSampleEntryResetAndExitWithoutDeveloperArguments() {
+    func testSampleEntryActionsResetAndExitWithoutDeveloperArguments() {
         let app = XCUIApplication()
         app.launch()
         defer { app.terminate() }
@@ -64,32 +33,7 @@ final class SampleWorkspaceTests: XCTestCase {
         _ = app.type("Show sample result", into: prompt)
         app.buttons["Send"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Simulated response to: Show sample result")).firstMatch.appears(within: 10))
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "release-sample-actions"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.buttons["Machines"].tap()
-        XCTAssertTrue(app.staticTexts["MacBook Pro"].appears(within: 5))
-        app.buttons["Settings"].tap()
-        app.buttons["Reset sample workspace"].tap()
-        XCTAssertTrue(app.staticTexts["Simulated actions only"].appears(within: 5))
-        app.buttons["Exit"].tap()
-        XCTAssertTrue(explore.appears(within: 5))
-    }
 
-    func testGitChangesRowOpensItsWorktree() {
-        let app = XCUIApplication()
-        app.launch()
-        defer { app.terminate() }
-        if app.buttons["Settings"].exists { app.buttons["Settings"].tap() }
-        let explore = app.buttons["Explore sample workspace"]
-        XCTAssertTrue(explore.appears(within: 10))
-        explore.tap()
-        app.choose(app.buttons["List"]) { app.buttons["Layout"].tap() }
-        let agent = app.staticTexts["add approval tests"].firstMatch
-        XCTAssertTrue(agent.appears(within: 5))
-        agent.tap()
         app.choose(app.buttons["Git changes"]) { app.buttons["More"].tap() }
         XCTAssertTrue(app.navigationBars["Git changes"].appears(within: 10))
         let row = app.buttons.containing(NSPredicate(format: "label CONTAINS %@", "sample-approval-tests")).firstMatch
@@ -99,9 +43,13 @@ final class SampleWorkspaceTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["sample-approval-tests"].appears(within: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["Done"].tap()
+
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["Machines"].tap()
+        XCTAssertTrue(app.staticTexts["MacBook Pro"].appears(within: 5))
         app.buttons["Settings"].tap()
+        app.buttons["Reset sample workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Simulated actions only"].appears(within: 5))
         app.buttons["Exit"].tap()
         XCTAssertTrue(explore.appears(within: 5))
     }

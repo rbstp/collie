@@ -74,6 +74,17 @@ extension XCUIElement {
 
 @MainActor
 extension XCUIApplication {
+    /// Launches the demo on an agent's session. `open` launches the app with the URL, so a `launch` before it is a second
+    /// launch, about ten seconds on CI.
+    func launch(onSession terminal: String) throws {
+        open(try XCTUnwrap(URL(string: "collie://agent?m=demo&t=\(terminal)")))
+    }
+
+    /// A session header's elapsed time, such as "2m" or "1h 5m".
+    var elapsedTimes: XCUIElementQuery {
+        staticTexts.matching(NSPredicate(format: "label MATCHES %@", "[0-9]+[smd]|[0-9]+h [0-9]+m"))
+    }
+
     func screen() -> Screen? {
         guard let window = try? windows.firstMatch.snapshot() else { return nil }
         func flatten(_ element: any XCUIElementSnapshot) -> [any XCUIElementSnapshot] {
