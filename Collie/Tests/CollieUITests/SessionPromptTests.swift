@@ -20,26 +20,6 @@ final class SessionPromptTests: XCTestCase {
         XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["Send"].isEnabled, app.debugDescription)
 
-        typed.tap()
-        let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        app.choose(app.buttons["Saved prompts"].firstMatch) { app.buttons["Attachments and saved prompts"].tap() }
-        let saved = app.navigationBars["Saved prompts"]
-        XCTAssertTrue(saved.appears(within: 5), app.debugDescription)
-        saved.buttons["Cancel"].tap()
-        XCTAssertTrue(saved.disappears(within: 5), app.debugDescription)
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-
-        XCTAssertNotNil(typed.settledFrame(), app.debugDescription)
-        let center = typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        center.press(forDuration: 1, thenDragTo: typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5)))
-        XCTAssertTrue(keyboard.exists, "a drag after a long press is not a swipe")
-        typed.tap()
-        // XCUIElement.swipeDown travels a fraction of the element, too short on a one-line field for a swipe.
-        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: 150)), withVelocity: .fast, thenHoldForDuration: 0)
-        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
-        XCTAssertTrue(typed.exists, app.debugDescription)
-
         // In the terminal the suggestion's Tab shows in the bottom row, unless the strip's own Tab covers it.
         app.buttons["Terminal"].firstMatch.tap()
         let keys = app.buttons["Keys"]
@@ -58,6 +38,32 @@ final class SessionPromptTests: XCTestCase {
         XCTAssertLessThan(accept.frame.maxX, returnKey.frame.minX, app.debugDescription)
         accept.tap()
         XCTAssertTrue(accept.disappears(within: 5), app.debugDescription)
+
+        app.buttons["Chat"].firstMatch.tap()
+        XCTAssertTrue(typed.appears(within: 5), app.debugDescription)
+        typed.tap()
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+        app.choose(app.buttons["Saved prompts"].firstMatch) { app.buttons["Attachments and saved prompts"].tap() }
+        let saved = app.navigationBars["Saved prompts"]
+        XCTAssertTrue(saved.appears(within: 5), app.debugDescription)
+        saved.buttons["Cancel"].tap()
+        XCTAssertTrue(saved.disappears(within: 5), app.debugDescription)
+        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
+
+        XCTAssertNotNil(typed.settledFrame(), app.debugDescription)
+        let center = typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.press(forDuration: 1, thenDragTo: typed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.5)))
+        XCTAssertTrue(keyboard.exists, "a drag after a long press is not a swipe")
+        typed.tap()
+        // XCUIElement.swipeDown travels a fraction of the element, too short on a one-line field for a swipe.
+        // Last: after the keyboard leaves a session the app can stop idling for minutes, and XCTest then waits 60 s around every
+        // later event (see choose).
+        app.withInteractionOptions(2) {
+            center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: 150)), withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        XCTAssertTrue(keyboard.disappears(within: 10), app.debugDescription)
+        XCTAssertTrue(typed.exists, app.debugDescription)
     }
 
     func testALongMacDraftScrollsAndCopiesWithoutTheKeyboard() throws {
