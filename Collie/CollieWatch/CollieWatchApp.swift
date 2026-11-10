@@ -452,9 +452,12 @@ private struct AgentSection: View {
                                 if let left = agent.contextLeft {
                                     Text("\(left)%")
                                 }
-                                if let until = agent.limitedUntilMs {
-                                    Label(Date(unixMs: until).formatted(date: .omitted, time: .shortened), systemImage: "hourglass")
-                                        .accessibilityLabel("Limited until \(Date(unixMs: until).formatted(date: .omitted, time: .shortened))")
+                                if let until = agent.limitedUntilMs.map(Date.init(unixMs:)) {
+                                    let time = Calendar.current.isDateInToday(until)
+                                        ? until.formatted(date: .omitted, time: .shortened)
+                                        : until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+                                    Label(time, systemImage: "hourglass")
+                                        .accessibilityLabel("Limited until \(time)")
                                 }
                             }
                             .font(.caption2.monospacedDigit())

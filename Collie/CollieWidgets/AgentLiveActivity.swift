@@ -71,7 +71,12 @@ private func link(_ context: ActivityViewContext<AgentActivityAttributes>) -> UR
 private func subtitle(_ context: ActivityViewContext<AgentActivityAttributes>) -> String {
     let state = context.state.opened(attributes: context.attributes)
     guard state.status != .unknown else { return "Open Collie to view the agent" }
-    let limited = state.limitedUntil.map { "Limited until \($0.formatted(date: .omitted, time: .shortened))" }
+    let limited = state.limitedUntil.map { until in
+        let time = Calendar.current.isDateInToday(until)
+            ? until.formatted(date: .omitted, time: .shortened)
+            : until.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        return "Limited until \(time)"
+    }
     return [limited, state.workspace, context.attributes.machineLabel].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
 }
 
