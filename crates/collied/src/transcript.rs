@@ -121,6 +121,17 @@ impl Transcripts {
         self.usage.plan()
     }
 
+    pub fn reached(&mut self, session_id: &str) -> Option<crate::usage::Reached> {
+        self.usage.refresh();
+        self.usage.reached(session_id)
+    }
+
+    pub fn claude_transcript(&self, a: &AgentInfo, session_id: &str) -> Option<PathBuf> {
+        is_session_id(session_id)
+            .then(|| self.locate(Kind::Claude, session_id, a))
+            .flatten()
+    }
+
     pub fn from_env() -> Self {
         let codex = match std::env::var_os("CODEX_HOME") {
             Some(dir) => Some(PathBuf::from(dir)),
@@ -698,6 +709,22 @@ pub(crate) fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
     Some((file, meta.len(), meta.modified().ok()?))
 }
 
+/// Claude Code's `turnOrigin` for the prompt `prompt_id`, read from the end of the transcript:
+/// `human` for a prompt typed or pasted into the input box; a background task, a subagent's
+/// report, a scheduled prompt or another session's message has its own. The `UserPromptSubmit`
+/// hook cannot tell a scheduled prompt from a typed one (`claude-2.1.321` fixtures).
+pub fn turn_origin(path: &Path, prompt_id: &str) -> Option<String> {
+    let (file, len, _) = open(path)?;
+    let text = tail(file, len).ok()?;
+    let needle = format!("\"promptId\":\"{prompt_id}\"");
+    text.lines()
+        .rev()
+        .filter(|l| l.contains(&needle))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v["type"] == "user" && v["promptId"] == prompt_id)
+        .find_map(|v| v["turnOrigin"].as_str().map(str::to_owned))
+}
+
 fn tail(mut file: File, len: u64) -> std::io::Result<String> {
     let start = len.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(start))?;
@@ -1257,6 +1284,45 @@ mod tests {
         let ms = uuid_v7_ms(CODEX_ID).unwrap();
         assert_eq!(civil((ms / 86_400_000) as i64), (2026, 10, 6));
         assert_eq!(uuid_v7_ms(CLAUDE_ID), None);
+    }
+
+    #[test]
+    fn the_transcript_tells_a_typed_prompt_from_a_wakeup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            include_str!("../tests/fixtures/claude-2.1.321/turn-origins.transcript.jsonl"),
+        )
+        .unwrap();
+        for (prompt, origin) in [
+            ("e0b2b751-3d45-4851-a48a-5566c8441154", Some("human")),
+            (
+                "8ef3be8b-6aa5-4e5b-8fea-15ab4f189aaa",
+                Some("task_notification"),
+            ),
+            ("2c8293ad-c9c2-4da4-a83c-5269f549963f", Some("peer")),
+            ("6add568c-0c09-4f2f-843b-f15616b21a8c", Some("scheduled")),
+            ("a9bfdc2e-5747-4538-9386-fe4afbfdc907", Some("human")),
+            ("c8160e60-97b2-4da9-8c82-46d043af4a4e", None),
+            ("00000000-0000-4000-8000-000000000000", None),
+        ] {
+            assert_eq!(turn_origin(&path, prompt).as_deref(), origin, "{prompt}");
+        }
+        // The UserPromptSubmit hook gets the same fields for a typed and a scheduled prompt.
+        let hooks: Vec<Value> =
+            include_str!("../tests/fixtures/claude-2.1.321/user-prompt-submit.hook.jsonl")
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+        let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        let typed = hooks
+            .iter()
+            .find(|h| h["prompt"] == "reply with the single word hi");
+        let scheduled = hooks
+            .iter()
+            .find(|h| h["prompt"] == "reply with the single word tick");
+        assert_eq!(keys(typed.unwrap()), keys(scheduled.unwrap()));
     }
 
     #[test]

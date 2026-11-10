@@ -1,0 +1,19 @@
+{
+  "session_id": "85f2d085-49d3-41e6-9f4e-7b6d4be9f21c",
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-src-app/85f2d085-49d3-41e6-9f4e-7b6d4be9f21c.jsonl",
+  "cwd": "/Users/me/src/app",
+  "scratchpad_dir": "/tmp/claude/-Users-me-src-app/85f2d085-49d3-41e6-9f4e-7b6d4be9f21c/scratchpad",
+  "prompt_id": "a24b39fd-8367-475a-b654-f4a14ccfcf5d",
+  "permission_mode": "auto",
+  "agent_id": "accff7a9a46efc783",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "SubagentHandback",
+  "tool_input": {
+    "message": "ok"
+  },
+  "tool_use_id": "toolu_019g7TEMM7PnNEvY2NVGhG6w"
+}

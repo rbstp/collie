@@ -26,6 +26,8 @@ const MAX_SESSIONS: usize = 64;
 const RESTAMP_MS: u64 = 60_000;
 /// Claude Code's windows are 200K and 1M; anything far outside is not a window size.
 const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 1_000..=100_000_000;
+/// A window this full counts as reached, so an agent stops before it runs on extra usage.
+pub const LIMIT_PERCENT: f64 = 99.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recorded {
@@ -38,6 +40,19 @@ pub struct Recorded {
     /// Context window size per Claude Code session id.
     #[serde(default)]
     pub windows: BTreeMap<String, SessionWindow>,
+    /// Per Claude Code session id, the windows its own last status line put at
+    /// `LIMIT_PERCENT` or more: sessions of another account never share them.
+    #[serde(default)]
+    pub reached: BTreeMap<String, Reached>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reached {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour_resets_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day_resets_ms: Option<u64>,
+    pub seen_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,19 +83,42 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
             codex: None,
             copilot: None,
         });
-    let session = v["session_id"]
+    let id = v["session_id"]
         .as_str()
-        .filter(|id| crate::transcript::is_session_id(id))
-        .zip(
-            v["context_window"]["context_window_size"]
-                .as_u64()
-                .filter(|n| WINDOW_RANGE.contains(n)),
-        );
+        .filter(|id| crate::transcript::is_session_id(id));
+    let session = id.zip(
+        v["context_window"]["context_window_size"]
+            .as_u64()
+            .filter(|n| WINDOW_RANGE.contains(n)),
+    );
+    let reached = id
+        .filter(|_| plan.is_some())
+        .map(|id| (id, reached(&v["rate_limits"], now_ms)));
     if plan.is_none() && session.is_none() {
         return Ok(());
     }
     update(data_dir, |recorded| {
         let before = recorded.clone();
+        if let Some((id, reached)) = reached {
+            match reached {
+                None => {
+                    recorded.reached.remove(id);
+                }
+                Some(r)
+                    if !recorded.reached.get(id).is_some_and(|old| {
+                        Reached {
+                            seen_ms: old.seen_ms,
+                            ..r.clone()
+                        } == *old
+                            && now_ms < old.seen_ms + RESTAMP_MS
+                    }) =>
+                {
+                    recorded.reached.insert(id.to_owned(), r);
+                    trim(&mut recorded.reached, |r| r.seen_ms);
+                }
+                Some(_) => {}
+            }
+        }
         if let Some(plan) = plan {
             recorded.plan = Some(merge_plan(recorded.plan.take(), plan, now_ms));
         }
@@ -97,20 +135,39 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
                     seen_ms: now_ms,
                 },
             );
-            while recorded.windows.len() > MAX_SESSIONS {
-                let Some(oldest) = recorded
-                    .windows
-                    .iter()
-                    .min_by_key(|(_, w)| w.seen_ms)
-                    .map(|(id, _)| id.clone())
-                else {
-                    break;
-                };
-                recorded.windows.remove(&oldest);
-            }
+            trim(&mut recorded.windows, |w| w.seen_ms);
         }
         *recorded != before
     })
+}
+
+fn trim<T>(by_session: &mut BTreeMap<String, T>, seen_ms: impl Fn(&T) -> u64) {
+    while by_session.len() > MAX_SESSIONS {
+        let Some(oldest) = by_session
+            .iter()
+            .min_by_key(|(_, v)| seen_ms(v))
+            .map(|(id, _)| id.clone())
+        else {
+            break;
+        };
+        by_session.remove(&oldest);
+    }
+}
+
+/// Compares the raw percentage: the tap rounds what it keeps for display.
+fn reached(limits: &Value, now_ms: u64) -> Option<Reached> {
+    let at = |w: &Value| {
+        let used = w["used_percentage"].as_f64().filter(|p| p.is_finite())?;
+        window(w)
+            .filter(|w| used >= LIMIT_PERCENT && w.resets_at_ms > now_ms)
+            .map(|w| w.resets_at_ms)
+    };
+    let r = Reached {
+        five_hour_resets_ms: at(&limits["five_hour"]),
+        seven_day_resets_ms: at(&limits["seven_day"]),
+        seen_ms: now_ms,
+    };
+    (r.five_hour_resets_ms.is_some() || r.seven_day_resets_ms.is_some()).then_some(r)
 }
 
 /// Each session reports the limits from its own last reply, so a quiet session's older
@@ -421,14 +478,8 @@ fn window(v: &Value) -> Option<UsageWindow> {
     let resets = v["resets_at"]
         .as_f64()
         .filter(|s| s.is_finite() && *s > 0.0 && *s < 1e11)?;
-    // 100 only at the limit itself: stopping at the plan limit reads it.
-    let used_percent = if used >= 100.0 {
-        100
-    } else {
-        used.round().clamp(0.0, 99.0) as u8
-    };
     Some(UsageWindow {
-        used_percent,
+        used_percent: used.round().clamp(0.0, 100.0) as u8,
         resets_at_ms: (resets * 1000.0) as u64,
     })
 }
@@ -523,6 +574,10 @@ impl Usage {
             self.announced = plan;
         }
         moved
+    }
+
+    pub fn reached(&self, session_id: &str) -> Option<Reached> {
+        self.recorded.reached.get(session_id).cloned()
     }
 
     pub fn window(&self, session_id: &str) -> Option<u64> {
@@ -821,16 +876,46 @@ mod tests {
     }
 
     #[test]
-    fn only_the_limit_itself_reads_100() {
+    fn each_session_keeps_the_windows_it_reached_at_99_percent() {
         let (_dir, data) = data();
-        for (used, want) in [(99.6, 99), (100.0, 100), (-3.0, 0)] {
-            record(&data, &limits(used, 1738425600, 1.0), 1_000).unwrap();
-            assert_eq!(
-                read(&data).plan.unwrap().five_hour.unwrap().used_percent,
-                want
-            );
-            std::fs::remove_file(data.join(USAGE_FILE)).unwrap();
-        }
+        let a = "00000000-0000-4000-8000-00000000000a";
+        let b = "00000000-0000-4000-8000-00000000000b";
+        let input = |session: &str, five: f64, seven: f64| {
+            serde_json::json!({"session_id": session, "rate_limits": {
+                "five_hour": {"used_percentage": five, "resets_at": 1738425600},
+                "seven_day": {"used_percentage": seven, "resets_at": 1738857600},
+            }})
+            .to_string()
+            .into_bytes()
+        };
+        record(&data, &input(a, 98.9, 40.0), 1_000).unwrap();
+        assert!(read(&data).reached.is_empty());
+        record(&data, &input(a, 99.0, 99.4), 2_000).unwrap();
+        record(&data, &input(b, 12.0, 30.0), 3_000).unwrap();
+        let r = read(&data);
+        assert_eq!(
+            r.reached[a],
+            Reached {
+                five_hour_resets_ms: Some(1_738_425_600_000),
+                seven_day_resets_ms: Some(1_738_857_600_000),
+                seen_ms: 2_000,
+            }
+        );
+        assert!(
+            !r.reached.contains_key(b),
+            "another account's session reached nothing"
+        );
+        // The display keeps its rounding: 99.4 still reads 99.
+        assert_eq!(r.plan.unwrap().seven_day.unwrap().used_percent, 99);
+        // A window past its reset, or a new window, no longer counts.
+        record(&data, &input(a, 1.0, 99.4), 1_738_425_600_000).unwrap();
+        let r = read(&data).reached[a].clone();
+        assert_eq!(
+            (r.five_hour_resets_ms, r.seven_day_resets_ms),
+            (None, Some(1_738_857_600_000))
+        );
+        record(&data, &input(a, 1.0, 2.0), 1_738_425_600_001).unwrap();
+        assert!(read(&data).reached.is_empty());
     }
 
     #[test]

@@ -348,13 +348,29 @@ impl State {
 
     /// Answers the PreToolUse hook. It reads only collied's own state, so a hook answered
     /// late or not at all is the hook's timeout, which lets the agent go on.
-    pub(crate) fn limit_check(&self, session_id: &str, subagent: bool) -> Option<String> {
-        if !crate::hooks::valid_session(session_id) || !lock(&self.limits).enabled() {
+    pub(crate) fn limit_check(
+        &self,
+        session_id: &str,
+        subagent: bool,
+        prompt_id: Option<&str>,
+    ) -> Option<String> {
+        if !crate::transcript::is_session_id(session_id) || !lock(&self.limits).enabled() {
             return None;
         }
-        let plan = lock(&self.transcripts).plan();
+        let call = limits::Call {
+            subagent,
+            prompt_id: prompt_id.filter(|p| crate::transcript::is_session_id(p)),
+        };
+        let reading = lock(&self.transcripts).reached(session_id);
+        let agent = lock(&self.limits).typed_check(session_id, &call);
+        let path = agent.and_then(|a| lock(&self.transcripts).claude_transcript(&a, session_id));
+        // Read with no lock held: the transcript can take a while.
+        let typed = path
+            .zip(call.prompt_id)
+            .and_then(|(path, prompt)| crate::transcript::turn_origin(&path, prompt))
+            .is_some_and(|origin| origin == "human");
         let now = crate::now_ms();
-        let verdict = lock(&self.limits).check(session_id, subagent, plan.as_ref(), now);
+        let verdict = lock(&self.limits).check(session_id, &call, reading.as_ref(), now, typed);
         match verdict {
             Verdict::Go => None,
             Verdict::Hold(window) => Some(limits::reason(window)),
@@ -363,7 +379,7 @@ impl State {
                     "collied",
                     "limit.cancel",
                     Some(&terminal),
-                    "prompted while limited: runs on extra usage",
+                    "prompt typed on the machine: runs on extra usage",
                 );
                 let _ = self.events.send(Event::FlockChanged {});
                 None
@@ -980,13 +996,19 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             ) else {
                 continue;
             };
+            // An agent held at the plan limit takes the wake after it resumes.
+            if lock(&state.limits).holds(&terminal_id) {
+                continue;
+            }
             let auth: Authorized = {
                 let (state, terminal_id, url) =
                     (state.clone(), terminal_id.clone(), watch.url.clone());
                 let by = watch.by.clone();
                 Arc::new(move || {
                     let watching = lock(&state.pulls).watches.watching(&terminal_id, &url);
-                    watching && lock(&state.peers).get(&by).is_some()
+                    watching
+                        && lock(&state.peers).get(&by).is_some()
+                        && !lock(&state.limits).holds(&terminal_id)
                 })
             };
             if pr_watch::wake(&state.drive, agent, &watch, text.clone(), &auth)
@@ -1041,47 +1063,79 @@ async fn limit_resumes(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             continue;
         }
         let agents = state.runtime.agent_list().await.ok();
-        let plan = lock(&state.transcripts).plan();
         for (terminal_id, stop) in due {
             let now = crate::now_ms();
             let window = limits::window_name(stop.window);
-            let at = stop.resume_at_ms.unwrap_or(now);
-            let (result, alert) = if now > at + limits::OVERDUE_MS {
+            let reading = lock(&state.transcripts).reached(&stop.session_id);
+            let agent = agents
+                .iter()
+                .flatten()
+                .find(|a| a.terminal_id == terminal_id);
+            let (result, alert) = if limits::overdue(&stop, now) {
                 lock(&state.limits).cancel(&terminal_id);
                 (
                     "dropped: overdue".to_owned(),
                     Some("Did not resume: the limit reset while the machine slept or collied was off".to_owned()),
                 )
-            } else if let Some(next) = lock(&state.limits).rearm(&terminal_id, plan.as_ref(), now) {
+            } else if let Some(next) =
+                lock(&state.limits).rearm(&terminal_id, reading.as_ref(), now)
+            {
                 (format!("another limit is reached; resume at {next}"), None)
             } else {
-                let auth: Authorized = {
-                    let (state, terminal_id, stop) =
-                        (state.clone(), terminal_id.clone(), stop.clone());
-                    Arc::new(move || lock(&state.limits).armed(&terminal_id, &stop))
-                };
-                let agent = agents
-                    .iter()
-                    .flatten()
-                    .find(|a| a.terminal_id == terminal_id);
-                match limits::resume(&state.drive, agent, &stop, &auth).await {
-                    Ok(()) => {
-                        lock(&state.limits).resumed(&terminal_id, crate::now_ms());
-                        if let Ok(t) = TerminalId::new(terminal_id.clone()) {
-                            state.push.notify_done(push::agent_alert(
-                                &t,
-                                &format!("Resumed {}", stop.title),
-                                &format!("The {window} limit reset"),
-                                &state.machine.node_id,
-                            ));
-                        }
-                        ("ok".to_owned(), None)
-                    }
-                    Err(reason) => {
+                match (limits::before_resume(agent, &stop), agent) {
+                    (limits::Attempt::Retry, _) | (limits::Attempt::Prompt, None) => continue,
+                    (limits::Attempt::Cancel(reason), _) => {
                         lock(&state.limits).cancel(&terminal_id);
-                        let alert =
-                            (reason != limits::BUSY).then(|| format!("Did not resume: {reason}"));
-                        (format!("not resumed: {reason}"), alert)
+                        (
+                            format!("not resumed: {reason}"),
+                            Some(format!("Did not resume: {reason}")),
+                        )
+                    }
+                    (limits::Attempt::Prompt, Some(agent)) => {
+                        if !lock(&state.limits).begin_resume(&terminal_id, &stop, now) {
+                            continue;
+                        }
+                        let auth: Authorized = {
+                            let (state, terminal_id) = (state.clone(), terminal_id.clone());
+                            Arc::new(move || {
+                                lock(&state.limits).resuming(&terminal_id, stop.stopped_ms)
+                            })
+                        };
+                        let typed = limits::resume(&state.drive, agent, &auth).await;
+                        let (finish, line) = match limits::outcome(typed) {
+                            limits::Outcome::Resumed => {
+                                if let Ok(t) = TerminalId::new(terminal_id.clone()) {
+                                    state.push.notify_done(push::agent_alert(
+                                        &t,
+                                        &format!("Resumed {}", stop.title),
+                                        &format!("The {window} limit reset"),
+                                        &state.machine.node_id,
+                                    ));
+                                }
+                                (limits::Finish::Resumed, ("ok".to_owned(), None))
+                            }
+                            limits::Outcome::Retry => {
+                                lock(&state.limits).finish_resume(
+                                    &terminal_id,
+                                    stop.stopped_ms,
+                                    limits::Finish::Retry,
+                                );
+                                continue;
+                            }
+                            limits::Outcome::Withdrawn => (
+                                limits::Finish::Cancel,
+                                ("not resumed: cancelled".to_owned(), None),
+                            ),
+                            limits::Outcome::Cancel(reason) => (
+                                limits::Finish::Cancel,
+                                (
+                                    format!("not resumed: {reason}"),
+                                    Some(format!("Did not resume: {reason}")),
+                                ),
+                            ),
+                        };
+                        lock(&state.limits).finish_resume(&terminal_id, stop.stopped_ms, finish);
+                        line
                     }
                 }
             };
@@ -3046,14 +3100,13 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         state.approvals.observe(&kept, &workspaces).await;
         let ended = lock(&state.limits).observe(&kept, crate::now_ms());
-        for change in &ended {
-            let (terminal_id, result) = match change {
-                limits::Change::Prompted(t) => (t, "prompted on the machine"),
-                limits::Change::Gone(t) => (t, "the agent is gone"),
-            };
-            state
-                .audit
-                .log("collied", "limit.cancel", Some(terminal_id), result);
+        for terminal_id in &ended {
+            state.audit.log(
+                "collied",
+                "limit.cancel",
+                Some(terminal_id),
+                "the agent is gone",
+            );
         }
         if !ended.is_empty() {
             let _ = state.events.send(Event::FlockChanged {});

@@ -46,6 +46,8 @@ pub enum Request {
         session_id: String,
         #[serde(default)]
         subagent: bool,
+        #[serde(default)]
+        prompt_id: Option<String>,
     },
 }
 
@@ -364,8 +366,9 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
         Request::Limit {
             session_id,
             subagent,
+            prompt_id,
         } => Reply::Limit {
-            stop: state.limit_check(&session_id, subagent),
+            stop: state.limit_check(&session_id, subagent, prompt_id.as_deref()),
         },
         Request::Pair => return pair(&state, &mut r, &mut w).await,
         Request::Watch => return watch_pending(&state, &mut r, &mut w, shutdown).await,

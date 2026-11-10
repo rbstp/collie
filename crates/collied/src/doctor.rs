@@ -178,7 +178,7 @@ fn check_limit(data_dir: &Path, settings_path: Option<&Path>) -> (Status, String
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
-    if hooks::installed(&settings, "PreToolUse") {
+    if hooks::installed_for_every_tool(&settings, "PreToolUse") {
         (
             Status::Ok,
             "stops Claude Code agents at the plan limit (PreToolUse hook installed)".to_owned(),
@@ -186,7 +186,7 @@ fn check_limit(data_dir: &Path, settings_path: Option<&Path>) -> (Status, String
     } else {
         (
             Status::Warn,
-            "stop at the plan limit is on, but the PreToolUse hook `collied hook` is not installed; no agent is stopped".to_owned(),
+            "stop at the plan limit is on, but no PreToolUse hook runs `collied hook` for every tool; agents are not stopped".to_owned(),
         )
     }
 }
@@ -1045,6 +1045,12 @@ mod tests {
         )
         .unwrap();
         assert!(check_limit(&data, Some(&settings)).0 == Status::Ok);
+        std::fs::write(
+            &settings,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"~/.cargo/bin/collied hook","timeout":5}]}]}}"#,
+        )
+        .unwrap();
+        assert!(check_limit(&data, Some(&settings)).0 == Status::Warn);
     }
 
     #[test]

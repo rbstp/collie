@@ -1,0 +1,19 @@
+{
+  "session_id": "85f2d085-49d3-41e6-9f4e-7b6d4be9f21c",
+  "transcript_path": "/Users/me/.claude/projects/-Users-me-src-app/85f2d085-49d3-41e6-9f4e-7b6d4be9f21c.jsonl",
+  "cwd": "/Users/me/src/app",
+  "scratchpad_dir": "/tmp/claude/-Users-me-src-app/85f2d085-49d3-41e6-9f4e-7b6d4be9f21c/scratchpad",
+  "prompt_id": "f74e6cdc-2837-4093-9962-0b23e94d2b27",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "sleep 10 && echo done",
+    "description": "Run sleep 10 then echo done in background",
+    "run_in_background": true
+  },
+  "tool_use_id": "toolu_01T5Ru9MpVS19AatCHMxjxMc"
+}

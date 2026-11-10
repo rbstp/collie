@@ -797,6 +797,29 @@ async fn scenario(
     assert_eq!(archive_on_merge().len(), 1);
     assert_eq!(mode(&data_dir.join("archive-on-merge.json")), 0o600);
 
+    println!("stopping at the plan limit is kept by collied for every phone");
+    assert_error(
+        &call(
+            &mut ws,
+            "agent.cancel_resume",
+            json!({"terminal_id": "term_65ce7ae4fd5731"}),
+        )
+        .await,
+        ErrorCode::InvalidParams,
+    );
+    for enabled in [true, false] {
+        assert_eq!(
+            result(call(&mut ws, "plan.stop_at_limit", json!({"enabled": enabled})).await),
+            Response::Ok
+        );
+        let Response::Flock(flock) = result(call(&mut ws, "flock.snapshot", json!({})).await)
+        else {
+            panic!("no flock");
+        };
+        assert_eq!(flock.stop_at_limit, enabled);
+    }
+    assert_eq!(mode(&data_dir.join("limits.json")), 0o600);
+
     println!("the reconcile drops the star of a closed pane with no snapshot asked");
     let shell = "term_ffffffffffff01";
     assert_eq!(

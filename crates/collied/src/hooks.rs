@@ -28,6 +28,8 @@ struct Input {
     /// Set when the hook fires inside a subagent.
     #[serde(default)]
     agent_id: Option<String>,
+    #[serde(default)]
+    prompt_id: Option<String>,
 }
 
 /// `collied hook`: Claude Code's PermissionRequest and PreToolUse hooks and Codex's
@@ -43,12 +45,17 @@ pub async fn run(control_path: &Path) {
         return;
     }
     let terminal = std::env::var("HC_TERMINAL_ID").ok();
-    let Some(request) = request(&raw, terminal) else {
-        return;
-    };
+    if let Some(out) = answer(control_path, &raw, terminal).await {
+        println!("{out}");
+    }
+}
+
+async fn answer(control_path: &Path, raw: &[u8], terminal: Option<String>) -> Option<Value> {
+    let request = request(raw, terminal)?;
     let reply = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
-    if let Ok(Ok(Some(Reply::Limit { stop: Some(reason) }))) = reply {
-        println!("{}", stop(&reason));
+    match reply {
+        Ok(Ok(Some(Reply::Limit { stop: Some(reason) }))) => Some(stop(&reason)),
+        _ => None,
     }
 }
 
@@ -77,6 +84,7 @@ fn request(raw: &[u8], terminal: Option<String>) -> Option<Request> {
         Some("PreToolUse") => Some(Request::Limit {
             session_id: input.session_id,
             subagent: input.agent_id.is_some(),
+            prompt_id: input.prompt_id,
         }),
         None | Some("PermissionRequest") => {
             let shown = shown(&input.tool_name, &input.tool_input);
@@ -172,10 +180,24 @@ pub fn settings_path() -> anyhow::Result<PathBuf> {
 /// Whether `collied hook` runs on `event`, in Claude Code's `settings.json` or Codex's
 /// `hooks.json`, which share this layout.
 pub fn installed(settings: &Value, event: &str) -> bool {
+    runs(settings, event, |_| true)
+}
+
+/// A matcher naming some tools leaves the others out.
+pub fn installed_for_every_tool(settings: &Value, event: &str) -> bool {
+    runs(settings, event, |m| {
+        m["matcher"]
+            .as_str()
+            .is_none_or(|m| matches!(m, "" | "*" | ".*"))
+    })
+}
+
+fn runs(settings: &Value, event: &str, matcher: impl Fn(&Value) -> bool) -> bool {
     settings["hooks"][event]
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|m| matcher(m))
         .flat_map(|m| m["hooks"].as_array().into_iter().flatten())
         .filter_map(|h| h["command"].as_str())
         .any(|c| c.trim_end().ends_with("collied hook"))
@@ -286,6 +308,12 @@ mod tests {
             "PermissionRequest"
         ));
         assert!(!installed(&json!({}), "PermissionRequest"));
+        let pre = |matcher: Value| json!({"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": [ours]}]}});
+        for every in [json!(null), json!(""), json!("*"), json!(".*")] {
+            assert!(installed_for_every_tool(&pre(every), "PreToolUse"));
+        }
+        assert!(installed(&pre(json!("Bash")), "PreToolUse"));
+        assert!(!installed_for_every_tool(&pre(json!("Bash")), "PreToolUse"));
         let codex = json!({"hooks": {"SessionStart": [
             {"hooks": [{"type": "command", "command": "bash '/h/.codex/herdr-agent-state.sh' session"}]},
             {"hooks": [{"type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5}]},
@@ -319,45 +347,81 @@ mod tests {
         assert!(request(b"not json", Some("t3".into())).is_none());
     }
 
+    const PRE_TOOL_USE: &str =
+        include_str!("../tests/fixtures/claude-2.1.321/pre-tool-use.hook.json");
+
     #[test]
-    fn pre_tool_use_asks_about_the_limit_and_stops_only_when_told() {
-        let raw = include_str!("../tests/fixtures/claude/pre-tool-use.synthetic.hook.json");
-        match request(raw.as_bytes(), None) {
+    fn pre_tool_use_asks_about_the_limit_with_the_turn_it_belongs_to() {
+        match request(PRE_TOOL_USE.as_bytes(), None) {
             Some(Request::Limit {
                 session_id,
                 subagent: false,
-            }) => assert_eq!(session_id, "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"),
+                prompt_id,
+            }) => assert_eq!(
+                (session_id.as_str(), prompt_id.as_deref()),
+                (
+                    "85f2d085-49d3-41e6-9f4e-7b6d4be9f21c",
+                    Some("f74e6cdc-2837-4093-9962-0b23e94d2b27")
+                )
+            ),
             other => panic!("{other:?}"),
         }
-        let mut sub: Value = serde_json::from_str(raw).unwrap();
-        sub["agent_id"] = "a1b2c3".into();
-        assert!(matches!(
-            request(sub.to_string().as_bytes(), None),
-            Some(Request::Limit { subagent: true, .. })
-        ));
+        // A subagent's call names the parent session and the prompt that started it.
+        let sub = include_str!("../tests/fixtures/claude-2.1.321/pre-tool-use-subagent.hook.json");
+        match request(sub.as_bytes(), None) {
+            Some(Request::Limit {
+                session_id,
+                subagent: true,
+                prompt_id: Some(_),
+            }) => assert_eq!(session_id, "85f2d085-49d3-41e6-9f4e-7b6d4be9f21c"),
+            other => panic!("{other:?}"),
+        }
         let out = stop("at the limit");
         assert_eq!(out["continue"], false);
         assert_eq!(out["stopReason"], "at the limit");
         assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
     }
 
+    fn one_reply(socket: &Path, line: &'static str) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _ = std::fs::remove_file(socket);
+        let listener = tokio::net::UnixListener::bind(socket).unwrap();
+        tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).await;
+            s.write_all(line.as_bytes()).await.unwrap();
+        })
+    }
+
     #[tokio::test]
     async fn the_hook_fails_open() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("control.sock");
-        let raw = include_str!("../tests/fixtures/claude/pre-tool-use.synthetic.hook.json");
-        let request = request(raw.as_bytes(), None).unwrap();
-        // No collied.
-        assert!(matches!(
-            control::request(&socket, &request).await,
-            Ok(None)
-        ));
-        // A collied that never answers: the deadline lets the agent go on.
-        let _listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let raw = PRE_TOOL_USE.as_bytes();
+        assert_eq!(answer(&socket, raw, None).await, None, "no collied");
+        let _hung = tokio::net::UnixListener::bind(&socket).unwrap();
         let start = std::time::Instant::now();
-        let reply = tokio::time::timeout(DEADLINE, control::request(&socket, &request)).await;
-        assert!(reply.is_err());
+        assert_eq!(
+            answer(&socket, raw, None).await,
+            None,
+            "a collied that never answers"
+        );
         assert!(start.elapsed() < DEADLINE + Duration::from_secs(1));
+        for line in [
+            "not json\n",
+            "{\"type\":\"noted\"}\n",
+            "{\"type\":\"limit\"}\n",
+        ] {
+            let server = one_reply(&socket, line);
+            assert_eq!(answer(&socket, raw, None).await, None, "{line}");
+            server.await.unwrap();
+        }
+        let server = one_reply(&socket, "{\"type\":\"limit\",\"stop\":\"stopped\"}\n");
+        let out = answer(&socket, raw, None).await.unwrap();
+        server.await.unwrap();
+        assert_eq!(out["stopReason"], "stopped");
+        assert_eq!(out["continue"], false);
     }
 
     #[test]
