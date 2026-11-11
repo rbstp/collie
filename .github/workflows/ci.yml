@@ -175,6 +175,15 @@ jobs:
             Collie/Resources/Acknowledgements.json
           key: ${{ steps.native.outputs.key }}
 
+      # Keyed on content, unlike DerivedData's timestamps; master builds without it and saves, so an entry holds one build.
+      - name: restore Xcode's compilation cache
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/ios/DerivedData/CompilationCache.noindex
+          key: ios-cas-${{ github.sha }}
+          restore-keys: ios-cas-
+
       # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot
       # saturates the runner for minutes: set up go has taken 8 to 338 s here against 2 to 5 s in rust,
       # and with the boot started after the rust toolchain, restoring the cargo cache took 369 s.
@@ -263,7 +272,16 @@ jobs:
         run: python3 scripts/test-ios-test-budget.py
 
       - name: test
-        run: just --no-deps test_iterations=2 ios-test never
+        run: |
+          echo 'COMPILATION_CACHE_ENABLE_CACHING = YES' > "$RUNNER_TEMP/ci.xcconfig"
+          XCODE_XCCONFIG_FILE="$RUNNER_TEMP/ci.xcconfig" just --no-deps test_iterations=2 ios-test never
+
+      - name: save Xcode's compilation cache
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/ios/DerivedData/CompilationCache.noindex
+          key: ios-cas-${{ github.sha }}
 
       # Fails over a ceiling in Collie/Tests/budget.json, and reports after failed tests too.
       - name: check the test budget
@@ -278,6 +296,24 @@ jobs:
           name: ios-test-metrics
           path: ${{ runner.temp }}/ios-test-metrics.json
           if-no-files-found: ignore
+
+  # Only master's newest compilation cache is read; older ones would push rarely read entries such as ios-sim out.
+  prune-compilation-cache:
+    if: ${{ github.event_name == 'push' }}
+    needs: ios
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+
+    steps:
+      - name: delete superseded compilation caches
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key \
+            --jq 'if any(.[]; .key == env.KEEP) then .[] | select(.key != env.KEEP) | .id else empty end' |
+            while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ios-cas-${{ github.sha }}
 
   desktop-packaging:
     runs-on: ubuntu-24.04
