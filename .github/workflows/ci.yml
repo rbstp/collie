@@ -297,6 +297,24 @@ jobs:
           path: ${{ runner.temp }}/ios-test-metrics.json
           if-no-files-found: ignore
 
+  # Only master's newest compilation cache is read; older ones would push rarely read entries such as ios-sim out.
+  prune-compilation-cache:
+    if: ${{ github.event_name == 'push' }}
+    needs: ios
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+
+    steps:
+      - name: delete superseded compilation caches
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key \
+            --jq 'if any(.[]; .key == env.KEEP) then .[] | select(.key != env.KEEP) | .id else empty end' |
+            while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ios-cas-${{ github.sha }}
+
   desktop-packaging:
     runs-on: ubuntu-24.04
 
