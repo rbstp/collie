@@ -496,6 +496,7 @@ struct NewTaskSheet: View {
 /// only until its text clears the keyboard, leaving the row's bottom under it.
 private struct KeepsFieldVisible: ViewModifier {
     let row: String?
+    @State private var current: String?
     @State private var userScrolling = false
 
     func body(content: Content) -> some View {
@@ -503,6 +504,7 @@ private struct KeepsFieldVisible: ViewModifier {
             content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
                 if let row { proxy.scrollTo(row, anchor: .bottom) }
             }
+            .onChange(of: row, initial: true) { current = row }
             .onScrollPhaseChange { _, phase in userScrolling = phase.isScrolling }
             // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
             // the prompt row where UIKit keeps only the field visible, under the predictive bar. The prompt row can also take
@@ -511,12 +513,16 @@ private struct KeepsFieldVisible: ViewModifier {
             // points tall and can land last, leaving the row under the navigation bar with only the offset changed, so an
             // offset change the user did not make scrolls again. An animated scroll restarted on every offset change barely
             // moves. Scrolling from inside this callback was measured against the old layout, hence the next turn of the main
-            // queue.
+            // queue, where a drag or a focus change may have come first.
             .onScrollGeometryChange(for: [CGFloat].self) {
                 [$0.containerSize.height, $0.contentInsets.bottom, $0.contentSize.height, $0.contentOffset.y]
-            } action: { _, _ in
-                guard let row, !userScrolling else { return }
-                DispatchQueue.main.async { proxy.scrollTo(row, anchor: .bottom) }
+            } action: { old, new in
+                let onlyOffset = old.dropLast() == new.dropLast()
+                guard let row, !(onlyOffset && userScrolling) else { return }
+                DispatchQueue.main.async {
+                    guard current == row, !(onlyOffset && userScrolling) else { return }
+                    proxy.scrollTo(row, anchor: .bottom)
+                }
             }
         }
     }
