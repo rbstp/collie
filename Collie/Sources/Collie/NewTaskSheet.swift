@@ -496,20 +496,27 @@ struct NewTaskSheet: View {
 /// only until its text clears the keyboard, leaving the row's bottom under it.
 private struct KeepsFieldVisible: ViewModifier {
     let row: String?
+    @State private var userScrolling = false
 
     func body(content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
-                if let row { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
+                if let row { proxy.scrollTo(row, anchor: .bottom) }
             }
+            .onScrollPhaseChange { _, phase in userScrolling = phase.isScrolling }
             // After a rotation the notification can arrive before the form takes the keyboard's inset. That scroll then left
             // the prompt row where UIKit keeps only the field visible, under the predictive bar. The prompt row can also take
             // its landscape height after the last scroll, and the list then moved it by the difference, under the navigation
-            // bar. Scrolling from inside this callback was measured against the old layout, hence the next turn of the main
+            // bar. A scroll made while the sheet still animates into its rotated frame is measured against a form about 80
+            // points tall and can land last, leaving the row under the navigation bar with only the offset changed, so an
+            // offset change the user did not make scrolls again. An animated scroll restarted on every offset change barely
+            // moves. Scrolling from inside this callback was measured against the old layout, hence the next turn of the main
             // queue.
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.containerSize.height, $0.contentInsets.bottom, $0.contentSize.height] } action: { _, _ in
-                guard let row else { return }
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }
+            .onScrollGeometryChange(for: [CGFloat].self) {
+                [$0.containerSize.height, $0.contentInsets.bottom, $0.contentSize.height, $0.contentOffset.y]
+            } action: { _, _ in
+                guard let row, !userScrolling else { return }
+                DispatchQueue.main.async { proxy.scrollTo(row, anchor: .bottom) }
             }
         }
     }
