@@ -252,7 +252,7 @@ poll:       1,000 lines: 0.04 MB vt, poll 0.9 to 1.2 ms, snapshot 0.05 MB in 1 m
 
 ## Follow-up issues
 
-### 1. List Rex agents and their status beside herdr's
+### 1. List Rex agents and their status beside herdr's (#704)
 
 Connect to a running personal Rex server (never start one) over its control WebSocket, follow each session's block events, and show its agents in one group per Rex session, with OSC 7501 status, status times, alerts and pushes. herdr, herdr-core and Rex work in any combination with no setting.
 
@@ -267,7 +267,7 @@ Connect to a running personal Rex server (never start one) over its control WebS
 - [ ] The threat model and architecture pages describe Rex.
 - [ ] Live tests run a Rex server of their own, as AGENTS.md says.
 
-### 2. Read Rex agent screens through collied's emulator
+### 2. Read Rex agent screens through collied's emulator (#705)
 
 Reads and watches poll `format` VT (`max_bytes`, then `blob_read` of the tail the phone's lines need) into `runtime::screen::Screen` at herdr's watch periods, for `agent.read`, `pane.read`, `agent.watch`, drafts, the jump banner and notices. No data connection.
 
@@ -277,7 +277,7 @@ Reads and watches poll `format` VT (`max_bytes`, then `blob_read` of the tail th
 - [ ] No read or watch changes a terminal's size or owner.
 - [ ] Live tests run a Rex server of their own.
 
-### 3. Send prompts, keys and approval decisions to Rex agents
+### 3. Send prompts, keys and approval decisions to Rex agents (#706)
 
 Paste and key events behind the existing allowlist and ready check; approvals gated on the status `kind`, with collied's own `state_change_seq`, moved by every status report.
 
@@ -288,7 +288,7 @@ Paste and key events behind the existing allowlist and ready check; approvals ga
 - [ ] Every `Key` is checked live over the socket by the bytes a program receives; `cmd` combinations, `ctrl+[`, `ctrl+alt+[` and `ctrl+shift` combinations are refused for a Rex agent.
 - [ ] Live tests run a Rex server of their own.
 
-### 4. Bind Claude Code and Codex sessions to Rex blocks
+### 4. Bind Claude Code and Codex sessions to Rex blocks (#707)
 
 Claude Code's session from `sessions/<pid>.json` for the block's foreground pid, through collied's own lookup; Codex's from collied's SessionStart hook reporting `REX_BLOCK`, as for herdr-core's `HC_TERMINAL_ID`. Check Codex's OSC 7501 reports in a Rex block.
 
@@ -297,7 +297,7 @@ Claude Code's session from `sessions/<pid>.json` for the block's foreground pid,
 - [ ] A Codex agent in Rex reports its status and binds its session.
 - [ ] Live tests run a Rex server of their own.
 
-### 5. Start, resume and archive tasks in Rex when neither herdr nor herdr-core answers
+### 5. Start, resume and archive tasks in Rex when neither herdr nor herdr-core answers (#708)
 
 `session.create` with the agent's command, the new block disowned, task records by block id, `git worktree` for worktree tasks, and `block.close` of the task's own block on archive. No session is ever destroyed.
 
@@ -308,13 +308,13 @@ Claude Code's session from `sessions/<pid>.json` for the block's foreground pid,
 - [ ] With herdr or herdr-core running, tasks still start there.
 - [ ] Live tests run a Rex server of their own.
 
-### 6. Check focusing a Rex agent with Rex.app
+### 6. Check focusing a Rex agent with Rex.app (#709)
 
 With the owner's Rex.app, check whether `session.focus_block` brings the agent's session forward; if it does, `agent.focus` uses it, else focus stays refused. No Remote Control action is used.
 
 - [ ] docs/rex.md and architecture.md say what Rex.app does.
 
-### 7. Keep Claude Code's wrapped tip line out of an approval's context
+### 7. Keep Claude Code's wrapped tip line out of an approval's context (#710)
 
 At 80 columns Claude Code wraps the tip line of its permission prompt, which ends `choose "switch to auto mode" below`, and `prompt::context` takes the wrapped `below` as the call's description: `Bash: below` instead of `Bash: Create empty file ...`. The spike saw it on a Rex block at its default 80x24; a herdr pane that narrow shows the same screen.
 
