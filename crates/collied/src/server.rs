@@ -46,8 +46,8 @@ use crate::peers::{self, Peer, Store};
 use crate::pr_watch::{self, Wakes, Watch, Watches};
 use crate::pulls::{self, Pulls};
 use crate::push::{self, ActivityError, Push};
-use crate::runtime::herdr_core::{self, Core};
-use crate::runtime::{self, Runtime};
+use crate::runtime::herdr_core::Core;
+use crate::runtime::{self, Owner, Runtime};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::turns::Turns;
@@ -2917,7 +2917,7 @@ impl<'a> Herdr<'a> {
             *last = Some(
                 agents
                     .iter()
-                    .filter(|a| !herdr_core::owns(&a.terminal_id))
+                    .filter(|a| Owner::of(&a.terminal_id) == Owner::Herdr)
                     .cloned()
                     .collect(),
             );
@@ -2938,7 +2938,7 @@ impl<'a> Herdr<'a> {
         match self {
             Self::Answered => false,
             Self::Held(held) => held.iter().any(|a| a.terminal_id == terminal_id),
-            Self::Unknown => !herdr_core::owns(terminal_id),
+            Self::Unknown => Owner::of(terminal_id) == Owner::Herdr,
         }
     }
 }

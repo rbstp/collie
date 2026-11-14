@@ -6,8 +6,7 @@ use protocol::{
     Agent, AgentStatus, Flock, MachineInfo, Subagent, Terminal, TerminalId, Workspace, WorkspaceId,
 };
 
-use crate::runtime::herdr_core::owns;
-use crate::runtime::{AgentInfo, PaneInfo, SessionSnapshot, WorkspaceInfo};
+use crate::runtime::{AgentInfo, Owner, PaneInfo, SessionSnapshot, WorkspaceInfo};
 use crate::transcript::{Derived, Transcripts};
 
 /// herdr reports no timestamp for a status, so collied records when it first saw each one,
@@ -57,10 +56,10 @@ impl StatusTracker {
     /// A runtime that lists no agent, or does not answer, keeps its agents' times.
     pub fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
         let live: std::collections::HashSet<&str> = live.collect();
-        let listed = |core: bool| live.iter().any(|id| owns(id) == core);
+        let listed = |owner: Owner| live.iter().any(|id| Owner::of(id) == owner);
         let before = self.seen.len();
         self.seen
-            .retain(|id, _| live.contains(id.as_str()) || !listed(owns(id)));
+            .retain(|id, _| live.contains(id.as_str()) || !listed(Owner::of(id)));
         self.dirty |= self.seen.len() != before;
     }
 }
@@ -118,12 +117,12 @@ impl Stars {
     pub fn reconcile(&mut self, panes: &[PaneInfo]) -> Vec<TerminalId> {
         // herdr answers before it restores its panes, so a runtime that lists none, or does
         // not answer, keeps its stars.
-        let listed = |core: bool| panes.iter().any(|p| owns(&p.terminal_id) == core);
+        let listed = |owner: Owner| panes.iter().any(|p| Owner::of(&p.terminal_id) == owner);
         let next: BTreeMap<String, String> = self
             .starred
             .iter()
             .filter_map(|(terminal_id, pane_id)| {
-                if !listed(owns(terminal_id)) {
+                if !listed(Owner::of(terminal_id)) {
                     return Some((terminal_id.clone(), pane_id.clone()));
                 }
                 panes

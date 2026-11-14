@@ -123,11 +123,28 @@ pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
-fn herdr_only(id: &str) -> Result<(), Error> {
-    if herdr_core::owns(id) {
-        return Err(Error::Unsupported(NOT_YET.to_owned()));
+/// The runtime an id belongs to, by its prefix; herdr's ids have none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    Herdr,
+    Core,
+}
+
+impl Owner {
+    pub fn of(id: &str) -> Self {
+        if herdr_core::owns(id) {
+            Self::Core
+        } else {
+            Self::Herdr
+        }
     }
-    Ok(())
+}
+
+fn herdr_only(id: &str) -> Result<(), Error> {
+    match Owner::of(id) {
+        Owner::Herdr => Ok(()),
+        Owner::Core => Err(Error::Unsupported(NOT_YET.to_owned())),
+    }
 }
 
 impl Runtime {
@@ -219,18 +236,16 @@ impl Runtime {
     /// The agents of the runtime `id` belongs to, so a herdr agent's lookup still fails with
     /// herdr's error while herdr is down.
     pub async fn agents_of(&self, id: &str) -> Result<Vec<AgentInfo>, Error> {
-        if herdr_core::owns(id) {
-            self.agent_list().await
-        } else {
-            herdr::agent_list(&self.herdr).await
+        match Owner::of(id) {
+            Owner::Herdr => herdr::agent_list(&self.herdr).await,
+            Owner::Core => self.agent_list().await,
         }
     }
 
     pub async fn snapshot_of(&self, id: &str) -> Result<SessionSnapshot, Error> {
-        if herdr_core::owns(id) {
-            self.session_snapshot().await
-        } else {
-            herdr::session_snapshot(&self.herdr).await
+        match Owner::of(id) {
+            Owner::Herdr => herdr::session_snapshot(&self.herdr).await,
+            Owner::Core => self.session_snapshot().await,
         }
     }
 
@@ -244,10 +259,10 @@ impl Runtime {
     }
 
     pub async fn agent_get(&self, target: &str) -> Result<AgentInfo, Error> {
-        if herdr_core::owns(target) {
-            return self.followed()?.get(target).await;
+        match Owner::of(target) {
+            Owner::Herdr => herdr::agent_get(&self.herdr, target).await,
+            Owner::Core => self.followed()?.get(target).await,
         }
-        herdr::agent_get(&self.herdr, target).await
     }
 
     pub async fn pane_get(&self, pane_id: &str) -> Result<PaneInfo, Error> {
@@ -257,10 +272,10 @@ impl Runtime {
 
     /// A herdr-core terminal's own width; herdr's is its layout rect's.
     pub async fn pane_columns(&self, pane_id: &str) -> Result<Option<u16>, Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.columns(pane_id);
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_columns(&self.herdr, pane_id).await,
+            Owner::Core => self.followed()?.columns(pane_id),
         }
-        herdr::pane_columns(&self.herdr, pane_id).await
     }
 
     pub async fn agent_read(
@@ -269,10 +284,10 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.read(pane_id, source, lines).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::agent_read(&self.herdr, pane_id, source, lines).await,
+            Owner::Core => self.followed()?.read(pane_id, source, lines).await,
         }
-        herdr::agent_read(&self.herdr, pane_id, source, lines).await
     }
 
     pub async fn pane_read(
@@ -281,80 +296,84 @@ impl Runtime {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.read(pane_id, source, lines).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_read(&self.herdr, pane_id, source, lines).await,
+            Owner::Core => self.followed()?.read(pane_id, source, lines).await,
         }
-        herdr::pane_read(&self.herdr, pane_id, source, lines).await
     }
 
     /// Keeps a herdr-core terminal attached until dropped, so a watch's reads come from one
     /// emulated screen; herdr needs nothing kept.
     pub fn watch(&self, pane_id: &str) -> Result<Option<herdr_core::Watch>, Error> {
-        if !herdr_core::owns(pane_id) {
-            return Ok(None);
+        match Owner::of(pane_id) {
+            Owner::Herdr => Ok(None),
+            Owner::Core => self.followed()?.watch(pane_id).map(Some),
         }
-        self.followed()?.watch(pane_id).map(Some)
     }
 
     pub async fn agent_explain(&self, target: &str) -> Result<herdr::Explain, Error> {
-        if herdr_core::owns(target) {
-            return self.followed()?.explain(target);
+        match Owner::of(target) {
+            Owner::Herdr => herdr::agent_explain(&self.herdr, target).await,
+            Owner::Core => self.followed()?.explain(target),
         }
-        herdr::agent_explain(&self.herdr, target).await
     }
 
     pub async fn detection_text(&self, pane_id: &str) -> Result<String, Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.screen_text(pane_id).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::detection_text(&self.herdr, pane_id).await,
+            Owner::Core => self.followed()?.screen_text(pane_id).await,
         }
-        herdr::detection_text(&self.herdr, pane_id).await
     }
 
     /// `seen` is the status the ready check saw, which a herdr-core send requires again.
     pub async fn agent_prompt(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.send(pane_id, text, seen, false).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::agent_prompt(&self.herdr, pane_id, text).await,
+            Owner::Core => self.followed()?.send(pane_id, text, seen, false).await,
         }
-        herdr::agent_prompt(&self.herdr, pane_id, text).await
     }
 
     /// A typed answer: a paste and Enter, also into a blocked agent's dialog.
     pub async fn type_text(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            let blocked = seen == "blocked";
-            return self.followed()?.send(pane_id, text, seen, blocked).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => {
+                let paste = format!("\u{1b}[200~{text}\u{1b}[201~");
+                herdr::pane_send_input(&self.herdr, pane_id, &paste, &["enter"]).await
+            }
+            Owner::Core => {
+                let blocked = seen == "blocked";
+                self.followed()?.send(pane_id, text, seen, blocked).await
+            }
         }
-        let paste = format!("\u{1b}[200~{text}\u{1b}[201~");
-        herdr::pane_send_input(&self.herdr, pane_id, &paste, &["enter"]).await
     }
 
     pub async fn agent_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.keys(pane_id, keys).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::agent_send_keys(&self.herdr, pane_id, keys).await,
+            Owner::Core => self.followed()?.keys(pane_id, keys).await,
         }
-        herdr::agent_send_keys(&self.herdr, pane_id, keys).await
     }
 
     pub async fn pane_send_text(&self, pane_id: &str, text: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.type_raw(pane_id, text).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, text).await,
+            Owner::Core => self.followed()?.type_raw(pane_id, text).await,
         }
-        herdr::pane_send_text(&self.herdr, pane_id, text).await
     }
 
     pub async fn scroll_bottom(&self, pane_id: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.keys(pane_id, &["ctrl+end"]).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, SCROLL_BOTTOM).await,
+            Owner::Core => self.followed()?.keys(pane_id, &["ctrl+end"]).await,
         }
-        herdr::pane_send_text(&self.herdr, pane_id, SCROLL_BOTTOM).await
     }
 
     /// A notice option's digit, without Enter.
     pub async fn notice_digit(&self, pane_id: &str, digit: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.keys(pane_id, &[digit]).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, digit).await,
+            Owner::Core => self.followed()?.keys(pane_id, &[digit]).await,
         }
-        herdr::pane_send_text(&self.herdr, pane_id, digit).await
     }
 
     pub async fn pane_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
@@ -432,12 +451,12 @@ impl Runtime {
     /// A herdr-core group is a label, not a workspace: closing it would end every terminal in
     /// the core, a desktop app's included, so it is refused.
     pub async fn workspace_close(&self, workspace_id: &str) -> Result<(), Error> {
-        if herdr_core::owns(workspace_id) {
-            return Err(Error::Unsupported(
+        match Owner::of(workspace_id) {
+            Owner::Herdr => herdr::workspace_close(&self.herdr, workspace_id).await,
+            Owner::Core => Err(Error::Unsupported(
                 "a Herdr 2 group cannot be closed; close its agents one at a time".to_owned(),
-            ));
+            )),
         }
-        herdr::workspace_close(&self.herdr, workspace_id).await
     }
 
     pub async fn pane_processes(&self, pane_id: &str) -> Result<PaneProcesses, Error> {
@@ -446,9 +465,9 @@ impl Runtime {
     }
 
     pub async fn pane_close(&self, pane_id: &str) -> Result<(), Error> {
-        if herdr_core::owns(pane_id) {
-            return self.followed()?.close(pane_id).await;
+        match Owner::of(pane_id) {
+            Owner::Herdr => herdr::pane_close(&self.herdr, pane_id).await,
+            Owner::Core => self.followed()?.close(pane_id).await,
         }
-        herdr::pane_close(&self.herdr, pane_id).await
     }
 }
