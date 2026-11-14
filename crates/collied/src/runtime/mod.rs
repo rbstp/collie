@@ -3,12 +3,14 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+mod agents;
 pub mod herdr;
 pub mod herdr_core;
 pub mod screen;
 
 use self::herdr_core::Core;
 
+pub use agents::pane;
 pub use herdr::{Error, PaneRead};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -206,7 +208,7 @@ impl Runtime {
         self.merge(herdr, |snap, agents| {
             snap.workspaces
                 .extend(herdr_core::group(&agents, &snap.workspaces));
-            snap.panes.extend(agents.iter().map(herdr_core::pane));
+            snap.panes.extend(agents.iter().map(pane));
             snap.agents.extend(agents);
         })
     }

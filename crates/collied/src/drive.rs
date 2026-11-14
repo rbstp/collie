@@ -1698,7 +1698,7 @@ impl Driver {
             };
             if let Some(a) = &a {
                 listed = true;
-                let pane = runtime::herdr_core::pane(a);
+                let pane = runtime::pane(a);
                 self.started_check(a, &pane, name, kind).await?;
                 if matches!(
                     flock::status(&a.agent_status),
@@ -3302,7 +3302,7 @@ mod tests {
         );
         let drive = core_driver(&root, core.clone());
         let a = drive.runtime.agent_get(&core_id()).await.unwrap();
-        let pane = runtime::herdr_core::pane(&a);
+        let pane = runtime::pane(&a);
         let p = TaskNewParams {
             op_id: OpId::new("n".repeat(22)).unwrap(),
             cwd: Cwd::new("/w").unwrap(),

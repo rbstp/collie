@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use super::herdr::{Explain, MatchedRule};
 use super::screen::Screen;
-use super::{AgentInfo, AgentSession, Error, PaneInfo, PaneRead, WorkspaceInfo};
+use super::{AgentInfo, AgentSession, Error, PaneRead, WorkspaceInfo, agents};
 
 pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
@@ -76,10 +76,6 @@ pub struct Occupant {
 }
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
-const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
-const SHELLS: [&str; 9] = [
-    "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu",
-];
 const TIMEOUT: Duration = Duration::from_secs(5);
 const KILL_TIMEOUT: Duration = Duration::from_secs(15);
 /// A send or keys call first waits until nobody has typed for about 3 s, and input through
@@ -311,15 +307,11 @@ struct RawForeground {
 
 impl From<RawForeground> for Foreground {
     fn from(raw: RawForeground) -> Self {
-        let name = raw
-            .argv
-            .first()
-            .and_then(|a| Path::new(a).file_name())
-            .and_then(|n| n.to_str());
+        let argv0 = raw.argv.first().map_or("", String::as_str);
         Self {
             pid: raw.pid,
-            cli: name.filter(|n| AGENT_CLIS.contains(n)).map(str::to_owned),
-            shell: name.is_some_and(|n| SHELLS.contains(&n.trim_start_matches('-'))),
+            cli: agents::cli(argv0).map(str::to_owned),
+            shell: agents::shell(argv0),
             cwd: raw.cwd,
         }
     }
@@ -528,17 +520,10 @@ fn agent(
     }
     let cli = t.foreground.as_ref().and_then(|f| f.cli.as_deref());
     let kind = match &t.status {
-        Some(s) => match s.app.as_deref() {
-            Some("claude-code") => Some("claude".to_owned()),
-            Some(app) if !app.is_empty() => Some(app.to_owned()),
-            _ => cli.map(str::to_owned),
-        },
+        Some(s) => agents::kind(s.app.as_deref(), cli),
         None => Some(cli?.to_owned()),
     };
-    let status = t
-        .state()
-        .filter(|s| matches!(*s, "idle" | "working" | "blocked" | "done"))
-        .unwrap_or("unknown");
+    let status = agents::status(t.state());
     let id = format!("{group}:{}", t.address);
     let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
     let pid = t.foreground.as_ref().and_then(|f| f.pid);
@@ -552,7 +537,7 @@ fn agent(
         pane_id: id,
         agent: kind,
         name: t.name.as_deref().and_then(some),
-        title: some(title(&t.title)),
+        title: some(agents::title(&t.title)),
         terminal_title_stripped: None,
         agent_status: status.to_owned(),
         state_change_seq: h.seq,
@@ -565,28 +550,10 @@ fn agent(
     })
 }
 
-/// Without the spinner or status glyph an agent puts before its title (Codex redraws one
-/// every 100 ms while it works), so a spinner tick changes nothing the phone shows.
-fn title(raw: &str) -> &str {
-    raw.trim_start_matches(|c: char| c.is_whitespace() || (!c.is_ascii() && !c.is_alphanumeric()))
-        .trim_end()
-}
-
 /// One group per core, numbered after herdr's workspaces; none without agents.
 pub fn group(agents: &[AgentInfo], herdr: &[WorkspaceInfo]) -> Option<WorkspaceInfo> {
     let first = agents.first()?;
-    let rank = |s: &str| match s {
-        "blocked" => 4,
-        "working" => 3,
-        "done" => 2,
-        "idle" => 1,
-        _ => 0,
-    };
-    let status = agents
-        .iter()
-        .map(|a| a.agent_status.as_str())
-        .max_by_key(|s| rank(s))
-        .unwrap_or("unknown");
+    let status = agents::group_status(agents);
     Some(WorkspaceInfo {
         workspace_id: first.workspace_id.clone(),
         number: herdr.iter().map(|w| w.number).max().unwrap_or(0) + 1,
@@ -595,19 +562,6 @@ pub fn group(agents: &[AgentInfo], herdr: &[WorkspaceInfo]) -> Option<WorkspaceI
         agent_status: status.to_owned(),
         worktree: None,
     })
-}
-
-pub fn pane(a: &AgentInfo) -> PaneInfo {
-    PaneInfo {
-        pane_id: a.pane_id.clone(),
-        terminal_id: a.terminal_id.clone(),
-        workspace_id: a.workspace_id.clone(),
-        tab_id: a.workspace_id.clone(),
-        cwd: a.cwd.clone(),
-        foreground_cwd: a.foreground_cwd.clone(),
-        agent: a.agent.clone(),
-        label: a.name.clone(),
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
