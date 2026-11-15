@@ -36,7 +36,8 @@ pub enum Request {
         tool_name: String,
         shown: Vec<String>,
     },
-    /// Codex's SessionStart, from a herdr-core terminal (`HC_TERMINAL_ID`).
+    /// Codex's SessionStart, from a herdr-core terminal (`HC_TERMINAL_ID`) or a Rex block
+    /// (`rex:` and `REX_BLOCK`).
     Session {
         terminal_id: String,
         session_id: String,
