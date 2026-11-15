@@ -80,9 +80,10 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         Some(socket) => Some(rex::probe(socket).await),
         None => None,
     };
+    let rex_answers = matches!(&rex_probed, Some(Ok(s)) if s.refused().is_none());
     let answers = if core_answers {
         Some("herdr-core")
-    } else if matches!(&rex_probed, Some(Ok(s)) if s.refused().is_none()) {
+    } else if rex_answers {
         Some("Rex")
     } else {
         None
@@ -144,7 +145,7 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         let (s, d) = check_codex_hook(&codex);
         r.line(s, "codex hook", d);
         if codex.is_dir() {
-            let (s, d) = check_codex_session_hook(&codex, core_answers);
+            let (s, d) = check_codex_session_hook(&codex, core_answers, rex_answers);
             r.line(s, "codex hook", d);
         }
     }
@@ -207,9 +208,13 @@ fn check_codex_hook(codex_home: &Path) -> (Status, String) {
     }
 }
 
-/// collied's own SessionStart hook binds a Codex session to the herdr-core terminal it runs
-/// in, as herdr's hook does for a herdr pane; only herdr-core needs it.
-fn check_codex_session_hook(codex_home: &Path, core_answers: bool) -> (Status, String) {
+/// collied's own SessionStart hook binds a Codex session to the herdr-core terminal or Rex
+/// block it runs in, as herdr's hook does for a herdr pane; only herdr-core and Rex need it.
+fn check_codex_session_hook(
+    codex_home: &Path,
+    core_answers: bool,
+    rex_answers: bool,
+) -> (Status, String) {
     let path = codex_home.join("hooks.json");
     let hooks = std::fs::read(&path)
         .ok()
@@ -222,13 +227,16 @@ fn check_codex_session_hook(codex_home: &Path, core_answers: bool) -> (Status, S
         );
     }
     let missing = format!(
-        "SessionStart hook `collied hook` not in {}; Herdr 2 Codex agents get no Chat, context or resume",
+        "SessionStart hook `collied hook` not in {}; Herdr 2 and Rex Codex agents get no Chat, context or resume",
         path.display()
     );
-    if core_answers {
+    if core_answers || rex_answers {
         (Status::Warn, missing)
     } else {
-        (Status::Ok, format!("{missing} (herdr-core is not running)"))
+        (
+            Status::Ok,
+            format!("{missing} (neither herdr-core nor a followed Rex is running)"),
+        )
     }
 }
 
@@ -1111,18 +1119,20 @@ mod tests {
     }
 
     #[test]
-    fn warns_about_collieds_codex_hook_only_while_herdr_core_runs() {
+    fn warns_about_collieds_codex_hook_only_while_herdr_core_or_rex_runs() {
         let dir = tempfile::tempdir().unwrap();
-        let (s, d) = check_codex_session_hook(dir.path(), false);
+        let (s, d) = check_codex_session_hook(dir.path(), false, false);
         assert!(s == Status::Ok && d.contains("not in"), "{d}");
-        let (s, d) = check_codex_session_hook(dir.path(), true);
-        assert!(s == Status::Warn && d.contains("Herdr 2 Codex"), "{d}");
+        for (core, rex) in [(true, false), (false, true)] {
+            let (s, d) = check_codex_session_hook(dir.path(), core, rex);
+            assert!(s == Status::Warn && d.contains("Rex Codex"), "{d}");
+        }
         std::fs::write(
             dir.path().join("hooks.json"),
             r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"~/.cargo/bin/collied hook","timeout":5}]}]}}"#,
         )
         .unwrap();
-        let (s, d) = check_codex_session_hook(dir.path(), true);
+        let (s, d) = check_codex_session_hook(dir.path(), true, true);
         assert!(s == Status::Ok && d.starts_with("SessionStart hook"), "{d}");
     }
 
