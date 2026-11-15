@@ -381,9 +381,8 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
     assert!(!rt.agent_get(&id(B1)).await.unwrap().read_only);
     assert_eq!(fake.calls().len(), before, "listing called the server");
 
-    let unsupported = |r: Result<_, Error>| matches!(r, Err(Error::Unsupported(w)) if w == NOT_YET);
     assert_eq!(Owner::of(&id(B1)), Owner::Rex);
-    assert!(unsupported(rt.agent_focus(&id(B1)).await));
+    assert!(matches!(rt.agent_focus(&id(B1)).await, Err(Error::Unsupported(w)) if w == FOCUS));
     let group = format!("rex:{S1}");
     assert!(
         matches!(rt.workspace_close(&group).await, Err(Error::Unsupported(w)) if w == GROUP_CLOSE)

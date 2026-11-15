@@ -8,7 +8,7 @@ Spike for [#703](https://github.com/rbstp/collie/issues/703), 2026-11-12. This p
 - Claude Code 2.1.322 reports `idle`, `working`, `blocked` (`kind: permission`, `msg: approve Bash: touch rex-spike-probe.txt`) and `done` in a Rex block, as it does under herdr-core, and nothing at its folder trust prompt (verified). Codex and Copilot CLI were not run here: Codex reports OSC 7501 under herdr-core and Copilot CLI does not, so a Copilot agent would be read-only from the phone.
 - collied should talk to the control WebSocket (`/api/control`, subprotocol `rex.control.v1`), not run the CLI. A call costs 0.2 to 0.3 ms on an open connection against 25 to 35 ms for each `rex` process, and status, process and title changes arrive as events. collied already depends on `tokio-tungstenite`.
 - collied's approval parser, menu gate and fingerprint read Rex's `format` text unchanged, and its `alacritty_terminal` emulator fed with `format`'s VT output draws the same screen (verified). Reads and watches poll `format`, as collied polls herdr: every poll is the terminal's whole current state, so no output is applied twice or lost. A poll costs about 1 ms at 1,000 lines of scrollback and 39 to 46 ms at 100,000. The data stream is not used: nothing lines it up with `format`, and it opens with a binary Ghostty snapshot (4.5 MB at 100,000 lines) that `alacritty_terminal` cannot read ([Screen](#4-screen)).
-- Lost or weaker for a Rex agent: `terminal.send`'s `if` and its typing hold, which Rex has no equivalent for, closing a whole Rex session from the phone (refused, as for a herdr-core group), and probably desktop focus. Built in collied: the agent kind, the session binding (Claude Code's `sessions/<pid>.json`, as for herdr-core), `state_change_seq`, task records and worktrees.
+- Lost or weaker for a Rex agent: `terminal.send`'s `if` and its typing hold, which Rex has no equivalent for, closing a whole Rex session from the phone (refused, as for a herdr-core group), and desktop focus (Rex.app does not follow `session.focus_block`, #709). Built in collied: the agent kind, the session binding (Claude Code's `sessions/<pid>.json`, as for herdr-core), `state_change_seq`, task records and worktrees.
 - Shape: a third runtime beside herdr and herdr-core, `crates/collied/src/runtime/rex/`, with ids `rex:block:<uuid>`, one group per Rex session (`rex:session:<uuid>`), and the phone protocol unchanged.
 
 ## Evidence
@@ -30,7 +30,7 @@ Read, not run:
 
 Verified later, in #707 (Rex 0.1.0-preview.19, build 1972, API revision 14): Codex 0.167.1 in a Rex block against a scratch server, and collied's own lookup of Claude Code's session file in a one-off manual check on the owner's Rex.app server, with the owner's permission ([Shape](#shape)). Tests still run a server of their own (AGENTS.md).
 
-Not verified: Copilot CLI in Rex, a program with a keyboard protocol, Linux, Rex.app (whether it follows a focus change made on the server; the size it gives a block it owns was checked in #705, [Screen](#4-screen)), a server started by `--autostart` (what environment it passes on; Rex.app's own server was checked in #707), sessions restored after a server restart, builds other than 1940 and, for what #707 and #708 checked, 1972, and whether Rex.app claims and sizes a task block collied gave up when it shows it (on the owner's server the block had no owner and stayed 80x24, #708).
+Not verified: Copilot CLI in Rex, a program with a keyboard protocol, Linux, Rex.app (whether, already showing a session, it follows an active window change made on the server; that it neither switches to the session nor comes forward was checked in #709, [Focus](#9-focus); the size it gives a block it owns was checked in #705, [Screen](#4-screen)), a server started by `--autostart` (what environment it passes on; Rex.app's own server was checked in #707), sessions restored after a server restart, builds other than 1940 and, for what #707 and #708 checked, 1972, and whether Rex.app claims and sizes a task block collied gave up when it shows it (on the owner's server the block had no owner and stayed 80x24, #708).
 
 ## What Rex is
 
@@ -65,7 +65,7 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 | `agent_send_keys`, `scroll_bottom`, `notice_digit` | `agent.send_keys`, `pane.send_text` | `terminal.keys` | `block.event` key | equivalent, except `cmd`, `ctrl+[`, `ctrl+alt+[`, and Control without Alt on a character with Shift or on `i ' , - . ; =` or `` ` ``, refused (built and verified, [Input](#5-input)) |
 | `pane_send_text` (slash mirror, notes) | `pane.send_text` | typing attach | `block.event` paste, no Enter | equivalent (verified) |
 | `pane_send_keys`, `pane_send_input` | as named | herdr only | `block.event` | herdr only, as for herdr-core |
-| `agent_focus` | `agent.focus` | lost | `session.focus_block` | unverified ([Focus](#9-focus)) |
+| `agent_focus` | `agent.focus` | lost | none: Rex.app does not follow `session.focus_block` | refused ([Focus](#9-focus)) |
 | `agent_start`, `workspace_create` | `agent.start`, `workspace.create` | `terminal.run` | `session.create` with one window running the agent | equivalent; kind and task record built |
 | `tab_create` (keeps an archived worktree's workspace open) | `tab.create` | not needed | not needed: a session outlives its last block (verified) | |
 | `worktree_list`, `worktree_create`, `worktree_open`, `worktree_remove` | `worktree.*` | `git worktree` | `git worktree` | built, as for herdr-core |
@@ -153,9 +153,10 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 
 ### 9. Focus
 
-- `rex focus BLOCK` (`session.focus_block`) makes the block's window the session's active window and focuses the block, on the server (verified with `session.view`), with no Rex.app setting. Whether Rex.app then shows that session and comes forward is not verified.
+- `rex focus BLOCK` (`session.focus_block`) makes the block's window the session's active window and focuses the block, on the server (verified with `session.view`), with no Rex.app setting. It answers `{"revision": N}`; on a block already focused in the active window, which a task's only block always is, it changes nothing and sends no event.
+- Rex.app does not follow it (checked by the owner with Rex Beta.app 0.1.0-preview.19 on 2026-11-15, #709). Showing another session, the app stayed on it after `session.focus_block` on a one-block session; behind another app, it neither came forward nor switched to the session after a call that did change the session's active window. The call changes only the server's view of the session. Not checked: whether the app, already showing the session, follows the new active window.
 - Rex.app's own actions (`client.tab.goto`, `client.window.*`, through `client.perform` or `rex -C`) are refused while Remote Control is off in its settings: its binary holds "Rex.app is not accepting actions. Turn on Remote Control in its Settings under Rex Server." collied never calls them: they drive the app, and that setting is the user's.
-- Plan: `agent.focus` on a Rex agent is refused, as for herdr-core, until a check with Rex.app shows `session.focus_block` brings the agent forward.
+- `agent.focus` on a Rex agent is therefore refused, as for herdr-core, with "Rex.app cannot be brought forward from outside the app" (`internal`). collied does not call `session.focus_block`, and only Rex.app's own `client.*` actions, which collied never calls, could bring it forward.
 
 ### 10. Alongside the others
 
@@ -232,9 +233,9 @@ Each phase adds the methods it needs to the set the method check requires ([Tran
 3. Input and approvals (M): paste and key events behind the allowlist, the ready check, read-only agents without status, approvals gated on `kind`, collied's own `state_change_seq` (built in #704 from `updated_at`, so every report moves it); tests for two identical prompts in a row and for every key over the socket. Server: `block.event`.
 4. Sessions (S): Claude Code's pid file through collied's lookup, the Codex SessionStart hook with `REX_BLOCK`, then Chat, costs, context, resume and the permission hook's binding. No new method.
 5. Tasks (M, built in #708): New task, resume, worktrees and archive in Rex when neither herdr nor herdr-core answers, with the sixteen variables stripped, the block disowned and task records kept by block id. Server: `session.create`, `session.disown_block`.
-6. Focus (S, only if Rex.app follows): `agent.focus` through `session.focus_block`, added to the set only then.
+6. Focus (checked in #709): Rex.app does not follow `session.focus_block`, so `agent.focus` stays refused and the method is not added to the set.
 
-What a Rex agent cannot do that a herdr one can, after all phases: take a prompt held to the status collied saw (no `if`), wait for the Mac's typing to pause, take `cmd`, `ctrl+[`, `ctrl+alt+[` or the Control keys Rex sends as nothing, close with its whole group, probably be focused on the desktop, and, for a CLI without OSC 7501 (Copilot CLI), report a status or take input from the phone.
+What a Rex agent cannot do that a herdr one can, after all phases: take a prompt held to the status collied saw (no `if`), wait for the Mac's typing to pause, take `cmd`, `ctrl+[`, `ctrl+alt+[` or the Control keys Rex sends as nothing, close with its whole group, be focused on the desktop, and, for a CLI without OSC 7501 (Copilot CLI), report a status or take input from the phone.
 
 ## Risks
 
@@ -369,7 +370,9 @@ Claude Code's session from `sessions/<pid>.json` for the block's foreground pid,
 
 With the owner's Rex.app, check whether `session.focus_block` brings the agent's session forward; if it does, `agent.focus` uses it, else focus stays refused. No Remote Control action is used.
 
-- [ ] docs/rex.md and architecture.md say what Rex.app does.
+Checked: it does not, so focus stays refused ([Focus](#9-focus)).
+
+- [x] docs/rex.md and architecture.md say what Rex.app does.
 
 ### 7. Keep Claude Code's wrapped tip line out of an approval's context (#710)
 
