@@ -123,7 +123,7 @@ struct NewTaskSheet: View {
                                             .font(.system(size: 20))
                                             .frame(width: 28, height: 28)
                                     }
-                                    .buttonStyle(.glass)
+                                    .appGlassButton()
                                     .tint(.primary)
                                     .buttonBorderShape(.circle)
                                     .controlSize(.small)
@@ -348,7 +348,7 @@ struct NewTaskSheet: View {
                     .font(.footnote)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .appGlass(in: .rect(cornerRadius: 12))
                     .padding(.horizontal)
                     .padding(.vertical, 6)
                     .allowsHitTesting(false)

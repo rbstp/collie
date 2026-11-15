@@ -112,7 +112,7 @@ struct ApprovalCard: View {
             .labelStyle(.titleAndIcon)
             .font(.footnote.weight(.semibold))
         }
-        .buttonStyle(.glass)
+        .appGlassButton(dimmed: true)
         .tint(.primary)
         .background(SessionBarDim(), in: .capsule)
         // A 44-point target around the 30-point glass, so the row keeps its height. Where it reaches the decisions in
@@ -394,7 +394,7 @@ private struct ApprovalCountdown: View {
             .frame(maxHeight: .infinity)
             // The dimming color behind the glass, as on Review: the glass alone left the digits at 3.7:1 over the dark
             // terminal, and the last minute's red reads 4.6:1 there on the landscape band, its lowest.
-            .glassEffect(.regular, in: .capsule)
+            .appGlass(dimmed: true, in: .capsule)
             .background(SessionBarDim(), in: .capsule)
     }
 }
@@ -665,8 +665,8 @@ private struct DecisionStyle: ViewModifier {
         case .approve: content.buttonStyle(.glassProminent).tint(Color(red: 0.11, green: 0.5, blue: 0.22))
         // Glass over the terminal came out lighter than over Chat, and the red label read 3.1:1 there; the dimming color
         // behind the glass keeps it at 4.5:1 or more over either.
-        case .deny: content.buttonStyle(.glass).tint(AgentState.blocked.color).background(SessionBarDim(), in: .capsule)
-        default: content.buttonStyle(.glass).tint(.primary).background(SessionBarDim(), in: .capsule)
+        case .deny: content.appGlassButton(dimmed: true).tint(AgentState.blocked.color).background(SessionBarDim(), in: .capsule)
+        default: content.appGlassButton(dimmed: true).tint(.primary).background(SessionBarDim(), in: .capsule)
         }
     }
 }

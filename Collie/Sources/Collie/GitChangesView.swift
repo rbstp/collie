@@ -767,20 +767,20 @@ struct GitDiffView: View {
                 }
                 .toggleStyle(.button)
                 .labelStyle(.iconOnly)
-                .buttonStyle(.glass)
+                .appGlassButton()
             }
             Button("File feedback", systemImage: "text.bubble") {
                 collapsed = false
                 editing = review.add(root: root, file: file, selection: "")
             }
             .labelStyle(.iconOnly)
-            .buttonStyle(.glass)
+            .appGlassButton()
             .disabled(review.sending)
         }
         .controlSize(.small)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .appGlass(in: .rect(cornerRadius: 16))
         .padding(.horizontal, 8)
         .padding(.bottom, 4)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -833,7 +833,7 @@ private struct GitCommentEditor: View {
                 Text(verbatim: comment.file.path).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("Remove feedback", systemImage: "trash", role: .destructive, action: remove)
-                    .labelStyle(.iconOnly).buttonStyle(.glass)
+                    .labelStyle(.iconOnly).appGlassButton()
             }
             if !comment.selection.isEmpty {
                 Text(verbatim: comment.selection).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
@@ -843,7 +843,7 @@ private struct GitCommentEditor: View {
             } else { field }
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .appGlass(in: .rect(cornerRadius: 16))
     }
 
     private var field: some View {
@@ -862,12 +862,12 @@ private struct GitReviewBar: View {
         VStack(spacing: 8) {
             if let error = review.error {
                 Text(error).font(.footnote).foregroundStyle(.red)
-                    .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .padding(8).appGlass(in: .rect(cornerRadius: 12))
             }
             if !agent.canSendText && !review.sending {
                 Text(cleanup == nil ? "Feedback stays here until the agent can accept a prompt." : "Clean up waits until the agent can accept a prompt.")
                     .font(.footnote).foregroundStyle(.secondary)
-                    .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 12))
+                    .padding(8).appGlass(in: .rect(cornerRadius: 12))
             }
             Button {
                 Task {

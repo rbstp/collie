@@ -46,6 +46,7 @@ struct FlockScreen: View {
                     .tag(true)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .environment(\.glassPage, Color(.systemGroupedBackground))
             // The pager clips its pages to its frame, so it spans the bars for the pages to run under them.
             .ignoresSafeArea(.container)
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
@@ -599,7 +600,7 @@ struct StatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .padding(2)
-            .glassEffect(.regular, in: .capsule)
+            .appGlass(dimmed: colorScheme == .dark, in: .capsule)
             // Dark glass over a lighter surface such as the terminal turns gray; the dim keeps the label at 4.5:1 or more.
             .background(colorScheme == .dark ? .black.opacity(0.75) : .clear, in: .capsule)
             .fixedSize()

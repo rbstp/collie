@@ -59,7 +59,7 @@ struct AgentInbox<Menu: View>: View {
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 44)
-                        .glassEffect(.regular, in: .capsule)
+                        .appGlass(in: .capsule)
                         closeSearchButton
                     }
                     .padding(.horizontal)
@@ -164,7 +164,7 @@ struct AgentInbox<Menu: View>: View {
         .font(.system(size: 16, weight: .medium))
         .foregroundStyle(.primary)
         .frame(width: 38, height: 38)
-        .glassEffect(.regular.interactive(), in: .circle)
+        .appGlass(interactive: true, in: .circle)
         .contentShape(Circle().inset(by: -3))
     }
 

@@ -63,6 +63,19 @@ The app caps Dynamic Type at AccessibilityXL (`.dynamicTypeSize(...DynamicTypeSi
 
 Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views).
 
+## Glass setting
+
+Issue #722 adds **Settings > Appearance > Glass**, stored on the phone with the other display choices and read through the environment (`appGlass`), so a change applies at once. Every surface the app draws takes it from two modifiers, `appGlass(interactive:dimmed:in:)` for glass effects and `appGlassButton(dimmed:)` for glass buttons (`dimmed` where the caller already draws the dimming color); none names `.regular` itself. Buttons take the system's own `.glass` style directly: a wrapping button style left the dictation menu without its glass.
+
+- **Regular**, the default, is the glass every surface drew before the setting, unchanged.
+- **Clear** is `Glass.clear` (`.glass(.clear)` for buttons, `clearGlass()` for the UIKit paperclip) over the dimming color (70% black in dark mode, 80% white in light), as Apple's guidance asks for clear glass over busy content. Content shows sharper and dimmed instead of blurred. The session header and its approval band keep Regular: clear glass, even over the dimming color, let a full terminal or chat run through the title and the status row.
+- **Opaque** is regular glass over the page's own background in place of the dimming color, so nothing shows through: the terminal's background or the chat's on the agent screen, grouped gray on Agents and machine rows, the system background elsewhere. Under the header's feathered edge, content fades into the page as it does under the approval band, so a line crossing the edge does not read cut in half.
+- Not covered: the navigation bar, the tab bar, toolbar buttons and their shared capsule, sheets, menus and native segmented controls are drawn by the system and follow iOS's own Liquid Glass setting; SwiftUI offers no glass variant for them, and the app does not replace them to force one. Accent-filled `.glassProminent` buttons take no glass variant and keep their look. The grid's running subagents overlay was already clear glass and stays so; under Opaque its dimming color becomes the page. The watch app keeps its look.
+
+| Light | Dark |
+| --- | --- |
+| ![Clear, Regular and Opaque over the terminal in light mode, the session header above and the composer below](images/glass-setting-light.jpg) | ![Clear, Regular and Opaque over the terminal in dark mode, the session header above and the composer below](images/glass-setting-dark.jpg) |
+
 ## Validation
 
 - `just ios-test`: passed (274 app tests, 62 Ghostty tests).

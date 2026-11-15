@@ -17,6 +17,7 @@ struct DevicePrefs: StateFile, Equatable {
     /// Nil until the user picks it, so a phone that never did leaves the Macs' setting alone.
     var archiveOnMerge: Bool?
     var accent = AppAccent.blue
+    var glass = AppGlass.regular
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
     var taskUltracode: [String: Bool] = [:]
@@ -68,6 +69,7 @@ extension DevicePrefs {
         doneAlerts = (try? container.decodeIfPresent(Bool.self, forKey: .doneAlerts)) ?? defaults.doneAlerts
         archiveOnMerge = try? container.decodeIfPresent(Bool.self, forKey: .archiveOnMerge)
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
+        glass = (try? container.decodeIfPresent(AppGlass.self, forKey: .glass)) ?? defaults.glass
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
         taskUltracode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskUltracode)) ?? defaults.taskUltracode
     }
@@ -144,6 +146,25 @@ enum SessionView: String, Codable, CaseIterable {
         case .terminal: "Terminal"
         }
     }
+}
+
+enum AppGlass: String, Codable, CaseIterable {
+    case clear
+    case regular
+    case opaque
+
+    var label: String {
+        switch self {
+        case .clear: "Clear"
+        case .regular: "Regular"
+        case .opaque: "Opaque"
+        }
+    }
+
+    /// Opaque is regular glass over the page's own background, which `SessionBarDim` resolves to.
+    var effect: Glass { self == .clear ? .clear : .regular }
+    /// Clear glass needs the dimming color behind it to stay legible, and Opaque's dimming color is the page.
+    var dims: Bool { self != .regular }
 }
 
 enum AgentsLayout: String, Codable, CaseIterable {

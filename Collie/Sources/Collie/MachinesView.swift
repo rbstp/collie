@@ -122,7 +122,8 @@ struct MachineRow<Destination: View>: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .appGlass(in: .rect(cornerRadius: 18))
+        .environment(\.glassPage, Color(.systemGroupedBackground))
     }
 }
 
@@ -192,7 +193,7 @@ struct CopyIcon: View {
             .foregroundStyle(copiedAt == nil ? accent : AgentState.done.color)
             .frame(minWidth: 28, minHeight: 28)
             .padding(2)
-            .glassEffect(.regular.interactive(), in: .circle)
+            .appGlass(interactive: true, in: .circle)
             .task(id: copiedAt) {
                 guard copiedAt != nil else { return }
                 try? await Task.sleep(for: .seconds(3))

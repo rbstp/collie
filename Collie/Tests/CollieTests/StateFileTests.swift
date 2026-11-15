@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
+        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -31,7 +31,7 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true, keysShown: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, archiveOnMerge: true, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
+                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
             )
     )
     prefs.save(to: file)
@@ -48,7 +48,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test(arguments: [
     #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
     #""watchDecisions":"true""#, #""doneAlerts":0"#, #""archiveOnMerge":"on""#, #""taskBases":[]"#,
-    #""gestures":{"doubleTap":"later"}"#,
+    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#,
 ])
 func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
@@ -89,6 +89,44 @@ func accentPreferenceSurvivesOtherPreferenceUpdates(_ accent: AppAccent) throws 
     #expect(prefs.keepKeyboard)
     #expect(prefs.historyLines == 500)
     #expect(prefs.taskBases == ["m1": "/Users/me/git"])
+}
+
+@Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"glass":"future"}"#])
+func prefsWithoutAKnownGlassKeepRegularAndOtherPreferences(_ json: String) throws {
+    let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))
+    #expect(prefs.glass == .regular)
+    #expect(!prefs.wrapLines)
+}
+
+@Test(arguments: AppGlass.allCases)
+func glassPreferenceSurvivesOtherPreferenceUpdates(_ glass: AppGlass) throws {
+    let file = try write(#"{"keepKeyboard":true,"accent":"red"}"#, as: "prefs.json")
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    DevicePrefs.update(in: file) { $0.glass = glass }
+    DevicePrefs.update(in: file) { $0.historyLines = 500 }
+    let prefs = DevicePrefs.load(from: file)
+    #expect(prefs.glass == glass)
+    #expect(prefs.accent == .red)
+    #expect(prefs.keepKeyboard)
+}
+
+// Regular must stay the glass every surface drew before the setting; Opaque draws regular glass over the page.
+@Test func glassChoicesMapToTheSystemGlass() {
+    #expect(AppGlass.regular.effect == .regular)
+    #expect(AppGlass.clear.effect == .clear)
+    #expect(AppGlass.opaque.effect == .regular)
+}
+
+@Test(arguments: [ColorScheme.light, .dark])
+func opaqueGlassDimsWithThePageAndOtherChoicesKeepTheDimmingColor(_ scheme: ColorScheme) {
+    var environment = EnvironmentValues()
+    environment.colorScheme = scheme
+    environment.glassPage = .orange
+    let dim: Color = scheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
+    for glass in AppGlass.allCases {
+        environment.appGlass = glass
+        #expect(SessionBarDim().resolve(in: environment) == (glass == .opaque ? .orange : dim))
+    }
 }
 
 @Test(arguments: [ColorScheme.light, .dark])

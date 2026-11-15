@@ -44,6 +44,9 @@ final class AppModel {
             publishWatchState()
         }
     }
+    var glass = DevicePrefs.load(from: DevicePrefs.file).glass {
+        didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.glass = glass } }
+    }
     var openingAgent: AgentRoute?
     var approvalOpenError: String?
     @ObservationIgnored private var openingApproval: Task<Void, Never>?

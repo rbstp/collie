@@ -252,7 +252,7 @@ struct FileViewer: View {
             } description: {
                 Text(error)
             } actions: {
-                Button("Try Again") { Task { await model.load(agent.openFile) } }.buttonStyle(.glass)
+                Button("Try Again") { Task { await model.load(agent.openFile) } }.appGlassButton()
             }
         } else {
             ProgressView("Opening \(model.name)…").frame(maxWidth: .infinity, maxHeight: .infinity)

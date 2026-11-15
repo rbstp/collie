@@ -4,6 +4,54 @@ import UIKit
 extension EnvironmentValues {
     @Entry var appAccent: Color = .accentColor
     @Entry var neutralAccent = false
+    @Entry var appGlass = AppGlass.regular
+    /// What Opaque glass shows instead of the content under it.
+    @Entry var glassPage = Color(.systemBackground)
+}
+
+extension View {
+    /// The glass Settings > Appearance picks; every surface the app draws takes it from here.
+    /// `dimmed`: the caller already draws `SessionBarDim` behind it.
+    func appGlass(interactive: Bool = false, dimmed: Bool = false, in shape: some Shape) -> some View {
+        modifier(AppGlassEffect(interactive: interactive, dimmed: dimmed, shape: shape))
+    }
+}
+
+private struct AppGlassEffect<S: Shape>: ViewModifier {
+    let interactive: Bool
+    let dimmed: Bool
+    let shape: S
+    @Environment(\.appGlass) private var glass
+
+    func body(content: Content) -> some View {
+        content
+            .glassEffect(interactive ? glass.effect.interactive() : glass.effect, in: shape)
+            .background(glass.dims && !dimmed ? AnyShapeStyle(SessionBarDim()) : AnyShapeStyle(.clear), in: shape)
+    }
+}
+
+extension View {
+    /// `.buttonStyle(.glass)` in the app's glass. A wrapping button style left menus without their glass.
+    /// `dimmed`: the caller already draws `SessionBarDim` behind it.
+    func appGlassButton(dimmed: Bool = false) -> some View {
+        modifier(AppGlassButton(dimmed: dimmed))
+    }
+}
+
+private struct AppGlassButton: ViewModifier {
+    let dimmed: Bool
+    @Environment(\.appGlass) private var glass
+
+    func body(content: Content) -> some View {
+        Group {
+            if glass == .clear {
+                content.buttonStyle(.glass(.clear))
+            } else {
+                content.buttonStyle(.glass)
+            }
+        }
+        .background(glass.dims && !dimmed ? AnyShapeStyle(SessionBarDim()) : AnyShapeStyle(.clear), in: .capsule)
+    }
 }
 
 struct GlassPicker<Selection: Hashable>: View {

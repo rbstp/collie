@@ -48,7 +48,8 @@ private struct AttachmentMenuControl: UIViewRepresentable {
         button.configure(
             savedPromptsEnabled: savedPromptsEnabled, filesEnabled: filesEnabled,
             color: UIColor(Color(Color.primary.resolve(in: context.environment))),
-            locale: context.environment.locale
+            locale: context.environment.locale,
+            clear: context.environment.appGlass == .clear
         )
     }
 
@@ -67,10 +68,17 @@ final class AttachmentMenuButton: UIButton {
     private(set) var pendingChoice: AttachmentChoice?
     private var savedPromptsEnabled = true
     private var filesEnabled = true
+    private var clear = false
 
     init() {
         super.init(frame: .zero)
-        var configuration = UIButton.Configuration.glass()
+        configuration = Self.glass(clear: false)
+        showsMenuAsPrimaryAction = true
+        preferredMenuElementOrder = .fixed
+    }
+
+    private static func glass(clear: Bool) -> UIButton.Configuration {
+        var configuration = clear ? UIButton.Configuration.clearGlass() : .glass()
         configuration.image = UIImage(systemName: "paperclip")
         // Not the neighbors' 20: the diagonal paperclip at 20 measured 24 by 27 points and filled its circle; 17 matches them optically.
         configuration.preferredSymbolConfigurationForImage = .init(pointSize: 17)
@@ -79,19 +87,21 @@ final class AttachmentMenuButton: UIButton {
         configuration.background.backgroundInsets = NSDirectionalEdgeInsets(
             top: Self.outset, leading: Self.outset, bottom: Self.outset, trailing: Self.outset
         )
-        self.configuration = configuration
-        showsMenuAsPrimaryAction = true
-        preferredMenuElementOrder = .fixed
+        return configuration
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
     }
 
-    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, color: UIColor, locale: Locale) {
+    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, color: UIColor, locale: Locale, clear: Bool = false) {
         self.savedPromptsEnabled = savedPromptsEnabled
         self.filesEnabled = filesEnabled
         guard !isHeld else { return }
+        if clear != self.clear {
+            self.clear = clear
+            configuration = Self.glass(clear: clear)
+        }
         configuration?.baseForegroundColor = color
         configuration?.image = UIImage(systemName: "paperclip")?.withTintColor(color, renderingMode: .alwaysOriginal)
         accessibilityLabel = String(localized: "Attachments and saved prompts", locale: locale)

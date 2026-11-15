@@ -45,6 +45,7 @@ struct RootView: View {
             .tint(app.accent.color)
             .accentColor(app.accent.color)
             .environment(\.appAccent, app.accent.color)
+            .environment(\.appGlass, app.glass)
             .environment(\.neutralAccent, app.accent == .neutral)
             .toggleStyle(AccentSwitch(tint: app.accent.switchTint))
             .alert("Approval unavailable", isPresented: Binding(
@@ -66,7 +67,7 @@ struct RootView: View {
                 Text(error)
             } actions: {
                 Button("Explore sample workspace", systemImage: "play.rectangle") { sample = true }
-                    .buttonStyle(.glass)
+                    .appGlassButton()
             }
         } else if app.showsMain {
             TabView(
