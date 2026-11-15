@@ -33,6 +33,7 @@ struct Press {
 
 const PASTE_START: &str = "\u{1b}[200~";
 const PASTE_END: &str = "\u{1b}[201~";
+pub const STATUS_CHANGED: &str = "status_changed";
 
 pub(super) const REFUSED: &str =
     "Rex agents take no cmd key, and no ctrl key that Rex would send as nothing or as ESC [";
@@ -64,6 +65,9 @@ fn press(name: &str) -> Result<Press, Error> {
         "esc" => ("escape".into(), "\u{1b}".into(), 27),
         "tab" => ("tab".into(), "\t".into(), 9),
         "backspace" => ("backspace".into(), "\u{7f}".into(), 127),
+        "space" if has("ctrl") && has("shift") && !has("alt") => {
+            return Err(Error::Unsupported(REFUSED.to_owned()));
+        }
         "space" => ("space".into(), " ".into(), 32),
         "up" | "down" | "left" | "right" => (format!("arrow_{key}"), String::new(), 0),
         "end" => ("end".into(), String::new(), 0),
@@ -136,10 +140,40 @@ fn punctuation(c: u8) -> Option<&'static str> {
     })
 }
 
+/// The status the ready check saw, which each event of a call requires again: Rex has no
+/// conditional send. `seq` also pins a blocked agent's dialog, so an answer never lands in
+/// the next one.
+pub struct Seen<'a> {
+    pub status: &'a str,
+    pub seq: Option<u64>,
+}
+
 impl Rex {
-    async fn send(&self, id: &str, events: &[Event<'_>]) -> Result<(), Error> {
+    /// From the model, with no call: the pump applies every report Rex pushed before an
+    /// event's response before that response returns.
+    fn still(&self, id: &str, seen: &Seen) -> Result<(), Error> {
+        let a = self.get(id)?;
+        if a.agent_status != seen.status || seen.seq.is_some_and(|s| s != a.state_change_seq) {
+            return Err(Error::Rex {
+                code: STATUS_CHANGED.to_owned(),
+                message: "the agent's status changed".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        id: &str,
+        events: &[Event<'_>],
+        seen: Option<&Seen<'_>>,
+    ) -> Result<(), Error> {
+        let _one = self.input.lock().await;
         let (client, session, block, _) = self.target(id)?;
         for event in events {
+            if let Some(seen) = seen {
+                self.still(id, seen)?;
+            }
             let payload = json!({ "session_id": session, "block_id": block, "event": event });
             client
                 .call::<serde_json::Value>(Method::BlockEvent, payload, TIMEOUT)
@@ -150,7 +184,13 @@ impl Rex {
 
     /// Pasted, then Enter when `enter`. collied's own bracketed paste markers, which herdr
     /// writes as they are, are left to Rex.
-    pub async fn paste(&self, id: &str, text: &str, enter: bool) -> Result<(), Error> {
+    pub async fn paste(
+        &self,
+        id: &str,
+        text: &str,
+        enter: bool,
+        seen: Option<&Seen<'_>>,
+    ) -> Result<(), Error> {
         let text = (text.strip_prefix(PASTE_START))
             .and_then(|t| t.strip_suffix(PASTE_END))
             .unwrap_or(text);
@@ -158,7 +198,7 @@ impl Rex {
         if enter {
             events.push(Event::Key(press("enter")?));
         }
-        self.send(id, &events).await
+        self.send(id, &events, seen).await
     }
 
     /// Every key is checked before the first is sent.
@@ -166,7 +206,7 @@ impl Rex {
         let events = (keys.iter())
             .map(|k| press(k).map(Event::Key))
             .collect::<Result<Vec<_>, _>>()?;
-        self.send(id, &events).await
+        self.send(id, &events, None).await
     }
 }
 
@@ -213,6 +253,17 @@ mod tests {
                 "{name}"
             );
         }
+        // Each key Rex sends as nothing with Control, one by one, and Shift's space.
+        for c in CONTROL_SILENT.iter().map(|c| char::from(*c)) {
+            let name = format!("ctrl+{c}");
+            assert!(
+                matches!(press(&name), Err(Error::Unsupported(w)) if w == REFUSED),
+                "{name}"
+            );
+        }
+        assert_eq!(CONTROL_SILENT, b"i',-.;=`");
+        assert!(matches!(press("ctrl+shift+space"), Err(Error::Unsupported(w)) if w == REFUSED));
+        assert!(press("ctrl+alt+shift+space").is_ok() && press("ctrl+space").is_ok());
         for name in ["", "+", "super+x", "home", "f13", "ctrl+", "ab", "~"] {
             assert!(
                 matches!(press(name), Err(Error::Unsupported(w)) if w.starts_with("no such key")),

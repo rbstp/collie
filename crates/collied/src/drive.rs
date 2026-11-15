@@ -118,6 +118,12 @@ pub fn herdr_fail(e: runtime::Error) -> Fail {
         runtime::Error::Core { kind, .. } => {
             return (ErrorCode::Internal, format!("herdr-core refused: {kind}"));
         }
+        runtime::Error::Rex { code, .. } if code == runtime::rex::STATUS_CHANGED => {
+            return (
+                ErrorCode::AgentNotReady,
+                "the agent's status changed; the rest was not sent".to_owned(),
+            );
+        }
         runtime::Error::Rex { code, .. } if code == "not_found" || code == "session_not_found" => {
             return (ErrorCode::NotFound, "not found".to_owned());
         }
@@ -790,7 +796,12 @@ impl Driver {
         self.input_safeguards(&a).await?;
         authorized(auth)?;
         self.runtime
-            .type_text(&a.pane_id, p.text.as_str(), &a.agent_status)
+            .type_text(
+                &a.pane_id,
+                p.text.as_str(),
+                &a.agent_status,
+                a.state_change_seq,
+            )
             .await
             .map_err(herdr_fail)?;
         Ok(Response::Ok)

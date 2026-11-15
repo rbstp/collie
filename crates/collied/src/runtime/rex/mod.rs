@@ -32,6 +32,7 @@ mod screen_tests;
 mod tests;
 
 pub use discovery::socket_path;
+pub use input::{STATUS_CHANGED, Seen};
 pub use model::{Listing, PREFIX};
 
 pub const NOT_YET: &str = "not available for Rex agents yet";
@@ -212,6 +213,8 @@ pub struct Rex {
     settled: watch::Sender<bool>,
     pub(super) herdr: Arc<HerdrSeen>,
     screens: Screens,
+    /// One call's input at a time, so another call's key never lands among its keys.
+    input: tokio::sync::Mutex<()>,
 }
 
 /// The connection, session, block and size of a listed agent.
@@ -238,6 +241,7 @@ impl Rex {
             settled: watch::channel(false).0,
             herdr: Arc::default(),
             screens: Screens::default(),
+            input: tokio::sync::Mutex::default(),
         }
     }
 

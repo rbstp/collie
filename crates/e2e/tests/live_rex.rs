@@ -612,7 +612,14 @@ async fn input_scenario(server: &RexServer) {
     dumped(&expected).await;
 
     // Refused before anything is sent, the keys before them in the call included.
-    for name in ["cmd+k", "ctrl+[", "ctrl+alt+[", "ctrl+shift+a", "ctrl+i"] {
+    for name in [
+        "cmd+k",
+        "ctrl+[",
+        "ctrl+alt+[",
+        "ctrl+shift+a",
+        "ctrl+i",
+        "ctrl+shift+space",
+    ] {
         assert!(KeyCombo::new(name).is_ok(), "{name}");
         assert!(
             rt.agent_send_keys(&dump, &["a", name]).await.is_err(),

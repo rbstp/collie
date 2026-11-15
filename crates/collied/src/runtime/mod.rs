@@ -424,17 +424,32 @@ impl Runtime {
         }
     }
 
-    /// `seen` is the status the ready check saw, which a herdr-core send requires again.
+    /// `seen` is the status the ready check saw, which a herdr-core or Rex send requires again.
     pub async fn agent_prompt(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::agent_prompt(&self.herdr, pane_id, text).await,
             Owner::Core => self.followed()?.send(pane_id, text, seen, false).await,
-            Owner::Rex => self.followed_rex()?.paste(pane_id, text, true).await,
+            Owner::Rex => {
+                let seen = rex::Seen {
+                    status: seen,
+                    seq: None,
+                };
+                (self.followed_rex()?)
+                    .paste(pane_id, text, true, Some(&seen))
+                    .await
+            }
         }
     }
 
-    /// A typed answer: a paste and Enter, also into a blocked agent's dialog.
-    pub async fn type_text(&self, pane_id: &str, text: &str, seen: &str) -> Result<(), Error> {
+    /// A typed answer: a paste and Enter, also into a blocked agent's dialog, whose
+    /// `state_change_seq` was `seq` when checked.
+    pub async fn type_text(
+        &self,
+        pane_id: &str,
+        text: &str,
+        seen: &str,
+        seq: u64,
+    ) -> Result<(), Error> {
         match Owner::of(pane_id) {
             Owner::Herdr => {
                 let paste = format!("\u{1b}[200~{text}\u{1b}[201~");
@@ -444,7 +459,15 @@ impl Runtime {
                 let blocked = seen == "blocked";
                 self.followed()?.send(pane_id, text, seen, blocked).await
             }
-            Owner::Rex => self.followed_rex()?.paste(pane_id, text, true).await,
+            Owner::Rex => {
+                let seen = rex::Seen {
+                    status: seen,
+                    seq: (seen == "blocked").then_some(seq),
+                };
+                (self.followed_rex()?)
+                    .paste(pane_id, text, true, Some(&seen))
+                    .await
+            }
         }
     }
 
@@ -460,7 +483,11 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, text).await,
             Owner::Core => self.followed()?.type_raw(pane_id, text).await,
-            Owner::Rex => self.followed_rex()?.paste(pane_id, text, false).await,
+            Owner::Rex => {
+                (self.followed_rex()?)
+                    .paste(pane_id, text, false, None)
+                    .await
+            }
         }
     }
 

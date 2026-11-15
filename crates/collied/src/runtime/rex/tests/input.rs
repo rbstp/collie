@@ -51,7 +51,7 @@ async fn prompts_and_answers_are_pastes_then_enter_and_keys_are_key_events_on_on
         events(&fake, B1),
         [paste("fix the build\nthen test"), enter.clone()]
     );
-    rt.type_text(&agent, "yes", "blocked").await.unwrap();
+    rt.type_text(&agent, "yes", "idle", 0).await.unwrap();
     assert_eq!(events(&fake, B1), [paste("yes"), enter]);
 
     // The slash mirror's own markers are Rex's to add; anything else is pasted as it is.
@@ -189,4 +189,111 @@ async fn input_reaches_only_a_listed_agent_and_fails_at_once_without_rex() {
     assert!(not_found(rt.agent_prompt(&id(B1), "hi", "idle").await));
     assert!(not_found(rt.agent_send_keys(&id(B1), &["enter"]).await));
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
+}
+
+fn blocked_at(at: &str) -> Value {
+    let mut r = fake::record("blocked", 10, "2.1.322", at);
+    r["kind"] = json!("permission");
+    r
+}
+
+/// The program reports `record` as Rex takes the next `block.event`, before answering it.
+fn reports_on_next_event(fake: &Fake, record: Value) {
+    fake.state().hook(
+        crate::runtime::rex::client::Method::BlockEvent,
+        Some(B1),
+        false,
+        Box::new(move |s| {
+            s.block(B1).records = vec![record.clone()];
+            vec![fake::status_changed(S1, B1, record)]
+        }),
+    );
+}
+
+fn status_changed(r: Result<(), Error>) -> bool {
+    matches!(r, Err(Error::Rex { code, .. }) if code == input::STATUS_CHANGED)
+}
+
+#[tokio::test]
+async fn a_dialog_that_opens_during_a_prompt_never_gets_its_enter() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    let (rex, rt, _dir) = followed(&fake).await;
+    reports_on_next_event(&fake, blocked_at("2026-11-12T16:47:05.000001Z"));
+    assert!(status_changed(rt.agent_prompt(&id(B1), "hi", "idle").await));
+    assert_eq!(events(&fake, B1), [paste("hi")]);
+    assert_eq!(rex.get(&id(B1)).unwrap().agent_status, "blocked");
+
+    // Nor a prompt whose agent changed before its first event.
+    assert!(status_changed(rt.agent_prompt(&id(B1), "hi", "idle").await));
+    assert!(events(&fake, B1).is_empty());
+}
+
+#[tokio::test]
+async fn a_typed_answer_never_lands_in_the_next_dialog() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "blocked", T0);
+    fake.state().block(B1).records = vec![blocked_at(T0)];
+    let (rex, rt, _dir) = followed(&fake).await;
+    let seq = rex.get(&id(B1)).unwrap().state_change_seq;
+
+    // The same dialog: the answer and its Enter.
+    rt.type_text(&id(B1), "yes", "blocked", seq).await.unwrap();
+    assert_eq!(
+        events(&fake, B1),
+        [paste("yes"), key("enter", "", "\r", 13)]
+    );
+
+    // Another dialog, still `blocked`, reported while the answer was pasted.
+    reports_on_next_event(&fake, blocked_at("2026-11-12T16:47:05.000001Z"));
+    assert!(status_changed(
+        rt.type_text(&id(B1), "yes", "blocked", seq).await
+    ));
+    assert_eq!(events(&fake, B1), [paste("yes")]);
+}
+
+#[tokio::test]
+async fn one_calls_keys_reach_the_block_together() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "blocked", T0);
+    let (_rex, rt, _dir) = followed(&fake).await;
+    let rt = Arc::new(rt);
+    fake.state().stall = true;
+    let deny = tokio::spawn({
+        let rt = rt.clone();
+        async move {
+            rt.agent_send_keys(&id(B1), &["down", "down", "enter"])
+                .await
+        }
+    });
+    super::eventually("the first arrow", || {
+        fake.state().block(B1).events.len() == 1
+    })
+    .await;
+    let other = tokio::spawn({
+        let rt = rt.clone();
+        async move { rt.agent_send_keys(&id(B1), &["enter"]).await }
+    });
+    // Without one call at a time, the other Enter reaches Rex here, between the arrows.
+    let between = tokio::time::timeout(std::time::Duration::from_millis(200), async {
+        while fake.state().block(B1).events.len() < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    fake.emit(|s| {
+        s.stall = false;
+        Vec::new()
+    });
+    deny.await.unwrap().unwrap();
+    other.await.unwrap().unwrap();
+    assert!(
+        between.is_err(),
+        "another call's key was sent between the arrows"
+    );
+    let codes: Vec<String> = events(&fake, B1)
+        .iter()
+        .map(|e| e["payload"]["key"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(codes, ["arrow_down", "arrow_down", "enter", "enter"]);
 }
