@@ -61,6 +61,8 @@ When the machine last reported the runtime you chose as missing, a red line unde
 
 Archiving the last pane of a repository workspace with linked worktree sessions leaves a shell there to keep those sessions open.
 
+In Rex, **Archive** also removes the task's session from Rex.app's sidebar once nothing else is left in it. A session that still holds another window or block stays, as does any session collie did not create for the task; the answer says which.
+
 One task works in a checkout at a time, whichever runtime started it. When Herdr 2 or Rex runs beside herdr, herdr's **Archive** and **Open** leave a checkout alone while a Herdr 2 terminal or a Rex block works in it, and say so, such as "a Rex block works in this checkout". A Herdr 2 or Rex that does not answer never stops herdr. The other way round, an **Open** or **Archive** in Herdr 2 or Rex leaves a checkout alone while a herdr pane works in it or herdr has it open, and refuses while herdr runs but does not answer.
 
 ## Herdr 2

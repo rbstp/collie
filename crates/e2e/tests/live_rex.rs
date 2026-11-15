@@ -1132,13 +1132,18 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         AgentKind::new("claude").unwrap(),
         AgentKind::new("codex").unwrap(),
     ];
+    transcripts(&bin.join("agents"), &work);
     let drive = Driver::new(
         server.root.join("no-herdr.sock"),
         kinds.clone(),
         std::slice::from_ref(&work),
     )
     .unwrap()
-    .with_rex(Some(rex.clone()));
+    .with_rex(Some(rex.clone()))
+    .with_transcripts(collied::transcript::Transcripts::new(
+        Some(bin.join("agents/claude/projects")),
+        None,
+    ));
     let yes: Authorized = Arc::new(|| true);
 
     let Ok(Response::TaskOptions(options)) = drive.task_options().await else {
@@ -1326,25 +1331,81 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         panic!("the worktree task was not archived");
     };
     assert!(
-        message.starts_with("Removed worktree checkout"),
+        message.starts_with("Removed worktree checkout")
+            && message.contains("Removed its Rex session."),
         "{message}"
     );
     assert!(!checkout.exists());
     assert!(!git(&work, &["worktree", "list"]).contains("feat-rex-task"));
-    assert!(blocks_of(server, &codex_session).is_empty());
+    assert!(
+        !sessions(server).contains(&codex_session),
+        "the task's own empty session is removed"
+    );
 
+    // A window the user opened in the task's session keeps it.
+    let window = serde_json::json!({ "layout": { "block": {
+        "flavor": "com.superlogical.terminal.shell",
+        "options": { "command": ["/bin/sleep", "600"], "cwd": "/" },
+    }}});
+    server.rex(&[
+        "api",
+        "call",
+        "-s",
+        &session,
+        "session.new_window",
+        &window.to_string(),
+    ]);
+    assert_eq!(blocks_of(server, &session).len(), 2);
     let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&claude), &yes).await
     else {
         panic!("the task was not archived");
     };
-    assert!(message.starts_with("Closed pane."), "{message}");
-    assert!(blocks_of(server, &session).is_empty());
-    assert!(work.exists());
-    let left = sessions(server);
     assert!(
-        left.contains(&session) && left.contains(&codex_session),
-        "archive destroys no session: {left:?}"
+        message.starts_with("Closed pane.")
+            && message.contains("Kept its Rex session, which holds another block or window."),
+        "{message}"
     );
+    let kept = blocks_of(server, &session);
+    assert_eq!(kept.len(), 1, "only the task's block closed: {kept:?}");
+    assert!(sessions(server).contains(&session));
+    assert!(work.exists());
+
+    // An agent collie did not start ends alone: its session, now empty, stays.
+    let (mine, block) = new_session(server, "collie-mine", &["/usr/bin/perl", "-e", AGENT]);
+    let agent = TerminalId::new(format!("rex:{block}")).unwrap();
+    until("the user's agent", async || rex.get(agent.as_str()).ok()).await;
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&agent), &yes).await
+    else {
+        panic!("the user's agent was not archived");
+    };
+    assert!(!message.contains("Rex session"), "{message}");
+    assert!(blocks_of(server, &mine).is_empty());
+    assert!(
+        sessions(server).contains(&mine),
+        "a session collie did not create stays"
+    );
+
+    // An archived task resumes, in a new session of its own.
+    let resume = TaskNewParams {
+        resume: Some(protocol::SessionId::new(CLOSED_SESSION).unwrap()),
+        ..new("claude", "carry on", None)
+    };
+    let (group, resumed) = started(drive.task_new(resume, &yes).await);
+    let (resumed_session, _) = ids(&group, &resumed);
+    until("the resumed Claude Code", async || {
+        record("prompts-claude").filter(|p| p.contains("carry on"))
+    })
+    .await;
+    assert_eq!(
+        record("args-claude").as_deref(),
+        Some(format!("--resume\n{CLOSED_SESSION}\n").as_str())
+    );
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&resumed), &yes).await
+    else {
+        panic!("the resumed task was not archived");
+    };
+    assert!(message.contains("Removed its Rex session."), "{message}");
+    assert!(!sessions(server).contains(&resumed_session));
 
     // herdr answers, and a task asked of Rex starts there with nothing sent to herdr.
     let herdr = mock_herdr(&server.root.join("herdr.sock"), |method, _| {
@@ -1392,7 +1453,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     let Ok(Response::TaskArchived { .. }) = drive.task_archive(archive(&chosen), &yes).await else {
         panic!("the task started beside herdr was not archived");
     };
-    assert!(blocks_of(server, &chosen_session).is_empty());
+    assert!(!sessions(server).contains(&chosen_session));
 
     // A herdr that takes the connection and never answers leaves Rex to answer task.options.
     let busy = server.root.join("busy.sock");

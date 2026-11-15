@@ -107,6 +107,7 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
         Some(&Task {
             name: NAME.to_owned(),
             worktree: None,
+            session: Some(session.clone()),
         })
     );
 
@@ -560,7 +561,7 @@ async fn archive_closes_only_the_tasks_block_and_removes_its_recorded_worktree()
     };
     assert!(
         message.starts_with(&format!(
-            "Removed worktree checkout {at} and closed {task}."
+            "Removed worktree checkout {at} and closed {task}. Kept its Rex session, which holds another block or window."
         )),
         "{message}"
     );
@@ -620,14 +621,17 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
 }
 
 #[tokio::test]
-async fn a_task_without_a_worktree_is_archived_by_closing_its_block_alone() {
+async fn a_task_without_a_worktree_is_archived_with_the_session_collied_created_for_it() {
     let fake = Fake::start().await;
     claude(&fake, S1, B1, 10, "idle", T0);
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
-    let (rex, rt) = followed(&fake, &root).await;
-    let host = host(&rt).await;
-    let task = host
+    let file = dir.path().join("rex-tasks.json");
+    let rex = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file.clone()));
+    let following = follow(&rex).await;
+    let rt = Runtime::new(root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    let task = host(&rt)
+        .await
         .start(
             root.to_str().unwrap(),
             NAME,
@@ -639,21 +643,61 @@ async fn a_task_without_a_worktree_is_archived_by_closing_its_block_alone() {
         )
         .await
         .unwrap();
-    eventually("the task listed", || rex.get(&task).is_ok()).await;
-    let drive = driver(&root, rex);
+    let session = fake.state().block(block_of(&task)).session.clone();
+
+    // A collied started again knows the session as its own from the file.
+    fake.drop_connection();
+    let _ = following.await;
+    let again = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file));
+    let _following = follow(&again).await;
+    eventually("the task listed", || again.get(&task).is_ok()).await;
+    let drive = driver(&root, again.clone());
     let yes: Authorized = Arc::new(|| true);
     let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&task), &yes).await
     else {
         panic!("not archived");
     };
-    assert!(message.starts_with("Closed pane."), "{message}");
-    let state = fake.state();
-    assert!(!state.blocks.iter().any(|b| b.id == block_of(&task)));
     assert!(
-        state.blocks.iter().any(|b| b.id == B1),
-        "another agent stays"
+        message.starts_with("Closed pane. Its folder was left in place. Removed its Rex session."),
+        "{message}"
     );
-    assert_eq!(state.sessions.len(), 2, "no session is destroyed");
+    {
+        let state = fake.state();
+        assert!(!state.blocks.iter().any(|b| b.id == block_of(&task)));
+        assert!(!state.sessions.iter().any(|(s, _)| *s == session));
+        assert!(
+            state.blocks.iter().any(|b| b.id == B1),
+            "another agent stays"
+        );
+    }
+    eventually("the session's group to leave", || {
+        !again
+            .listing()
+            .unwrap()
+            .agents
+            .iter()
+            .any(|a| a.workspace_id == format!("rex:{session}"))
+    })
+    .await;
+
+    // An agent collied did not start ends alone: its session, now empty, stays.
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&id(B1)), &yes).await
+    else {
+        panic!("not archived");
+    };
+    assert!(!message.contains("Rex session"), "{message}");
+    let state = fake.state();
+    assert!(!state.blocks.iter().any(|b| b.id == B1));
+    assert_eq!(state.sessions.len(), 1, "{:?}", state.sessions);
+    assert_eq!(state.sessions[0].0, S1);
+    assert_eq!(
+        state
+            .calls
+            .iter()
+            .filter(|c| *c == "session.destroy")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -681,7 +725,9 @@ async fn records_are_kept_on_disk_and_forgotten_once_their_block_is_gone() {
     let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(
         saved,
-        json!({ block.clone(): { "name": NAME, "worktree": "/w/.worktree/x" } })
+        json!({ block.clone(): {
+            "name": NAME, "worktree": "/w/.worktree/x", "session": fake.state().block(&block).session,
+        }})
     );
     eventually("the task listed", || rex.get(&started).is_ok()).await;
     assert_eq!(rex.worktree(&started).as_deref(), Some("/w/.worktree/x"));

@@ -383,9 +383,16 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 .find(|(id, _)| *id == session)
                 .map(|(_, l)| l);
             let client = (!s.anonymous).then_some(CLIENT);
-            Ok(json!({ "client_id": client, "view": {
-                "revision": 1, "session_id": session, "label": label,
-            }}))
+            // One window per block, left out when there is none, as Rex leaves it out.
+            let windows: Vec<Value> = (s.blocks.iter())
+                .filter(|b| b.session == session)
+                .map(|b| json!({ "window_id": format!("window:{}", b.id), "label": "w" }))
+                .collect();
+            let mut view = json!({ "revision": 1, "session_id": session, "label": label });
+            if !windows.is_empty() {
+                view["windows"] = json!(windows);
+            }
+            Ok(json!({ "client_id": client, "view": view }))
         }
         ("session.list_blocks", _) if has_session => {
             let blocks: Vec<Value> = (s.blocks.iter())
@@ -422,6 +429,15 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 }
             }
             Ok(json!({ "blocks": owners }))
+        }
+        ("session.destroy", _) if !s.attached.contains(&session) => Err("conflict"),
+        ("session.destroy", _) if has_session => {
+            s.sessions.retain(|(id, _)| *id != session);
+            s.blocks.retain(|b| b.session != session);
+            let destroyed =
+                json!({ "type": "session_destroyed", "payload": { "session_id": session } });
+            deliver(s, seq, out, destroyed);
+            Ok(json!({}))
         }
         ("block.close", _) => match found {
             Some(i) => {

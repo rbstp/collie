@@ -54,10 +54,11 @@ pub(super) enum Method {
     BlockEvent,
     SessionCreate,
     SessionDisownBlock,
+    SessionDestroy,
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 18] = [
+    pub(super) const ALL: [Self; 19] = [
         Self::HelpAll,
         Self::ServerVersion,
         Self::ServerStatus,
@@ -76,6 +77,7 @@ impl Method {
         Self::BlockEvent,
         Self::SessionCreate,
         Self::SessionDisownBlock,
+        Self::SessionDestroy,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -98,6 +100,7 @@ impl Method {
             Self::BlockEvent => "block.event",
             Self::SessionCreate => "session.create",
             Self::SessionDisownBlock => "session.disown_block",
+            Self::SessionDestroy => "session.destroy",
         }
     }
 

@@ -206,6 +206,9 @@ pub(super) struct Attached {
 pub(super) struct View {
     #[serde(default)]
     pub label: Option<String>,
+    /// Left out when the session has no window.
+    #[serde(default)]
+    pub windows: Option<Vec<serde::de::IgnoredAny>>,
 }
 
 #[derive(Deserialize)]
