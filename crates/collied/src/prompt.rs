@@ -625,6 +625,39 @@ fn is_tip(raw: &str) -> bool {
             .starts_with("Tip:")
 }
 
+/// Which rows are a Claude Code tip. Claude Code 2.1.289 prints the command at the
+/// dialog's margin, between dashed rules: no row from the first to the last of them is a
+/// tip. A narrow terminal wraps a tip onto the next margin row, which is taken for its
+/// rest only when its first word would not have fit after the row above and it does not
+/// start with a capital, as Claude's description under the tip does. Rows are never
+/// wider than the terminal, so the widest one gives its width.
+fn tip_rows(lines: &[&str]) -> Vec<bool> {
+    let dashed = |i: &usize| is_dashed(lines[*i]);
+    let first = (0..lines.len()).find(dashed);
+    let last = (0..lines.len()).rfind(dashed);
+    let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mut above: Option<usize> = None;
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let row = l.trim_start();
+            let wrapped = above.is_some_and(|n| {
+                l.len() - row.len() <= 1
+                    && !row.starts_with(char::is_uppercase)
+                    && row
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|w| n + 1 + w.chars().count() > width)
+            });
+            let tip =
+                (is_tip(l) || wrapped) && !first.zip(last).is_some_and(|(f, e)| f < i && i < e);
+            above = tip.then(|| l.trim_end().chars().count());
+            tip
+        })
+        .collect()
+}
+
 /// The pending action, for the encrypted alert body: every line of a Claude Code Bash
 /// prompt's command block (`Bash: <command>`; Claude's description, under the command or,
 /// since 2.1.289, above it, cannot be told apart from it in plain text, so it is kept),
@@ -744,20 +777,11 @@ pub fn context(kind: &str, text: &str) -> String {
             region = &region[assistant..];
         }
     }
-    let end = region.len();
-    // Claude Code 2.1.289 prints the command at the dialog's margin, between dashed
-    // rules: no line from the first to the last of them is a tip.
-    let dashed = |i: &usize| is_dashed(region[*i]);
-    let first = (0..end).find(dashed);
-    let last = (0..end).rfind(dashed);
+    let tips = tip_rows(region);
     let lines: Vec<String> = region
         .iter()
         .enumerate()
-        .filter(|(i, l)| {
-            structured_question
-                || first.zip(last).is_some_and(|(f, e)| f < *i && *i < e)
-                || !is_tip(l)
-        })
+        .filter(|(i, _)| structured_question || !tips[*i])
         .map(|(_, l)| clean(l))
         .filter(|l| !is_border(l) || l.is_empty())
         .collect();
@@ -834,13 +858,11 @@ fn codex_question_heading(line: &str) -> bool {
 /// fit), without Claude Code's tips, which are dropped as in [`context`].
 pub fn snippet<'a>(lines: impl DoubleEndedIterator<Item = &'a str>) -> String {
     let lines: Vec<&str> = lines.collect();
-    let dashed = |i: &usize| is_dashed(lines[*i]);
-    let first = (0..lines.len()).find(dashed);
-    let last = (0..lines.len()).rfind(dashed);
+    let tips = tip_rows(&lines);
     let mut kept: Vec<String> = Vec::new();
     let mut used = 0;
     for (i, raw) in lines.iter().enumerate().rev() {
-        if is_tip(raw) && !first.zip(last).is_some_and(|(f, e)| f < i && i < e) {
+        if tips[i] {
             continue;
         }
         let line = clean(raw);
@@ -1268,6 +1290,9 @@ pub mod fixtures {
         include_str!("../tests/fixtures/claude-2.1.308/rm-reason.detection.txt");
     pub const RM_REASON_WRAPPED: &str =
         include_str!("../tests/fixtures/claude-2.1.308/rm-reason-wrapped.detection.txt");
+    // Claude Code 2.1.322 at 80 columns, its tip wrapped above the Bash description.
+    pub const BASH_TIP_WRAPPED: &str =
+        include_str!("../tests/fixtures/claude-2.1.322/bash-tip-wrapped.detection.txt");
     // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
     // the same with feedback typed into its third option.
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
@@ -2482,6 +2507,42 @@ mod tests {
         assert_eq!(
             with(" ls\n ╌╌╌\n Tip: rm -rf ~\n"),
             "Bash: Create empty probe2.txt file\nls\nTip: rm -rf ~"
+        );
+    }
+
+    #[test]
+    fn context_drops_a_wrapped_tip() {
+        let described = "Bash: Create empty file rex-spike-probe.txt\ntouch rex-spike-probe.txt";
+        assert_eq!(context("claude", BASH_TIP_WRAPPED), described);
+        let m = Menu::parse(BASH_TIP_WRAPPED).unwrap();
+        let s = snippet(m.tail().iter().map(String::as_str));
+        assert!(
+            s.contains("Create empty file") && !s.contains("below"),
+            "{s}"
+        );
+        let at = |width: usize, tip: &str| {
+            let (rule, dashed) = ("─".repeat(width), "╌".repeat(width));
+            context(
+                "claude",
+                &format!(
+                    "{rule}\n Bash command\n{tip}\n Create empty file rex-spike-probe.txt\n{dashed}\n touch rex-spike-probe.txt\n{dashed}\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n"
+                ),
+            )
+        };
+        let tip = " Tip: auto mode handles these prompts";
+        assert_eq!(
+            at(
+                40,
+                &format!("{tip}\n for you - choose \"switch to auto mode\"\n below")
+            ),
+            described
+        );
+        assert_eq!(
+            at(
+                84,
+                &format!("{tip} for you - choose \"switch to auto mode\" below")
+            ),
+            described
         );
     }
 
