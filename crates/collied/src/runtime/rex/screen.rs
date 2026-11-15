@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
@@ -55,11 +56,17 @@ struct Fed {
     text: String,
 }
 
+/// A block's last `format` with or without `unwrap`, and the ticket taken just before it was
+/// asked for.
+type Rendered = Arc<tokio::sync::Mutex<Option<(u64, Formatted)>>>;
+
 /// Rex agent screens, each read from a `format` VT tail and emulated afresh when the tail
 /// changed: Rex sends no event for output, so each read is the terminal's whole state.
 #[derive(Default)]
 pub(super) struct Screens {
     fed: Mutex<HashMap<Reader, Fed>>,
+    rendered: Mutex<HashMap<(String, bool), Rendered>>,
+    tickets: AtomicU64,
     #[cfg(test)]
     pub(super) emulated: std::sync::atomic::AtomicUsize,
 }
@@ -92,7 +99,7 @@ impl Screens {
         };
         let mut window =
             (crate::lock(&self.fed).get(&key)).map_or_else(Window::default, |f| f.window);
-        let tail = tail(client, session, block, ask, &mut window).await?;
+        let tail = self.tail(client, session, block, ask, &mut window).await?;
         if let Some(f) = crate::lock(&self.fed).get_mut(&key) {
             f.window = window;
             if f.size == size && f.tail == tail {
@@ -121,6 +128,69 @@ impl Screens {
     /// Drops what blocks no longer listed were read with.
     pub(super) fn retain(&self, listed: impl Fn(&str) -> bool) {
         crate::lock(&self.fed).retain(|(block, ..), _| listed(block));
+        crate::lock(&self.rendered).retain(|(block, _), _| listed(block));
+    }
+
+    /// The end of the terminal's VT rendering, from a line break on. Neither call changes the
+    /// terminal's size or owner (verified).
+    async fn tail(
+        &self,
+        client: &Client,
+        session: &str,
+        block: &str,
+        ask: Ask,
+        window: &mut Window,
+    ) -> Result<Vec<u8>, Error> {
+        for _ in 0..ATTEMPTS {
+            let head = if window.whole { MAX_TAIL } else { 1 };
+            let f = self
+                .format(client, session, block, ask.unwrap, head)
+                .await?;
+            window.whole = f.total <= FIRST_TAIL;
+            let Some(id) = f.id else {
+                return Ok(f.content.into_bytes());
+            };
+            match last(client, session, block, id, f.total, ask, window).await {
+                Err(Error::Rex { code, .. }) if code == "not_found" => {}
+                read => return read,
+            }
+        }
+        Err(Error::Rex {
+            code: "not_found".to_owned(),
+            message: "Rex dropped each screen before it was read".to_owned(),
+        })
+    }
+
+    /// One `format` at a time per block and `unwrap`: a reader that finds one under way
+    /// waits, and shares the next one with the readers that waited with it. A reader is only
+    /// served a rendering asked for after it asked, so a screen read right before input sees
+    /// what it would see on a `format` of its own.
+    async fn format(
+        &self,
+        client: &Client,
+        session: &str,
+        block: &str,
+        unwrap: bool,
+        head: u64,
+    ) -> Result<Formatted, Error> {
+        let asked = self.tickets.fetch_add(1, Ordering::Relaxed);
+        let rendered = (crate::lock(&self.rendered))
+            .entry((block.to_owned(), unwrap))
+            .or_default()
+            .clone();
+        let mut latest = rendered.lock().await;
+        if let Some((ticket, f)) = &*latest
+            && *ticket > asked
+        {
+            return Ok(f.clone());
+        }
+        let ticket = self.tickets.fetch_add(1, Ordering::Relaxed);
+        let args = json!({ "format": "vt", "unwrap": unwrap, "max_bytes": head });
+        let (_, f): (_, Formatted) = client
+            .terminal(Method::Format, session, block, args)
+            .await?;
+        *latest = Some((ticket, f.clone()));
+        Ok(f)
     }
 }
 
@@ -133,36 +203,6 @@ struct Ask {
     rows: u64,
     /// Line breaks wanted: the rows and the history asked for.
     need: u64,
-}
-
-/// The end of the terminal's VT rendering, from a line break on. Neither call changes the
-/// terminal's size or owner (verified).
-async fn tail(
-    client: &Client,
-    session: &str,
-    block: &str,
-    ask: Ask,
-    window: &mut Window,
-) -> Result<Vec<u8>, Error> {
-    for _ in 0..ATTEMPTS {
-        let head = if window.whole { MAX_TAIL } else { 1 };
-        let args = json!({ "format": "vt", "unwrap": ask.unwrap, "max_bytes": head });
-        let (_, f): (_, Formatted) = client
-            .terminal(Method::Format, session, block, args)
-            .await?;
-        window.whole = f.total <= FIRST_TAIL;
-        let Some(id) = f.id else {
-            return Ok(f.content.into_bytes());
-        };
-        match last(client, session, block, id, f.total, ask, window).await {
-            Err(Error::Rex { code, .. }) if code == "not_found" => {}
-            read => return read,
-        }
-    }
-    Err(Error::Rex {
-        code: "not_found".to_owned(),
-        message: "Rex dropped each screen before it was read".to_owned(),
-    })
 }
 
 /// The shortest tail holding `ask.need` line breaks, within what one answer holds. One that
