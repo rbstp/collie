@@ -18,6 +18,7 @@ use super::{AgentInfo, Error, HerdrSeen, PaneRead};
 
 mod client;
 mod discovery;
+mod input;
 mod model;
 mod screen;
 mod sessions;

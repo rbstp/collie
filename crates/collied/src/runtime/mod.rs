@@ -429,7 +429,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::agent_prompt(&self.herdr, pane_id, text).await,
             Owner::Core => self.followed()?.send(pane_id, text, seen, false).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.paste(pane_id, text, true).await,
         }
     }
 
@@ -444,7 +444,7 @@ impl Runtime {
                 let blocked = seen == "blocked";
                 self.followed()?.send(pane_id, text, seen, blocked).await
             }
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.paste(pane_id, text, true).await,
         }
     }
 
@@ -452,7 +452,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::agent_send_keys(&self.herdr, pane_id, keys).await,
             Owner::Core => self.followed()?.keys(pane_id, keys).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.keys(pane_id, keys).await,
         }
     }
 
@@ -460,7 +460,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, text).await,
             Owner::Core => self.followed()?.type_raw(pane_id, text).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.paste(pane_id, text, false).await,
         }
     }
 
@@ -468,7 +468,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, SCROLL_BOTTOM).await,
             Owner::Core => self.followed()?.keys(pane_id, &["ctrl+end"]).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.keys(pane_id, &["ctrl+end"]).await,
         }
     }
 
@@ -477,7 +477,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, digit).await,
             Owner::Core => self.followed()?.keys(pane_id, &[digit]).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.keys(pane_id, &[digit]).await,
         }
     }
 

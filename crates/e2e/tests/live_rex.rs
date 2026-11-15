@@ -7,10 +7,12 @@ use std::time::Duration;
 
 use collie_core::{AgentState, CollieCore, MachineFlock};
 use collied::config::TasksConfig;
+use collied::drive::{Authorized, Driver};
 use collied::runtime::rex::{GROUP_CLOSE, Rex};
 use collied::runtime::{AgentInfo, Error, Runtime};
 use collied::server::{self, ServerConfig};
 use common::*;
+use protocol::{AgentSendKeysParams, ErrorCode, Key, KeyCombo, OpId, TerminalId};
 use tokio::sync::watch;
 
 /// A stand-in agent: it reports OSC 7501 as Claude Code does, from the process that leads the
@@ -499,4 +501,144 @@ fn fake_hook() {
     }
     let control = std::fs::read_to_string("control").unwrap();
     runtime().block_on(collied::hooks::run(Path::new(control.trim())));
+}
+
+/// A stand-in agent that reports idle and appends each byte it reads, as hex, to `keys`:
+/// raw mode without echo, signals or flow control, so every byte reaches it as sent.
+const KEY_DUMP: &str = r#"use POSIX;
+$| = 1;
+print "\e]7501;state=idle:app=claude-code\e\\";
+my $t = POSIX::Termios->new; $t->getattr(0);
+$t->setlflag($t->getlflag & ~(ECHO|ICANON|ISIG|IEXTEN));
+$t->setiflag($t->getiflag & ~(ICRNL|IXON|INLCR|IGNCR|ISTRIP|BRKINT|PARMRK));
+$t->setcc(VMIN, 1); $t->setcc(VTIME, 0);
+$t->setattr(0, TCSANOW);
+open my $f, '>>', 'keys' or die; select((select($f), $| = 1)[0]);
+while (sysread(STDIN, my $b, 1)) { printf $f "%02x", ord $b }
+"#;
+
+/// Beyond `COMBOS`: what herdr-core sends for these.
+const MORE: [(&str, &str); 7] = [
+    ("f1", "1b4f50"),
+    ("f5", "1b5b31357e"),
+    ("ctrl+shift+up", "1b5b313b3641"),
+    ("ctrl+alt+shift+x", "1b78"),
+    ("ctrl+2", "00"),
+    ("ctrl+/", "1f"),
+    ("ctrl+]", "1d"),
+];
+
+#[test]
+fn live_rex_input() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "i");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(input_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+async fn input_scenario(server: &RexServer) {
+    let (_, dump) = new_session(server, "collie-keys", &["/usr/bin/perl", "-e", KEY_DUMP]);
+    let (_, silent) = new_session(
+        server,
+        "collie-silent",
+        &["/bin/bash", "-c", "exec -a claude sleep 600"],
+    );
+    let (dump, silent) = (format!("rex:{dump}"), format!("rex:{silent}"));
+
+    let rex = Arc::new(Rex::new(server.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let none = server.root.join("no-herdr.sock");
+    let rt = Runtime::new(none.clone()).with_rex(Some(rex.clone()));
+    let find = async |id: &str| -> Option<AgentInfo> {
+        (rt.agent_list().await.ok()?.into_iter()).find(|a| a.terminal_id == id)
+    };
+    until("the key dump's idle report", async || {
+        find(&dump).await.filter(|a| a.agent_status == "idle")
+    })
+    .await;
+
+    // Each key sent on its own, in order on one connection, so every byte the program
+    // receives, a stray one included, shows in the next check.
+    let file = server.work.join("keys");
+    let dumped = async |expected: &str| {
+        let arrived = until(expected, async || {
+            let keys = std::fs::read_to_string(&file).unwrap_or_default();
+            (keys.len() >= expected.len()).then_some(keys)
+        })
+        .await;
+        assert_eq!(arrived, expected);
+    };
+    let mut expected = String::new();
+    for key in &KEYS {
+        rt.agent_send_keys(&dump, &[key.herdr_name()])
+            .await
+            .unwrap();
+        expected.push_str(key_bytes(key));
+    }
+    dumped(&expected).await;
+    let chars = "abcdefghijklmnopqrstuvwxyz0123456789',-./;=\\]`";
+    // As herdr-core: Shift makes a letter a capital and leaves any other key as it is.
+    for c in chars.chars() {
+        let shifted = format!("shift+{c}");
+        rt.agent_send_keys(&dump, &[c.to_string().as_str(), shifted.as_str()])
+            .await
+            .unwrap();
+        let capital = c.to_ascii_uppercase();
+        expected.push_str(&format!("{:02x}{:02x}", c as u32, capital as u32));
+    }
+    for (name, bytes) in COMBOS.into_iter().chain(MORE) {
+        assert!(KeyCombo::new(name).is_ok(), "{name}");
+        rt.agent_send_keys(&dump, &[name]).await.unwrap();
+        expected.push_str(bytes);
+    }
+    rt.scroll_bottom(&dump).await.unwrap();
+    expected.push_str("1b5b313b3546");
+    rt.notice_digit(&dump, "1").await.unwrap();
+    expected.push_str("31");
+    dumped(&expected).await;
+
+    // Refused before anything is sent, the keys before them in the call included.
+    for name in ["cmd+k", "ctrl+[", "ctrl+alt+[", "ctrl+shift+a", "ctrl+i"] {
+        assert!(KeyCombo::new(name).is_ok(), "{name}");
+        assert!(
+            rt.agent_send_keys(&dump, &["a", name]).await.is_err(),
+            "{name}"
+        );
+    }
+
+    // A prompt is a paste and Enter, text alone a paste; this program asked for no
+    // bracketed paste, so a newline arrives as a carriage return.
+    rt.agent_prompt(&dump, "hi\nyo", "idle").await.unwrap();
+    expected.push_str("68690d796f0d");
+    rt.pane_send_text(&dump, "\u{1b}[200~/x\u{1b}[201~")
+        .await
+        .unwrap();
+    expected.push_str("2f78");
+    dumped(&expected).await;
+
+    // No status: listed, read-only, and refused by the ready check.
+    let s = until("the agent with no status", async || find(&silent).await).await;
+    assert!(s.read_only && s.agent_status == "unknown", "{s:?}");
+    let drive = Driver::new(none, vec![], &[]).unwrap().with_rex(Some(rex));
+    let yes: Authorized = Arc::new(|| true);
+    let keys = AgentSendKeysParams {
+        op_id: OpId::new("K".repeat(22)).unwrap(),
+        terminal_id: TerminalId::new(silent).unwrap(),
+        keys: vec![Key::Enter],
+    };
+    assert_eq!(
+        drive.send_keys(keys, &yes).await.0.unwrap_err().0,
+        ErrorCode::AgentNotReady
+    );
+
+    stop.send_replace(true);
+    task.await.unwrap();
 }

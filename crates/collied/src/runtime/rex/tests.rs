@@ -11,6 +11,8 @@ use super::*;
 use crate::runtime::{Owner, Runtime};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+mod input;
+
 pub(super) const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";
 const S2: &str = "session:019a7d2e-0000-7000-8000-000000000002";
 pub(super) const B1: &str = "block:019a7d2e-0000-7000-8000-0000000000b1";
@@ -88,6 +90,7 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "com.superlogical.terminal.size",
             "com.superlogical.terminal.format",
             "com.superlogical.terminal.blob_read",
+            "block.event",
         ]
     );
     let terminal: Vec<&str> = Method::ALL
@@ -376,8 +379,6 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
 
     let unsupported = |r: Result<_, Error>| matches!(r, Err(Error::Unsupported(w)) if w == NOT_YET);
     assert_eq!(Owner::of(&id(B1)), Owner::Rex);
-    assert!(unsupported(rt.agent_prompt(&id(B1), "hi", "idle").await));
-    assert!(unsupported(rt.agent_send_keys(&id(B1), &["enter"]).await));
     assert!(unsupported(rt.agent_focus(&id(B1)).await));
     let group = format!("rex:{S1}");
     assert!(

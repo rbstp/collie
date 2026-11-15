@@ -785,68 +785,6 @@ const KEY_DUMP: &str = r#"printf '\033]7501;state=idle:app=keydump\033\\'
 stty raw -echo
 while :; do dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' >> keys; echo >> keys; done"#;
 
-/// What each key reaches a program with no keyboard modes set as, from herdr-core 0.1.16.
-fn key_bytes(key: &Key) -> &'static str {
-    match key {
-        Key::Enter => "0d",
-        Key::Esc => "1b",
-        Key::Up => "1b5b41",
-        Key::Down => "1b5b42",
-        Key::Left => "1b5b44",
-        Key::ShiftLeft => "1b5b313b3244",
-        Key::Right => "1b5b43",
-        Key::Tab => "09",
-        Key::ShiftTab => "1b5b5a",
-        Key::Backspace => "7f",
-        Key::CtrlC => "03",
-        Key::CtrlEnter => "1b5b32373b353b31337e",
-        Key::CtrlA => "01",
-        Key::CtrlB => "02",
-        Key::CtrlE => "05",
-        Key::CtrlK => "0b",
-        Key::CtrlL => "0c",
-        Key::CtrlU => "15",
-        Key::CtrlW => "17",
-        Key::Combo(_) => unreachable!("combos are in COMBOS"),
-    }
-}
-
-/// Combos from a key shortcut and their bytes, likewise, from herdr-core 0.1.18.
-const COMBOS: [(&str, &str); 10] = [
-    ("ctrl+alt+x", "1b18"),
-    ("alt+x", "1b78"),
-    ("shift+f5", "1b5b31353b327e"),
-    ("f12", "1b5b32347e"),
-    ("space", "20"),
-    ("ctrl+space", "00"),
-    ("/", "2f"),
-    ("alt+enter", "1b0d"),
-    ("shift+enter", "1b5b32373b323b31337e"),
-    ("shift+a", "41"),
-];
-
-const KEYS: [Key; 19] = [
-    Key::Enter,
-    Key::Esc,
-    Key::Up,
-    Key::Down,
-    Key::Left,
-    Key::ShiftLeft,
-    Key::Right,
-    Key::Tab,
-    Key::ShiftTab,
-    Key::Backspace,
-    Key::CtrlC,
-    Key::CtrlEnter,
-    Key::CtrlA,
-    Key::CtrlB,
-    Key::CtrlE,
-    Key::CtrlK,
-    Key::CtrlL,
-    Key::CtrlU,
-    Key::CtrlW,
-];
-
 #[test]
 fn live_herdr_core_input() {
     if !hc_installed() {

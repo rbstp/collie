@@ -38,6 +38,8 @@ pub(super) struct Block {
     /// What it renders without `unwrap`, when that differs.
     pub rows: Option<String>,
     pub size: (u32, u32),
+    /// What `block.event` sent it, in order.
+    pub events: Vec<Value>,
 }
 
 pub(super) struct State {
@@ -90,6 +92,7 @@ impl State {
             screen: String::new(),
             rows: None,
             size: (80, 24),
+            events: Vec::new(),
         });
     }
 }
@@ -363,6 +366,14 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             Some(i) => {
                 closed = Some(s.blocks.remove(i));
                 Ok(json!({ "block_id": block, "revision": 2 }))
+            }
+            None => Err("not_found"),
+        },
+        ("block.event", _) if !s.attached.contains(&session) => Err("conflict"),
+        ("block.event", _) => match found {
+            Some(i) => {
+                s.blocks[i].events.push(payload["event"].clone());
+                Ok(json!({}))
             }
             None => Err("not_found"),
         },

@@ -51,10 +51,11 @@ pub(super) enum Method {
     Size,
     Format,
     BlobRead,
+    BlockEvent,
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 15] = [
+    pub(super) const ALL: [Self; 16] = [
         Self::HelpAll,
         Self::ServerVersion,
         Self::ServerStatus,
@@ -70,6 +71,7 @@ impl Method {
         Self::Size,
         Self::Format,
         Self::BlobRead,
+        Self::BlockEvent,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -89,6 +91,7 @@ impl Method {
             Self::Size => "com.superlogical.terminal.size",
             Self::Format => "com.superlogical.terminal.format",
             Self::BlobRead => "com.superlogical.terminal.blob_read",
+            Self::BlockEvent => "block.event",
         }
     }
 
