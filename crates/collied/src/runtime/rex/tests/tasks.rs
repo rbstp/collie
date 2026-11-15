@@ -450,10 +450,25 @@ async fn options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not()
     .with_core(Some(answered(&root, false)))
     .with_rex(Some(rex));
     let yes: Authorized = Arc::new(|| true);
-    for drive in [&busy_herdr, &reconnecting] {
+    let hosts = [
+        (&busy_herdr, &[protocol::TaskRuntime::Rex][..]),
+        (
+            &reconnecting,
+            &[protocol::TaskRuntime::HerdrCore, protocol::TaskRuntime::Rex],
+        ),
+    ];
+    for (drive, hosts) in hosts {
         match drive.task_options().await {
             Ok(Response::TaskOptions(o)) => {
                 assert_eq!(o.runtimes, Some(vec![protocol::TaskRuntime::Rex]));
+                // Without herdr's answer, no kinds for herdr.
+                let starts: Vec<_> = (hosts.iter())
+                    .map(|&runtime| protocol::RuntimeAgents {
+                        runtime,
+                        agents: o.agents.clone(),
+                    })
+                    .collect();
+                assert_eq!(o.runtime_agents, starts);
             }
             Err((code, why)) => {
                 // No Claude Code on this machine's PATH: the kinds, not herdr, stop it.

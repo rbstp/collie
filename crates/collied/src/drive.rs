@@ -13,8 +13,8 @@ use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
     FolderName, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
-    SendTextParams, SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions,
-    TaskRuntime, TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo,
+    RuntimeAgents, SendTextParams, SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams,
+    TaskOptions, TaskRuntime, TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo,
     TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
     WorkspaceId, limits,
 };
@@ -1007,26 +1007,30 @@ impl Driver {
             Err(_) if self.runtime.follows_another() => Some("Herdr 2 or Rex"),
             Err(e) => return Err(herdr_fail(e)),
         };
-        let (known, snap) = if elsewhere.is_some() {
-            let known: Vec<String> = (runtime::TASK_KINDS.iter())
-                .filter(|k| runtime::task_cli(k).is_some())
-                .map(|k| (*k).to_owned())
-                .collect();
-            (known, self.runtime.session_snapshot().await)
+        let (herdr_kinds, snap) = if elsewhere.is_some() {
+            (None, self.runtime.session_snapshot().await)
         } else {
             let (known, snap) = tokio::join!(
                 self.runtime.agent_manifests(),
                 self.runtime.session_snapshot()
             );
-            (known.map_err(herdr_fail)?, snap)
+            (Some(known.map_err(herdr_fail)?), snap)
         };
         let snap = snap.map_err(herdr_fail)?;
-        let agents: Vec<AgentKind> = self
-            .agents
-            .iter()
-            .filter(|a| known.iter().any(|k| k == a.as_str()))
-            .cloned()
-            .collect();
+        let allowed = |starts: &dyn Fn(&str) -> bool| -> Vec<AgentKind> {
+            (self.agents.iter())
+                .filter(|a| starts(a.as_str()))
+                .cloned()
+                .collect()
+        };
+        let (core, rex) = (self.runtime.core(), self.runtime.rex());
+        let host_agents =
+            (core.is_some() || rex.is_some()).then(|| allowed(&|k| runtime::task_cli(k).is_some()));
+        let herdr_agents = herdr_kinds.map(|known| allowed(&|k| known.iter().any(|m| m == k)));
+        let agents = herdr_agents
+            .clone()
+            .or_else(|| host_agents.clone())
+            .unwrap_or_default();
         let Some(default_agent) = agents.first().cloned() else {
             return fail(
                 ErrorCode::NotFound,
@@ -1061,15 +1065,22 @@ impl Driver {
             .collect();
         let runtimes = [
             (elsewhere.is_none(), TaskRuntime::Herdr),
-            (
-                self.runtime.core().is_some_and(|c| c.following()),
-                TaskRuntime::HerdrCore,
-            ),
-            (
-                self.runtime.rex().is_some_and(|r| r.following()),
-                TaskRuntime::Rex,
-            ),
+            (core.is_some_and(|c| c.following()), TaskRuntime::HerdrCore),
+            (rex.is_some_and(|r| r.following()), TaskRuntime::Rex),
         ];
+        let runtime_agents = [
+            (TaskRuntime::Herdr, herdr_agents),
+            (TaskRuntime::HerdrCore, core.and(host_agents.clone())),
+            (TaskRuntime::Rex, rex.and(host_agents)),
+        ]
+        .into_iter()
+        .filter_map(|(runtime, agents)| {
+            Some(RuntimeAgents {
+                runtime,
+                agents: agents?,
+            })
+        })
+        .collect();
         Ok(Response::TaskOptions(TaskOptions {
             agents,
             default_agent,
@@ -1081,6 +1092,7 @@ impl Driver {
                     .filter_map(|(up, r)| up.then_some(r))
                     .collect(),
             ),
+            runtime_agents,
         }))
     }
 

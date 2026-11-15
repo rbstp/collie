@@ -5,14 +5,16 @@ use std::time::Duration;
 
 use collied::drive::{Authorized, Driver, Origin, Reply, Watched};
 use collied::pr_watch;
+use collied::runtime::herdr_core::Core;
+use collied::runtime::rex::Rex;
 use collied::transcript::Transcripts;
 use protocol::{
     AgentAnswerNoticeParams, AgentKind, AgentPromptParams, AgentSendKeysParams,
     AgentSlashDraftParams, AgentTypeTextParams, CloneSource, Cwd, DraftText, ErrorCode, FolderName,
     Key, KeyCombo, Label, NoticeDigit, OpId, PaneCloseParams, PromptText, ReadParams, ReadSource,
-    Request, Response, SendTextParams, SessionId, SlashCommand, TaskArchiveParams, TaskNewParams,
-    TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalId, TerminalRunParams,
-    TypedText, WorkspaceCloseParams, WorkspaceId,
+    Request, Response, RuntimeAgents, SendTextParams, SessionId, SlashCommand, TaskArchiveParams,
+    TaskNewParams, TaskRuntime, TaskSessionsParams, TaskWorktree, TaskWorktreesParams, TerminalId,
+    TerminalRunParams, TypedText, WorkspaceCloseParams, WorkspaceId,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -1936,6 +1938,56 @@ async fn task_options_intersects_and_filters() {
 
     let only_codex = herdr.driver(&["codex"], &base);
     assert_eq!(code(only_codex.task_options().await), ErrorCode::NotFound);
+}
+
+// The sheet offers a chosen runtime's own kinds: herdr's from its manifests, herdr-core's and
+// Rex's from the CLIs collied finds, followed or not.
+#[tokio::test]
+async fn task_options_says_which_kinds_each_runtime_starts() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let allowed = ["codex", "claude", "pi"];
+    let kinds = |names: &[&str]| -> Vec<AgentKind> {
+        names.iter().map(|a| AgentKind::new(*a).unwrap()).collect()
+    };
+    let starts = |runtime, names: &[&str]| RuntimeAgents {
+        runtime,
+        agents: kinds(names),
+    };
+    let alone = herdr.driver(&allowed, &base);
+    let Ok(Response::TaskOptions(opts)) = alone.task_options().await else {
+        panic!("no options");
+    };
+    assert_eq!(
+        opts.runtime_agents,
+        [starts(TaskRuntime::Herdr, &["claude", "pi"])]
+    );
+
+    let installed: Vec<&str> = (allowed.into_iter())
+        .filter(|k| collied::runtime::task_cli(k).is_some())
+        .collect();
+    assert!(!installed.contains(&"pi"));
+    let beside = Driver::new(
+        herdr.socket.clone(),
+        kinds(&allowed),
+        std::slice::from_ref(&base),
+    )
+    .unwrap()
+    .with_core(Some(Arc::new(Core::new(base.join("no-core.sock")))))
+    .with_rex(Some(Arc::new(Rex::new(base.join("no-rex.sock")))));
+    let Ok(Response::TaskOptions(opts)) = beside.task_options().await else {
+        panic!("no options");
+    };
+    assert_eq!(opts.agents, kinds(&["claude", "pi"]));
+    assert_eq!(opts.runtimes, Some(vec![TaskRuntime::Herdr]));
+    assert_eq!(
+        opts.runtime_agents,
+        [
+            starts(TaskRuntime::Herdr, &["claude", "pi"]),
+            starts(TaskRuntime::HerdrCore, &installed),
+            starts(TaskRuntime::Rex, &installed),
+        ]
+    );
 }
 
 #[tokio::test]

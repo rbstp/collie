@@ -1264,7 +1264,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     use protocol::{
-        AgentKind, Cwd, Label, TaskArchiveParams, TaskNewParams, TaskWorktree, TaskWorktreesParams,
+        AgentKind, Cwd, Label, RuntimeAgents, TaskArchiveParams, TaskNewParams, TaskRuntime,
+        TaskWorktree, TaskWorktreesParams,
     };
     std::fs::create_dir_all(bin.join("record")).unwrap();
     stand_in(bin, "claude", "claude-code");
@@ -1315,6 +1316,13 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
         panic!("no task options");
     };
     assert_eq!(options.agents, kinds);
+    assert_eq!(
+        options.runtime_agents,
+        [RuntimeAgents {
+            runtime: TaskRuntime::HerdrCore,
+            agents: kinds.clone(),
+        }]
+    );
 
     let new = |agent: &str, prompt: &str, worktree| TaskNewParams {
         op_id: OpId::new("N".repeat(22)).unwrap(),

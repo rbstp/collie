@@ -1105,7 +1105,8 @@ fn sessions(server: &RexServer) -> Vec<String> {
 async fn tasks_scenario(server: &RexServer, bin: &Path) {
     use collied::runtime::TaskHost;
     use protocol::{
-        AgentKind, Cwd, TaskArchiveParams, TaskNewParams, TaskRuntime, TaskWorktree, WorkspaceId,
+        AgentKind, Cwd, RuntimeAgents, TaskArchiveParams, TaskNewParams, TaskRuntime, TaskWorktree,
+        WorkspaceId,
     };
     std::fs::create_dir_all(bin.join("record")).unwrap();
     stand_in(bin, "claude", "claude-code");
@@ -1151,6 +1152,13 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     };
     assert_eq!(options.agents, kinds);
     assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
+    assert_eq!(
+        options.runtime_agents,
+        [RuntimeAgents {
+            runtime: TaskRuntime::Rex,
+            agents: kinds.clone(),
+        }]
+    );
 
     let new = |agent: &str, prompt: &str, worktree| TaskNewParams {
         op_id: OpId::new("N".repeat(22)).unwrap(),
@@ -1431,6 +1439,19 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     assert_eq!(
         options.runtimes,
         Some(vec![TaskRuntime::Herdr, TaskRuntime::Rex])
+    );
+    assert_eq!(
+        options.runtime_agents,
+        [
+            RuntimeAgents {
+                runtime: TaskRuntime::Herdr,
+                agents: vec![AgentKind::new("claude").unwrap()],
+            },
+            RuntimeAgents {
+                runtime: TaskRuntime::Rex,
+                agents: kinds.clone(),
+            },
+        ]
     );
     let called = herdr.lock().unwrap().len();
     let asked = TaskNewParams {
