@@ -57,14 +57,16 @@ fn reads(fake: &Fake, from: usize) -> Vec<String> {
 const FORMAT: &str = "com.superlogical.terminal.format";
 const BLOB_READ: &str = "com.superlogical.terminal.blob_read";
 
-/// Rex's `format` VT of Claude Code's permission dialog (198x68, from Rex.app), below some
-/// scrollback, emulated: the screen reads as Rex's own `format` text of it.
+/// Rex's `format` VT of Claude Code's permission dialog (198x68, from Rex.app), below more
+/// scrollback than the first tail holds, emulated from the tail: the screen reads as Rex's
+/// own `format` text of it.
 #[tokio::test]
 async fn the_emulated_screen_reads_as_rex_formats_its_text() {
-    let history: String = (1..=200).map(|i| format!("earlier {i}\r\n")).collect();
+    let history: String = (1..=20_000).map(|i| format!("earlier {i}\r\n")).collect();
     let (fake, _rex, rt, _dir) = showing(format!("{history}{VT}"), (198, 68)).await;
     let want = plain(TEXT);
     assert!(want.iter().any(|l| l.contains("Do you want to proceed?")));
+    let from = fake.calls().len();
     assert_eq!(plain(&rt.detection_text(&id(B1)).await.unwrap()), want);
     let visible = rt.agent_read(&id(B1), "visible", None).await.unwrap().text;
     assert!(visible.contains("\u{1b}[38;2;153;153;153m"), "{visible:?}");
@@ -77,8 +79,8 @@ async fn the_emulated_screen_reads_as_rex_formats_its_text() {
     let recent = plain(&strip(&recent.text));
     let (history, screen) = recent.split_at(recent.len() - want.len());
     assert_eq!(screen, want);
-    assert_eq!(history.last().map(String::as_str), Some("earlier 200"));
-    assert_eq!(fake.state().block(B1).size, (198, 68));
+    assert_eq!(history.last().map(String::as_str), Some("earlier 20000"));
+    assert!(reads(&fake, from).iter().any(|m| m == BLOB_READ));
 }
 
 fn numbered(n: usize) -> String {
@@ -120,13 +122,22 @@ async fn an_unchanged_screen_is_never_emulated_again() {
     read().await;
     assert_eq!(emulated(), 3);
 
+    let visible = async |lines| rt.agent_read(&id(B1), "visible", lines).await.unwrap();
+    visible(Some(5)).await;
+    visible(None).await;
+    assert_eq!(
+        emulated(),
+        4,
+        "visible reads the same whatever lines it is given"
+    );
+
     fake.state().block(B1).screen = numbered(100);
     read().await;
     let from = fake.calls().len();
     let short = read().await;
     assert_eq!(reads(&fake, from), [FORMAT]);
     assert!(strip(&short.text).ends_with("line 100 of the scrollback"));
-    assert_eq!(emulated(), 4);
+    assert_eq!(emulated(), 5);
 }
 
 /// Rex keeps a block's newest four results only: one dropped before its tail is read is
@@ -262,4 +273,59 @@ async fn a_block_whose_reads_failed_is_read_again_on_its_next_report() {
     eventually("the block read again", || rex.get(&id(B2)).is_ok()).await;
     assert_eq!(rex.get(&id(B2)).unwrap().agent_status, "working");
     assert_eq!(skipped(), 1);
+}
+
+/// One answer holds at most 983,040 bytes as a JSON string, its quotes included: once a
+/// reader learns the longest tail that fits, a poll asks only for that.
+#[tokio::test]
+async fn a_poll_asks_only_for_a_tail_that_fits() {
+    let line = "y".repeat(1000);
+    let screen: Vec<String> = (1..=3000).map(|i| format!("{line}{i}")).collect();
+    let (fake, _rex, rt, _dir) = showing(screen.join("\r\n"), (80, 24)).await;
+    let read = async || {
+        rt.agent_read(&id(B1), "recent_unwrapped", Some(1000))
+            .await
+            .unwrap()
+    };
+    let first = read().await;
+    let from = fake.calls().len();
+    fake.state().moved = 0;
+    assert_eq!(read().await.text, first.text);
+    assert_eq!(reads(&fake, from), [FORMAT, BLOB_READ]);
+    assert!(fake.state().moved <= 600_000, "{}", fake.state().moved);
+    assert!(strip(&first.text).ends_with("3000"));
+}
+
+/// A line longer than any tail, soft-wrapped across the whole screen: the screen reads
+/// row by row, as Rex draws it, and a read that would join it fails rather than show a
+/// screen without it.
+#[tokio::test]
+async fn a_line_longer_than_any_tail_never_shows_a_wrong_screen() {
+    let short: String = (1..=50).map(|i| format!("short {i}\r\n")).collect();
+    let long = "x".repeat(2_000_000);
+    let (fake, _rex, rt, _dir) = showing(format!("{short}{long}\r\nprompt> "), (80, 24)).await;
+    let rows: Vec<String> = (long.as_bytes().chunks(80))
+        .map(|c| String::from_utf8(c.to_vec()).unwrap())
+        .collect();
+    fake.state().block(B1).rows = Some(format!("{short}{}\r\nprompt> ", rows.join("\r\n")));
+    let visible = rt.agent_read(&id(B1), "visible", None).await.unwrap().text;
+    let visible: Vec<&str> = visible.split("\r\n").collect();
+    assert_eq!(visible.len(), 24);
+    assert!(visible[..23].iter().all(|r| *r == "x".repeat(80)));
+    assert_eq!(visible[23], "prompt>");
+    assert!(
+        rt.agent_read(&id(B1), "recent_unwrapped", Some(10))
+            .await
+            .is_err()
+    );
+}
+
+/// A block is listed once `process` names an agent, so its size is read before: a read is
+/// never emulated at no size, and `pane_columns` never answers 0.
+#[tokio::test]
+async fn a_blocks_size_is_read_before_it_is_listed() {
+    let (fake, _rex, _rt, _dir) = showing(String::new(), (80, 24)).await;
+    let calls = fake.calls();
+    let at = |m: &str| calls.iter().position(|c| c == m).unwrap();
+    assert!(at("com.superlogical.terminal.size") < at("com.superlogical.terminal.process"));
 }

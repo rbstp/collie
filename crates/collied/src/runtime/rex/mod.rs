@@ -553,7 +553,12 @@ impl Rex {
         Ok(())
     }
 
+    /// The size first: once `process` names an agent it is listed, and read at that size.
     async fn read_block(&self, client: &Client, session: &str, block: &str) -> Result<(), Error> {
+        let (seq, size): (_, Size) = client
+            .terminal(Method::Size, session, block, json!({}))
+            .await?;
+        self.live(|live| live.model.size(session, block, seq, size))?;
         let (seq, process): (_, Process) = client
             .terminal(Method::Process, session, block, json!({}))
             .await?;
@@ -566,10 +571,6 @@ impl Rex {
             .terminal(Method::Title, session, block, json!({}))
             .await?;
         self.live(|live| live.model.title(session, block, seq, title.title))?;
-        let (seq, size): (_, Size) = client
-            .terminal(Method::Size, session, block, json!({}))
-            .await?;
-        self.live(|live| live.model.size(session, block, seq, size))?;
         Ok(())
     }
 }

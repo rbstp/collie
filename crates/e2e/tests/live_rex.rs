@@ -31,6 +31,14 @@ print "\e]7501;state=idle:app=claude-code\e\\";
 select(undef, undef, undef, 600);
 "#;
 
+/// An agent whose last line, soft-wrapped across the whole screen, is longer than any tail.
+const WIDE: &str = r#"$| = 1;
+print "short $_\r\n" for 1 .. 50;
+print "x" x 2000000, "\r\nprompt> ";
+print "\e]7501;state=idle:app=claude-code\e\\";
+select(undef, undef, undef, 600);
+"#;
+
 /// A shell that reported a status and leads its terminal.
 const SHELL: &str = r#"printf '\033]7501;state=idle:app=claude-code\033\\'; read -r -t 600 _"#;
 
@@ -140,6 +148,29 @@ async fn scenario(server: &RexServer) {
     assert_eq!(rows.len(), 50, "{read:?}");
     assert_eq!(rows[0], "line 99951");
     assert_eq!(rows[49], "line 100000");
+
+    let (_, wide) = new_session(server, "collie-wide", &["/usr/bin/perl", "-e", WIDE]);
+    let wide = format!("rex:{wide}");
+    let read = until("the wide terminal's agent", async || {
+        rt.agent_get(&wide).await.ok()?;
+        let read = rt.agent_read(&wide, "visible", None).await.ok()?;
+        read.text.ends_with("prompt>").then_some(read.text)
+    })
+    .await;
+    let rows: Vec<&str> = read.split("\r\n").collect();
+    let (prompt, xs) = rows.split_last().unwrap();
+    assert_eq!(*prompt, "prompt>");
+    assert!(
+        xs.len() > 1
+            && xs
+                .iter()
+                .all(|r| !r.is_empty() && r.bytes().all(|b| b == b'x'))
+    );
+    assert!(
+        rt.agent_read(&wide, "recent_unwrapped", Some(10))
+            .await
+            .is_err()
+    );
 
     std::fs::write(server.work.join("go"), "").unwrap();
     let working = until("the working report", async || find("working").await).await;

@@ -35,6 +35,8 @@ pub(super) struct Block {
     pub title: String,
     /// What `format` renders as VT, and the size `size` answers.
     pub screen: String,
+    /// What it renders without `unwrap`, when that differs.
+    pub rows: Option<String>,
     pub size: (u32, u32),
 }
 
@@ -86,6 +88,7 @@ impl State {
             process,
             title: String::new(),
             screen: String::new(),
+            rows: None,
             size: (80, 24),
         });
     }
@@ -373,7 +376,11 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                     "cell_height_px": 16, "owner": null, "desired": [],
                 })),
                 "format" => {
-                    let screen = b.screen.clone();
+                    let rows = b
+                        .rows
+                        .as_ref()
+                        .filter(|_| payload["args"]["unwrap"] == false);
+                    let screen = rows.unwrap_or(&b.screen).clone();
                     Ok(format(s, &block, screen, &payload["args"]))
                 }
                 "blob_read" => blob_read(s, &block, &payload["args"]),
