@@ -153,10 +153,10 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 
 ### 9. Focus
 
-- `rex focus BLOCK` (`session.focus_block`) makes the block's window the session's active window and focuses the block, on the server (verified with `session.view`), with no Rex.app setting. It answers `{"revision": N}`; on a block already focused in the active window, which a task's only block always is, it changes nothing and sends no event.
-- Rex.app does not follow it (checked by the owner with Rex Beta.app 0.1.0-preview.19 on 2026-11-15, #709). Showing another session, the app stayed on it after `session.focus_block` on a one-block session; behind another app, it neither came forward nor switched to the session after a call that did change the session's active window. The call changes only the server's view of the session. Not checked: whether the app, already showing the session, follows the new active window.
+- `rex focus BLOCK` (`session.focus_block`) makes the block's window the session's active window and focuses the block, on the server (verified with `session.view`), with no Rex.app setting. It answers `{"revision": N}`; on a block already focused in the active window, which a new task's only block always is, it changes nothing and, on a scratch server, sent no event.
+- Rex.app does not follow it (checked by the owner with Rex Beta.app 0.1.0-preview.19 on 2026-11-15, #709). Showing another session, the app stayed on it after `session.focus_block` on a one-block session; behind another app, it neither came forward nor switched to the session after a call whose revision shows it changed the session's active window. The call changes only the server's view of the session. Not checked: whether the app, already showing the session, follows the new active window.
 - Rex.app's own actions (`client.tab.goto`, `client.window.*`, through `client.perform` or `rex -C`) are refused while Remote Control is off in its settings: its binary holds "Rex.app is not accepting actions. Turn on Remote Control in its Settings under Rex Server." collied never calls them: they drive the app, and that setting is the user's.
-- `agent.focus` on a Rex agent is therefore refused, as for herdr-core, with "Rex.app cannot be brought forward from outside the app" (`internal`). collied does not call `session.focus_block`, and only Rex.app's own `client.*` actions, which collied never calls, could bring it forward.
+- `agent.focus` on a Rex agent is therefore refused, as for herdr-core, with "a Rex agent cannot be focused from the phone" (`internal`). collied does not call `session.focus_block`, and never calls Rex.app's own `client.*` actions.
 
 ### 10. Alongside the others
 
