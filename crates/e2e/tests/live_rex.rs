@@ -1,11 +1,15 @@
 #[allow(dead_code)]
 mod common;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use collie_core::{AgentState, CollieCore, MachineFlock};
+use collied::config::TasksConfig;
 use collied::runtime::rex::{GROUP_CLOSE, Rex};
 use collied::runtime::{AgentInfo, Error, Runtime};
+use collied::server::{self, ServerConfig};
 use common::*;
 use tokio::sync::watch;
 
@@ -209,4 +213,290 @@ async fn scenario(server: &RexServer) {
 
     stop.send_replace(true);
     task.await.unwrap();
+}
+
+/// The session in the Claude Code transcript fixture.
+const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
+const CLOSED_SESSION: &str = "0a0a0a0a-0000-4000-8000-000000000001";
+
+/// A stand-in Claude Code: it writes its `sessions/<pid>.json` in the folder it is given for
+/// the first session it is given, then reports `idle`, as Claude Code does. Once the test
+/// creates `clear`, it names the second session in that file and reports nothing, as
+/// Claude Code's `/clear` does.
+const CLAUDE: &str = r#"$| = 1;
+use Cwd;
+my ($dir, $id, $cleared) = @ARGV;
+my $started = time() * 1000;
+sub claim {
+    open(my $f, ">", "$dir/$$.tmp") or die;
+    printf $f '{"pid":%d,"sessionId":"%s","cwd":"%s","startedAt":%d}', $$, $_[0], getcwd(), $started;
+    close $f;
+    rename("$dir/$$.tmp", "$dir/$$.json") or die;
+}
+claim($id);
+print "\e]7501;state=idle:app=claude-code\e\\";
+select(undef, undef, undef, 0.05) until -e "clear";
+claim($cleared);
+select(undef, undef, undef, 600);
+"#;
+
+/// The phone over the tailnet, with a Rex server of the test's own and no herdr. collied
+/// reads Claude Code's and Codex's files from scratch folders, never the user's.
+#[test]
+fn live_rex_phone() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let preset = std::env::var("COLLIE_E2E_AGENTS").ok();
+    let agents = (preset.clone()).unwrap_or_else(|| format!("/tmp/rxa-{}", std::process::id()));
+    // Removed even when the child run fails; a folder the caller named is left alone.
+    let _scratch = preset.is_none().then(|| TempDir(agents.clone().into()));
+    let claude = format!("{agents}/claude");
+    let codex = format!("{agents}/codex");
+    let env = [
+        ("COLLIE_E2E_AGENTS", agents.as_str()),
+        ("CLAUDE_CONFIG_DIR", claude.as_str()),
+        ("CODEX_HOME", codex.as_str()),
+    ];
+    if !in_child_with("live_rex_phone", &env) {
+        return;
+    }
+    let mut server = RexServer::start(&cli, "p");
+    let root = TempDir::new("e2e-rex");
+    let net = Net::start(&root.0);
+    wait_ready(&net.mac, 0);
+    let phone = phone(&root.0, "phone", &net);
+    let rt = runtime();
+    rt.block_on(phone.node_start(Some(net.key.clone())))
+        .unwrap();
+    wait_ready(&net.mac, 1);
+    wait_phone(&rt, &phone);
+    rt.block_on(phone_scenario(
+        &root.0,
+        &net,
+        &phone,
+        &server,
+        Path::new(&agents),
+    ));
+    drop(phone);
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+/// Transcripts for the stand-ins' sessions and one closed Claude Code session, in `work`.
+fn transcripts(agents: &Path, work: &Path) {
+    let folder = work.to_str().unwrap();
+    let project: String = folder
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = agents.join("claude/projects").join(project);
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(agents.join("claude/sessions")).unwrap();
+    let claude = include_str!("../../collied/tests/fixtures/transcripts/claude.jsonl");
+    std::fs::write(project.join(format!("{CLAUDE_SESSION}.jsonl")), claude).unwrap();
+    std::fs::write(
+        project.join(format!("{CLOSED_SESSION}.jsonl")),
+        claude.replace(CLAUDE_SESSION, CLOSED_SESSION),
+    )
+    .unwrap();
+    let day = agents.join("codex/sessions/2026/10/05");
+    std::fs::create_dir_all(&day).unwrap();
+    std::fs::write(
+        day.join(format!("rollout-2026-10-05T22-25-26-{CODEX_SESSION}.jsonl")),
+        include_str!("../../collied/tests/fixtures/transcripts/codex.jsonl")
+            .replace("/Users/me/src/collie", folder),
+    )
+    .unwrap();
+}
+
+async fn flock_until(
+    phone: &CollieCore,
+    m: &str,
+    what: &str,
+    ok: impl Fn(&MachineFlock) -> bool,
+) -> MachineFlock {
+    for _ in 0..150 {
+        let f = phone.flock(m.into()).await.unwrap();
+        if ok(&f) {
+            return f;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the phone never saw {what}");
+}
+
+async fn phone_scenario(
+    root: &Path,
+    net: &Net,
+    phone: &Arc<CollieCore>,
+    server: &RexServer,
+    agents: &Path,
+) {
+    let work = std::fs::canonicalize(&server.work).unwrap();
+    transcripts(agents, &work);
+    let sessions = agents.join("claude/sessions");
+    let (_, claude) = new_session(
+        server,
+        "collie-claude",
+        &[
+            "/usr/bin/perl",
+            "-e",
+            CLAUDE,
+            sessions.to_str().unwrap(),
+            CLAUDE_SESSION,
+            CLOSED_SESSION,
+        ],
+    );
+    // A stand-in Codex: this test binary, run as `codex` (`fake_codex`), and its hook as
+    // `hook` (`fake_hook`).
+    let bin = server.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["codex", "hook"] {
+        std::fs::copy(std::env::current_exe().unwrap(), bin.join(name)).unwrap();
+    }
+    let codex_exe = bin.join("codex");
+    let (_, codex) = new_session(
+        server,
+        "collie-codex",
+        &[
+            codex_exe.to_str().unwrap(),
+            "fake_codex",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    let data_dir = root.join("collied");
+    let handle = server::start_with(
+        net.mac.clone(),
+        ServerConfig {
+            rex: Some(server.socket.clone()),
+            ..server_config(&data_dir, "e2e")
+        },
+        root.join("no-herdr.sock"),
+        &TasksConfig {
+            roots: Some(vec![work.clone()]),
+            ..TasksConfig::default()
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    std::fs::write(
+        work.join("control"),
+        handle.control_path().to_str().unwrap(),
+    )
+    .unwrap();
+    let (machine, _) = pair(&handle.control_path(), phone, LABEL).await;
+    let m = machine.id.clone();
+
+    let (claude_id, codex_id) = (format!("rex:{claude}"), format!("rex:{codex}"));
+    flock_until(phone, &m, "the Rex agents", |f| {
+        f.agents.len() == 2 && f.agents.iter().all(|a| a.status == AgentState::Idle)
+    })
+    .await;
+    let chat = phone
+        .agent_history(m.clone(), claude_id.clone(), None, None, None)
+        .await
+        .unwrap();
+    assert!(chat.available, "{:?}", chat.unavailable_reason);
+    assert!(
+        chat.messages
+            .iter()
+            .any(|msg| msg.text.contains("fix the flaky approval test"))
+    );
+
+    std::fs::write(work.join("report"), "").unwrap();
+    let mut codex_chat = None;
+    for _ in 0..50 {
+        let page = phone
+            .agent_history(m.clone(), codex_id.clone(), None, None, None)
+            .await
+            .unwrap();
+        if page.available {
+            codex_chat = Some(page);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        codex_chat.is_some_and(|p| !p.messages.is_empty()),
+        "Codex's reported session"
+    );
+    let sessions = phone
+        .task_sessions(m.clone(), work.to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(listed, [CLOSED_SESSION], "open sessions are left out");
+
+    // `/clear`: a new session in the pid file and no report, followed by the reconcile tick.
+    std::fs::write(work.join("clear"), "").unwrap();
+    let mut listed = Vec::new();
+    for _ in 0..50 {
+        let sessions = phone
+            .task_sessions(m.clone(), work.to_str().unwrap().to_owned())
+            .await
+            .unwrap();
+        listed = sessions.iter().map(|s| s.session_id.to_string()).collect();
+        if listed == [CLAUDE_SESSION] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(listed, [CLAUDE_SESSION], "the cleared session is open");
+
+    phone.close_pane(m.clone(), claude_id, true).await.unwrap();
+    phone.close_pane(m.clone(), codex_id, true).await.unwrap();
+    flock_until(phone, &m, "the closed agents leave", |f| {
+        f.agents.is_empty()
+    })
+    .await;
+    handle.shutdown().await;
+}
+
+/// Codex, as the phone scenario runs it in its Rex block: it reports OSC 7501, then runs its
+/// SessionStart hook (`fake_hook`) once the test creates `report`, as Codex runs `collied
+/// hook`, from the process that leads the block.
+/// A process named `codex`, which a copied shell cannot be on macOS.
+#[test]
+fn fake_codex() {
+    let exe = std::env::current_exe().unwrap();
+    if exe.file_name().and_then(|n| n.to_str()) != Some("codex") {
+        return;
+    }
+    use std::io::Write;
+    print!("\x1b]7501;state=idle:app=codex\x1b\\");
+    std::io::stdout().flush().unwrap();
+    while !Path::new("report").exists() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let mut hook = std::process::Command::new(exe.with_file_name("hook"))
+        .args(["fake_hook", "--exact", "--nocapture"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = serde_json::json!({
+        "session_id": CODEX_SESSION, "hook_event_name": "SessionStart", "source": "startup",
+    });
+    hook.stdin
+        .take()
+        .unwrap()
+        .write_all(start.to_string().as_bytes())
+        .unwrap();
+    hook.wait().unwrap();
+    std::thread::sleep(Duration::from_secs(600));
+}
+
+/// `collied hook` under the stand-in Codex, with the environment Rex gave the block.
+#[test]
+fn fake_hook() {
+    let exe = std::env::current_exe().unwrap();
+    if exe.file_name().and_then(|n| n.to_str()) != Some("hook") {
+        return;
+    }
+    let control = std::fs::read_to_string("control").unwrap();
+    runtime().block_on(collied::hooks::run(Path::new(control.trim())));
 }

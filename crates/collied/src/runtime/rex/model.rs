@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use sha2::{Digest, Sha256};
 
@@ -7,9 +7,9 @@ use super::wire::{
     BlockEvent, BlockId, BlockRef, Label, Proc, Process, ProcessChanged, Record, SessionCreated,
     SessionEvent, SessionId, SessionRef, Size, StatusChanged, StatusRemoved, Tagged, Title,
 };
-use crate::runtime::{AgentInfo, WorkspaceInfo, agents};
+use crate::runtime::{AgentInfo, AgentSession, WorkspaceInfo, agents};
 
-pub(super) const PREFIX: &str = "rex:";
+pub const PREFIX: &str = "rex:";
 
 /// A value with the `seq` that set it: an event's own, or a read's response `seq`, the last
 /// event the read reflects. Neither replaces what something later set.
@@ -47,6 +47,9 @@ struct Block {
     child: Option<Proc>,
     title: Stamped<String>,
     size: Stamped<(u16, u16)>,
+    /// The agent's session, with the pid it was found for: it holds only while that process
+    /// leads the terminal.
+    session: Option<(u32, String)>,
 }
 
 /// One server's sessions and terminal blocks, from reads and the events that follow them.
@@ -61,6 +64,8 @@ pub(super) struct Model {
     gone: HashSet<String>,
     /// Blocks whose reads failed: left out until a report of theirs has them read again.
     failed: HashSet<String>,
+    /// Blocks whose process or status changed since `touched` last ran, by session and id.
+    touched: BTreeSet<(String, String)>,
 }
 
 /// Rex's ids are `session:<uuid>` and `block:<uuid>`; anything else is skipped, so every id
@@ -139,8 +144,18 @@ impl Model {
             }
             "block_event" => {
                 let be: BlockEvent = serde_json::from_value(e.payload).ok()?;
+                let moved = matches!(
+                    be.name.as_str(),
+                    "process_changed" | "program_status_changed"
+                );
                 match session.blocks.get_mut(&be.block_id) {
-                    Some(b) => b.event(seq, be),
+                    Some(b) => {
+                        let id = be.block_id.clone();
+                        b.event(seq, be);
+                        if moved {
+                            self.touched.insert((se.session_id, id));
+                        }
+                    }
                     None if self.failed.contains(&be.block_id) => return Some(se.session_id),
                     None => {}
                 }
@@ -226,6 +241,7 @@ impl Model {
                 .into_iter()
                 .find(|r| r.id.as_deref().is_none_or(str::is_empty));
             b.status.read(seq, root);
+            self.touched.insert((session.to_owned(), block.to_owned()));
         }
     }
 
@@ -233,6 +249,7 @@ impl Model {
         if let Some(b) = self.block(session, block) {
             b.child = p.child;
             b.foreground.read(seq, p.foreground);
+            self.touched.insert((session.to_owned(), block.to_owned()));
         }
     }
 
@@ -273,6 +290,50 @@ impl Model {
             }
         }
         listing
+    }
+
+    /// The Claude Code agents among the blocks touched since the last call: their session,
+    /// block and foreground pid.
+    pub(super) fn touched(&mut self) -> Vec<(String, String, u32)> {
+        let touched = std::mem::take(&mut self.touched);
+        (touched.into_iter())
+            .filter_map(|(session, block)| self.claude_of(session, block))
+            .collect()
+    }
+
+    /// Every Claude Code agent: its session, block and foreground pid.
+    pub(super) fn claude(&self) -> Vec<(String, String, u32)> {
+        (self.sessions.iter())
+            .flat_map(|(session, s)| s.blocks.keys().map(move |b| (session.clone(), b.clone())))
+            .filter_map(|(session, block)| self.claude_of(session, block))
+            .collect()
+    }
+
+    fn claude_of(&self, session: String, block: String) -> Option<(String, String, u32)> {
+        let b = self.sessions.get(&session)?.blocks.get(&block)?;
+        let a = b.agent(&session, &block)?;
+        let pid = b.foreground.value.as_ref()?.pid;
+        (a.agent.as_deref() == Some("claude")).then_some((session, block, pid))
+    }
+
+    /// The session and foreground pid of a block listed as a Codex agent.
+    pub(super) fn codex(&self, block: &str) -> Option<(String, u32)> {
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = s.blocks.get(block)?;
+            let a = b.agent(session, block)?;
+            let pid = b.foreground.value.as_ref()?.pid;
+            (a.agent.as_deref() == Some("codex")).then(|| (session.clone(), pid))
+        })
+    }
+
+    /// Kept only while `pid` still leads the block: refused when another process leads it
+    /// already, as when it changed while a pid file was read outside the lock.
+    pub(super) fn bind(&mut self, session: &str, block: &str, pid: u32, value: String) {
+        if let Some(b) = self.block(session, block)
+            && b.foreground.value.as_ref().is_some_and(|f| f.pid == pid)
+        {
+            b.session = Some((pid, value));
+        }
     }
 
     /// The session, block and size of a listed agent; nothing else is ever reached.
@@ -380,7 +441,11 @@ impl Block {
             state_change_seq: record.map_or(0, |r| change_seq(&r.updated_at)),
             cwd: self.child.as_ref().and_then(|c| c.cwd.clone()),
             foreground_cwd: fg.cwd.clone(),
-            agent_session: None,
+            agent_session: (self.session.as_ref())
+                .filter(|(pid, _)| *pid == fg.pid)
+                .map(|(_, value)| AgentSession {
+                    value: value.clone(),
+                }),
             interactive_ready: false,
             launch_pending: false,
             read_only: record.is_none(),

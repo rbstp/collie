@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -20,6 +20,7 @@ mod client;
 mod discovery;
 mod model;
 mod screen;
+mod sessions;
 mod wire;
 
 #[cfg(test)]
@@ -30,7 +31,7 @@ mod screen_tests;
 mod tests;
 
 pub use discovery::socket_path;
-pub use model::Listing;
+pub use model::{Listing, PREFIX};
 
 pub const NOT_YET: &str = "not available for Rex agents yet";
 pub const GROUP_CLOSE: &str =
@@ -185,6 +186,10 @@ struct Inner {
     server: Option<Server>,
     refused: Option<String>,
     live: Option<Live>,
+    /// Codex sessions by block id, as collied's SessionStart hook reported them, with the
+    /// foreground pid they were reported under. Kept outside the model, which a reconnect
+    /// drops, and applied when the block is read again.
+    codex: BTreeMap<String, (u32, String)>,
 }
 
 struct Live {
@@ -200,6 +205,7 @@ struct Live {
 /// server and never runs the `rex` CLI: an absent socket means none runs.
 pub struct Rex {
     socket: PathBuf,
+    claude_sessions: Option<PathBuf>,
     inner: Mutex<Inner>,
     wake: Notify,
     settled: watch::Sender<bool>,
@@ -225,6 +231,7 @@ impl Rex {
     pub fn new(socket: PathBuf) -> Self {
         Self {
             socket,
+            claude_sessions: None,
             inner: Mutex::default(),
             wake: Notify::new(),
             settled: watch::channel(false).0,
@@ -422,11 +429,13 @@ impl Rex {
         let Some(live) = inner.live.as_mut() else {
             return;
         };
-        if let Some(session) = live.model.event(seq, e) {
-            live.dirty.insert(session);
-            drop(inner);
+        let read = live.model.event(seq, e);
+        let dirty = read.map(|session| live.dirty.insert(session)).is_some();
+        drop(inner);
+        if dirty {
             self.wake.notify_one();
         }
+        self.claude(Model::touched);
     }
 
     /// Subscribes before it reads, so a session or report in between is not missed: events
@@ -571,6 +580,7 @@ impl Rex {
             .terminal(Method::Title, session, block, json!({}))
             .await?;
         self.live(|live| live.model.title(session, block, seq, title.title))?;
+        self.read_sessions(session, block);
         Ok(())
     }
 }

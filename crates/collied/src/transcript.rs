@@ -6,7 +6,7 @@ mod subagents;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -686,7 +686,8 @@ fn is_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
-/// Never follows a symlink, and never blocks on a FIFO put in the transcript's place.
+/// Never follows a symlink, never blocks on a FIFO put in the transcript's place, and reads
+/// only the user's own files.
 pub(crate) fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
     let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     let file = std::fs::OpenOptions::new()
@@ -694,7 +695,8 @@ pub(crate) fn open(path: &Path) -> Option<(File, u64, SystemTime)> {
         .custom_flags(flags.bits() as i32)
         .open(path)
         .ok()?;
-    let meta = file.metadata().ok().filter(|m| m.is_file())?;
+    let meta = (file.metadata().ok())
+        .filter(|m| m.is_file() && m.uid() == rustix::process::geteuid().as_raw())?;
     Some((file, meta.len(), meta.modified().ok()?))
 }
 
@@ -1459,6 +1461,17 @@ mod tests {
         let tail = tail(file, len).unwrap();
         assert!(tail.len() < TAIL_BYTES as usize && tail.starts_with('{'));
         assert_eq!(claude(&tail, None, true).context_left, Some(94));
+    }
+
+    #[test]
+    fn refuses_a_readable_file_of_another_user() {
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let root_owned = Path::new("/usr/bin/env");
+        let meta = std::fs::symlink_metadata(root_owned).unwrap();
+        assert!(meta.is_file() && meta.uid() == 0 && File::open(root_owned).is_ok());
+        assert!(open(root_owned).is_none());
     }
 
     fn aged(path: &Path, text: &str, secs: u64) {
