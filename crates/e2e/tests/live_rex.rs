@@ -631,9 +631,7 @@ async fn input_scenario(server: &RexServer) {
     // bracketed paste, so a newline arrives as a carriage return.
     rt.agent_prompt(&dump, "hi\nyo", "idle").await.unwrap();
     expected.push_str("68690d796f0d");
-    rt.pane_send_text(&dump, "\u{1b}[200~/x\u{1b}[201~")
-        .await
-        .unwrap();
+    rt.pane_paste(&dump, "/x").await.unwrap();
     expected.push_str("2f78");
     dumped(&expected).await;
 

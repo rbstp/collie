@@ -54,10 +54,8 @@ async fn prompts_and_answers_are_pastes_then_enter_and_keys_are_key_events_on_on
     rt.type_text(&agent, "yes", "idle", 0).await.unwrap();
     assert_eq!(events(&fake, B1), [paste("yes"), enter]);
 
-    // The slash mirror's own markers are Rex's to add; anything else is pasted as it is.
-    rt.pane_send_text(&agent, "\u{1b}[200~/model\u{1b}[201~")
-        .await
-        .unwrap();
+    // Rex brackets a paste itself; text is pasted as it is.
+    rt.pane_paste(&agent, "/model").await.unwrap();
     rt.pane_send_text(&agent, "a note").await.unwrap();
     assert_eq!(events(&fake, B1), [paste("/model"), paste("a note")]);
 

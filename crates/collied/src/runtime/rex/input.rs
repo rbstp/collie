@@ -31,8 +31,6 @@ struct Press {
     action: &'static str,
 }
 
-const PASTE_START: &str = "\u{1b}[200~";
-const PASTE_END: &str = "\u{1b}[201~";
 pub const STATUS_CHANGED: &str = "status_changed";
 
 pub(super) const REFUSED: &str =
@@ -182,8 +180,7 @@ impl Rex {
         Ok(())
     }
 
-    /// Pasted, then Enter when `enter`. collied's own bracketed paste markers, which herdr
-    /// writes as they are, are left to Rex.
+    /// Pasted, then Enter when `enter`.
     pub async fn paste(
         &self,
         id: &str,
@@ -191,9 +188,6 @@ impl Rex {
         enter: bool,
         seen: Option<&Seen<'_>>,
     ) -> Result<(), Error> {
-        let text = (text.strip_prefix(PASTE_START))
-            .and_then(|t| t.strip_suffix(PASTE_END))
-            .unwrap_or(text);
         let mut events = vec![Event::Paste { text }];
         if enter {
             events.push(Event::Key(press("enter")?));
