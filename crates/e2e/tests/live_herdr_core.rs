@@ -240,8 +240,10 @@ fn live_herdr_core_phone() {
     if !hc_installed() {
         return;
     }
-    let agents = std::env::var("COLLIE_E2E_AGENTS")
-        .unwrap_or_else(|_| format!("/tmp/hca-{}", std::process::id()));
+    let preset = std::env::var("COLLIE_E2E_AGENTS").ok();
+    let agents = (preset.clone()).unwrap_or_else(|| format!("/tmp/hca-{}", std::process::id()));
+    // Removed even when the child run fails; a folder the caller named is left alone.
+    let _scratch = preset.is_none().then(|| TempDir(agents.clone().into()));
     let claude = format!("{agents}/claude");
     let codex = format!("{agents}/codex");
     let env = [
@@ -250,7 +252,6 @@ fn live_herdr_core_phone() {
         ("CODEX_HOME", codex.as_str()),
     ];
     if !in_child_with("live_herdr_core_phone", &env) {
-        let _ = std::fs::remove_dir_all(&agents);
         return;
     }
     let mut hc = CoreSession::start("hcp");
