@@ -87,6 +87,8 @@ pub(super) struct State {
     pub hang_up: Option<&'static str>,
     /// Sessions whose view shows a window `session.list_blocks` has no block for.
     pub bare_windows: Vec<String>,
+    /// A method whose requests are never answered, the connection left open.
+    pub unanswered: Option<&'static str>,
 }
 
 impl State {
@@ -185,6 +187,7 @@ impl Fake {
             runs_in: None,
             hang_up: None,
             bare_windows: Vec::new(),
+            unanswered: None,
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -330,6 +333,9 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
     let method = request["method"].as_str().unwrap().to_owned();
     let payload = &request["payload"];
     s.calls.push(method.clone());
+    if s.unanswered == Some(method.as_str()) {
+        return;
+    }
     let session = payload["session_id"]
         .as_str()
         .unwrap_or_default()

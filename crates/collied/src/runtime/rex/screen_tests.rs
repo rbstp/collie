@@ -166,6 +166,30 @@ async fn readers_that_ask_together_share_a_format_made_after_they_asked() {
     assert_eq!(formats, 2);
 }
 
+/// A `format` Rex never answers fails each reader waiting behind it within one timeout of
+/// when that reader asked, as a `format` of its own would.
+#[tokio::test]
+async fn readers_behind_a_format_rex_never_answers_fail_within_one_timeout() {
+    let (fake, _rex, rt, _dir) = showing(numbered(5000), (80, 24)).await;
+    fake.state().unanswered = Some("com.superlogical.terminal.format");
+    tokio::time::pause();
+    let agent = id(B1);
+    let read = async || {
+        let asked = tokio::time::Instant::now();
+        let read = rt.agent_read(&agent, "visible", None).await;
+        assert!(matches!(read, Err(Error::Timeout)), "{read:?}");
+        asked.elapsed()
+    };
+    let waited = tokio::join!(read(), read(), read());
+    let timer = std::time::Duration::from_millis(10);
+    assert!(
+        [waited.0, waited.1, waited.2]
+            .iter()
+            .all(|w| *w <= client::TIMEOUT + timer),
+        "{waited:?}"
+    );
+}
+
 /// Rex keeps a block's newest four results only: one dropped before its tail is read is
 /// formatted again, and a read that never finds its result fails without ending anything.
 #[tokio::test]

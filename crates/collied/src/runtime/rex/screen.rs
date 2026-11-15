@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
-use super::client::{Client, Method};
+use super::client::{Client, Method, TIMEOUT};
 use super::wire::{Formatted, Piece};
 use crate::runtime::Error;
 use crate::runtime::screen::Screen;
@@ -164,7 +164,9 @@ impl Screens {
     /// One `format` at a time per block and `unwrap`: a reader that finds one under way
     /// waits, and shares the next one with the readers that waited with it. A reader is only
     /// served a rendering asked for after it asked, so a screen read right before input sees
-    /// what it would see on a `format` of its own.
+    /// what it would see on a `format` of its own. The wait and its own `format` end within
+    /// one `TIMEOUT` of when it asked, so a `format` Rex never answers fails no reader later
+    /// than its own would have.
     async fn format(
         &self,
         client: &Client,
@@ -178,19 +180,24 @@ impl Screens {
             .entry((block.to_owned(), unwrap))
             .or_default()
             .clone();
-        let mut latest = rendered.lock().await;
-        if let Some((ticket, f)) = &*latest
-            && *ticket > asked
-        {
-            return Ok(f.clone());
-        }
-        let ticket = self.tickets.fetch_add(1, Ordering::Relaxed);
-        let args = json!({ "format": "vt", "unwrap": unwrap, "max_bytes": head });
-        let (_, f): (_, Formatted) = client
-            .terminal(Method::Format, session, block, args)
-            .await?;
-        *latest = Some((ticket, f.clone()));
-        Ok(f)
+        let shared = async {
+            let mut latest = rendered.lock().await;
+            if let Some((ticket, f)) = &*latest
+                && *ticket > asked
+            {
+                return Ok(f.clone());
+            }
+            let ticket = self.tickets.fetch_add(1, Ordering::Relaxed);
+            let args = json!({ "format": "vt", "unwrap": unwrap, "max_bytes": head });
+            let (_, f): (_, Formatted) = client
+                .terminal(Method::Format, session, block, args)
+                .await?;
+            *latest = Some((ticket, f.clone()));
+            Ok(f)
+        };
+        tokio::time::timeout(TIMEOUT, shared)
+            .await
+            .map_err(|_| Error::Timeout)?
     }
 }
 
