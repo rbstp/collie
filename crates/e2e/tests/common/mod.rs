@@ -552,6 +552,12 @@ pub struct RexServer {
 
 impl RexServer {
     pub fn start(cli: &Path, tag: &str) -> Self {
+        Self::start_with(cli, tag, &[])
+    }
+
+    /// With `env` added to the server's environment, as a server started from a terminal
+    /// holding them would have it.
+    pub fn start_with(cli: &Path, tag: &str, env: &[(&str, &str)]) -> Self {
         let pid = std::process::id();
         let root = PathBuf::from(format!("/tmp/r{tag}-{pid}"));
         let _ = std::fs::remove_dir_all(&root);
@@ -565,6 +571,7 @@ impl RexServer {
         std::fs::write(root.join("init.lua"), "").unwrap();
         let socket = root.join("rex.sock");
         let child = rex_env(&mut Command::new(cli), &root)
+            .envs(env.iter().copied())
             .args(["--autostart=false", "server", "run", "--listen"])
             .arg(format!("unix://{}", socket.display()))
             .arg("--state-dir")

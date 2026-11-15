@@ -139,6 +139,9 @@ pub(super) struct Process {
     pub child: Option<Proc>,
     #[serde(default)]
     pub foreground: Option<Proc>,
+    /// Set once the terminal's program exited.
+    #[serde(default)]
+    pub last_exit: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -194,6 +197,8 @@ pub(super) struct Title {
 #[derive(Deserialize)]
 pub(super) struct Attached {
     #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
     pub view: Option<View>,
 }
 
@@ -222,6 +227,33 @@ pub(super) struct SessionId {
 #[derive(Deserialize)]
 pub(super) struct SessionCreated {
     pub session: SessionRef,
+}
+
+#[derive(Deserialize)]
+pub(super) struct Created {
+    pub session_id: String,
+    #[serde(default)]
+    pub initial_windows: Option<Vec<Window>>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct Window {
+    #[serde(default)]
+    pub block_ids: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct Owners {
+    #[serde(default)]
+    pub blocks: Option<Vec<Owned>>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct Owned {
+    #[serde(default)]
+    pub block_id: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
 #[derive(Deserialize)]

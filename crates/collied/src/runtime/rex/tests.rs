@@ -13,6 +13,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 mod approvals;
 mod input;
+mod tasks;
 
 pub(super) const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";
 const S2: &str = "session:019a7d2e-0000-7000-8000-000000000002";
@@ -92,6 +93,8 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "com.superlogical.terminal.format",
             "com.superlogical.terminal.blob_read",
             "block.event",
+            "session.create",
+            "session.disown_block",
         ]
     );
     let terminal: Vec<&str> = Method::ALL

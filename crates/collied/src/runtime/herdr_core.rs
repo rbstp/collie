@@ -14,7 +14,7 @@ use tokio::sync::watch;
 
 use super::herdr::{Explain, MatchedRule};
 use super::screen::Screen;
-use super::{AgentInfo, AgentSession, Error, HerdrSeen, PaneRead, WorkspaceInfo, agents};
+use super::{AgentInfo, AgentSession, Error, HerdrSeen, Occupant, PaneRead, WorkspaceInfo, agents};
 
 pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
@@ -33,46 +33,12 @@ pub const METHODS: [&str; 11] = [
     "terminal.keys",
     "terminal.run",
 ];
-/// herdr's and Claude Code's session variables, which a core passes from whatever started
-/// it to every terminal: herdr's hooks would report a herdr-core agent's session against the
-/// starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION` saves no transcript.
-/// Named, not matched by pattern, so variables the user chose (`CLAUDE_CONFIG_DIR`) stay.
-pub const STRIPPED: [&str; 16] = [
-    "HERDR_ENV",
-    "HERDR_PANE_ID",
-    "HERDR_SOCKET_PATH",
-    "HERDR_TAB_ID",
-    "HERDR_WORKSPACE_ID",
-    "HERDR_BIN_PATH",
-    "CLAUDECODE",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_MESSAGING_SOCKET",
-    "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SESSION_ATTENDED",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_EFFORT",
-    "CLAUDE_PID",
-];
-/// The kinds a task starts in herdr-core: those that report OSC 7501, without which nothing
-/// says the agent is ready or what dialog it shows.
-pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
 /// Set on the terminals collied starts as tasks, to the agent kind.
 const TASK_LABEL: &str = "collie.kind";
 /// Set on a worktree task's terminals, to the checkout collied created or opened for it:
 /// only that checkout is ever removed by an archive.
 const WORKTREE_LABEL: &str = "collie.worktree";
 
-/// A terminal the core holds, shell or agent, with the folders it works in.
-pub struct Occupant {
-    pub id: String,
-    pub task: bool,
-    /// The checkout collied recorded for the worktree task it started there.
-    pub worktree: Option<String>,
-    pub cwd: String,
-    pub foreground_cwd: Option<String>,
-}
 pub const GROUP_LABEL: &str = "Herdr 2";
 const PREFIX: &str = "hc:";
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -103,32 +69,6 @@ const SIZE_CHECK: Duration = Duration::from_millis(500);
 
 pub fn owns(id: &str) -> bool {
     id.starts_with(PREFIX)
-}
-
-/// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
-/// matches one. A path holding `=` would be read as a variable by `env`.
-pub fn cli(kind: &str) -> Option<String> {
-    if !TASK_KINDS.contains(&kind) {
-        return None;
-    }
-    // `program` joins folders under `$HOME`, which may be relative; `env` would resolve a
-    // relative path against the task's folder.
-    crate::usage::program(kind)
-        .filter(|p| p.is_absolute())
-        .and_then(|p| p.into_os_string().into_string().ok())
-        .filter(|p| !p.contains('='))
-}
-
-/// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since `terminal.run`'s
-/// `env` is set on top of the core's environment and cannot remove a variable.
-fn task_argv(cli: &str, args: &[&str]) -> Vec<String> {
-    let mut argv = vec!["/usr/bin/env".to_owned()];
-    for name in STRIPPED {
-        argv.extend(["-u".to_owned(), name.to_owned()]);
-    }
-    argv.push(cli.to_owned());
-    argv.extend(args.iter().map(|a| (*a).to_owned()));
-    argv
 }
 
 /// Where `hc` would find the core, from `var` (collied's own environment): `HC_SOCKET`, else
@@ -648,6 +588,13 @@ impl Core {
         self.lock().live.is_some()
     }
 
+    /// Answered, then lost or not followed yet, and not found gone since: the core is there
+    /// but not answering right now. One it refused, or that was never there, is not.
+    pub fn reconnecting(&self) -> bool {
+        let inner = self.lock();
+        inner.live.is_none() && inner.hello.as_ref().is_some_and(|h| h.problem().is_none())
+    }
+
     /// herdr's hooks exit without `HERDR_PANE_ID`, so herdr-core agents get their session
     /// here: Claude Code's from the file its foreground process keeps, Codex's from the hook.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
@@ -1037,7 +984,7 @@ impl Core {
         let group = (self.lock().live.as_ref())
             .map(|live| live.group.clone())
             .ok_or(Error::Closed)?;
-        let argv = task_argv(cli, args);
+        let argv = agents::task_argv(cli, args);
         let mut labels = serde_json::Map::new();
         labels.insert(TASK_LABEL.to_owned(), json!(kind));
         if let Some(checkout) = worktree {
@@ -2267,12 +2214,12 @@ pub(crate) mod tests {
             .map(|a| a.as_str().unwrap())
             .collect();
         let mut expected = vec!["/usr/bin/env"];
-        for name in STRIPPED {
+        for name in agents::STRIPPED {
             expected.extend(["-u", name]);
         }
         expected.extend(["/opt/bin/codex", "resume", SESSION, "--no-daemon"]);
         assert_eq!(argv, expected);
-        assert_eq!(STRIPPED.len(), 16);
+        assert_eq!(agents::STRIPPED.len(), 16);
         assert_eq!(
             (
                 &params["cwd"],
@@ -2303,7 +2250,7 @@ pub(crate) mod tests {
             super::super::herdr::agent_args("claude", Some(SESSION), true),
             ["--resume", SESSION, "--settings", r#"{"ultracode":true}"#]
         );
-        assert!(super::cli("copilot").is_none());
+        assert!(agents::task_cli("copilot").is_none());
     }
 
     /// A herdr that answers `ping`, `answer`'s methods, and an error for anything else.
@@ -2387,6 +2334,15 @@ pub(crate) mod tests {
 
     pub(crate) fn following(core: Core, terminals: Value) -> Arc<Core> {
         core.lock().live = Some(live(10, terminals));
+        Arc::new(core)
+    }
+
+    /// A core that answered (`refused`: one collied does not follow) and is not followed now,
+    /// as while it reconnects after its connection ended.
+    pub(crate) fn answered(root: &Path, refused: bool) -> Arc<Core> {
+        let core = Core::new(root.join("core.sock"));
+        let generation = if refused { GENERATION + 1 } else { GENERATION };
+        core.lock().hello = Some(hello(generation, MIN_VERSION, &METHODS));
         Arc::new(core)
     }
 
@@ -2871,12 +2827,12 @@ pub(crate) mod tests {
         let rt =
             Runtime::new(herdr.clone()).with_core(Some(followed(dir.path().join("core.sock"))));
         assert!(
-            rt.task_core().await.unwrap().is_some(),
+            rt.task_host().await.unwrap().is_some(),
             "herdr is not running"
         );
         let unfollowed = Runtime::new(herdr.clone())
             .with_core(Some(Arc::new(Core::new(dir.path().join("core.sock")))));
-        assert!(unfollowed.task_core().await.unwrap().is_none());
+        assert!(unfollowed.task_host().await.unwrap().is_none());
 
         // herdr runs but takes the connection and closes it unanswered.
         let listener = tokio::net::UnixListener::bind(&herdr).unwrap();
@@ -2885,13 +2841,13 @@ pub(crate) mod tests {
                 drop(stream);
             }
         });
-        assert!(rt.task_core().await.is_err(), "herdr does not answer");
+        assert!(rt.task_host().await.is_err(), "herdr does not answer");
         busy.abort();
         let _ = busy.await;
         std::fs::remove_file(&herdr).unwrap();
 
         fake_herdr(&herdr, |_| None);
-        assert!(rt.task_core().await.unwrap().is_none(), "herdr answers");
+        assert!(rt.task_host().await.unwrap().is_none(), "herdr answers");
     }
 
     #[tokio::test]

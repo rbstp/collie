@@ -19,6 +19,8 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use super::client::{Method, TERMINAL};
 
 pub(super) const HOST: &str = "1f4bd4b7-e04f-46e2-ad3b-0e2b89b5447c";
+/// This connection's client id, as `session.attach` names it.
+const CLIENT: &str = "client:1";
 
 /// Run once, on a request for its method (and block, when named): `after` runs once the
 /// answer is read, so the events it returns carry a later seq than the answer's, yet reach
@@ -40,6 +42,8 @@ pub(super) struct Block {
     pub size: (u32, u32),
     /// What `block.event` sent it, in order.
     pub events: Vec<Value>,
+    /// The client that owns it: the one that created it, until it gives it up.
+    pub owner: Option<String>,
 }
 
 pub(super) struct State {
@@ -66,6 +70,19 @@ pub(super) struct State {
     /// While set, `block.event` responses are held until an `emit` finds it cleared.
     pub stall: bool,
     held: Vec<Value>,
+    /// What `session.create` was asked, in order.
+    pub created: Vec<Value>,
+    /// The status the program of a created block reports first; none for `None`.
+    pub start: Option<&'static str>,
+    /// While set, `session.disown_block` leaves the caller the owner.
+    pub keep_owner: bool,
+    /// While set, `session.attach` does not name the caller's client.
+    pub anonymous: bool,
+    /// The folder a created block's program runs in instead of the layout's, as Rex starts
+    /// one whose folder is not a directory in the home folder.
+    pub runs_in: Option<String>,
+    /// A method whose request ends the connection instead of an answer.
+    pub hang_up: Option<&'static str>,
 }
 
 impl State {
@@ -96,6 +113,7 @@ impl State {
             rows: None,
             size: (80, 24),
             events: Vec::new(),
+            owner: None,
         });
     }
 }
@@ -155,6 +173,12 @@ impl Fake {
             moved: 0,
             stall: false,
             held: Vec::new(),
+            created: Vec::new(),
+            start: Some("idle"),
+            keep_owner: false,
+            anonymous: false,
+            runs_in: None,
+            hang_up: None,
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -251,6 +275,10 @@ async fn serve(
                 let Some(Ok(Message::Text(text))) = next else { return };
                 let request: Value = serde_json::from_str(&text).unwrap();
                 let mut s = crate::lock(&state);
+                if s.hang_up.is_some() && s.hang_up == request["method"].as_str() {
+                    s.calls.push(request["method"].as_str().unwrap().to_owned());
+                    return;
+                }
                 answer(&mut s, &request, &mut seq, &mut out);
             }
             pushed = pushed.recv() => {
@@ -354,7 +382,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 .iter()
                 .find(|(id, _)| *id == session)
                 .map(|(_, l)| l);
-            Ok(json!({ "client_id": "client:1", "view": {
+            let client = (!s.anonymous).then_some(CLIENT);
+            Ok(json!({ "client_id": client, "view": {
                 "revision": 1, "session_id": session, "label": label,
             }}))
         }
@@ -369,6 +398,30 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 })
                 .collect();
             Ok(json!({ "blocks": blocks }))
+        }
+        ("session.create", _) => Ok(create(s, payload, seq, out)),
+        ("session.disown_block", _) if !s.attached.contains(&session) => Err("bad_request"),
+        ("session.disown_block", _) => {
+            let ids: Vec<String> = (payload["block_ids"].as_array().into_iter().flatten())
+                .filter_map(|b| b.as_str().map(str::to_owned))
+                .collect();
+            let mut owners = Vec::new();
+            for id in ids {
+                match s
+                    .blocks
+                    .iter_mut()
+                    .find(|b| b.id == id && b.session == session)
+                {
+                    Some(b) => {
+                        if b.owner.as_deref() == Some(CLIENT) && !s.keep_owner {
+                            b.owner = None;
+                        }
+                        owners.push(json!({ "block_id": id, "owner": b.owner }));
+                    }
+                    None => return answer_error(request, answered, out, "bad_request"),
+                }
+            }
+            Ok(json!({ "blocks": owners }))
         }
         ("block.close", _) => match found {
             Some(i) => {
@@ -429,6 +482,61 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
     if let Some(b) = closed {
         deliver(s, seq, out, block_closed(&b.session, &b.id));
     }
+}
+
+fn answer_error(request: &Value, seq: u64, out: &mut Vec<Value>, code: &str) {
+    out.push(json!({
+        "type": "response", "id": request["id"].clone(), "seq": seq,
+        "error": { "code": code, "message": code, "status": 400 },
+    }));
+}
+
+/// A session with one terminal block running the layout's `command`, owned by its creator,
+/// announced before the answer as Rex does. The block's foreground process is the program
+/// after `env`'s options, in the layout's `cwd`, and reports `start` as that program's app.
+fn create(s: &mut State, payload: &Value, seq: &mut u64, out: &mut Vec<Value>) -> Value {
+    s.created.push(payload.clone());
+    let n = s.created.len();
+    let session = format!("session:019a7d2e-0000-7000-8000-0000000c{n:04x}");
+    let block = format!("block:019a7d2e-0000-7000-8000-0000000d{n:04x}");
+    let options = &payload["initial_windows"][0]["layout"]["block"]["options"];
+    let command: Vec<&str> = (options["command"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect();
+    let mut i = 1;
+    while command.get(i) == Some(&"-u") {
+        i += 2;
+    }
+    let program = command.get(i).copied().unwrap_or_default();
+    let cwd = s
+        .runs_in
+        .clone()
+        .map_or_else(|| options["cwd"].clone(), Value::from);
+    let pid = 900 + n as u32;
+    let label = payload["label"].as_str().unwrap_or_default().to_owned();
+    s.sessions.push((session.clone(), label.clone()));
+    let proc =
+        json!({ "pid": pid, "user_id": 501, "name": "2.1.322", "argv0": program, "cwd": cwd });
+    let records = (s.start.into_iter())
+        .map(|state| {
+            let mut r = record(state, pid, "2.1.322", "2026-11-14T10:00:00.000001Z");
+            if program.ends_with("/codex") {
+                r["app"] = json!("codex");
+            }
+            r
+        })
+        .collect();
+    s.add(
+        &session,
+        &block,
+        json!({ "last_exit": null, "child": proc, "foreground": proc }),
+        records,
+    );
+    s.block(&block).owner = Some(CLIENT.to_owned());
+    deliver(s, seq, out, session_created(&session, &label));
+    json!({ "session_id": session, "initial_windows": [{
+        "window_id": "window:019a7d2e-0000-7000-8000-000000000001", "block_ids": [block], "revision": 1,
+    }]})
 }
 
 /// The first part, by `max_bytes` as revision 13 answers it: no `eof`, and an id while more

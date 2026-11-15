@@ -26,6 +26,7 @@ use tokio::{process::Command, time::timeout};
 use crate::draft::{self, InputBox};
 use crate::runtime::herdr_core::Core;
 use crate::runtime::{self, AgentInfo, PaneInfo, Runtime};
+use crate::runtime::{Owner, TaskHost};
 use crate::transcript::{self, Transcripts};
 use crate::{flock, git, prompt, pulls, reflow};
 
@@ -44,7 +45,7 @@ const WATCH_IDLE: Duration = Duration::from_secs(1);
 const WATCH_QUIET: Duration = Duration::from_secs(5);
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const START_POLL: Duration = Duration::from_millis(250);
-/// herdr-core tasks run `git worktree` themselves. With the start's 30 s and the reads
+/// herdr-core and Rex tasks run `git worktree` themselves. With the start's 30 s and the reads
 /// around them, a slow `git worktree add` can outlast the phone's wait for `task.new` (90 s,
 /// 165 s with a pull request); the task still completes on the machine.
 const WORKTREE_TIMEOUT: Duration = Duration::from_secs(45);
@@ -62,8 +63,10 @@ pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const UNFOCUSED: &str =
     "a background task or agent below the input box is selected on the machine; nothing was sent";
-const CORE_KINDS: &str = "Herdr 2 starts Claude Code and Codex, and only once found on the machine";
-const STARTUP_PROMPT: &str = "the agent is blocked on a startup prompt; answer it in the terminal";
+pub(crate) const ELSEWHERE: &str =
+    "the agent runs in another folder than the task's; nothing was sent";
+pub(crate) const STARTUP_PROMPT: &str =
+    "the agent is blocked on a startup prompt; answer it in the terminal";
 pub const CODEX_UPDATE: &str = "Codex is asking to update. Answer it in Terminal.";
 pub const TOO_LONG: &str = "The line is longer than the terminal accepts before its shell prompt shows. Wait for the prompt and try again.";
 const MAX_FOLDERS: usize = 500;
@@ -995,15 +998,10 @@ impl Driver {
     }
 
     pub async fn task_options(&self) -> Reply {
-        let core = self
-            .runtime
-            .task_core()
-            .await
-            .map_err(herdr_fail)?
-            .is_some();
-        let (known, snap) = if core {
-            let known: Vec<String> = (runtime::herdr_core::TASK_KINDS.iter())
-                .filter(|k| runtime::herdr_core::cli(k).is_some())
+        let host = self.runtime.task_host().await.map_err(herdr_fail)?;
+        let (known, snap) = if host.is_some() {
+            let known: Vec<String> = (runtime::TASK_KINDS.iter())
+                .filter(|k| runtime::task_cli(k).is_some())
                 .map(|k| (*k).to_owned())
                 .collect();
             (known, self.runtime.session_snapshot().await)
@@ -1024,10 +1022,12 @@ impl Driver {
         let Some(default_agent) = agents.first().cloned() else {
             return fail(
                 ErrorCode::NotFound,
-                if core {
-                    "no allowed agent kind that Herdr 2 starts (Claude Code, Codex) is installed"
-                } else {
-                    "no allowed agent kind is known to herdr"
+                match host {
+                    Some(host) => format!(
+                        "no allowed agent kind that {} starts (Claude Code, Codex) is installed",
+                        host.name()
+                    ),
+                    None => "no allowed agent kind is known to herdr".to_owned(),
                 },
             );
         };
@@ -1071,10 +1071,7 @@ impl Driver {
     pub async fn task_worktrees(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
         authorized(auth)?;
         let requested = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
-        let core = self
-            .runtime
-            .task_core()
-            .await
+        let core = (self.runtime.task_host().await)
             .map_err(herdr_fail)?
             .is_some();
         let list = self.worktree_list(&requested, core).await?;
@@ -1178,21 +1175,23 @@ impl Driver {
         } else {
             p.new_folder.as_ref().map(|_| "created")
         };
-        // Decided before any folder is created or cloned, so a task herdr-core cannot start
-        // leaves nothing behind.
-        let core = match self.runtime.task_core().await {
-            Ok(core) => core,
+        // Decided before any folder is created or cloned, so a task herdr-core or Rex cannot
+        // start leaves nothing behind.
+        let host = match self.runtime.task_host().await {
+            Ok(host) => host,
             Err(e) => return (Err(herdr_fail(e)), None),
         };
-        if core.is_some() && runtime::herdr_core::cli(p.agent.as_str()).is_none() {
-            return (fail(ErrorCode::InvalidParams, CORE_KINDS), None);
+        if let Some(host) = &host
+            && runtime::task_cli(p.agent.as_str()).is_none()
+        {
+            return (fail(ErrorCode::InvalidParams, host_kinds(host)), None);
         }
         match self.task_cwd(&p, auth).await {
             Ok(cwd) => {
                 let mut reply = if p.worktree.is_some() {
-                    self.start_worktree_task(p, &cwd, core, auth).await
+                    self.start_worktree_task(p, &cwd, host, auth).await
                 } else {
-                    self.start_task(p, &cwd, core, auth).await
+                    self.start_task(p, &cwd, host, auth).await
                 };
                 if let Some(made) = made {
                     reply = reply.map_err(|(code, message)| {
@@ -1249,14 +1248,14 @@ impl Driver {
         &self,
         p: TaskNewParams,
         cwd: &Cwd,
-        core: Option<Arc<Core>>,
+        host: Option<TaskHost>,
         auth: &Authorized,
     ) -> Reply {
         if let Some(id) = &p.resume {
             self.resumable(&p.agent, id, cwd).await?;
         }
-        if let Some(core) = core {
-            return self.start_core_task(&core, &p, cwd, None, auth).await;
+        if let Some(host) = host {
+            return self.start_host_task(&host, &p, cwd, None, auth).await;
         }
         authorized(auth)?;
         let pane = self
@@ -1316,7 +1315,7 @@ impl Driver {
         &self,
         p: TaskNewParams,
         source: &Cwd,
-        core: Option<Arc<Core>>,
+        host: Option<TaskHost>,
         auth: &Authorized,
     ) -> Reply {
         let Some(worktree) = &p.worktree else {
@@ -1335,11 +1334,11 @@ impl Driver {
             TaskWorktree::PullRequest { .. } => None,
         };
         authorized(auth)?;
-        let listed = self.worktree_list(source, core.is_some()).await?;
+        let listed = self.worktree_list(source, host.is_some()).await?;
         let checkout =
             resolve_cwd(&listed.source.source_checkout_path, &self.roots).map_err(invalid)?;
         if !Path::new(source.as_str()).starts_with(checkout.as_str()) {
-            return fail(ErrorCode::InvalidParams, other_source(core.is_some()));
+            return fail(ErrorCode::InvalidParams, other_source(host.is_some()));
         }
         let deadline = tokio::time::Instant::now() + CLONE_TIMEOUT;
         let pulled;
@@ -1389,7 +1388,7 @@ impl Driver {
             fetch_pull_request(&checkout, *number, head, deadline).await?;
         }
         authorized(auth)?;
-        if let Some(core) = core {
+        if let Some(host) = host {
             let expected = match worktree {
                 TaskWorktree::Create { branch } => {
                     add_worktree(source, branch, &path).await?;
@@ -1398,7 +1397,7 @@ impl Driver {
                 _ => expected_branch.flatten(),
             };
             return self
-                .start_core_worktree_task(&core, &p, source, &path, expected, auth)
+                .start_host_worktree_task(&host, &p, source, &path, expected, auth)
                 .await;
         }
         let result = match worktree {
@@ -1542,8 +1541,8 @@ impl Driver {
     }
 
     /// The started agent must still be the one in `pane`; then ultracode is checked and the
-    /// prompt sent. `target` reaches the agent: herdr's agent name, or the herdr-core id.
-    async fn prompt_started(
+    /// prompt sent. `target` reaches the agent: herdr's agent name, or the herdr-core or Rex id.
+    pub(crate) async fn prompt_started(
         &self,
         p: &TaskNewParams,
         pane: &PaneInfo,
@@ -1565,9 +1564,10 @@ impl Driver {
                     let message = startup_prompt(&p.agent, screen.as_deref());
                     return fail(ErrorCode::AgentBlocked, message);
                 }
-            } else if runtime::herdr_core::owns(&pane.pane_id) {
-                // herdr-core has no screen rules: a Claude Code that reported idle beside a
-                // dialog (an MCP server approval) would take the prompt's Enter as its answer.
+            } else if Owner::of(&pane.pane_id) != Owner::Herdr {
+                // herdr-core and Rex have no screen rules: a Claude Code that reported idle
+                // beside a dialog (an MCP server approval) would take the prompt's Enter as
+                // its answer.
                 let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
                 if screen
                     .as_deref()
@@ -1599,27 +1599,29 @@ impl Driver {
             .map_err(herdr_fail)
     }
 
-    /// A task in herdr-core: no workspace, a terminal of the agent's own. A failure after the
-    /// start names the terminal, which is left running.
-    async fn start_core_task(
+    /// A task in herdr-core or Rex: no workspace, a terminal of the agent's own (in Rex, in a
+    /// session of its own). A failure after the start names the terminal, which is left
+    /// running.
+    async fn start_host_task(
         &self,
-        core: &Core,
+        host: &TaskHost,
         p: &TaskNewParams,
         cwd: &Cwd,
         worktree: Option<&Cwd>,
         auth: &Authorized,
     ) -> Reply {
-        let Some(cli) = runtime::herdr_core::cli(p.agent.as_str()) else {
-            return fail(ErrorCode::InvalidParams, CORE_KINDS);
+        let Some(cli) = runtime::task_cli(p.agent.as_str()) else {
+            return fail(ErrorCode::InvalidParams, host_kinds(host));
         };
         let name = agent_name()?;
         let resume = p.resume.as_ref().map(SessionId::as_str);
         let args = runtime::herdr::agent_args(p.agent.as_str(), resume, p.ultracode);
         authorized(auth)?;
-        let id = core
+        let id = host
             .start(
                 cwd.as_str(),
                 &name,
+                p.label.as_ref().map(|l| l.as_str()),
                 p.agent.as_str(),
                 worktree.map(Cwd::as_str),
                 &cli,
@@ -1628,22 +1630,25 @@ impl Driver {
             .await
             .map_err(herdr_fail)?;
         let left = |(code, message): Fail| {
-            let state = if core.finished(&id) {
+            let state = if host.finished(&id) {
                 "exited"
             } else {
                 "was left running"
             };
-            (code, format!("Herdr 2 agent {id} {state}: {message}"))
+            (
+                code,
+                format!("{} agent {id} {state}: {message}", host.name()),
+            )
         };
         let pane = self
-            .core_agent_ready(core, &id, &name, &p.agent)
+            .host_agent_ready(host, &id, &name, &p.agent, cwd)
             .await
             .map_err(left)?;
         let (Ok(workspace_id), Ok(terminal_id)) = (
             WorkspaceId::new(pane.workspace_id.clone()),
             TerminalId::new(id.clone()),
         ) else {
-            return Err(left(invalid("herdr-core returned an invalid id")));
+            return Err(left(invalid("the runtime returned an invalid id")));
         };
         self.prompt_started(p, &pane, &name, &id, auth)
             .await
@@ -1654,9 +1659,9 @@ impl Driver {
         })
     }
 
-    async fn start_core_worktree_task(
+    pub(crate) async fn start_host_worktree_task(
         &self,
-        core: &Core,
+        host: &TaskHost,
         p: &TaskNewParams,
         source: &Cwd,
         path: &Cwd,
@@ -1681,26 +1686,27 @@ impl Driver {
         }
         // One task per checkout, as herdr keeps one workspace per worktree: archiving one
         // would end the other and remove its checkout.
-        let Some(occupants) = core.occupants() else {
-            return Err(left(invalid("herdr-core is not followed right now")));
-        };
+        let occupants =
+            (self.runtime.occupants(host.owner()).await).map_err(|why| left(invalid(&why)))?;
         if (occupants.iter()).any(|o| o.worktree.as_deref() == Some(path.as_str())) {
             return Err(left(invalid("the worktree root pane is occupied")));
         }
-        self.start_core_task(core, p, path, Some(path), auth)
+        self.start_host_task(host, p, path, Some(path), auth)
             .await
             .map_err(left)
     }
 
-    /// herdr-core has no launch state: the agent is ready once it reports idle or done and
-    /// keeps that report for `SCREEN_SETTLE`, since Codex 0.166.0 reports idle, then working,
-    /// then idle again while it starts.
-    async fn core_agent_ready(
+    /// herdr-core and Rex have no launch state: the agent is ready once it reports idle or done
+    /// and keeps that report for `SCREEN_SETTLE`, since Codex 0.166.0 reports idle, then
+    /// working, then idle again while it starts. It must run in `cwd`: Rex starts a block whose
+    /// folder is gone in the home folder instead, and the prompt was meant for `cwd`.
+    pub(crate) async fn host_agent_ready(
         &self,
-        core: &Core,
+        host: &TaskHost,
         id: &str,
         name: &str,
         kind: &AgentKind,
+        cwd: &Cwd,
     ) -> Result<PaneInfo, Fail> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let mut listed = false;
@@ -1711,8 +1717,8 @@ impl Driver {
                 Ok(a) => Some(a),
                 // Not listed before the CLI leads its terminal and reports a status or runs
                 // as `claude` or `codex` (an npm install runs as `node`), nor once it ended.
-                Err(runtime::Error::Core { kind, .. })
-                    if kind == "not_found" && (listed || core.finished(id)) =>
+                Err(runtime::Error::Core { kind: code, .. } | runtime::Error::Rex { code, .. })
+                    if code == "not_found" && (listed || host.finished(id)) =>
                 {
                     return fail(
                         ErrorCode::AgentNotReady,
@@ -1732,6 +1738,9 @@ impl Driver {
                     match since {
                         Some((seq, at)) if seq == a.state_change_seq => {
                             if at.elapsed() >= SCREEN_SETTLE {
+                                if pane.foreground_cwd.as_deref() != Some(cwd.as_str()) {
+                                    return fail(ErrorCode::AgentNotReady, ELSEWHERE);
+                                }
                                 return Ok(pane);
                             }
                         }
@@ -2024,16 +2033,16 @@ impl Driver {
                 "only an idle worktree task is archived automatically",
             );
         }
-        let core_worktree = if runtime::herdr_core::owns(terminal_id.as_str()) {
-            self.core_worktree(terminal_id.as_str())
+        let host_worktree = if Owner::of(terminal_id.as_str()) != Owner::Herdr {
+            self.host_worktree(terminal_id.as_str())
                 .await
                 .map_err(|(code, message)| (code, format!("{message}; nothing was closed")))?
         } else {
             None
         };
-        let (repo, closed) = if let Some((repo, checkout)) = core_worktree {
+        let (repo, closed) = if let Some((repo, checkout)) = host_worktree {
             let closed = self
-                .archive_core_worktree(terminal_id.as_str(), &repo, &checkout, auth)
+                .archive_host_worktree(terminal_id.as_str(), &repo, &checkout, auth)
                 .await?;
             (Some(repo), closed)
         } else if let Some(worktree) = linked {
@@ -2191,11 +2200,12 @@ impl Driver {
     }
 
     /// Like herdr's `worktree.remove`: the task's terminal ends, then the checkout goes.
-    /// Nothing is closed while anything else may work in it: any other herdr-core terminal,
-    /// shells and other tasks included, a herdr pane, or a herdr workspace that has it open,
-    /// and herdr must answer unless it is not running at all. A terminal working in it is one
-    /// whose start or foreground folder, with symlinks resolved, lies in it.
-    async fn archive_core_worktree(
+    /// Nothing is closed while anything else may work in it: any other herdr-core terminal or
+    /// Rex block, shells and other tasks included, a herdr pane, or a herdr workspace that has
+    /// it open, and herdr must answer unless it is not running at all. A terminal working in
+    /// it is one whose start (in Rex, current) or foreground folder, with symlinks resolved,
+    /// lies in it.
+    async fn archive_host_worktree(
         &self,
         terminal_id: &str,
         repo: &Cwd,
@@ -2233,10 +2243,12 @@ impl Driver {
                 return refused("herdr has this checkout open in a workspace");
             }
         }
-        // Read from a followed core only: one whose events connection dropped knows nothing
+        // Read from a followed core and Rex only: one whose connection dropped knows nothing
         // about what works in the checkout.
-        let Some(all) = self.runtime.core().and_then(|core| core.occupants()) else {
-            return refused("herdr-core is not followed right now");
+        let owner = Owner::of(terminal_id);
+        let all = match self.runtime.occupants(owner).await {
+            Ok(all) => all,
+            Err(why) => return refused(&why),
         };
         let occupants: Vec<_> = (all.into_iter())
             .filter(|o| inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
@@ -2277,14 +2289,11 @@ impl Driver {
             )
         };
         authorized(auth).map_err(closed)?;
-        // Read again right before the removal: the core may have stopped being followed, or
-        // something may have started in the checkout meanwhile.
-        let Some(now) = self.runtime.core().and_then(|core| core.occupants()) else {
-            return fail(
-                ErrorCode::InvalidParams,
-                "herdr-core is not followed right now",
-            )
-            .map_err(closed);
+        // Read again right before the removal: the runtime may have stopped being followed,
+        // or something may have started in the checkout meanwhile.
+        let now = match self.runtime.occupants(owner).await {
+            Ok(now) => now,
+            Err(why) => return fail(ErrorCode::InvalidParams, why).map_err(closed),
         };
         if (now.iter()).any(|o| {
             o.id != terminal_id && (inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
@@ -2317,12 +2326,12 @@ impl Driver {
         ))
     }
 
-    /// The source checkout and checkout of a worktree task collied started in herdr-core:
-    /// only the checkout it created or opened for that task, recorded on the terminal, and
-    /// only while git still lists it there as a linked worktree. Any other terminal never has
-    /// its folder removed.
-    async fn core_worktree(&self, terminal_id: &str) -> Result<Option<(Cwd, Cwd)>, Fail> {
-        let Some(recorded) = self.runtime.core().and_then(|c| c.worktree(terminal_id)) else {
+    /// The source checkout and checkout of a worktree task collied started in herdr-core or
+    /// Rex: only the checkout it created or opened for that task, recorded on the terminal (in
+    /// Rex, by block id), and only while git still lists it there as a linked worktree. Any
+    /// other terminal never has its folder removed.
+    async fn host_worktree(&self, terminal_id: &str) -> Result<Option<(Cwd, Cwd)>, Fail> {
+        let Some(recorded) = self.runtime.task_worktree(terminal_id) else {
             return Ok(None);
         };
         if matches!(Path::new(&recorded).symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
@@ -2470,6 +2479,13 @@ async fn git_worktree(dir: &Cwd, args: &[&str], limit: Duration) -> Result<(), S
         .filter(|&c| !(c.is_control() || protocol::is_format(c)))
         .take(200)
         .collect())
+}
+
+fn host_kinds(host: &TaskHost) -> String {
+    format!(
+        "{} starts Claude Code and Codex, and only once found on the machine",
+        host.name()
+    )
 }
 
 fn other_source(core: bool) -> &'static str {
@@ -3263,6 +3279,43 @@ mod tests {
         format!("hc:{}:t1", core_tests::ID)
     }
 
+    fn w() -> Cwd {
+        Cwd::new("/w").unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_herdr_core_agent_running_in_another_folder_takes_no_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        // Ready (idle) in /w/sub, the fixture's foreground folder, not in /w.
+        core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(
+                Path::new("/w"),
+                serde_json::json!({"state": "idle", "app": "claude-code"}),
+                "live",
+            ),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let idle = serde_json::json!({"state": "idle", "app": "claude-code"});
+        let t = claude(Path::new("/w"), idle, "live");
+        let core = core_tests::core_of(&root, serde_json::json!([t]));
+        let drive = core_driver(&root, core.clone());
+        let kind = AgentKind::new("claude").unwrap();
+        let host = TaskHost::Core(core);
+        let failed = drive
+            .host_agent_ready(&host, &core_id(), NAME, &kind, &w())
+            .await
+            .unwrap_err();
+        assert_eq!(failed, (ErrorCode::AgentNotReady, ELSEWHERE.to_owned()));
+        let sub = Cwd::new("/w/sub").unwrap();
+        let pane = drive
+            .host_agent_ready(&host, &core_id(), NAME, &kind, &sub)
+            .await
+            .unwrap();
+        assert_eq!(pane.foreground_cwd.as_deref(), Some("/w/sub"));
+    }
+
     #[tokio::test]
     async fn a_claude_code_with_no_status_and_a_menu_on_screen_fails_its_start() {
         let dir = tempfile::tempdir().unwrap();
@@ -3278,7 +3331,7 @@ mod tests {
         let drive = core_driver(&root, core.clone());
         let kind = AgentKind::new("claude").unwrap();
         let failed = drive
-            .core_agent_ready(&core, &core_id(), NAME, &kind)
+            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
             .await
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
@@ -3299,7 +3352,7 @@ mod tests {
         let kind = AgentKind::new("claude").unwrap();
         let started = tokio::time::Instant::now();
         let failed = drive
-            .core_agent_ready(&core, &core_id(), NAME, &kind)
+            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
             .await
             .unwrap_err();
         assert_eq!(failed.1, "agent exited before becoming interactive");
@@ -3373,8 +3426,8 @@ mod tests {
         };
         let yes: Authorized = Arc::new(|| true);
         let (code, message) = drive
-            .start_core_worktree_task(
-                &core,
+            .start_host_worktree_task(
+                &TaskHost::Core(core.clone()),
                 &p,
                 &Cwd::new(repo.to_str().unwrap()).unwrap(),
                 &Cwd::new(checkout.to_str().unwrap()).unwrap(),

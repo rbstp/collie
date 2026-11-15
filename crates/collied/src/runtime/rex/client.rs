@@ -52,10 +52,12 @@ pub(super) enum Method {
     Format,
     BlobRead,
     BlockEvent,
+    SessionCreate,
+    SessionDisownBlock,
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 16] = [
+    pub(super) const ALL: [Self; 18] = [
         Self::HelpAll,
         Self::ServerVersion,
         Self::ServerStatus,
@@ -72,6 +74,8 @@ impl Method {
         Self::Format,
         Self::BlobRead,
         Self::BlockEvent,
+        Self::SessionCreate,
+        Self::SessionDisownBlock,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -92,6 +96,8 @@ impl Method {
             Self::Format => "com.superlogical.terminal.format",
             Self::BlobRead => "com.superlogical.terminal.blob_read",
             Self::BlockEvent => "block.event",
+            Self::SessionCreate => "session.create",
+            Self::SessionDisownBlock => "session.disown_block",
         }
     }
 

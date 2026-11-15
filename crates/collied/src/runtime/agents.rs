@@ -140,6 +140,59 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
     Some((parent, name))
 }
 
+/// herdr's and Claude Code's session variables, which a herdr-core core or a Rex server passes
+/// from whatever started it to every terminal: herdr's hooks would report a task agent's
+/// session against the starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION`
+/// saves no transcript. Named, not matched by pattern, so variables the user chose
+/// (`CLAUDE_CONFIG_DIR`) stay.
+pub const STRIPPED: [&str; 16] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_BIN_PATH",
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+/// The kinds a task starts in herdr-core or Rex: those that report OSC 7501, without which
+/// nothing says the agent is ready or what dialog it shows.
+pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
+
+/// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
+/// matches one. A path holding `=` would be read as a variable by `env`.
+pub fn task_cli(kind: &str) -> Option<String> {
+    if !TASK_KINDS.contains(&kind) {
+        return None;
+    }
+    // `program` joins folders under `$HOME`, which may be relative; `env` would resolve a
+    // relative path against the task's folder.
+    crate::usage::program(kind)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.into_os_string().into_string().ok())
+        .filter(|p| !p.contains('='))
+}
+
+/// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since neither
+/// `terminal.run`'s `env` nor Rex's options can remove a variable.
+pub(super) fn task_argv(cli: &str, args: &[&str]) -> Vec<String> {
+    let mut argv = vec!["/usr/bin/env".to_owned()];
+    for name in STRIPPED {
+        argv.extend(["-u".to_owned(), name.to_owned()]);
+    }
+    argv.push(cli.to_owned());
+    argv.extend(args.iter().map(|a| (*a).to_owned()));
+    argv
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
