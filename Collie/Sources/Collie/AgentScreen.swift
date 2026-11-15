@@ -215,7 +215,7 @@ struct AgentScreen: View {
                 }
                 if continueInTerminal {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
-                        .font(.footnote).appGlassButton(dimmed: true).background(SessionBarDim(), in: .capsule)
+                        .font(.footnote).appGlassButton(dim: .always)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.top, 6)
@@ -594,9 +594,12 @@ private struct SessionBarGlass: View {
         // The glass rim along the bottom edge drew a hairline seam over the content: it lies past the mask,
         // and the glass fades out over its last points rather than ending on a hard cut.
         // Light glass over a white chat is nearly white itself: a faint gray tint gives the band a visible edge.
-        Color.clear.appGlass(in: .rect)
-            // Clear, even over the dimming color, let a full terminal or chat run through the title and status.
-            .environment(\.appGlass, glass == .clear ? .regular : glass)
+        Color.clear.appGlass(dim: glass == .clear ? .never : .setting, in: .rect)
+            // Clear: the dimming color under clear glass let a full chat run through the status row in dark mode and hid nearly
+            // everything in light mode; dimming what shows through the glass keeps the content visible and the header readable.
+            .overlay {
+                if glass == .clear { (colorScheme == .dark ? Color.black : .white).opacity(0.75) }
+            }
             .overlay(colorScheme == .light ? Color.black.opacity(0.04) : .clear)
             .padding(.bottom, -feather)
             .mask {
@@ -622,8 +625,10 @@ private struct SessionBarGlass: View {
 // Apple's guidance for clear glass: a dimming layer behind it keeps text legible over bright or busy content.
 struct SessionBarDim: ShapeStyle {
     func resolve(in environment: EnvironmentValues) -> Color {
-        if environment.appGlass == .opaque { return environment.glassPage }
-        return environment.colorScheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
+        let dark = environment.colorScheme == .dark
+        // Opaque: the same dim mixed over the page, so the contrast measured over the dim still holds.
+        if environment.appGlass == .opaque { return environment.glassPage.mix(with: dark ? .black : .white, by: dark ? 0.7 : 0.8, in: .device) }
+        return dark ? .black.opacity(0.7) : .white.opacity(0.8)
     }
 }
 
@@ -927,8 +932,7 @@ private struct KeyStrip: View {
             }
         }
         .padding(.horizontal, 4)
-        .appGlass(interactive: true, dimmed: true, in: .capsule)
-        .background(SessionBarDim(), in: .capsule)
+        .appGlass(interactive: true, dim: .always, in: .capsule)
     }
 }
 
@@ -974,8 +978,7 @@ private struct StripChip<Label: View>: View {
                 .padding(.horizontal, 11)
                 .frame(minHeight: 30)
                 .opacity(isEnabled ? 1 : 0.4)
-                .appGlass(interactive: true, dimmed: true, in: .capsule)
-                .background(SessionBarDim(), in: .capsule)
+                .appGlass(interactive: true, dim: .always, in: .capsule)
                 // A 44-point target around the compact capsule, inside the scroll view, which takes no touches past its bounds.
                 .padding(.vertical, 7)
                 .contentShape(.rect)
@@ -1006,8 +1009,7 @@ private struct CursorJoystick: View {
         }
         .frame(width: diameter, height: diameter)
         .clipShape(.circle)
-        .appGlass(interactive: true, dimmed: true, in: .circle)
-        .background(SessionBarDim(), in: .circle)
+        .appGlass(interactive: true, dim: .always, in: .circle)
         .contentShape(Circle().inset(by: (diameter - 44) / 2))
         .opacity(model.acceptsKeys ? 1 : 0.4)
         .gesture(
@@ -1194,12 +1196,11 @@ private struct PromptBar: View {
                     keysButton
                     Spacer(minLength: 0)
                     if !model.isTerminal {
-                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, dimmed: true, shown: $dictationShown) {
+                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, dim: .always, shown: $dictationShown) {
                             keptDraft = model.draft
                             model.draft = ""
                             if model.startDictation() == nil { restoreDraft() }
                         }
-                        .background(SessionBarDim(), in: .capsule)
                     }
                     if !model.keysShown { CursorJoystick(model: model, diameter: 38) }
                     Button {
@@ -1209,12 +1210,11 @@ private struct PromptBar: View {
                             .font(.system(size: 20))
                             .frame(width: 28, height: 28)
                     }
-                    .appGlassButton(dimmed: true)
+                    .appGlassButton(dim: .always)
                     .tint(.primary)
                     .buttonBorderShape(.circle)
                     .controlSize(.small)
                     .contentShape(.interaction, Circle().inset(by: -3))
-                    .background(SessionBarDim(), in: .circle)
                     .accessibilityLabel(typing ? "Hide keyboard" : "Keyboard")
                     if !model.keysShown, model.suggestion != nil { suggestionButton }
                     if !model.keysShown { returnButton }
@@ -1287,14 +1287,12 @@ private struct PromptBar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .appGlass(interactive: true, dimmed: true, in: .rect(cornerRadius: 18))
-                    .background(SessionBarDim(), in: .rect(cornerRadius: 18))
+                    .appGlass(interactive: true, dim: .always, in: .rect(cornerRadius: 18))
                     ZStack {
-                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, dimmed: true, shown: $dictationShown) {
+                        DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, dim: .always, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
                             editing = false
                         }
-                        .background(SessionBarDim(), in: .capsule)
                     }
                     HStack(spacing: 8) {
                         if editing {
@@ -1305,12 +1303,11 @@ private struct PromptBar: View {
                                     .font(.system(size: 20))
                                     .frame(width: 28, height: 28)
                             }
-                            .appGlassButton(dimmed: true)
+                            .appGlassButton(dim: .always)
                             .tint(.primary)
                             .buttonBorderShape(.circle)
                             .controlSize(.small)
                             .contentShape(.interaction, Circle().inset(by: -3))
-                            .background(SessionBarDim(), in: .circle)
                             .accessibilityLabel("Hide keyboard")
                         }
                         Button {
@@ -1412,12 +1409,11 @@ private struct PromptBar: View {
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
-        .appGlassButton(dimmed: true)
+        .appGlassButton(dim: .always)
         .tint(model.keysShown ? appAccent : .primary)
         .buttonBorderShape(.circle)
         .controlSize(.small)
         .contentShape(.interaction, Circle().inset(by: -3))
-        .background(SessionBarDim(), in: .circle)
         .accessibilityLabel("Keys")
         .accessibilityAddTraits(model.keysShown ? .isSelected : [])
     }
@@ -1430,12 +1426,11 @@ private struct PromptBar: View {
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
-        .appGlassButton(dimmed: true)
+        .appGlassButton(dim: .always)
         .tint(.primary)
         .buttonBorderShape(.circle)
         .controlSize(.small)
         .contentShape(.interaction, Circle().inset(by: -3))
-        .background(SessionBarDim(), in: .circle)
         .disabled(!model.canTap(.tab))
         .accessibilityLabel("Accept suggestion")
     }
@@ -1450,12 +1445,11 @@ private struct PromptBar: View {
                 .font(.system(size: 20))
                 .frame(width: 28, height: 28)
         }
-        .appGlassButton(dimmed: true)
+        .appGlassButton(dim: .always)
         .tint(.primary)
         .buttonBorderShape(.circle)
         .controlSize(.small)
         .contentShape(.interaction, Circle().inset(by: -3))
-        .background(SessionBarDim(), in: .circle)
         .disabled(!model.canPress(.enter))
         .sensoryFeedback(.impact(weight: .light), trigger: returns)
         .accessibilityLabel("Return")
@@ -1497,7 +1491,7 @@ private struct DraftReader: UIViewRepresentable {
 struct DictationButton: View {
     let dictation: DictationModel
     let disabled: Bool
-    var dimmed = false
+    var dim = GlassDim.setting
     let starting: () -> Void
 
     var body: some View {
@@ -1520,7 +1514,7 @@ struct DictationButton: View {
                 starting()
             }
         }
-        .appGlassButton(dimmed: dimmed)
+        .appGlassButton(dim: dim)
         .tint(.primary)
         .buttonBorderShape(.circle)
         .controlSize(.small)
@@ -1533,7 +1527,7 @@ struct DictationButton: View {
 struct DictationControl: View {
     let dictation: DictationModel
     let disabled: Bool
-    var dimmed = false
+    var dim = GlassDim.setting
     @Binding var shown: Bool
     let starting: () -> Void
     @State private var grown = false
@@ -1543,9 +1537,9 @@ struct DictationControl: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             if dictation.isActive || shown {
-                DictationBar(dictation: dictation, grown: grown, revealed: revealed, dimmed: dimmed)
+                DictationBar(dictation: dictation, grown: grown, revealed: revealed, dim: dim)
             } else {
-                DictationButton(dictation: dictation, disabled: disabled, dimmed: dimmed, starting: starting)
+                DictationButton(dictation: dictation, disabled: disabled, dim: dim, starting: starting)
             }
         }
         .task(id: dictation.isActive) {
@@ -1579,7 +1573,7 @@ struct DictationBar: View {
     let dictation: DictationModel
     let grown: Bool
     let revealed: Bool
-    var dimmed = false
+    var dim = GlassDim.setting
 
     var body: some View {
         HStack(spacing: grown ? 8 : 0) {
@@ -1625,7 +1619,7 @@ struct DictationBar: View {
         }
         .padding(.leading, grown ? 7 : 0)
         .padding(5)
-        .appGlass(interactive: true, dimmed: dimmed, in: .capsule)
+        .appGlass(interactive: true, dim: dim, in: .capsule)
     }
 }
 
@@ -1747,7 +1741,6 @@ extension View {
     func composerNoteGlass() -> some View {
         padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .appGlass(dimmed: true, in: .rect(cornerRadius: 12))
-            .background(SessionBarDim(), in: .rect(cornerRadius: 12))
+            .appGlass(dim: .always, in: .rect(cornerRadius: 12))
     }
 }

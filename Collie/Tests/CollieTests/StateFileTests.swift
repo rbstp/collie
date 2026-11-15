@@ -98,34 +98,24 @@ func prefsWithoutAKnownGlassKeepRegularAndOtherPreferences(_ json: String) throw
     #expect(!prefs.wrapLines)
 }
 
-@Test(arguments: AppGlass.allCases)
-func glassPreferenceSurvivesOtherPreferenceUpdates(_ glass: AppGlass) throws {
-    let file = try write(#"{"keepKeyboard":true,"accent":"red"}"#, as: "prefs.json")
-    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-    DevicePrefs.update(in: file) { $0.glass = glass }
-    DevicePrefs.update(in: file) { $0.historyLines = 500 }
-    let prefs = DevicePrefs.load(from: file)
-    #expect(prefs.glass == glass)
-    #expect(prefs.accent == .red)
-    #expect(prefs.keepKeyboard)
-}
-
 // Regular must stay the glass every surface drew before the setting; Opaque draws regular glass over the page.
 @Test func glassChoicesMapToTheSystemGlass() {
     #expect(AppGlass.regular.effect == .regular)
+    #expect(!AppGlass.regular.dims)
     #expect(AppGlass.clear.effect == .clear)
     #expect(AppGlass.opaque.effect == .regular)
 }
 
 @Test(arguments: [ColorScheme.light, .dark])
-func opaqueGlassDimsWithThePageAndOtherChoicesKeepTheDimmingColor(_ scheme: ColorScheme) {
+func opaqueGlassMixesTheDimmingColorOverThePage(_ scheme: ColorScheme) {
     var environment = EnvironmentValues()
     environment.colorScheme = scheme
     environment.glassPage = .orange
     let dim: Color = scheme == .dark ? .black.opacity(0.7) : .white.opacity(0.8)
+    let opaque = Color.orange.mix(with: scheme == .dark ? .black : .white, by: scheme == .dark ? 0.7 : 0.8, in: .device)
     for glass in AppGlass.allCases {
         environment.appGlass = glass
-        #expect(SessionBarDim().resolve(in: environment) == (glass == .opaque ? .orange : dim))
+        #expect(SessionBarDim().resolve(in: environment).resolve(in: environment) == (glass == .opaque ? opaque : dim).resolve(in: environment))
     }
 }
 

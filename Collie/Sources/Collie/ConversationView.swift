@@ -197,10 +197,10 @@ struct ConversationView: View {
                         if !model.messages.isEmpty {
                             GlassEffectContainer(spacing: 8) {
                                 HStack(spacing: 8) {
-                                    Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }
-                                    Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }
+                                    Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }.appGlassButton()
+                                    Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }.appGlassButton()
                                 }
-                                .labelStyle(.iconOnly).appGlassButton()
+                                .labelStyle(.iconOnly)
                             }
                         }
                     }
@@ -599,7 +599,7 @@ struct ConversationMarkdown: View {
                             Label(copied == index ? "Copied" : "Copy code", systemImage: copied == index ? AgentActivityStatus(.done).symbol : "doc.on.doc")
                                 .foregroundStyle(copied == index ? AgentState.done.color : .primary)
                         }
-                        .labelStyle(.iconOnly).appGlassButton().tint(.primary).controlSize(.small)
+                        .labelStyle(.iconOnly).appGlassButton(dim: .never).tint(.primary).controlSize(.small)
                     }
                     .padding(8)
                     .padding(.leading, 4)

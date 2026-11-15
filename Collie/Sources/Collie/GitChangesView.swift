@@ -767,14 +767,14 @@ struct GitDiffView: View {
                 }
                 .toggleStyle(.button)
                 .labelStyle(.iconOnly)
-                .appGlassButton()
+                .appGlassButton(dim: .never)
             }
             Button("File feedback", systemImage: "text.bubble") {
                 collapsed = false
                 editing = review.add(root: root, file: file, selection: "")
             }
             .labelStyle(.iconOnly)
-            .appGlassButton()
+            .appGlassButton(dim: .never)
             .disabled(review.sending)
         }
         .controlSize(.small)
@@ -833,7 +833,7 @@ private struct GitCommentEditor: View {
                 Text(verbatim: comment.file.path).font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("Remove feedback", systemImage: "trash", role: .destructive, action: remove)
-                    .labelStyle(.iconOnly).appGlassButton()
+                    .labelStyle(.iconOnly).appGlassButton(dim: .never)
             }
             if !comment.selection.isEmpty {
                 Text(verbatim: comment.selection).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)

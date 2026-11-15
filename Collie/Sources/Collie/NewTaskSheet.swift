@@ -110,7 +110,7 @@ struct NewTaskSheet: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            DictationControl(dictation: model.dictation, disabled: model.phase != .editing, shown: $dictationShown) {
+                            DictationControl(dictation: model.dictation, disabled: model.phase != .editing, dim: .never, shown: $dictationShown) {
                                 dictationExpanded = model.startDictation(at: editingPrompt ? selection : nil) != nil
                                 editingPrompt = false
                             }
@@ -123,7 +123,7 @@ struct NewTaskSheet: View {
                                             .font(.system(size: 20))
                                             .frame(width: 28, height: 28)
                                     }
-                                    .appGlassButton()
+                                    .appGlassButton(dim: .never)
                                     .tint(.primary)
                                     .buttonBorderShape(.circle)
                                     .controlSize(.small)

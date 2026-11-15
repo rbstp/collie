@@ -600,7 +600,7 @@ struct StatusPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .padding(2)
-            .appGlass(dimmed: colorScheme == .dark, in: .capsule)
+            .appGlass(dim: colorScheme == .dark ? .never : .setting, in: .capsule)
             // Dark glass over a lighter surface such as the terminal turns gray; the dim keeps the label at 4.5:1 or more.
             .background(colorScheme == .dark ? .black.opacity(0.75) : .clear, in: .capsule)
             .fixedSize()

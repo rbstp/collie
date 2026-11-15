@@ -47,7 +47,7 @@ struct OnboardingView: View {
                         authKey = ""
                         signIn { await app.signIn(authKey: key) }
                     }
-                    .appGlassButton()
+                    .appGlassButton(dim: .never)
                     .disabled(app.signingIn || authKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } header: {
                     Text("Auth key")

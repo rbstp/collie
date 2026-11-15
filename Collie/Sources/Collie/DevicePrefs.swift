@@ -161,9 +161,9 @@ enum AppGlass: String, Codable, CaseIterable {
         }
     }
 
-    /// Opaque is regular glass over the page's own background, which `SessionBarDim` resolves to.
+    /// Opaque is regular glass over `SessionBarDim`, which it resolves to an opaque color.
     var effect: Glass { self == .clear ? .clear : .regular }
-    /// Clear glass needs the dimming color behind it to stay legible, and Opaque's dimming color is the page.
+    /// Clear glass needs the dimming color behind it to stay legible, and Opaque hides the content behind it.
     var dims: Bool { self != .regular }
 }
 

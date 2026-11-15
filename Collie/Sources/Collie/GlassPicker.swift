@@ -9,37 +9,53 @@ extension EnvironmentValues {
     @Entry var glassPage = Color(.systemBackground)
 }
 
+/// Whether a glass surface sits on the dimming color, `SessionBarDim`.
+enum GlassDim {
+    /// Under Clear and Opaque, the settings that need it.
+    case setting
+    /// Under every setting: a control over busy content.
+    case always
+    /// Never: it sits on another dimmed surface, or in a row or panel nothing scrolls under.
+    case never
+
+    func applies(to glass: AppGlass) -> Bool {
+        switch self {
+        case .setting: glass.dims
+        case .always: true
+        case .never: false
+        }
+    }
+}
+
 extension View {
     /// The glass Settings > Appearance picks; every surface the app draws takes it from here.
-    /// `dimmed`: the caller already draws `SessionBarDim` behind it.
-    func appGlass(interactive: Bool = false, dimmed: Bool = false, in shape: some Shape) -> some View {
-        modifier(AppGlassEffect(interactive: interactive, dimmed: dimmed, shape: shape))
+    func appGlass(interactive: Bool = false, dim: GlassDim = .setting, in shape: some Shape) -> some View {
+        modifier(AppGlassEffect(interactive: interactive, dim: dim, shape: shape))
+    }
+
+    /// `.buttonStyle(.glass)` in the app's glass. A wrapping button style left menus without their glass.
+    func appGlassButton(dim: GlassDim = .setting) -> some View {
+        modifier(AppGlassButton(dim: dim))
     }
 }
 
 private struct AppGlassEffect<S: Shape>: ViewModifier {
     let interactive: Bool
-    let dimmed: Bool
+    let dim: GlassDim
     let shape: S
     @Environment(\.appGlass) private var glass
 
     func body(content: Content) -> some View {
         content
             .glassEffect(interactive ? glass.effect.interactive() : glass.effect, in: shape)
-            .background(glass.dims && !dimmed ? AnyShapeStyle(SessionBarDim()) : AnyShapeStyle(.clear), in: shape)
-    }
-}
-
-extension View {
-    /// `.buttonStyle(.glass)` in the app's glass. A wrapping button style left menus without their glass.
-    /// `dimmed`: the caller already draws `SessionBarDim` behind it.
-    func appGlassButton(dimmed: Bool = false) -> some View {
-        modifier(AppGlassButton(dimmed: dimmed))
+            .background {
+                if dim.applies(to: glass) { shape.fill(SessionBarDim()) }
+            }
     }
 }
 
 private struct AppGlassButton: ViewModifier {
-    let dimmed: Bool
+    let dim: GlassDim
     @Environment(\.appGlass) private var glass
 
     func body(content: Content) -> some View {
@@ -50,7 +66,9 @@ private struct AppGlassButton: ViewModifier {
                 content.buttonStyle(.glass)
             }
         }
-        .background(glass.dims && !dimmed ? AnyShapeStyle(SessionBarDim()) : AnyShapeStyle(.clear), in: .capsule)
+        .background {
+            if dim.applies(to: glass) { Capsule().fill(SessionBarDim()) }
+        }
     }
 }
 

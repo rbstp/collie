@@ -94,7 +94,7 @@ final class AttachmentMenuButton: UIButton {
         super.init(coder: coder)
     }
 
-    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, color: UIColor, locale: Locale, clear: Bool = false) {
+    func configure(savedPromptsEnabled: Bool, filesEnabled: Bool, color: UIColor, locale: Locale, clear: Bool) {
         self.savedPromptsEnabled = savedPromptsEnabled
         self.filesEnabled = filesEnabled
         guard !isHeld else { return }
