@@ -297,13 +297,23 @@ impl Model {
     pub(super) fn touched(&mut self) -> Vec<(String, String, u32)> {
         let touched = std::mem::take(&mut self.touched);
         (touched.into_iter())
-            .filter_map(|(session, block)| {
-                let b = self.sessions.get(&session)?.blocks.get(&block)?;
-                let a = b.agent(&session, &block)?;
-                let pid = b.foreground.value.as_ref()?.pid;
-                (a.agent.as_deref() == Some("claude")).then_some((session, block, pid))
-            })
+            .filter_map(|(session, block)| self.claude_of(session, block))
             .collect()
+    }
+
+    /// Every Claude Code agent: its session, block and foreground pid.
+    pub(super) fn claude(&self) -> Vec<(String, String, u32)> {
+        (self.sessions.iter())
+            .flat_map(|(session, s)| s.blocks.keys().map(move |b| (session.clone(), b.clone())))
+            .filter_map(|(session, block)| self.claude_of(session, block))
+            .collect()
+    }
+
+    fn claude_of(&self, session: String, block: String) -> Option<(String, String, u32)> {
+        let b = self.sessions.get(&session)?.blocks.get(&block)?;
+        let a = b.agent(&session, &block)?;
+        let pid = b.foreground.value.as_ref()?.pid;
+        (a.agent.as_deref() == Some("claude")).then_some((session, block, pid))
     }
 
     /// The session and foreground pid of a block listed as a Codex agent.
@@ -316,7 +326,8 @@ impl Model {
         })
     }
 
-    /// Kept only while `pid` still leads the block.
+    /// Kept only while `pid` still leads the block: refused when another process leads it
+    /// already, as when it changed while a pid file was read outside the lock.
     pub(super) fn bind(&mut self, session: &str, block: &str, pid: u32, value: String) {
         if let Some(b) = self.block(session, block)
             && b.foreground.value.as_ref().is_some_and(|f| f.pid == pid)

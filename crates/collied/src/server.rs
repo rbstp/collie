@@ -2810,6 +2810,9 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
         }
+        if let Some(rex) = state.runtime.rex() {
+            rex.reread_sessions();
+        }
         let (agents, workspaces, answered) = match state.runtime.poll().await {
             Ok(p) => (p.agents, p.workspaces, p.herdr),
             Err(e) => {

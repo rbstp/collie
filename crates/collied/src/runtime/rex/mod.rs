@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -186,6 +186,10 @@ struct Inner {
     server: Option<Server>,
     refused: Option<String>,
     live: Option<Live>,
+    /// Codex sessions by block id, as collied's SessionStart hook reported them, with the
+    /// foreground pid they were reported under. Kept outside the model, which a reconnect
+    /// drops, and applied when the block is read again.
+    codex: BTreeMap<String, (u32, String)>,
 }
 
 struct Live {
@@ -426,12 +430,12 @@ impl Rex {
             return;
         };
         let read = live.model.event(seq, e);
-        sessions::claude(&mut live.model, self.claude_sessions.as_deref());
-        if let Some(session) = read {
-            live.dirty.insert(session);
-            drop(inner);
+        let dirty = read.map(|session| live.dirty.insert(session)).is_some();
+        drop(inner);
+        if dirty {
             self.wake.notify_one();
         }
+        self.claude(Model::touched);
     }
 
     /// Subscribes before it reads, so a session or report in between is not missed: events
@@ -575,10 +579,8 @@ impl Rex {
         let (seq, title): (_, Title) = client
             .terminal(Method::Title, session, block, json!({}))
             .await?;
-        self.live(|live| {
-            live.model.title(session, block, seq, title.title);
-            sessions::claude(&mut live.model, self.claude_sessions.as_deref());
-        })?;
+        self.live(|live| live.model.title(session, block, seq, title.title))?;
+        self.read_sessions(session, block);
         Ok(())
     }
 }

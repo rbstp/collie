@@ -1,20 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::Rex;
 use super::model::{Model, PREFIX};
+use super::{Inner, Rex};
 use crate::runtime::agents;
 
-/// Claude Code's session for each Claude Code agent whose process or status changed: the
-/// `sessionId` of the `sessions/<pid>.json` its foreground process keeps, as Rex names that
-/// process, through the lookup herdr-core's agents use. Read on those events only, never per
-/// listing, so a session changed without a report (`/clear`) shows at the next report.
-pub(super) fn claude(model: &mut Model, sessions: Option<&Path>) {
-    for (session, block, pid) in model.touched() {
-        if let Some(found) = sessions.and_then(|d| crate::transcript::claude_session(d, pid)) {
-            model.bind(&session, &block, pid, found);
-        }
-    }
-}
+type Agents = Vec<(String, String, u32)>;
 
 impl Rex {
     /// Claude Code's `sessions` folder, where each process keeps `<pid>.json`.
@@ -35,7 +25,8 @@ impl Rex {
             return false;
         }
         let mut inner = self.lock();
-        let Some(live) = inner.live.as_mut() else {
+        let Inner { live, codex, .. } = &mut *inner;
+        let Some(live) = live.as_mut() else {
             return false;
         };
         let Some((rex_session, pid)) = live.model.codex(block) else {
@@ -44,9 +35,60 @@ impl Rex {
         if !agents::reported_by(pid, reporter, agents::process) {
             return false;
         }
+        if live.synced {
+            codex.retain(|b, (bound, _)| live.model.codex(b).is_some_and(|(_, p)| p == *bound));
+        }
+        codex.insert(block.to_owned(), (pid, session.to_owned()));
         live.model
             .bind(&rex_session, block, pid, session.to_owned());
         true
+    }
+
+    /// After a block's reads: the Codex session reported before a reconnect, and Claude
+    /// Code's from its pid file.
+    pub(super) fn read_sessions(&self, session: &str, block: &str) {
+        {
+            let mut inner = self.lock();
+            let Inner { live, codex, .. } = &mut *inner;
+            if let (Some(live), Some((pid, value))) = (live.as_mut(), codex.get(block)) {
+                live.model.bind(session, block, *pid, value.clone());
+            }
+        }
+        self.claude(Model::touched);
+    }
+
+    /// Once per reconcile tick, never per listing: `/clear` rewrites Claude Code's pid file
+    /// with no report and no block event. At most one small file read per Claude Code agent.
+    pub fn reread_sessions(&self) {
+        self.claude(|m| m.claude());
+    }
+
+    /// Claude Code's session for the agents `which` names: the `sessionId` of the
+    /// `sessions/<pid>.json` its foreground process keeps, as Rex names that process, through
+    /// the lookup herdr-core's agents use. The files are read outside the lock every listing
+    /// takes, so a binding whose process changed meanwhile is refused.
+    pub(super) fn claude(&self, which: impl FnOnce(&mut Model) -> Agents) {
+        let wanted = match self.lock().live.as_mut() {
+            Some(live) => which(&mut live.model),
+            None => return,
+        };
+        let Some(dir) = self.claude_sessions.as_deref() else {
+            return;
+        };
+        let found: Vec<_> = (wanted.into_iter())
+            .filter_map(|(session, block, pid)| {
+                let value = crate::transcript::claude_session(dir, pid)?;
+                Some((session, block, pid, value))
+            })
+            .collect();
+        if found.is_empty() {
+            return;
+        }
+        if let Some(live) = self.lock().live.as_mut() {
+            for (session, block, pid, value) in found {
+                live.model.bind(&session, &block, pid, value);
+            }
+        }
     }
 }
 
@@ -61,6 +103,7 @@ mod tests {
 
     use super::super::fake::{self, Fake};
     use super::super::tests::{eventually, follow, id};
+    use super::super::wire::{BlockRef, Process, SessionRef};
     use super::*;
     use crate::drive::Driver;
     use crate::transcript::Transcripts;
@@ -158,10 +201,15 @@ mod tests {
         assert_eq!(session_of(&rex, OTHER), None, "a file naming another pid");
         assert_eq!(session_of(&rex, STALE), None, "a stale pid file");
 
-        // A session changed without a report (`/clear`): listings read no file, so it shows
-        // at the next report.
+        // A session changed without a report (`/clear`): listings read no file, and the
+        // reconcile tick's read finds it.
         pid_file(dir.path(), me, me, CLEARED, now);
         assert_eq!(session_of(&rex, CLAUDE).as_deref(), Some(FIRST));
+        rex.reread_sessions();
+        assert_eq!(session_of(&rex, CLAUDE).as_deref(), Some(CLEARED));
+
+        // And a report finds it.
+        pid_file(dir.path(), me, me, FIRST, now);
         fake.emit(move |_| {
             vec![fake::status_changed(
                 S,
@@ -170,14 +218,14 @@ mod tests {
             )]
         });
         eventually("the session after the report", || {
-            session_of(&rex, CLAUDE).as_deref() == Some(CLEARED)
+            session_of(&rex, CLAUDE).as_deref() == Some(FIRST)
         })
         .await;
 
         // A new foreground process: its own file, from its process_changed.
         fake.emit(move |_| vec![process_changed(STALE, me, "claude", "2.1.322")]);
         eventually("the session of the new foreground process", || {
-            session_of(&rex, STALE).as_deref() == Some(CLEARED)
+            session_of(&rex, STALE).as_deref() == Some(FIRST)
         })
         .await;
     }
@@ -191,7 +239,7 @@ mod tests {
         add(&fake, CODEX, fake::process(codex.pid(), "codex", "codex"));
         add(&fake, CLAUDE, fake::process(me, "claude", "2.1.322"));
         let rex = rex(&fake, dir.path());
-        let _task = follow(&rex).await;
+        let task = follow(&rex).await;
 
         assert!(!rex.bind(&id(OTHER), FIRST, codex.pid()), "no such block");
         assert!(!rex.bind(CODEX, FIRST, codex.pid()), "not a Rex id");
@@ -207,6 +255,14 @@ mod tests {
 
         assert!(rex.bind(&id(CODEX), FIRST, codex.pid()));
         assert_eq!(session_of(&rex, CODEX).as_deref(), Some(FIRST));
+
+        // A reconnect reads the block again and keeps the report.
+        fake.drop_connection();
+        let (_, followed) = task.await.unwrap();
+        assert!(followed);
+        let _task = follow(&rex).await;
+        assert_eq!(session_of(&rex, CODEX).as_deref(), Some(FIRST));
+
         fake.emit(move |_| vec![process_changed(CODEX, me, "codex", "codex")]);
         eventually("the report to lapse with its process", || {
             rex.get(&id(CODEX)).is_ok() && session_of(&rex, CODEX).is_none()
@@ -256,5 +312,33 @@ mod tests {
         };
         let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
         assert_eq!(listed, [CLEARED]);
+    }
+
+    #[test]
+    fn a_session_found_for_a_process_that_no_longer_leads_the_block_is_refused() {
+        let mut model = Model::new(Some(fake::HOST.to_owned()));
+        let session = SessionRef {
+            session_id: S.to_owned(),
+            label: "work".to_owned(),
+        };
+        model.sessions(1, vec![session]);
+        let refs = vec![BlockRef {
+            block_id: Some(CLAUDE.to_owned()),
+            creator_name: Some(super::super::client::TERMINAL.to_owned()),
+            host_id: Some(fake::HOST.to_owned()),
+        }];
+        model.blocks(S, refs);
+        let claude = |pid| -> Process {
+            serde_json::from_value(fake::process(pid, "claude", "2.1.322")).unwrap()
+        };
+        model.process(S, CLAUDE, 1, claude(10));
+        assert_eq!(model.touched(), [(S.to_owned(), CLAUDE.to_owned(), 10)]);
+        // Its pid file is read outside the lock; meanwhile another process leads the block
+        // and its own session is found first.
+        model.process(S, CLAUDE, 2, claude(20));
+        model.bind(S, CLAUDE, 20, CLEARED.to_owned());
+        model.bind(S, CLAUDE, 10, FIRST.to_owned());
+        let session = |m: &Model| m.listing().agents[0].agent_session.clone().map(|s| s.value);
+        assert_eq!(session(&model).as_deref(), Some(CLEARED));
     }
 }

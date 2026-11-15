@@ -221,14 +221,23 @@ const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
 const CLOSED_SESSION: &str = "0a0a0a0a-0000-4000-8000-000000000001";
 
 /// A stand-in Claude Code: it writes its `sessions/<pid>.json` in the folder it is given for
-/// the session it is given, then reports `idle`, as Claude Code does.
+/// the first session it is given, then reports `idle`, as Claude Code does. Once the test
+/// creates `clear`, it names the second session in that file and reports nothing, as
+/// Claude Code's `/clear` does.
 const CLAUDE: &str = r#"$| = 1;
 use Cwd;
-my ($dir, $id) = @ARGV;
-open(my $f, ">", "$dir/$$.json") or die;
-printf $f '{"pid":%d,"sessionId":"%s","cwd":"%s","startedAt":%d}', $$, $id, getcwd(), time() * 1000;
-close $f;
+my ($dir, $id, $cleared) = @ARGV;
+my $started = time() * 1000;
+sub claim {
+    open(my $f, ">", "$dir/$$.tmp") or die;
+    printf $f '{"pid":%d,"sessionId":"%s","cwd":"%s","startedAt":%d}', $$, $_[0], getcwd(), $started;
+    close $f;
+    rename("$dir/$$.tmp", "$dir/$$.json") or die;
+}
+claim($id);
 print "\e]7501;state=idle:app=claude-code\e\\";
+select(undef, undef, undef, 0.05) until -e "clear";
+claim($cleared);
 select(undef, undef, undef, 600);
 "#;
 
@@ -239,8 +248,10 @@ fn live_rex_phone() {
     let Some(cli) = rex_cli() else {
         return;
     };
-    let agents = std::env::var("COLLIE_E2E_AGENTS")
-        .unwrap_or_else(|_| format!("/tmp/rxa-{}", std::process::id()));
+    let preset = std::env::var("COLLIE_E2E_AGENTS").ok();
+    let agents = (preset.clone()).unwrap_or_else(|| format!("/tmp/rxa-{}", std::process::id()));
+    // Removed even when the child run fails; a folder the caller named is left alone.
+    let _scratch = preset.is_none().then(|| TempDir(agents.clone().into()));
     let claude = format!("{agents}/claude");
     let codex = format!("{agents}/codex");
     let env = [
@@ -249,7 +260,6 @@ fn live_rex_phone() {
         ("CODEX_HOME", codex.as_str()),
     ];
     if !in_child_with("live_rex_phone", &env) {
-        let _ = std::fs::remove_dir_all(&agents);
         return;
     }
     let mut server = RexServer::start(&cli, "p");
@@ -336,6 +346,7 @@ async fn phone_scenario(
             CLAUDE,
             sessions.to_str().unwrap(),
             CLAUDE_SESSION,
+            CLOSED_SESSION,
         ],
     );
     // A stand-in Codex: this test binary, run as `codex` (`fake_codex`), and its hook as
@@ -419,6 +430,22 @@ async fn phone_scenario(
         .unwrap();
     let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
     assert_eq!(listed, [CLOSED_SESSION], "open sessions are left out");
+
+    // `/clear`: a new session in the pid file and no report, followed by the reconcile tick.
+    std::fs::write(work.join("clear"), "").unwrap();
+    let mut listed = Vec::new();
+    for _ in 0..50 {
+        let sessions = phone
+            .task_sessions(m.clone(), work.to_str().unwrap().to_owned())
+            .await
+            .unwrap();
+        listed = sessions.iter().map(|s| s.session_id.to_string()).collect();
+        if listed == [CLAUDE_SESSION] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(listed, [CLAUDE_SESSION], "the cleared session is open");
 
     phone.close_pane(m.clone(), claude_id, true).await.unwrap();
     phone.close_pane(m.clone(), codex_id, true).await.unwrap();
