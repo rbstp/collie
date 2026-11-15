@@ -1,0 +1,67 @@
+
+[0m[38;2;215;119;87m ▐[0m[38;2;215;119;87m[48;2;0;0;0m▛███▛█[3C[0m[1mClaude Code[1C[0m[38;2;153;153;153mv2.1.325[0m
+[0m[38;2;215;119;87m▝▜[0m[38;2;215;119;87m[48;2;0;0;0m█████[0m[38;2;215;119;87m█▀[2C[0m[38;2;153;153;153mOpus 5.5 with xhigh effort · Claude Plus[0m
+[0m[38;2;215;119;87m ▝▝   ▝▝ [2C[0m[38;2;153;153;153m~/git/workspace[0m
+
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mtouch a temp file for a test[0m[48;2;55;55;55m                                                                                                                                                                        [0m
+
+[0m[38;2;153;153;153m⏺[1C[0mCreating an empty temp file[1Cin[1Cthe[1Cscratchpad
+[0m[38;2;153;153;153m  ⎿  $ touch /private/tmp/claude-502/-Users-appleseed-git-workspace/00000000-0000-4000-8000-000000000000/scratchpad/test.tmp && ls -l [0m
+[5C[0m[38;2;153;153;153m/private/tmp/claude-502/-Users-appleseed-git-workspace/00000000-0000-4000-8000-000000000000/scratchpad/test.tmp[0m
+
+[0m[38;2;177;185;249m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+[1C[0m[1m[38;2;177;185;249mBash command[0m
+[1C[0m[1mTip: auto mode handles these prompts for you — choose "switch to auto mode" below[0m
+[1C[0m[38;2;153;153;153mCreate an empty temp file in the scratchpad[0m
+[0m[38;2;80;80;80m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m
+[1C[0m[2m│[1C[0mtouch[1C/private/tmp/claude-502/-Users-appleseed-git-workspace/00000000-0000-4000-8000-000000000000/scratchpad/test.tmp[1C&&[1Cls[1C-l
+[1C[0m[2m│[1C[0m/private/tmp/claude-502/-Users-appleseed-git-workspace/00000000-0000-4000-8000-000000000000/scratchpad/test.tmp
+[0m[38;2;80;80;80m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[0m
+[1CThis[1Ccommand[1Crequires[1Capproval
+
+[1CDo[1Cyou[1Cwant[1Cto[1Cproceed?
+[1C[0m[38;2;177;185;249m❯[1C[0m[38;2;153;153;153m1. [0m[38;2;177;185;249mYes[0m
+[1C  [0m[38;2;153;153;153m2. [0mYes, and don’t ask again for: touch /private/tmp/claude-502/-Users-appleseed-git-workspace/00000000-0000-4000-8000-000000000000/scratchpad/test.tmp
+[3C[0m[38;2;153;153;153m3. [0mYes,[1Cand[1Cswitch[1Cto[1Cauto[1Cmode[0m[38;2;153;153;153m · auto mode handles these prompts for you[0m
+[3C[0m[38;2;153;153;153m4. [0mNo
+
+[1C[0m[38;2;153;153;153mEsc to cancel · Tab to amend[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[172C       
+
+
+
+  

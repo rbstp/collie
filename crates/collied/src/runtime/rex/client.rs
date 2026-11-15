@@ -48,10 +48,13 @@ pub(super) enum Method {
     Process,
     ProgramStatus,
     Title,
+    Size,
+    Format,
+    BlobRead,
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 12] = [
+    pub(super) const ALL: [Self; 15] = [
         Self::HelpAll,
         Self::ServerVersion,
         Self::ServerStatus,
@@ -64,6 +67,9 @@ impl Method {
         Self::Process,
         Self::ProgramStatus,
         Self::Title,
+        Self::Size,
+        Self::Format,
+        Self::BlobRead,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -80,6 +86,9 @@ impl Method {
             Self::Process => "com.superlogical.terminal.process",
             Self::ProgramStatus => "com.superlogical.terminal.program_status",
             Self::Title => "com.superlogical.terminal.title",
+            Self::Size => "com.superlogical.terminal.size",
+            Self::Format => "com.superlogical.terminal.format",
+            Self::BlobRead => "com.superlogical.terminal.blob_read",
         }
     }
 
@@ -247,8 +256,9 @@ impl Client {
         method: Method,
         session: &str,
         block: &str,
+        args: Value,
     ) -> Result<(u64, R), Error> {
-        let payload = json!({ "session_id": session, "block_id": block, "args": {} });
+        let payload = json!({ "session_id": session, "block_id": block, "args": args });
         self.call(method, payload, TIMEOUT).await
     }
 }

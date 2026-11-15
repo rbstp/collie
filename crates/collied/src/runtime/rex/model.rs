@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use super::client::TERMINAL;
 use super::wire::{
     BlockEvent, BlockId, BlockRef, Label, Proc, Process, ProcessChanged, Record, SessionCreated,
-    SessionEvent, SessionId, SessionRef, StatusChanged, StatusRemoved, Tagged, Title,
+    SessionEvent, SessionId, SessionRef, Size, StatusChanged, StatusRemoved, Tagged, Title,
 };
 use crate::runtime::{AgentInfo, WorkspaceInfo, agents};
 
@@ -46,6 +46,7 @@ struct Block {
     foreground: Stamped<Option<Proc>>,
     child: Option<Proc>,
     title: Stamped<String>,
+    size: Stamped<(u16, u16)>,
 }
 
 /// One server's sessions and terminal blocks, from reads and the events that follow them.
@@ -58,6 +59,8 @@ pub(super) struct Model {
     /// Closed blocks and destroyed sessions, while a read that started before could still
     /// list them. Ids are never reused.
     gone: HashSet<String>,
+    /// Blocks whose reads failed: left out until a report of theirs has them read again.
+    failed: HashSet<String>,
 }
 
 /// Rex's ids are `session:<uuid>` and `block:<uuid>`; anything else is skipped, so every id
@@ -127,6 +130,7 @@ impl Model {
             "block_closed" => {
                 let id = serde_json::from_value::<BlockId>(e.payload).ok()?.block_id;
                 session.blocks.remove(&id);
+                self.failed.remove(&id);
                 self.gone.insert(id);
             }
             "session_label_changed" => {
@@ -135,7 +139,11 @@ impl Model {
             }
             "block_event" => {
                 let be: BlockEvent = serde_json::from_value(e.payload).ok()?;
-                session.blocks.get_mut(&be.block_id)?.event(seq, be);
+                match session.blocks.get_mut(&be.block_id) {
+                    Some(b) => b.event(seq, be),
+                    None if self.failed.contains(&be.block_id) => return Some(se.session_id),
+                    None => {}
+                }
             }
             _ => {}
         }
@@ -171,11 +179,17 @@ impl Model {
         }
     }
 
-    /// A block whose reads failed, until a later read of its session adds it again.
-    pub(super) fn forget(&mut self, session: &str, block: &str) {
+    /// A block that went away, or whose reads `failed` until its next report or a later read
+    /// of its session adds it again; whether it newly failed.
+    pub(super) fn forget(&mut self, session: &str, block: &str, failed: bool) -> bool {
         if let Some(s) = self.sessions.get_mut(session) {
             s.blocks.remove(block);
         }
+        failed && self.failed.insert(block.to_owned())
+    }
+
+    pub(super) fn recovered(&mut self, block: &str) {
+        self.failed.remove(block);
     }
 
     /// Adds the terminal blocks listed on this machine that were neither read nor closed
@@ -228,6 +242,12 @@ impl Model {
         }
     }
 
+    pub(super) fn size(&mut self, session: &str, block: &str, seq: u64, size: Size) {
+        if let Some(b) = self.block(session, block) {
+            b.size.read(seq, cells(size));
+        }
+    }
+
     /// No read is in flight: what closed is gone from every answer to come.
     pub(super) fn settle(&mut self) {
         self.gone.clear();
@@ -255,14 +275,34 @@ impl Model {
         listing
     }
 
-    /// The session and block of a listed agent; nothing else is ever reached.
-    pub(super) fn target(&self, id: &str) -> Option<(String, String)> {
+    /// The session, block and size of a listed agent; nothing else is ever reached.
+    pub(super) fn target(&self, id: &str) -> Option<(String, String, (u16, u16))> {
         let block = id.strip_prefix(PREFIX)?;
         self.sessions.iter().find_map(|(session, s)| {
             let b = s.blocks.get(block)?;
             b.agent(session, block)?;
-            Some((session.clone(), block.to_owned()))
+            Some((session.clone(), block.to_owned(), b.size.value))
         })
+    }
+
+    /// A listed agent's blocked report's kind (`permission`, `question`), standing in for
+    /// herdr's rule id.
+    pub(super) fn blocked_kind(&self, id: &str) -> Option<Option<String>> {
+        let block = id.strip_prefix(PREFIX)?;
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = s.blocks.get(block)?;
+            let a = b.agent(session, block)?;
+            let record = b
+                .status
+                .value
+                .as_ref()
+                .filter(|_| a.agent_status == "blocked");
+            Some(record.and_then(|r| r.kind.clone()))
+        })
+    }
+
+    pub(super) fn has(&self, block: &str) -> bool {
+        self.sessions.values().any(|s| s.blocks.contains_key(block))
     }
 }
 
@@ -291,6 +331,11 @@ impl Block {
             "title_changed" => {
                 if let Ok(t) = serde_json::from_value::<Title>(e.payload) {
                     self.title.event(seq, t.title);
+                }
+            }
+            "size_changed" => {
+                if let Ok(size) = serde_json::from_value::<Size>(e.payload) {
+                    self.size.event(seq, cells(size));
                 }
             }
             _ => {}
@@ -341,6 +386,11 @@ impl Block {
             read_only: record.is_none(),
         })
     }
+}
+
+fn cells(size: Size) -> (u16, u16) {
+    let cap = |n: u32| u16::try_from(n).unwrap_or(u16::MAX);
+    (cap(size.columns), cap(size.rows))
 }
 
 /// collied's own `state_change_seq`, since Rex's `seq` restarts with each connection: from

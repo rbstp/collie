@@ -115,6 +115,20 @@ impl Screen {
         }
         out.join("\r\n")
     }
+
+    /// The screen's rows as plain text, without trailing blanks.
+    pub fn text(&mut self) -> String {
+        let read = self.read("visible", None);
+        let mut plain = String::with_capacity(read.len());
+        let mut rest = read.as_str();
+        while let Some(at) = rest.find('\u{1b}') {
+            plain.push_str(&rest[..at]);
+            rest = rest[at..].split_once('m').map_or("", |(_, after)| after);
+        }
+        plain.push_str(rest);
+        let rows: Vec<&str> = plain.split("\r\n").map(str::trim_end).collect();
+        rows.join("\n")
+    }
 }
 
 fn style(cell: &Cell) -> Style {

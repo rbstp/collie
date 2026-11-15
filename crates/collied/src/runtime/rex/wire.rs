@@ -286,3 +286,26 @@ pub(super) struct Listener {
     #[serde(default)]
     pub admission: Option<String>,
 }
+
+#[derive(Deserialize)]
+pub(super) struct Size {
+    pub columns: u32,
+    pub rows: u32,
+}
+
+/// `format` with `max_bytes`: the first part, and the result's id while more remains.
+#[derive(Deserialize)]
+pub(super) struct Formatted {
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub total: u64,
+}
+
+#[derive(Deserialize)]
+pub(super) struct Piece {
+    pub data: String,
+    pub eof: bool,
+}
