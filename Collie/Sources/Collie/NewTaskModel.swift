@@ -157,7 +157,7 @@ final class NewTaskModel {
         )
     }
 
-    /// With a runtime chosen, the kinds collied says it starts; `agents` from a collied that does not say.
+    /// The chosen runtime's kinds from `runtimeAgents`; `agents` on Automatic or when collied lists none for it.
     var offeredAgents: [String]? {
         guard let options else { return nil }
         guard let runtime = runtimeChoice.runtime, let listed = options.runtimeAgents.first(where: { $0.runtime == runtime }) else {
