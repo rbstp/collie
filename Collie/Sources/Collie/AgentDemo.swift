@@ -18,6 +18,7 @@ struct AgentDemo: View {
     @State private var follows: FollowModel
     @State private var opening: AgentRoute?
     private let accent = DevicePrefs.load(from: DevicePrefs.file).accent
+    private let glass = DevicePrefs.load(from: DevicePrefs.file).glass
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -60,6 +61,7 @@ struct AgentDemo: View {
         .tint(accent.color)
         .accentColor(accent.color)
         .environment(\.appAccent, accent.color)
+        .environment(\.appGlass, glass)
         .environment(\.neutralAccent, accent == .neutral)
         .toggleStyle(AccentSwitch(tint: accent.switchTint))
         .task {

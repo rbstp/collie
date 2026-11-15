@@ -4,6 +4,72 @@ import UIKit
 extension EnvironmentValues {
     @Entry var appAccent: Color = .accentColor
     @Entry var neutralAccent = false
+    @Entry var appGlass = AppGlass.regular
+    /// What Opaque glass shows instead of the content under it.
+    @Entry var glassPage = Color(.systemBackground)
+}
+
+/// Whether a glass surface sits on the dimming color, `SessionBarDim`.
+enum GlassDim {
+    /// Under Clear and Opaque, the settings that need it.
+    case setting
+    /// Under every setting: a control over busy content.
+    case always
+    /// Never: it sits on another dimmed surface, or in a row or panel nothing scrolls under.
+    case never
+
+    func applies(to glass: AppGlass) -> Bool {
+        switch self {
+        case .setting: glass.dims
+        case .always: true
+        case .never: false
+        }
+    }
+}
+
+extension View {
+    /// The glass Settings > Appearance picks; every surface the app draws takes it from here.
+    func appGlass(interactive: Bool = false, dim: GlassDim = .setting, in shape: some Shape) -> some View {
+        modifier(AppGlassEffect(interactive: interactive, dim: dim, shape: shape))
+    }
+
+    /// `.buttonStyle(.glass)` in the app's glass. A wrapping button style left menus without their glass.
+    func appGlassButton(dim: GlassDim = .setting) -> some View {
+        modifier(AppGlassButton(dim: dim))
+    }
+}
+
+private struct AppGlassEffect<S: Shape>: ViewModifier {
+    let interactive: Bool
+    let dim: GlassDim
+    let shape: S
+    @Environment(\.appGlass) private var glass
+
+    func body(content: Content) -> some View {
+        content
+            .glassEffect(interactive ? glass.effect.interactive() : glass.effect, in: shape)
+            .background {
+                if dim.applies(to: glass) { shape.fill(SessionBarDim()) }
+            }
+    }
+}
+
+private struct AppGlassButton: ViewModifier {
+    let dim: GlassDim
+    @Environment(\.appGlass) private var glass
+
+    func body(content: Content) -> some View {
+        Group {
+            if glass == .clear {
+                content.buttonStyle(.glass(.clear))
+            } else {
+                content.buttonStyle(.glass)
+            }
+        }
+        .background {
+            if dim.applies(to: glass) { Capsule().fill(SessionBarDim()) }
+        }
+    }
 }
 
 struct GlassPicker<Selection: Hashable>: View {

@@ -134,7 +134,7 @@ struct AgentGrid<Menu: View>: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, minHeight: 36)
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12))
+            .appGlass(in: RoundedRectangle(cornerRadius: 12))
             .contentShape(Rectangle())
             .modifier(GridDropTarget(dragging: $dragging, machineId: entry.id) { source, _ in
                 move(source, in: entry, starred: starred, after: !starred)

@@ -134,7 +134,7 @@ struct ConversationView: View {
                 } description: {
                     Text(model.unavailableReason ?? "This session has no readable Claude Code, Codex or Copilot CLI transcript yet. Older daemons need an update for Chat.")
                 } actions: {
-                    Button("Open Terminal", action: terminal).buttonStyle(.glass)
+                    Button("Open Terminal", action: terminal).appGlassButton()
                 }
             } else {
                 history
@@ -177,9 +177,9 @@ struct ConversationView: View {
                         }
                 }
                 .padding(12)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .appGlass(interactive: true, in: .capsule)
                 Button("Close search", systemImage: "xmark") { searching = false }
-                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
+                    .labelStyle(.iconOnly).appGlassButton().controlSize(.large)
             }
         }
         .padding(.horizontal)
@@ -197,10 +197,10 @@ struct ConversationView: View {
                         if !model.messages.isEmpty {
                             GlassEffectContainer(spacing: 8) {
                                 HStack(spacing: 8) {
-                                    Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }
-                                    Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }
+                                    Button("Previous match", systemImage: "chevron.up") { navigate(-1, proxy: proxy) }.appGlassButton()
+                                    Button("Next match", systemImage: "chevron.down") { navigate(1, proxy: proxy) }.appGlassButton()
                                 }
-                                .labelStyle(.iconOnly).buttonStyle(.glass)
+                                .labelStyle(.iconOnly)
                             }
                         }
                     }
@@ -219,7 +219,7 @@ struct ConversationView: View {
                                     Text(model.loadingOlder ? "Loading older messages…" : "Load older messages")
                                 }
                             }
-                                .font(.footnote).buttonStyle(.glass)
+                                .font(.footnote).appGlassButton()
                                 .disabled(model.loading)
                                 .frame(maxWidth: .infinity)
                         }
@@ -277,7 +277,7 @@ struct ConversationView: View {
                 .overlay(alignment: .bottom) {
                     if !atBottom && submitted.isEmpty {
                         Button("Latest messages", systemImage: "arrow.down") { proxy.scrollTo("bottom", anchor: .bottom) }
-                            .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.large)
+                            .labelStyle(.iconOnly).appGlassButton().controlSize(.large)
                             .padding(12)
                     }
                 }
@@ -336,7 +336,7 @@ private struct ConversationWake: View {
                 }
                 .font(.footnote)
             }
-            .buttonStyle(.glass)
+            .appGlassButton()
             .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
@@ -369,7 +369,7 @@ struct ConversationActivity: View {
                 }
                 .font(.footnote)
             }
-            .buttonStyle(.glass)
+            .appGlassButton()
             .tint(.primary)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded {
@@ -474,10 +474,10 @@ private struct ConversationToolRecord: View {
                 Spacer()
                 if let agent {
                     Button("Quote", systemImage: "text.quote") { agent.quote(message.text) }
-                        .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                        .labelStyle(.iconOnly).appGlassButton().controlSize(.small)
                 }
                 Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
-                    .labelStyle(.iconOnly).buttonStyle(.glass).controlSize(.small)
+                    .labelStyle(.iconOnly).appGlassButton().controlSize(.small)
             }
             if message.tool == nil {
                 ConversationMarkdown(text: message.text, query: query)
@@ -599,7 +599,7 @@ struct ConversationMarkdown: View {
                             Label(copied == index ? "Copied" : "Copy code", systemImage: copied == index ? AgentActivityStatus(.done).symbol : "doc.on.doc")
                                 .foregroundStyle(copied == index ? AgentState.done.color : .primary)
                         }
-                        .labelStyle(.iconOnly).buttonStyle(.glass).tint(.primary).controlSize(.small)
+                        .labelStyle(.iconOnly).appGlassButton(dim: .never).tint(.primary).controlSize(.small)
                     }
                     .padding(8)
                     .padding(.leading, 4)

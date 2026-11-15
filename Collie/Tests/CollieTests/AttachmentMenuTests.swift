@@ -60,7 +60,7 @@ final class AttachmentMenuTests: XCTestCase {
     func testEveryChoiceWaitsForMenuDismissal() {
         for choice in AttachmentChoice.allCases {
             let button = AttachmentMenuButton()
-            button.configure(savedPromptsEnabled: true, filesEnabled: true, color: .label, locale: .current)
+            button.configure(savedPromptsEnabled: true, filesEnabled: true, color: .label, locale: .current, clear: false)
             var selected: [AttachmentChoice] = []
             button.select = { selected.append($0) }
             let animator = MenuAnimator()
@@ -79,7 +79,7 @@ final class AttachmentMenuTests: XCTestCase {
 
     func testCancellationAndDisabledChoicesDoNotPresent() {
         let button = AttachmentMenuButton()
-        button.configure(savedPromptsEnabled: true, filesEnabled: false, color: .label, locale: .current)
+        button.configure(savedPromptsEnabled: true, filesEnabled: false, color: .label, locale: .current, clear: false)
         var selected: [AttachmentChoice] = []
         button.select = { selected.append($0) }
         button.finishSelection(animator: nil)
@@ -91,7 +91,7 @@ final class AttachmentMenuTests: XCTestCase {
         button.queueSelection(.savedPrompts)
         button.finishSelection(animator: nil)
         XCTAssertEqual(selected, [.savedPrompts])
-        button.configure(savedPromptsEnabled: false, filesEnabled: true, color: .label, locale: .current)
+        button.configure(savedPromptsEnabled: false, filesEnabled: true, color: .label, locale: .current, clear: false)
         button.queueSelection(.savedPrompts)
         XCTAssertNil(button.pendingChoice)
         button.queueSelection(.files)

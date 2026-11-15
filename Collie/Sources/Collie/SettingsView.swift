@@ -31,6 +31,10 @@ struct SettingsView: View {
                     }
                     .tint(app.accent.color)
                     .id(app.accent)
+                    Picker("Glass", selection: $app.glass) {
+                        ForEach(AppGlass.allCases, id: \.self) { Text($0.label) }
+                    }
+                    .tint(.primary)
                 }
                 Section {
                     LabeledContent("Push", value: app.pushStatus)

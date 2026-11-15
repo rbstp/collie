@@ -63,6 +63,21 @@ The app caps Dynamic Type at AccessibilityXL (`.dynamicTypeSize(...DynamicTypeSi
 
 Reference: [Apple's Liquid Glass guidance](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views).
 
+## Glass setting
+
+Issue #722 adds **Settings > Appearance > Glass**, stored on the phone with the other display choices and read through the environment (`appGlass`), so a change applies at once. The app's own SwiftUI glass takes it from two modifiers, `appGlass(interactive:dim:in:)` for glass effects and `appGlassButton(dim:)` for glass buttons, plus the UIKit paperclip; none names `.regular` itself. A new `.glassEffect(.regular` or `.buttonStyle(.glass)` would bypass the setting, and nothing checks for one. Buttons take the system's own `.glass` style directly: a wrapping button style left the dictation menu without its glass.
+
+`dim` says whether a surface sits on the dimming color (70% black in dark mode, 80% white in light): `.setting` under Clear and Opaque only, `.always` for the controls over busy content that had it before (composer, key strip, joystick, dictation, notes, approval decisions, Review, the countdown), and `.never` for controls on another dimmed surface or in a row or panel nothing scrolls under (copy buttons on cards and the prompt field, git review buttons, copy code, form rows). The modifier draws the dim itself, so no site pairs a flag with a background of its own; the paperclip, a UIKit button whose circle is inset in its hit area, keeps the background its caller draws.
+
+- **Regular**, the default, is the glass every surface drew before the setting, unchanged; nothing is added behind it.
+- **Clear** is `Glass.clear` (`.glass(.clear)` for buttons, `clearGlass()` for the paperclip) over the dimming color, as Apple's guidance asks for clear glass over busy content: content shows sharper and dimmed instead of blurred. The session header and approval band dim what shows through the clear glass instead, by 75% (black in dark mode, white in light): the dimming color under clear glass let a full chat run through the status row in dark mode and hid nearly everything in light mode. The band's cards and their buttons follow the setting like other controls.
+- **Opaque** is regular glass over the dimming color mixed over the page, so nothing shows through and the contrast measured over the dim (the countdown, Deny) holds: the page is the terminal's or the chat's background on the agent screen, grouped gray on Agents and machine rows, the system background elsewhere. Under the header's feathered edge, content fades into the page as it does under the approval band, so a line crossing the edge does not read cut in half.
+- Not covered: the navigation bar, the tab bar, toolbar buttons and their shared capsule, sheets, menus and native segmented controls are drawn by the system and follow iOS's own Liquid Glass setting; SwiftUI offers only visibility for bar backgrounds, no glass variant, and the app does not replace them to force one. Accent-filled `.glassProminent` buttons take no glass variant and keep their look. The terminal's selection pop-up (Copy, Quote, Open), a transient UIKit glass button in the GhosttyTerminal package, keeps regular glass. The grid's running subagents overlay was already clear glass and stays so; under Opaque its dimming color becomes opaque. The watch app keeps its look.
+
+| Light | Dark |
+| --- | --- |
+| ![Clear, Regular and Opaque over the terminal in light mode, the session header above and the composer below](images/glass-setting-light.jpg) | ![Clear, Regular and Opaque over the terminal in dark mode, the session header above and the composer below](images/glass-setting-dark.jpg) |
+
 ## Validation
 
 - `just ios-test`: passed (274 app tests, 62 Ghostty tests).
