@@ -58,6 +58,9 @@ pub struct StatusInfo {
     /// None when no herdr-core socket is configured or the daemon predates this field.
     #[serde(default)]
     pub herdr_core: Option<Box<crate::runtime::herdr_core::Report>>,
+    /// None when no Rex socket is found or the daemon predates this field.
+    #[serde(default)]
+    pub rex: Option<Box<crate::runtime::rex::Report>>,
     /// The node's own tags, as the tailnet reports them; None when the node status failed
     /// or the daemon predates this field.
     #[serde(default)]
@@ -557,6 +560,7 @@ mod tests {
                 peers: 0,
                 herdr_version: None,
                 herdr_core: None,
+                rex: None,
                 tags: None,
                 flock: None,
                 flock_too_large: false,
@@ -591,6 +595,7 @@ mod tests {
             peers: 0,
             herdr_version: None,
             herdr_core: None,
+            rex: None,
             tags: Some(vec!["tag:collie-linux".into()]),
             flock: Some(flock(n)),
             flock_too_large: false,

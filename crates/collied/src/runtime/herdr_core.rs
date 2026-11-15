@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ use tokio::sync::watch;
 
 use super::herdr::{Explain, MatchedRule};
 use super::screen::Screen;
-use super::{AgentInfo, AgentSession, Error, PaneRead, WorkspaceInfo, agents};
+use super::{AgentInfo, AgentSession, Error, HerdrSeen, PaneRead, WorkspaceInfo, agents};
 
 pub const GENERATION: u32 = 1;
 pub const MIN_VERSION: &str = "0.1.16";
@@ -595,7 +594,7 @@ pub struct Core {
     claude_sessions: Option<PathBuf>,
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
-    herdr: AtomicU8,
+    pub(super) herdr: HerdrSeen,
     held: Mutex<HashMap<String, Weak<Hold>>>,
 }
 
@@ -624,7 +623,7 @@ impl Core {
             claude_sessions: None,
             inner: Mutex::default(),
             settled: watch::channel(false).0,
-            herdr: AtomicU8::new(0),
+            herdr: HerdrSeen::default(),
             held: Mutex::default(),
         }
     }
@@ -745,29 +744,6 @@ impl Core {
                 _ = shutdown.changed() => return,
             }
             delay = (delay * 2).min(RETRY_MAX);
-        }
-    }
-
-    /// herdr's reachability as calls merged with this core saw it, so that losing herdr
-    /// while the core answers is logged once, and a herdr that never answered stays quiet.
-    pub(super) fn herdr_seen(&self, error: Option<&Error>) {
-        const UP: u8 = 1;
-        const DOWN: u8 = 2;
-        match error {
-            None => {
-                if self.herdr.swap(UP, Ordering::Relaxed) == DOWN {
-                    tracing::info!("herdr reachable again");
-                }
-            }
-            Some(e) => {
-                if self
-                    .herdr
-                    .compare_exchange(UP, DOWN, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    tracing::warn!(error = %e, "herdr unavailable, herdr-core still answers");
-                }
-            }
         }
     }
 

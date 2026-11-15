@@ -36,6 +36,8 @@ pub enum Error {
     Empty,
     #[error("herdr-core error {kind}: {message}")]
     Core { kind: String, message: String },
+    #[error("Rex error {code}: {message}")]
+    Rex { code: String, message: String },
     #[error("{0}")]
     Unsupported(String),
 }

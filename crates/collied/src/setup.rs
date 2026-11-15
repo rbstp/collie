@@ -255,6 +255,7 @@ mod tests {
             peers,
             herdr_version: None,
             herdr_core: None,
+            rex: None,
             tags: None,
             flock: None,
             flock_too_large: false,

@@ -420,6 +420,9 @@ async fn status(control_path: &Path) -> anyhow::Result<()> {
             if let Some(c) = &s.herdr_core {
                 println!("herdr-core: {}", herdr_core_line(c));
             }
+            if let Some(r) = &s.rex {
+                println!("rex:       {}", rex_line(r));
+            }
             if let Some(flock) = s.flock {
                 print_agents(&flock);
             } else if s.flock_too_large {
@@ -443,6 +446,29 @@ fn herdr_core_line(c: &collied::runtime::herdr_core::Report) -> String {
     }
     if !c.missing.is_empty() {
         line.push_str(&format!(", lacks {}", c.missing.join(", ")));
+    }
+    line
+}
+
+fn rex_line(r: &collied::runtime::rex::Report) -> String {
+    let p = collied::printable;
+    let mut line = match (&r.version, r.api_revision) {
+        (Some(v), Some(api)) => format!("{} (API revision {api})", p(v)),
+        _ if r.refused.is_some() => "running".to_owned(),
+        _ => "not running".to_owned(),
+    };
+    line.push_str(&format!(", {}", p(&r.socket)));
+    if let Some(mode) = r.folder_mode {
+        line.push_str(&format!(", folder {mode:04o}"));
+    }
+    if let Some(why) = &r.refused {
+        line.push_str(&format!(", not followed: {}", p(why)));
+    }
+    if !r.remote.is_empty() {
+        line.push_str(&format!(
+            ", reachable from other machines through {}",
+            p(&r.remote.join(", "))
+        ));
     }
     line
 }

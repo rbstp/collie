@@ -118,6 +118,12 @@ pub fn herdr_fail(e: runtime::Error) -> Fail {
         runtime::Error::Core { kind, .. } => {
             return (ErrorCode::Internal, format!("herdr-core refused: {kind}"));
         }
+        runtime::Error::Rex { code, .. } if code == "not_found" || code == "session_not_found" => {
+            return (ErrorCode::NotFound, "not found".to_owned());
+        }
+        runtime::Error::Rex { code, .. } => {
+            return (ErrorCode::Internal, format!("Rex refused: {code}"));
+        }
         _ => return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned()),
     };
     let (code, message) = match code.as_str() {
@@ -255,6 +261,11 @@ impl Driver {
 
     pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
         self.runtime = self.runtime.with_core(core);
+        self
+    }
+
+    pub fn with_rex(mut self, rex: Option<Arc<crate::runtime::rex::Rex>>) -> Self {
+        self.runtime = self.runtime.with_rex(rex);
         self
     }
 
