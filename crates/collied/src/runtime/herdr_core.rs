@@ -2043,7 +2043,7 @@ pub(crate) mod tests {
         for seen in ["idle", "working", "done", "unknown"] {
             rt.agent_prompt(&id, "hi", seen).await.unwrap();
         }
-        rt.type_text(&id, "yes", "blocked").await.unwrap();
+        rt.type_text(&id, "yes", "blocked", 0).await.unwrap();
         rt.agent_send_keys(&id, &["down", "enter"]).await.unwrap();
         rt.scroll_bottom(&id).await.unwrap();
         rt.notice_digit(&id, "2").await.unwrap();

@@ -38,6 +38,8 @@ pub(super) struct Block {
     /// What it renders without `unwrap`, when that differs.
     pub rows: Option<String>,
     pub size: (u32, u32),
+    /// What `block.event` sent it, in order.
+    pub events: Vec<Value>,
 }
 
 pub(super) struct State {
@@ -61,6 +63,9 @@ pub(super) struct State {
     next_result: u64,
     /// The bytes of screen `format` and `blob_read` answered with.
     pub moved: usize,
+    /// While set, `block.event` responses are held until an `emit` finds it cleared.
+    pub stall: bool,
+    held: Vec<Value>,
 }
 
 impl State {
@@ -90,6 +95,7 @@ impl State {
             screen: String::new(),
             rows: None,
             size: (80, 24),
+            events: Vec::new(),
         });
     }
 }
@@ -147,6 +153,8 @@ impl Fake {
             results: Vec::new(),
             next_result: 1,
             moved: 0,
+            stall: false,
+            held: Vec::new(),
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -250,6 +258,9 @@ async fn serve(
                 let mut s = crate::lock(&state);
                 for e in f(&mut s) {
                     deliver(&s, &mut seq, &mut out, e);
+                }
+                if !s.stall {
+                    out.append(&mut s.held);
                 }
             }
         }
@@ -366,6 +377,14 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             }
             None => Err("not_found"),
         },
+        ("block.event", _) if !s.attached.contains(&session) => Err("conflict"),
+        ("block.event", _) => match found {
+            Some(i) => {
+                s.blocks[i].events.push(payload["event"].clone());
+                Ok(json!({}))
+            }
+            None => Err("not_found"),
+        },
         (_, Some(m)) if s.terminal.contains(&m) => match found.map(|i| &s.blocks[i]) {
             Some(b) => match m {
                 "process" => Ok(b.process.clone()),
@@ -395,13 +414,18 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
         deliver(s, seq, out, e);
     }
     let id = request["id"].clone();
-    out.push(match result {
+    let response = match result {
         Ok(payload) => json!({ "type": "response", "id": id, "seq": answered, "payload": payload }),
         Err(code) => json!({
             "type": "response", "id": id, "seq": answered,
             "error": { "code": code, "message": code, "status": 404 },
         }),
-    });
+    };
+    if s.stall && method == "block.event" {
+        s.held.push(response);
+    } else {
+        out.push(response);
+    }
     if let Some(b) = closed {
         deliver(s, seq, out, block_closed(&b.session, &b.id));
     }
