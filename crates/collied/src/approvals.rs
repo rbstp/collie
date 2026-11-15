@@ -42,9 +42,10 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
 const MAX_HOOKS: usize = 64;
 /// Each Rex screen read makes Rex render the whole scrollback, and Claude Code reports each
-/// dialog anew (a new `state_change_seq`): a blocked Rex agent's screen is read on this many
-/// reconciles of a report, for a dialog still drawing, then not until its next report or a
-/// decision. A decision checks the screen itself before it sends a key.
+/// dialog anew (a new `state_change_seq`): while a blocked Rex agent's approval stands, its
+/// screen is read on this many reconciles of a report, for a dialog still drawing, then not
+/// until its next report, or until its approval ends and another is to be raised. A read
+/// that failed does not count. A decision checks the screen itself before it sends a key.
 const REX_READS: u8 = 3;
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
@@ -303,9 +304,12 @@ impl Approvals {
         if read.0 != a.state_change_seq {
             *read = (a.state_change_seq, 0);
         }
-        read.1 < REX_READS && {
+        read.1 < REX_READS
+    }
+
+    fn read_done(&self, a: &AgentInfo) {
+        if let Some(read) = self.lock().rex_reads.get_mut(&a.terminal_id) {
             read.1 += 1;
-            true
         }
     }
 
@@ -380,6 +384,7 @@ impl Approvals {
                 })
                 .collect();
             for (t, outcome) in done {
+                inner.rex_reads.remove(&t);
                 if let Some(p) = inner.pending.remove(&t) {
                     inner.remember(p.approval.approval_id.clone());
                     ended.push((p.approval.approval_id, outcome));
@@ -394,11 +399,13 @@ impl Approvals {
             let Ok(screen) = self.screen(a).await else {
                 continue;
             };
+            self.read_done(a);
             let mut inner = self.lock();
             if inner.pending.get(&a.terminal_id).is_some_and(|p| {
                 !p.deciding && p.approval.approval_id == id && !p.screen.shows_same(&screen)
             }) {
                 inner.pending.remove(&a.terminal_id);
+                inner.rex_reads.remove(&a.terminal_id);
                 self.count(&inner);
                 inner.remember(id.clone());
                 if let Some(last) = inner.alerted.get_mut(&a.terminal_id) {
@@ -520,6 +527,7 @@ impl Approvals {
         let terminal_id = TerminalId::new(a.terminal_id.clone())?;
         let title = alert_title(a);
         let screen = self.screen(a).await?;
+        self.read_done(a);
         if !screen.blocked || screen.settings_picker {
             return Ok(());
         }

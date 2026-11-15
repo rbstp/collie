@@ -40,12 +40,16 @@ struct Blocked {
 }
 
 async fn blocked() -> Blocked {
-    blocked_settling(crate::approvals::SETTLE).await
+    blocked_timed(crate::approvals::TTL, crate::approvals::SETTLE).await
+}
+
+async fn blocked_settling(settle: std::time::Duration) -> Blocked {
+    blocked_timed(crate::approvals::TTL, settle).await
 }
 
 /// A Claude Code in `B1` blocked on Rex's own screen of a permission dialog; a decision waits
 /// `settle` for it to move on.
-async fn blocked_settling(settle: std::time::Duration) -> Blocked {
+async fn blocked_timed(ttl: std::time::Duration, settle: std::time::Duration) -> Blocked {
     let fake = Fake::start().await;
     claude(&fake, S1, B1, 10, "blocked", T0);
     {
@@ -64,7 +68,7 @@ async fn blocked_settling(settle: std::time::Duration) -> Blocked {
     let (tx, events) = broadcast::channel(64);
     let approvals = Approvals::new(none, "nMAC".into(), tx, audit, None)
         .with_rex(Some(rex.clone()))
-        .with_timing(crate::approvals::TTL, settle);
+        .with_timing(ttl, settle);
     Blocked {
         fake,
         rex,
@@ -278,4 +282,77 @@ async fn a_decision_the_agent_did_not_take_lets_the_same_report_raise_a_fresh_ap
     b.observe().await;
     let [again] = b.raised().try_into().unwrap();
     assert_ne!(again.approval_id, a.approval_id);
+}
+
+/// Whether the screen reads fail: Rex answers `format` with an error.
+fn reads_fail(b: &Blocked, fail: bool) {
+    let mut s = b.fake.state();
+    s.terminal.retain(|m| *m != "format");
+    if !fail {
+        s.terminal.push("format");
+    }
+}
+
+#[tokio::test]
+async fn an_approval_that_expires_is_raised_again_for_a_dialog_still_open() {
+    let mut b = blocked_timed(
+        std::time::Duration::from_millis(300),
+        crate::approvals::SETTLE,
+    )
+    .await;
+    b.observe().await;
+    let [first] = b.raised().try_into().unwrap();
+    let mut again = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while again.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "never raised again");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        b.observe().await;
+        again = b.raised();
+    }
+    assert_ne!(again[0].approval_id, first.approval_id);
+}
+
+#[tokio::test]
+async fn failed_screen_reads_do_not_use_up_the_reads_of_a_report() {
+    let mut b = blocked().await;
+    reads_fail(&b, true);
+    for _ in 0..3 {
+        b.observe().await;
+    }
+    assert!(b.raised().is_empty());
+    reads_fail(&b, false);
+    b.observe().await;
+    let [a] = b.raised().try_into().unwrap();
+    assert_eq!(
+        a.options,
+        [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+    );
+}
+
+#[tokio::test]
+async fn an_approval_raised_on_a_dialog_still_drawing_is_replaced_once_it_is_drawn() {
+    let mut b = blocked().await;
+    b.fake.state().block(B1).screen = "\r\n Bash command\r\n\r\n   touch x\r\n".to_owned();
+    reads_fail(&b, true);
+    b.observe().await;
+    reads_fail(&b, false);
+    b.observe().await;
+    b.observe().await;
+    let [drawing] = b.raised().try_into().unwrap();
+    assert!(drawing.options.is_empty());
+    // Drawn on the third read: the approval it ends is replaced, past this report's reads.
+    b.fake.state().block(B1).screen = VT.to_owned();
+    for _ in 0..3 {
+        b.observe().await;
+    }
+    let raised = b.raised();
+    let pending: Vec<_> = b.approvals.pending();
+    assert_eq!(pending.len(), 1);
+    assert_ne!(pending[0].approval_id, drawing.approval_id);
+    assert_eq!(
+        pending[0].options,
+        [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+    );
+    assert_eq!(raised.len(), 1);
 }
