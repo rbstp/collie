@@ -358,7 +358,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     for (runtime, message) in [
         (
             TaskRuntime::HerdrCore,
-            "Herdr 2 is not running on this computer",
+            "Herdr Core is not running on this computer",
         ),
         (TaskRuntime::Rex, "Rex is not running on this computer"),
     ] {

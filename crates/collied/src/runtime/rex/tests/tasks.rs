@@ -219,7 +219,7 @@ async fn tasks_start_in_herdr_then_herdr_core_then_rex() {
         .with_rex(Some(rex.clone()));
     assert!(matches!(
         waiting.task_host(None).await,
-        Err(Error::Unsupported(m)) if m.starts_with("Herdr 2 is reconnecting")
+        Err(Error::Unsupported(m)) if m.starts_with("Herdr Core is reconnecting")
     ));
     let refused = Runtime::new(root.join("no-herdr.sock"))
         .with_core(Some(answered(&root, true)))
@@ -277,7 +277,7 @@ async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
         .with_rex(Some(Arc::new(Rex::new(root.join("no-rex.sock")))));
     assert_eq!(
         refused(bare.task_host(Some(Owner::Core)).await),
-        "Herdr 2 is not running on this computer"
+        "Herdr Core is not running on this computer"
     );
     assert_eq!(
         refused(bare.task_host(Some(Owner::Rex)).await),
@@ -296,7 +296,7 @@ async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
     let why = refused(refusing.task_host(Some(Owner::Core)).await);
     assert!(
         why.starts_with(
-            "collied does not follow Herdr 2 on this computer: speaks protocol generation"
+            "collied does not follow Herdr Core on this computer: speaks protocol generation"
         ),
         "{why}"
     );
@@ -329,7 +329,7 @@ async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
     );
     assert_eq!(
         refused(waiting.task_host(Some(Owner::Core)).await),
-        "Herdr 2 is reconnecting; try again in a moment"
+        "Herdr Core is reconnecting; try again in a moment"
     );
     assert!(matches!(
         waiting.task_host(Some(Owner::Rex)).await,
@@ -536,7 +536,7 @@ async fn answer_from_a_followed_rex_while_herdr_does_not() {
         reply.unwrap_err(),
         (
             ErrorCode::Internal,
-            "Herdr 2 is reconnecting; try again in a moment".to_owned()
+            "Herdr Core is reconnecting; try again in a moment".to_owned()
         )
     );
     closer.abort();

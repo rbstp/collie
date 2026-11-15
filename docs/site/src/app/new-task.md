@@ -1,6 +1,6 @@
 # New task
 
-**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr 2](#herdr-2) when herdr is not running there. Write what the agent should do, choose where it runs, then tap **Start** at the top right. While the task starts, **Start** shows a spinner and the title reads "Starting the task…", then "Waiting for the agent…".
+**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr Core](#herdr-core) when herdr is not running there. Write what the agent should do, choose where it runs, then tap **Start** at the top right. While the task starts, **Start** shows a spinner and the title reads "Starting the task…", then "Waiting for the agent…".
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: prompt, location, folder and agent picker">
@@ -33,7 +33,7 @@ Check the branch and path before you tap **Start**. If the agent fails to start,
 
 ## Resume a session
 
-Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr or Herdr 2, are left out.
+Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr or Herdr Core, are left out.
 
 ## Options
 
@@ -45,10 +45,10 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 
 **Settings > Sessions > Start tasks in** picks where New task starts agents, on every machine:
 
-- **Automatic**, the default: herdr while it runs, otherwise Herdr 2, otherwise Rex.
-- **Herdr**, **Herdr 2** or **Rex**: there and nowhere else, for prompts, folders, clones, Git worktrees, pull requests and Resume.
+- **Automatic**, the default: herdr while it runs, otherwise Herdr Core, otherwise Rex.
+- **Herdr**, **Herdr Core** or **Rex**: there and nowhere else, for prompts, folders, clones, Git worktrees, pull requests and Resume.
 
-When the machine last reported the runtime you chose as missing, a red line under the location says so before you tap **Start**. If the machine cannot start the task there, the sheet says why, such as "Rex is not running on this computer" or "Rex is reconnecting; try again in a moment", and keeps your prompt; nothing starts anywhere else. Once `collied` is updated, the **Agent** list offers only the agents the chosen runtime starts on that machine, as `collied` reports them, so Herdr 2 and Rex do not offer Copilot CLI. If the agent you had picked is not among them, such as after you switch machines, the sheet picks one that is. When the runtime can start none of the machine's agents, the sheet says so and keeps **Start** dimmed for a new prompt. With an older `collied`, the list is as before and **Start** refuses an agent the runtime cannot start, before anything is created. A machine whose `collied` is too old for the setting says so under the location and keeps **Start** dimmed until you update `collied` or choose Automatic.
+When the machine last reported the runtime you chose as missing, a red line under the location says so before you tap **Start**. If the machine cannot start the task there, the sheet says why, such as "Rex is not running on this computer" or "Rex is reconnecting; try again in a moment", and keeps your prompt; nothing starts anywhere else. Once `collied` is updated, the **Agent** list offers only the agents the chosen runtime starts on that machine, as `collied` reports them, so Herdr Core and Rex do not offer Copilot CLI. If the agent you had picked is not among them, such as after you switch machines, the sheet picks one that is. When the runtime can start none of the machine's agents, the sheet says so and keeps **Start** dimmed for a new prompt. With an older `collied`, the list is as before and **Start** refuses an agent the runtime cannot start, before anything is created. A machine whose `collied` is too old for the setting says so under the location and keeps **Start** dimmed until you update `collied` or choose Automatic.
 
 ## Archive
 
@@ -63,13 +63,13 @@ Archiving the last pane of a repository workspace with linked worktree sessions 
 
 In Rex, **Archive** also removes the task's session from Rex.app's sidebar once nothing else is left in it. A session that still holds another window or block stays, as does any session collie did not create for the task. For a session collie created, the answer says whether it was removed.
 
-One task works in a checkout at a time, whichever runtime started it. When Herdr 2 or Rex runs beside herdr, herdr's **Archive** and **Open** leave a checkout alone while a Herdr 2 terminal or a Rex block works in it, and say so, such as "a Rex block works in this checkout". A Herdr 2 or Rex that does not answer never stops herdr. The other way round, an **Open** or **Archive** in Herdr 2 or Rex leaves a checkout alone while a herdr pane works in it or herdr has it open, and refuses while herdr runs but does not answer.
+One task works in a checkout at a time, whichever runtime started it. When Herdr Core or Rex runs beside herdr, herdr's **Archive** and **Open** leave a checkout alone while a Herdr Core terminal or a Rex block works in it, and say so, such as "a Rex block works in this checkout". A Herdr Core or Rex that does not answer never stops herdr. The other way round, an **Open** or **Archive** in Herdr Core or Rex leaves a checkout alone while a herdr pane works in it or herdr has it open, and refuses while herdr runs but does not answer.
 
-## Herdr 2
+## Herdr Core
 
-When herdr is not running on the machine and herdr-core (Herdr 2) is, **New task** starts the agent in Herdr 2, in a terminal of its own in the machine's **Herdr 2** group. While herdr runs, tasks start in herdr. You change no setting, unless you want tasks in Herdr 2 while herdr runs: choose it in [Where tasks start](#where-tasks-start).
+When herdr is not running on the machine and herdr-core (Herdr Core) is, **New task** starts the agent in Herdr Core, in a terminal of its own in the machine's **Herdr Core** group. While herdr runs, tasks start in herdr. You change no setting, unless you want tasks in Herdr Core while herdr runs: choose it in [Where tasks start](#where-tasks-start).
 
-- You can start Claude Code and Codex, once `collied` finds them on the machine. Copilot CLI does not start there: in Herdr 2 it says it is idle even while it asks whether to trust the folder, so collie cannot send it your prompt safely. Such a task fails before collie creates or clones a folder.
-- Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in herdr, but the task label is not kept: nothing in Herdr 2 would show it. One task works in a worktree at a time: **Open** refuses a checkout another Herdr 2 task already records. If the task fails after the agent starts, the agent keeps running and the checkout stays; the error names them.
+- You can start Claude Code and Codex, once `collied` finds them on the machine. Copilot CLI does not start there: in Herdr Core it says it is idle even while it asks whether to trust the folder, so collie cannot send it your prompt safely. Such a task fails before collie creates or clones a folder.
+- Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in herdr, but the task label is not kept: nothing in Herdr Core would show it. One task works in a worktree at a time: **Open** refuses a checkout another Herdr Core task already records. If the task fails after the agent starts, the agent keeps running and the checkout stays; the error names them.
 - When Claude Code asks whether to trust the folder, or shows another startup question, the task stops without sending your prompt. Answer it on the machine: Claude Code reports nothing while it asks, so no approval reaches the phone.
-- **Archive** of a worktree task collie started (Create, pull request or Open) ends that task's agent and removes the checkout, **uncommitted changes included**, then runs `gh poi`; its answer names the agent it ended. It closes nothing while another herdr or Herdr 2 terminal or task works in the checkout (a Resume started there included), while herdr runs and has the checkout open or does not answer, or while the worktree is locked. Windows in other apps, such as Terminal.app, an IDE or tmux, are not checked: close them first. A task whose agent already exited no longer shows, so you cannot archive it from the phone: remove its checkout on the machine. For a regular folder, an agent collie did not start, or a folder you picked that happens to be a worktree, it ends only that agent, keeps the folder and runs `gh poi` as in herdr. collie does not [archive a Herdr 2 task by itself](pull-requests.md#archive-when-the-pull-request-merges) when its pull request merges.
+- **Archive** of a worktree task collie started (Create, pull request or Open) ends that task's agent and removes the checkout, **uncommitted changes included**, then runs `gh poi`; its answer names the agent it ended. It closes nothing while another herdr or Herdr Core terminal or task works in the checkout (a Resume started there included), while herdr runs and has the checkout open or does not answer, or while the worktree is locked. Windows in other apps, such as Terminal.app, an IDE or tmux, are not checked: close them first. A task whose agent already exited no longer shows, so you cannot archive it from the phone: remove its checkout on the machine. For a regular folder, an agent collie did not start, or a folder you picked that happens to be a worktree, it ends only that agent, keeps the folder and runs `gh poi` as in herdr. collie does not [archive a Herdr Core task by itself](pull-requests.md#archive-when-the-pull-request-merges) when its pull request merges.

@@ -39,7 +39,7 @@ const TASK_LABEL: &str = "collie.kind";
 /// only that checkout is ever removed by an archive.
 const WORKTREE_LABEL: &str = "collie.worktree";
 
-pub const GROUP_LABEL: &str = "Herdr 2";
+pub const GROUP_LABEL: &str = "Herdr Core";
 const PREFIX: &str = "hc:";
 const TIMEOUT: Duration = Duration::from_secs(5);
 const KILL_TIMEOUT: Duration = Duration::from_secs(15);

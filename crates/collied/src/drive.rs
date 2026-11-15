@@ -1005,7 +1005,7 @@ impl Driver {
         // Rex to answer, so a task the phone asks of one of them can still be set up.
         let elsewhere = match self.runtime.task_host(None).await {
             Ok(host) => host.map(|h| h.name()),
-            Err(_) if self.runtime.follows_another() => Some("Herdr 2 or Rex"),
+            Err(_) if self.runtime.follows_another() => Some("Herdr Core or Rex"),
             Err(e) => return Err(herdr_fail(e)),
         };
         let (herdr_kinds, snap) = if elsewhere.is_some() {
@@ -2312,7 +2312,7 @@ impl Driver {
             .and_then(|c| c.occupants())
             .is_some_and(inside)
         {
-            return Some("a Herdr 2 terminal works in this checkout");
+            return Some("a Herdr Core terminal works in this checkout");
         }
         let rex = self.runtime.rex().filter(|r| r.following());
         if let Some(rex) = rex
@@ -3830,7 +3830,7 @@ mod tests {
             .start_worktree_task(open(&repo, &checkout, None), &source, None, &yes)
             .await
             .unwrap_err();
-        let why = "a Herdr 2 terminal works in this checkout";
+        let why = "a Herdr Core terminal works in this checkout";
         assert_eq!(refused, (ErrorCode::InvalidParams, why.to_owned()));
         let archive = TaskArchiveParams {
             op_id: OpId::new("a".repeat(22)).unwrap(),
