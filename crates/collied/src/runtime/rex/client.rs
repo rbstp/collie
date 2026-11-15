@@ -31,79 +31,53 @@ const MAX_MESSAGE: usize = 1 << 20;
 /// The server pings every 120 s.
 const SILENCE: Duration = Duration::from_secs(300);
 
-/// Every method collied calls on a Rex server, and the only way to name one: the API also
-/// stops the server, turns on Tailscale, edits the host list, runs Lua, moves files and
-/// drives Rex.app, and none of that can be sent because nothing here names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Method {
-    HelpAll,
-    ServerVersion,
-    ServerStatus,
-    BlockCreatorList,
-    SessionAttachAll,
-    SessionList,
-    SessionAttach,
-    SessionListBlocks,
-    BlockClose,
-    Process,
-    ProgramStatus,
-    Title,
-    Size,
-    Format,
-    BlobRead,
-    BlockEvent,
-    SessionCreate,
-    SessionDisownBlock,
-    SessionDestroy,
+/// The enum, `ALL` and `name` from one list, so no method can be left out of `ALL`.
+macro_rules! methods {
+    ($($variant:ident => $name:literal,)*) => {
+        /// Every method collied calls on a Rex server, and the only way to name one: the API
+        /// also stops the server, turns on Tailscale, edits the host list, runs Lua, moves
+        /// files and drives Rex.app, and none of that can be sent because nothing here names
+        /// it.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(super) enum Method {
+            $($variant,)*
+        }
+
+        impl Method {
+            pub(super) const ALL: [Self; [$($name),*].len()] = [$(Self::$variant),*];
+
+            pub(super) fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)*
+                }
+            }
+        }
+    };
+}
+
+methods! {
+    HelpAll => "help.all",
+    ServerVersion => "server.version",
+    ServerStatus => "server.status",
+    BlockCreatorList => "block_creator.list",
+    SessionAttachAll => "session.attach_all",
+    SessionList => "session.list",
+    SessionAttach => "session.attach",
+    SessionListBlocks => "session.list_blocks",
+    BlockClose => "block.close",
+    Process => "com.superlogical.terminal.process",
+    ProgramStatus => "com.superlogical.terminal.program_status",
+    Title => "com.superlogical.terminal.title",
+    Size => "com.superlogical.terminal.size",
+    Format => "com.superlogical.terminal.format",
+    BlobRead => "com.superlogical.terminal.blob_read",
+    BlockEvent => "block.event",
+    SessionCreate => "session.create",
+    SessionDisownBlock => "session.disown_block",
+    SessionDestroy => "session.destroy",
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 19] = [
-        Self::HelpAll,
-        Self::ServerVersion,
-        Self::ServerStatus,
-        Self::BlockCreatorList,
-        Self::SessionAttachAll,
-        Self::SessionList,
-        Self::SessionAttach,
-        Self::SessionListBlocks,
-        Self::BlockClose,
-        Self::Process,
-        Self::ProgramStatus,
-        Self::Title,
-        Self::Size,
-        Self::Format,
-        Self::BlobRead,
-        Self::BlockEvent,
-        Self::SessionCreate,
-        Self::SessionDisownBlock,
-        Self::SessionDestroy,
-    ];
-
-    pub(super) fn name(self) -> &'static str {
-        match self {
-            Self::HelpAll => "help.all",
-            Self::ServerVersion => "server.version",
-            Self::ServerStatus => "server.status",
-            Self::BlockCreatorList => "block_creator.list",
-            Self::SessionAttachAll => "session.attach_all",
-            Self::SessionList => "session.list",
-            Self::SessionAttach => "session.attach",
-            Self::SessionListBlocks => "session.list_blocks",
-            Self::BlockClose => "block.close",
-            Self::Process => "com.superlogical.terminal.process",
-            Self::ProgramStatus => "com.superlogical.terminal.program_status",
-            Self::Title => "com.superlogical.terminal.title",
-            Self::Size => "com.superlogical.terminal.size",
-            Self::Format => "com.superlogical.terminal.format",
-            Self::BlobRead => "com.superlogical.terminal.blob_read",
-            Self::BlockEvent => "block.event",
-            Self::SessionCreate => "session.create",
-            Self::SessionDisownBlock => "session.disown_block",
-            Self::SessionDestroy => "session.destroy",
-        }
-    }
-
     /// A terminal block's method, by the name `block_creator.list` gives it.
     pub(super) fn terminal(self) -> Option<&'static str> {
         self.name()
