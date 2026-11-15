@@ -750,3 +750,31 @@ async fn a_tasks_record_goes_when_its_block_closes() {
     assert_eq!(saved, json!({}));
     assert!(rex.finished(&started));
 }
+
+#[tokio::test]
+async fn a_herdr_core_archive_names_rex_when_rex_does_not_list_its_blocks() {
+    let (_dir, root, _repo, checkout) = worktree();
+    let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+    let core = core_of(
+        &root,
+        json!([codex_in(&checkout, worktree_task(&checkout))]),
+    );
+    let fake = Fake::start().await;
+    let (rex, _) = followed(&fake, &root).await;
+    fake.state().hang_up = Some("session.list");
+    let drive = driver(&root, rex).with_core(Some(core));
+    let yes: Authorized = Arc::new(|| true);
+    let (_, message) = drive
+        .task_archive(archive(&format!("hc:{ID}:t1")), &yes)
+        .await
+        .unwrap_err();
+    assert!(
+        message.starts_with("Rex is not followed right now"),
+        "{message}"
+    );
+    assert!(checkout.exists());
+    assert!(
+        crate::lock(&seen).calls.is_empty(),
+        "no terminal was closed"
+    );
+}
