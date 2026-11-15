@@ -2050,7 +2050,7 @@
           "type": "array"
         },
         "runtimes": {
-          "description": "The runtimes a task can start in right now; absent from a collied that ignores\n`TaskNewParams::runtime`.",
+          "description": "The runtimes a task can start in right now; absent from a collied that refuses\n`TaskNewParams::runtime`.",
           "items": {
             "$ref": "#/$defs/TaskRuntime"
           },
@@ -2072,7 +2072,8 @@
       "enum": [
         "herdr",
         "herdr_core",
-        "rex"
+        "rex",
+        "unknown"
       ],
       "type": "string"
     },

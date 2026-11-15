@@ -239,11 +239,8 @@ pub fn not_running(e: &Error) -> bool {
 
 pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
 
-fn reconnecting() -> String {
-    format!(
-        "{} is reconnecting; try again in a moment",
-        herdr_core::GROUP_LABEL
-    )
+fn reconnecting(name: &str) -> String {
+    format!("{name} is reconnecting; try again in a moment")
 }
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
@@ -307,6 +304,12 @@ impl Runtime {
         self.rex.as_ref()
     }
 
+    /// A followed core or Rex, which can take a task the phone asks of it whatever herdr does.
+    pub fn follows_another(&self) -> bool {
+        self.core.as_ref().is_some_and(|c| c.following())
+            || self.rex.as_ref().is_some_and(|r| r.following())
+    }
+
     fn followed_rex(&self) -> Result<&Arc<Rex>, Error> {
         self.rex
             .as_ref()
@@ -326,28 +329,41 @@ impl Runtime {
     pub async fn task_host(&self, chosen: Option<Owner>) -> Result<Option<TaskHost>, Error> {
         let core = self.core.as_ref();
         let waiting = core.is_some_and(|c| c.reconnecting());
-        let down =
-            |name: &str| Error::Unavailable(format!("{name} is not running on this computer"));
+        let unavailable = |name: &str, reconnects: bool, refused: Option<String>| {
+            Error::Unavailable(match refused {
+                _ if reconnects => reconnecting(name),
+                Some(why) => format!("collied does not follow {name} on this computer: {why}"),
+                None => format!("{name} is not running on this computer"),
+            })
+        };
         match chosen {
             None => {}
             Some(Owner::Herdr) => {
                 return match herdr::ping(&self.herdr).await {
                     Ok(_) => Ok(None),
-                    Err(e) if not_running(&e) => Err(down("Herdr")),
+                    Err(e) if not_running(&e) => Err(unavailable("Herdr", false, None)),
                     Err(e) => Err(e),
                 };
             }
             Some(Owner::Core) => {
-                return match core.filter(|c| c.following()) {
-                    Some(c) => Ok(Some(TaskHost::Core(c.clone()))),
-                    None if waiting => Err(Error::Unavailable(reconnecting())),
-                    None => Err(down(herdr_core::GROUP_LABEL)),
+                return match core {
+                    Some(c) if c.following() => Ok(Some(TaskHost::Core(c.clone()))),
+                    _ => Err(unavailable(
+                        herdr_core::GROUP_LABEL,
+                        waiting,
+                        core.and_then(|c| c.refused()),
+                    )),
                 };
             }
             Some(Owner::Rex) => {
-                return match self.rex.as_ref().filter(|r| r.following()) {
-                    Some(r) => Ok(Some(TaskHost::Rex(r.clone()))),
-                    None => Err(down(rex::NAME)),
+                let rex = self.rex.as_ref();
+                return match rex {
+                    Some(r) if r.following() => Ok(Some(TaskHost::Rex(r.clone()))),
+                    _ => Err(unavailable(
+                        rex::NAME,
+                        rex.is_some_and(|r| r.reconnecting()),
+                        rex.and_then(|r| r.refused()),
+                    )),
                 };
             }
         }
@@ -362,7 +378,7 @@ impl Runtime {
             Ok(_) => Ok(None),
             Err(e) if not_running(&e) => host
                 .map(Some)
-                .ok_or_else(|| Error::Unsupported(reconnecting())),
+                .ok_or_else(|| Error::Unsupported(reconnecting(herdr_core::GROUP_LABEL))),
             Err(e) => Err(e),
         }
     }

@@ -595,6 +595,11 @@ impl Core {
         inner.live.is_none() && inner.hello.as_ref().is_some_and(|h| h.problem().is_none())
     }
 
+    /// Why collied does not follow the core that answered last.
+    pub fn refused(&self) -> Option<String> {
+        self.lock().hello.as_ref()?.problem()
+    }
+
     /// herdr's hooks exit without `HERDR_PANE_ID`, so herdr-core agents get their session
     /// here: Claude Code's from the file its foreground process keeps, Codex's from the hook.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {

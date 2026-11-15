@@ -712,12 +712,13 @@ impl From<TaskRuntime> for protocol::TaskRuntime {
     }
 }
 
-impl From<protocol::TaskRuntime> for TaskRuntime {
-    fn from(r: protocol::TaskRuntime) -> Self {
+impl TaskRuntime {
+    fn known(r: protocol::TaskRuntime) -> Option<Self> {
         match r {
-            protocol::TaskRuntime::Herdr => Self::Herdr,
-            protocol::TaskRuntime::HerdrCore => Self::HerdrCore,
-            protocol::TaskRuntime::Rex => Self::Rex,
+            protocol::TaskRuntime::Herdr => Some(Self::Herdr),
+            protocol::TaskRuntime::HerdrCore => Some(Self::HerdrCore),
+            protocol::TaskRuntime::Rex => Some(Self::Rex),
+            protocol::TaskRuntime::Unknown => None,
         }
     }
 }
@@ -2005,7 +2006,8 @@ impl CollieCore {
                 default_agent: o.default_agent.into(),
                 recent_cwds: o.recent_cwds.into_iter().map(String::from).collect(),
                 roots: o.roots.into_iter().map(String::from).collect(),
-                runtimes: (o.runtimes).map(|r| r.into_iter().map(Into::into).collect()),
+                runtimes: (o.runtimes)
+                    .map(|r| r.into_iter().filter_map(TaskRuntime::known).collect()),
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -5536,7 +5538,10 @@ mod tailnet_tests {
                                 default_agent: AgentKind::new("claude").unwrap(),
                                 recent_cwds: vec![Cwd::new("/src/collie").unwrap()],
                                 roots: vec![Cwd::new("/src").unwrap()],
-                                runtimes: Some(vec![protocol::TaskRuntime::Rex]),
+                                runtimes: Some(vec![
+                                    protocol::TaskRuntime::Rex,
+                                    protocol::TaskRuntime::Unknown,
+                                ]),
                             }))
                         }
                         Request::TaskFolders(p) => {

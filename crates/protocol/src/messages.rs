@@ -1054,6 +1054,8 @@ pub enum TaskRuntime {
     Herdr,
     HerdrCore,
     Rex,
+    #[serde(other)]
+    Unknown,
 }
 
 impl TaskNewParams {
@@ -1827,7 +1829,7 @@ pub struct TaskOptions {
     pub default_agent: AgentKind,
     pub recent_cwds: Vec<Cwd>,
     pub roots: Vec<Cwd>,
-    /// The runtimes a task can start in right now; absent from a collied that ignores
+    /// The runtimes a task can start in right now; absent from a collied that refuses
     /// `TaskNewParams::runtime`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtimes: Option<Vec<TaskRuntime>>,
@@ -2603,15 +2605,23 @@ mod tests {
             assert_eq!(p.runtime, Some(runtime));
             assert!(serde_json::to_string(&frame).unwrap().contains(extra));
         }
-        assert_eq!(
-            task(r#","runtime":"tmux""#).unwrap_err().code,
-            ErrorCode::InvalidParams
-        );
+        let Request::TaskNew(p) = task(r#","runtime":"tmux""#).unwrap().request else {
+            panic!("not a task");
+        };
+        assert_eq!(p.runtime, Some(TaskRuntime::Unknown));
         let older: TaskOptions = serde_json::from_str(
             r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"]}"#,
         )
         .unwrap();
         assert_eq!(older.runtimes, None);
+        let newer: TaskOptions = serde_json::from_str(
+            r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"],"runtimes":["rex","tmux"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            newer.runtimes,
+            Some(vec![TaskRuntime::Rex, TaskRuntime::Unknown])
+        );
     }
 
     #[test]

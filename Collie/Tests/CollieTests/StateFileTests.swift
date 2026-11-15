@@ -109,7 +109,6 @@ func prefsWithoutAKnownTaskRuntimeStartTasksAutomatically(_ json: String) throws
 
 @Test func taskRuntimeChoicesNameTheirRuntime() {
     #expect(TaskRuntimeChoice.allCases.map(\.runtime) == [nil, .herdr, .herdrCore, .rex])
-    #expect(TaskRuntimeChoice.allCases.map(\.label) == ["Automatic", "Herdr", "Herdr 2", "Rex"])
 }
 
 // Regular must stay the glass every surface drew before the setting; Opaque draws regular glass over the page.

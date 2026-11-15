@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use protocol::{
     AgentKind, Cwd, ErrorCode, OpId, PromptText, Response, TaskArchiveParams, TaskNewParams,
-    TerminalId,
+    TaskWorktreesParams, TerminalId,
 };
 use serde_json::{Value, json};
 
@@ -268,19 +268,51 @@ async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
         Ok(Some(TaskHost::Rex(_)))
     ));
 
-    let herdr_only = Runtime::new(root.join("herdr.sock"))
-        .with_core(Some(answered(&root, true)))
+    // Nothing there, a core collied refused, a Rex that lacks a method, a Rex lost.
+    let bare = Runtime::new(root.join("herdr.sock"))
+        .with_core(Some(Arc::new(crate::runtime::herdr_core::Core::new(
+            root.join("none.sock"),
+        ))))
         .with_rex(Some(Arc::new(Rex::new(root.join("no-rex.sock")))));
-    for rt in [&herdr_only, &Runtime::new(root.join("herdr.sock"))] {
-        assert_eq!(
-            refused(rt.task_host(Some(Owner::Core)).await),
-            "Herdr 2 is not running on this computer"
-        );
-        assert_eq!(
-            refused(rt.task_host(Some(Owner::Rex)).await),
-            "Rex is not running on this computer"
-        );
-    }
+    assert_eq!(
+        refused(bare.task_host(Some(Owner::Core)).await),
+        "Herdr 2 is not running on this computer"
+    );
+    assert_eq!(
+        refused(bare.task_host(Some(Owner::Rex)).await),
+        "Rex is not running on this computer"
+    );
+    let lacking = Fake::start().await;
+    lacking
+        .state()
+        .methods
+        .retain(|m| *m != "session.list_blocks");
+    let unfollowed = Arc::new(Rex::new(lacking.socket.clone()));
+    assert!(!unfollowed.attempt().await.1);
+    let refusing = Runtime::new(root.join("herdr.sock"))
+        .with_core(Some(answered(&root, true)))
+        .with_rex(Some(unfollowed));
+    let why = refused(refusing.task_host(Some(Owner::Core)).await);
+    assert!(
+        why.starts_with(
+            "collied does not follow Herdr 2 on this computer: speaks protocol generation"
+        ),
+        "{why}"
+    );
+    assert_eq!(
+        refused(refusing.task_host(Some(Owner::Rex)).await),
+        "collied does not follow Rex on this computer: lacks session.list_blocks"
+    );
+    let dropping = Fake::start().await;
+    let lost = Arc::new(Rex::new(dropping.socket.clone()));
+    let attempt = follow(&lost).await;
+    dropping.drop_connection();
+    assert!(attempt.await.unwrap().1, "followed before it was lost");
+    let reconnecting = Runtime::new(root.join("herdr.sock")).with_rex(Some(lost));
+    assert_eq!(
+        refused(reconnecting.task_host(Some(Owner::Rex)).await),
+        "Rex is reconnecting; try again in a moment"
+    );
 
     // A reconnecting core holds Automatic back, not a task asked of Rex.
     let waiting = Runtime::new(root.join("no-herdr.sock"))
@@ -366,6 +398,10 @@ async fn a_task_its_chosen_runtime_refuses_starts_nowhere_and_creates_no_folder(
         runtime: Some(protocol::TaskRuntime::Rex),
     };
     let yes: Authorized = Arc::new(|| true);
+    let unknown = TaskNewParams {
+        runtime: Some(protocol::TaskRuntime::Unknown),
+        ..p.clone()
+    };
     let (reply, cwd) = drive.task_new(p, &yes).await;
     assert_eq!(
         reply.unwrap_err(),
@@ -375,7 +411,89 @@ async fn a_task_its_chosen_runtime_refuses_starts_nowhere_and_creates_no_folder(
         )
     );
     assert!(cwd.is_none());
+    let (reply, cwd) = drive.task_new(unknown, &yes).await;
+    assert_eq!(
+        reply.unwrap_err(),
+        (
+            ErrorCode::InvalidParams,
+            "collied on this computer does not know that runtime".to_owned()
+        )
+    );
+    assert!(cwd.is_none());
     assert!(!root.join("made").exists());
+}
+
+// A task asked of Rex must be possible to set up while herdr or herdr-core is the problem;
+// Automatic still refuses the start as it did.
+#[tokio::test]
+async fn options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not() {
+    let fake = Fake::start().await;
+    let (_dir, root, repo, _) = worktree();
+    let (rex, _) = followed(&fake, &root).await;
+    let busy = root.join("busy.sock");
+    let listener = tokio::net::UnixListener::bind(&busy).unwrap();
+    let closer = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            drop(stream);
+        }
+    });
+    let busy_herdr = Driver::new(busy, vec![claude_kind()], std::slice::from_ref(&root))
+        .unwrap()
+        .with_rex(Some(rex.clone()));
+    let reconnecting = Driver::new(
+        root.join("no-herdr.sock"),
+        vec![claude_kind()],
+        std::slice::from_ref(&root),
+    )
+    .unwrap()
+    .with_core(Some(answered(&root, false)))
+    .with_rex(Some(rex));
+    let yes: Authorized = Arc::new(|| true);
+    for drive in [&busy_herdr, &reconnecting] {
+        match drive.task_options().await {
+            Ok(Response::TaskOptions(o)) => {
+                assert_eq!(o.runtimes, Some(vec![protocol::TaskRuntime::Rex]));
+            }
+            Err((code, why)) => {
+                // No Claude Code on this machine's PATH: the kinds, not herdr, stop it.
+                assert_eq!(code, ErrorCode::NotFound, "{why}");
+                assert!(why.contains("Herdr 2 or Rex starts"), "{why}");
+            }
+            Ok(other) => panic!("{other:?}"),
+        }
+        let listed = TaskWorktreesParams {
+            cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+        };
+        assert!(matches!(
+            drive.task_worktrees(listed, &yes).await,
+            Ok(Response::TaskWorktrees { .. })
+        ));
+    }
+    let automatic = TaskNewParams {
+        op_id: OpId::new("n".repeat(22)).unwrap(),
+        cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+        agent: claude_kind(),
+        prompt: Some(PromptText::new("go".to_owned()).unwrap()),
+        label: None,
+        new_folder: None,
+        worktree: None,
+        clone: None,
+        resume: None,
+        ultracode: false,
+        runtime: None,
+    };
+    let (reply, _) = busy_herdr.task_new(automatic.clone(), &yes).await;
+    assert_eq!(reply.unwrap_err().0, ErrorCode::HerdrUnavailable);
+    let (reply, _) = reconnecting.task_new(automatic, &yes).await;
+    assert_eq!(
+        reply.unwrap_err(),
+        (
+            ErrorCode::Internal,
+            "Herdr 2 is reconnecting; try again in a moment".to_owned()
+        )
+    );
+    closer.abort();
+    assert!(fake.state().created.is_empty());
 }
 
 /// Rex's calls that end sessions, windows or the server, or take a block from Rex.app.

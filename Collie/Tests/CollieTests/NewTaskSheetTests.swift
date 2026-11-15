@@ -61,7 +61,8 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex])
 
         let older = await start(prefs, nil)
-        XCTAssertEqual(older.error, NewTaskModel.collieTooOld)
+        XCTAssertFalse(older.canStart)
+        XCTAssertNil(older.error)
         XCTAssertEqual(older.runtimeProblem, NewTaskModel.collieTooOld)
         XCTAssertEqual(older.prompt, "keep this prompt")
         XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex], "nothing sent to an older collied")
@@ -70,13 +71,14 @@ final class NewTaskSheetTests: XCTestCase {
         core.state.withLock { $0.options.runtimes = [.herdr] }
         let missing = NewTaskModel(core: core, machines: [machine], prefsFile: prefs)
         await missing.loadOptions()
-        XCTAssertEqual(missing.runtimeProblem, "Rex is not running on this computer")
+        XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
         missing.prompt = "keep this prompt"
         missing.cwd = "/Users/me/app"
-        core.set(error: .InvalidInput(field: nil, message: "Rex is not running on this computer"))
+        core.set(error: .InvalidInput(field: nil, message: "Rex is reconnecting; try again in a moment"))
         let refused = await missing.start()
         XCTAssertNil(refused)
-        XCTAssertEqual(missing.error, "Rex is not running on this computer")
+        XCTAssertEqual(missing.error, "Rex is reconnecting; try again in a moment")
+        XCTAssertNil(missing.runtimeProblem, "one message on screen")
         XCTAssertEqual(missing.prompt, "keep this prompt")
         XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex, .rex])
     }

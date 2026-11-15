@@ -155,18 +155,18 @@ final class NewTaskModel {
         )
     }
 
-    /// What `task.options` says stops the chosen runtime; collied's refusal is what counts.
+    /// What `task.options` says stops the chosen runtime, not why: collied's refusal says that, and replaces it.
     var runtimeProblem: String? {
-        guard let runtime = runtimeChoice.runtime, let options else { return nil }
+        guard error == nil, let runtime = runtimeChoice.runtime, let options else { return nil }
         guard let offered = options.runtimes else { return Self.collieTooOld }
-        return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not running on this computer"
+        return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not available on this computer right now"
     }
 
     static let collieTooOld = "collied on this computer is too old to choose where tasks start. Update it, or set Start tasks in to Automatic in Settings."
 
     var canStart: Bool {
         guard !cancelled, phase == .editing, machineId != nil, upload == nil, !dictation.isActive else { return false }
-        guard runtimeChoice == .automatic || options != nil else { return false }
+        guard runtimeChoice == .automatic || options?.runtimes != nil else { return false }
         if location == .resume {
             guard let session, let folder, sessionsFolder == folder else { return false }
             return sessions?.contains { $0.sessionId == session.sessionId } == true
@@ -298,10 +298,7 @@ final class NewTaskModel {
         let ultracode = agent == "claude" && self.ultracode
         let runtime = runtimeChoice.runtime
         // An older collied refuses the field, and starting the task elsewhere would ignore the choice.
-        if runtime != nil, options?.runtimes == nil {
-            error = Self.collieTooOld
-            return nil
-        }
+        if runtime != nil, options?.runtimes == nil { return nil }
         phase = .starting
         error = nil
         let started: TaskStarted

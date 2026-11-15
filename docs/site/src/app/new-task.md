@@ -48,7 +48,7 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 - **Automatic**, the default: herdr while it runs, otherwise Herdr 2, otherwise Rex.
 - **Herdr**, **Herdr 2** or **Rex**: there and nowhere else, for prompts, folders, clones, Git worktrees, pull requests and Resume.
 
-When the machine last reported the runtime you chose as missing, a red line under the location says so before you tap **Start**. If the machine cannot start the task there, the sheet says why, such as "Rex is not running on this computer", and keeps your prompt; nothing starts anywhere else. A machine whose `collied` is too old for the setting starts no task until you update `collied` or choose Automatic.
+When the machine last reported the runtime you chose as missing, a red line under the location says so before you tap **Start**. If the machine cannot start the task there, the sheet says why, such as "Rex is not running on this computer" or "Rex is reconnecting; try again in a moment", and keeps your prompt; nothing starts anywhere else. The **Agent** list can still offer Copilot CLI, which only herdr starts: with Herdr 2 or Rex chosen, **Start** refuses it before anything is created. A machine whose `collied` is too old for the setting says so under the location and keeps **Start** dimmed until you update `collied` or choose Automatic.
 
 ## Archive
 

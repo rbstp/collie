@@ -1000,8 +1000,14 @@ impl Driver {
     }
 
     pub async fn task_options(&self) -> Reply {
-        let host = self.runtime.task_host(None).await.map_err(herdr_fail)?;
-        let (known, snap) = if host.is_some() {
+        // A herdr that does not answer, or a core that reconnects, leaves the followed core or
+        // Rex to answer, so a task the phone asks of one of them can still be set up.
+        let elsewhere = match self.runtime.task_host(None).await {
+            Ok(host) => host.map(|h| h.name()),
+            Err(_) if self.runtime.follows_another() => Some("Herdr 2 or Rex"),
+            Err(e) => return Err(herdr_fail(e)),
+        };
+        let (known, snap) = if elsewhere.is_some() {
             let known: Vec<String> = (runtime::TASK_KINDS.iter())
                 .filter(|k| runtime::task_cli(k).is_some())
                 .map(|k| (*k).to_owned())
@@ -1024,10 +1030,9 @@ impl Driver {
         let Some(default_agent) = agents.first().cloned() else {
             return fail(
                 ErrorCode::NotFound,
-                match host {
-                    Some(host) => format!(
-                        "no allowed agent kind that {} starts (Claude Code, Codex) is installed",
-                        host.name()
+                match elsewhere {
+                    Some(name) => format!(
+                        "no allowed agent kind that {name} starts (Claude Code, Codex) is installed"
                     ),
                     None => "no allowed agent kind is known to herdr".to_owned(),
                 },
@@ -1054,9 +1059,8 @@ impl Driver {
             .iter()
             .filter_map(|r| r.to_str().and_then(|r| Cwd::new(r).ok()))
             .collect();
-        // herdr answered unless another runtime took the task in its place.
         let runtimes = [
-            (host.is_none(), TaskRuntime::Herdr),
+            (elsewhere.is_none(), TaskRuntime::Herdr),
             (
                 self.runtime.core().is_some_and(|c| c.following()),
                 TaskRuntime::HerdrCore,
@@ -1091,9 +1095,11 @@ impl Driver {
     pub async fn task_worktrees(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
         authorized(auth)?;
         let requested = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
-        let core = (self.runtime.task_host(None).await)
-            .map_err(herdr_fail)?
-            .is_some();
+        let core = match self.runtime.task_host(None).await {
+            Ok(host) => host.is_some(),
+            Err(_) if self.runtime.follows_another() => true,
+            Err(e) => return Err(herdr_fail(e)),
+        };
         let list = self.worktree_list(&requested, core).await?;
         let source =
             resolve_cwd(&list.source.source_checkout_path, &self.roots).map_err(invalid)?;
@@ -1197,11 +1203,21 @@ impl Driver {
         };
         // Decided before any folder is created or cloned, so a task herdr-core or Rex cannot
         // start leaves nothing behind.
-        let chosen = p.runtime.map(|r| match r {
-            TaskRuntime::Herdr => Owner::Herdr,
-            TaskRuntime::HerdrCore => Owner::Core,
-            TaskRuntime::Rex => Owner::Rex,
-        });
+        let chosen = match p.runtime {
+            None => None,
+            Some(TaskRuntime::Herdr) => Some(Owner::Herdr),
+            Some(TaskRuntime::HerdrCore) => Some(Owner::Core),
+            Some(TaskRuntime::Rex) => Some(Owner::Rex),
+            Some(TaskRuntime::Unknown) => {
+                return (
+                    fail(
+                        ErrorCode::InvalidParams,
+                        "collied on this computer does not know that runtime",
+                    ),
+                    None,
+                );
+            }
+        };
         let host = match self.runtime.task_host(chosen).await {
             Ok(host) => host,
             Err(e) => return (Err(herdr_fail(e)), None),
@@ -1413,6 +1429,17 @@ impl Driver {
             fetch_pull_request(&checkout, *number, head, deadline).await?;
         }
         authorized(auth)?;
+        // One task per checkout across runtimes: archiving either would remove the checkout
+        // from under the other.
+        if matches!(worktree, TaskWorktree::Open { .. }) {
+            let other = match &host {
+                Some(_) => self.herdr_in_checkout(&path).await.map(str::to_owned),
+                None => self.followed_in_checkout(&path).await,
+            };
+            if let Some(why) = other {
+                return fail(ErrorCode::InvalidParams, why);
+            }
+        }
         if let Some(host) = host {
             let expected = match worktree {
                 TaskWorktree::Create { branch } => {
@@ -2089,6 +2116,9 @@ impl Driver {
             }) {
                 return Err(invalid("worktree is no longer linked to this workspace"));
             }
+            if let Some(why) = self.followed_in_checkout(&checkout).await {
+                return Err(invalid(&format!("{why}; nothing was closed")));
+            }
             authorized(auth)?;
             if let Some((expected, head, _)) = merged
                 && !(checkout == *expected
@@ -2224,6 +2254,42 @@ impl Driver {
         })
     }
 
+    /// Why a herdr pane or workspace may work in `checkout`: a pane whose start or foreground
+    /// folder lies in it, or a workspace that has it open. herdr must answer unless it is not
+    /// running at all.
+    async fn herdr_in_checkout(&self, checkout: &Cwd) -> Option<&'static str> {
+        let snapshot = match self.runtime.herdr_snapshot().await {
+            Ok(snapshot) => snapshot,
+            Err(e) if runtime::not_running(&e) => return None,
+            Err(_) => return Some("herdr did not answer"),
+        };
+        if (snapshot.panes.iter()).any(|p| {
+            works_in(checkout, p.cwd.as_deref()) || works_in(checkout, p.foreground_cwd.as_deref())
+        }) {
+            return Some("a herdr pane works in this checkout");
+        }
+        let Ok(listed) = self.runtime.worktree_list(checkout.as_str()).await else {
+            return Some("herdr did not list the worktrees");
+        };
+        let same = |path: &str| resolved(path) == Path::new(checkout.as_str());
+        (listed.worktrees.iter())
+            .any(|w| w.open_workspace_id.is_some() && same(&w.path))
+            .then_some("herdr has this checkout open in a workspace")
+    }
+
+    /// Why a terminal of a followed core or Rex may work in `checkout`.
+    async fn followed_in_checkout(&self, checkout: &Cwd) -> Option<String> {
+        match self.runtime.occupants(Owner::Herdr).await {
+            Err(why) => Some(why),
+            Ok(all) => (all.iter())
+                .any(|o| {
+                    works_in(checkout, Some(&o.cwd))
+                        || works_in(checkout, o.foreground_cwd.as_deref())
+                })
+                .then(|| "a Herdr 2 or Rex terminal works in this checkout".to_owned()),
+        }
+    }
+
     /// Like herdr's `worktree.remove`: the task's terminal ends, then the checkout goes.
     /// Nothing is closed while anything else may work in it: any other herdr-core terminal or
     /// Rex block, shells and other tasks included, a herdr pane, or a herdr workspace that has
@@ -2237,36 +2303,15 @@ impl Driver {
         checkout: &Cwd,
         auth: &Authorized,
     ) -> Result<String, Fail> {
-        let resolved =
-            |path: &str| std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
-        let inside = |cwd: Option<&str>| {
-            cwd.filter(|c| !c.is_empty())
-                .is_some_and(|cwd| resolved(cwd).starts_with(checkout.as_str()))
-        };
-        let same = |path: &str| resolved(path) == Path::new(checkout.as_str());
+        let inside = |cwd: Option<&str>| works_in(checkout, cwd);
         let refused = |why: &str| {
             fail(
                 ErrorCode::InvalidParams,
                 format!("{why}; nothing was closed"),
             )
         };
-        let herdr = match self.runtime.herdr_snapshot().await {
-            Ok(snapshot) => Some(snapshot),
-            Err(e) if runtime::not_running(&e) => None,
-            Err(_) => return refused("herdr did not answer"),
-        };
-        if let Some(snapshot) = &herdr {
-            if (snapshot.panes.iter())
-                .any(|p| inside(p.cwd.as_deref()) || inside(p.foreground_cwd.as_deref()))
-            {
-                return refused("a herdr pane works in this checkout");
-            }
-            let Ok(listed) = self.runtime.worktree_list(checkout.as_str()).await else {
-                return refused("herdr did not list the worktrees");
-            };
-            if (listed.worktrees.iter()).any(|w| w.open_workspace_id.is_some() && same(&w.path)) {
-                return refused("herdr has this checkout open in a workspace");
-            }
+        if let Some(why) = self.herdr_in_checkout(checkout).await {
+            return refused(why);
         }
         // Read from a followed core and Rex only: one whose connection dropped knows nothing
         // about what works in the checkout.
@@ -2511,6 +2556,16 @@ fn host_kinds(host: &TaskHost) -> String {
         "{} starts Claude Code and Codex, and only once found on the machine",
         host.name()
     )
+}
+
+fn resolved(path: &str) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+}
+
+/// `cwd`, symlinks resolved, lies in `checkout`.
+fn works_in(checkout: &Cwd, cwd: Option<&str>) -> bool {
+    cwd.filter(|c| !c.is_empty())
+        .is_some_and(|cwd| resolved(cwd).starts_with(checkout.as_str()))
 }
 
 fn other_source(core: bool) -> &'static str {
@@ -3468,6 +3523,106 @@ mod tests {
             message.ends_with("the worktree root pane is occupied"),
             "{message}"
         );
+    }
+
+    fn open(repo: &Path, checkout: &Path, runtime: Option<TaskRuntime>) -> TaskNewParams {
+        TaskNewParams {
+            op_id: OpId::new("o".repeat(22)).unwrap(),
+            cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+            agent: AgentKind::new("claude").unwrap(),
+            prompt: Some(protocol::PromptText::new("go".to_owned()).unwrap()),
+            label: None,
+            new_folder: None,
+            worktree: Some(TaskWorktree::Open {
+                path: Cwd::new(checkout.to_str().unwrap()).unwrap(),
+            }),
+            clone: None,
+            resume: None,
+            ultracode: false,
+            runtime,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_herdr_core_open_refuses_a_checkout_a_herdr_pane_works_in() {
+        let (_dir, root, repo, checkout) = core_tests::worktree();
+        let core = core_tests::core_of(&root, serde_json::json!([]));
+        static CHECKOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        CHECKOUT.set(checkout.display().to_string()).unwrap();
+        core_tests::fake_herdr(&root.join("herdr.sock"), |method| {
+            (method == "session.snapshot").then(|| {
+                serde_json::json!({"type": "session_snapshot", "snapshot": {"workspaces": [],
+                    "agents": [], "panes": [{"pane_id": "w1:p1", "terminal_id": "term_1",
+                    "workspace_id": "w1", "tab_id": "w1:t1", "cwd": "/",
+                    "foreground_cwd": CHECKOUT.get().unwrap()}]}})
+            })
+        });
+        let drive = core_driver(&root, core.clone());
+        let yes: Authorized = Arc::new(|| true);
+        let p = open(&repo, &checkout, Some(TaskRuntime::HerdrCore));
+        let source = Cwd::new(repo.to_str().unwrap()).unwrap();
+        let refused = drive
+            .start_worktree_task(p, &source, Some(TaskHost::Core(core)), &yes)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused,
+            (
+                ErrorCode::InvalidParams,
+                "a herdr pane works in this checkout".to_owned()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn herdr_neither_opens_nor_archives_a_checkout_a_herdr_core_terminal_works_in() {
+        let (_dir, root, repo, checkout) = core_tests::worktree();
+        let shell = core_tests::codex_in(&checkout, serde_json::json!({}));
+        let core = core_tests::core_of(&root, serde_json::json!([shell]));
+        static LISTED: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+        LISTED
+            .set((repo.display().to_string(), checkout.display().to_string()))
+            .unwrap();
+        core_tests::fake_herdr(&root.join("herdr.sock"), |method| {
+            let (repo, checkout) = LISTED.get().unwrap();
+            match method {
+                "worktree.list" => Some(serde_json::json!({"type": "worktree_list",
+                    "source": {"source_checkout_path": repo},
+                    "worktrees": [{"path": checkout, "branch": "feat", "open_workspace_id": "w1",
+                        "is_bare": false, "is_linked_worktree": true}]})),
+                "session.snapshot" => Some(serde_json::json!({"type": "session_snapshot",
+                    "snapshot": {"agents": [],
+                    "workspaces": [{"workspace_id": "w1", "number": 1, "label": "feat",
+                        "agent_status": "idle", "worktree": {"repo_root": repo,
+                        "checkout_path": checkout, "is_linked_worktree": true}}],
+                    "panes": [{"pane_id": "w1:p1", "terminal_id": "term_1", "workspace_id": "w1",
+                        "tab_id": "w1:t1", "cwd": checkout}]}})),
+                _ => None,
+            }
+        });
+        let drive = core_driver(&root, core);
+        let yes: Authorized = Arc::new(|| true);
+        let source = Cwd::new(repo.to_str().unwrap()).unwrap();
+        let refused = drive
+            .start_worktree_task(open(&repo, &checkout, None), &source, None, &yes)
+            .await
+            .unwrap_err();
+        let why = "a Herdr 2 or Rex terminal works in this checkout";
+        assert_eq!(refused, (ErrorCode::InvalidParams, why.to_owned()));
+        let archive = TaskArchiveParams {
+            op_id: OpId::new("a".repeat(22)).unwrap(),
+            terminal_id: TerminalId::new("term_1".to_owned()).unwrap(),
+            confirm: true,
+        };
+        let refused = drive.task_archive(archive, &yes).await.unwrap_err();
+        assert_eq!(
+            refused,
+            (
+                ErrorCode::InvalidParams,
+                format!("{why}; nothing was closed")
+            )
+        );
+        assert!(checkout.exists());
     }
 
     #[test]
