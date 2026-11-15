@@ -28,7 +28,7 @@ async fn followed(fake: &Fake, root: &Path) -> (Arc<Rex>, Runtime) {
 }
 
 async fn host(rt: &Runtime) -> TaskHost {
-    let host = rt.task_host().await.unwrap().expect("a task host");
+    let host = rt.task_host(None).await.unwrap().expect("a task host");
     assert_eq!(host.owner(), Owner::Rex);
     host
 }
@@ -197,14 +197,17 @@ async fn tasks_start_in_herdr_then_herdr_core_then_rex() {
     let dir = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
     let (rex, rt) = followed(&fake, &root).await;
-    assert!(matches!(rt.task_host().await, Ok(Some(TaskHost::Rex(_)))));
+    assert!(matches!(
+        rt.task_host(None).await,
+        Ok(Some(TaskHost::Rex(_)))
+    ));
 
     let core = core_of(&root, json!([]));
     let both = Runtime::new(root.join("no-herdr.sock"))
         .with_core(Some(core))
         .with_rex(Some(rex.clone()));
     assert!(matches!(
-        both.task_host().await,
+        both.task_host(None).await,
         Ok(Some(TaskHost::Core(_)))
     ));
 
@@ -214,28 +217,165 @@ async fn tasks_start_in_herdr_then_herdr_core_then_rex() {
         .with_core(Some(answered(&root, false)))
         .with_rex(Some(rex.clone()));
     assert!(matches!(
-        waiting.task_host().await,
+        waiting.task_host(None).await,
         Err(Error::Unsupported(m)) if m.starts_with("Herdr 2 is reconnecting")
     ));
     let refused = Runtime::new(root.join("no-herdr.sock"))
         .with_core(Some(answered(&root, true)))
         .with_rex(Some(rex.clone()));
     assert!(matches!(
-        refused.task_host().await,
+        refused.task_host(None).await,
         Ok(Some(TaskHost::Rex(_)))
     ));
 
     let unfollowed = Runtime::new(root.join("no-herdr.sock"))
         .with_rex(Some(Arc::new(Rex::new(fake.socket.clone()))));
-    assert!(matches!(unfollowed.task_host().await, Ok(None)));
+    assert!(matches!(unfollowed.task_host(None).await, Ok(None)));
 
     fake_herdr(&root.join("herdr.sock"), |_| None);
     let with_herdr = Runtime::new(root.join("herdr.sock")).with_rex(Some(rex));
     assert!(
-        matches!(with_herdr.task_host().await, Ok(None)),
+        matches!(with_herdr.task_host(None).await, Ok(None)),
         "herdr answers, so the task starts there"
     );
     assert!(fake.state().created.is_empty());
+}
+
+#[tokio::test]
+async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (rex, _) = followed(&fake, &root).await;
+    let refused = |host: Result<Option<TaskHost>, Error>| match host {
+        Err(Error::Unavailable(why)) => why,
+        Err(e) => panic!("not a refusal: {e}"),
+        Ok(host) => panic!("started in {:?}", host.map(|h| h.owner())),
+    };
+    let core = || Some(core_of(&root, json!([])));
+
+    fake_herdr(&root.join("herdr.sock"), |_| None);
+    let all = Runtime::new(root.join("herdr.sock"))
+        .with_core(core())
+        .with_rex(Some(rex.clone()));
+    assert!(matches!(all.task_host(Some(Owner::Herdr)).await, Ok(None)));
+    assert!(matches!(
+        all.task_host(Some(Owner::Core)).await,
+        Ok(Some(TaskHost::Core(_)))
+    ));
+    assert!(matches!(
+        all.task_host(Some(Owner::Rex)).await,
+        Ok(Some(TaskHost::Rex(_)))
+    ));
+
+    let herdr_only = Runtime::new(root.join("herdr.sock"))
+        .with_core(Some(answered(&root, true)))
+        .with_rex(Some(Arc::new(Rex::new(root.join("no-rex.sock")))));
+    for rt in [&herdr_only, &Runtime::new(root.join("herdr.sock"))] {
+        assert_eq!(
+            refused(rt.task_host(Some(Owner::Core)).await),
+            "Herdr 2 is not running on this computer"
+        );
+        assert_eq!(
+            refused(rt.task_host(Some(Owner::Rex)).await),
+            "Rex is not running on this computer"
+        );
+    }
+
+    // A reconnecting core holds Automatic back, not a task asked of Rex.
+    let waiting = Runtime::new(root.join("no-herdr.sock"))
+        .with_core(Some(answered(&root, false)))
+        .with_rex(Some(rex.clone()));
+    assert!(matches!(
+        waiting.task_host(None).await,
+        Err(Error::Unsupported(_))
+    ));
+    assert_eq!(
+        refused(waiting.task_host(Some(Owner::Herdr)).await),
+        "Herdr is not running on this computer"
+    );
+    assert_eq!(
+        refused(waiting.task_host(Some(Owner::Core)).await),
+        "Herdr 2 is reconnecting; try again in a moment"
+    );
+    assert!(matches!(
+        waiting.task_host(Some(Owner::Rex)).await,
+        Ok(Some(TaskHost::Rex(_)))
+    ));
+
+    // A herdr that runs but does not answer fails Herdr with its own error, not a refusal.
+    let closing = root.join("closing.sock");
+    let listener = tokio::net::UnixListener::bind(&closing).unwrap();
+    let closer = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            drop(stream);
+        }
+    });
+    assert!(matches!(
+        Runtime::new(closing).task_host(Some(Owner::Herdr)).await,
+        Err(Error::Closed)
+    ));
+    closer.abort();
+
+    // One that never answers would hold a task for its 5 s timeout: one asked of the core or
+    // Rex never waits on herdr.
+    let busy = root.join("busy.sock");
+    let listener = tokio::net::UnixListener::bind(&busy).unwrap();
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            open.push(stream);
+        }
+    });
+    let stuck = Runtime::new(busy).with_core(core()).with_rex(Some(rex));
+    let quick = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+        let core = stuck.task_host(Some(Owner::Core)).await;
+        let rex = stuck.task_host(Some(Owner::Rex)).await;
+        (core, rex)
+    });
+    let (core, rex) = quick.await.expect("a chosen runtime waited on herdr");
+    assert!(matches!(core, Ok(Some(TaskHost::Core(_)))));
+    assert!(matches!(rex, Ok(Some(TaskHost::Rex(_)))));
+    held.abort();
+    assert!(fake.state().created.is_empty());
+}
+
+#[tokio::test]
+async fn a_task_its_chosen_runtime_refuses_starts_nowhere_and_creates_no_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    fake_herdr(&root.join("herdr.sock"), |_| None);
+    let drive = Driver::new(
+        root.join("herdr.sock"),
+        vec![claude_kind()],
+        std::slice::from_ref(&root),
+    )
+    .unwrap()
+    .with_rex(Some(Arc::new(Rex::new(root.join("no-rex.sock")))));
+    let p = TaskNewParams {
+        op_id: OpId::new("n".repeat(22)).unwrap(),
+        cwd: Cwd::new(root.to_str().unwrap()).unwrap(),
+        agent: claude_kind(),
+        prompt: Some(PromptText::new("go".to_owned()).unwrap()),
+        label: None,
+        new_folder: Some(protocol::FolderName::new("made").unwrap()),
+        worktree: None,
+        clone: None,
+        resume: None,
+        ultracode: false,
+        runtime: Some(protocol::TaskRuntime::Rex),
+    };
+    let yes: Authorized = Arc::new(|| true);
+    let (reply, cwd) = drive.task_new(p, &yes).await;
+    assert_eq!(
+        reply.unwrap_err(),
+        (
+            ErrorCode::InvalidParams,
+            "Rex is not running on this computer".to_owned()
+        )
+    );
+    assert!(cwd.is_none());
+    assert!(!root.join("made").exists());
 }
 
 /// Rex's calls that end sessions, windows or the server, or take a block from Rex.app.
@@ -593,6 +733,7 @@ async fn no_prompt_reaches_an_idle_rex_claude_code_that_shows_a_menu() {
         clone: None,
         resume: None,
         ultracode: false,
+        runtime: None,
     };
     let yes: Authorized = Arc::new(|| true);
     let failed = drive_in(dir.path(), rex.clone())

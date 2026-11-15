@@ -1,3 +1,4 @@
+import CollieCore
 import Foundation
 import SwiftUI
 
@@ -18,6 +19,7 @@ struct DevicePrefs: StateFile, Equatable {
     var archiveOnMerge: Bool?
     var accent = AppAccent.blue
     var glass = AppGlass.regular
+    var taskRuntime = TaskRuntimeChoice.automatic
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
     var taskUltracode: [String: Bool] = [:]
@@ -70,6 +72,7 @@ extension DevicePrefs {
         archiveOnMerge = try? container.decodeIfPresent(Bool.self, forKey: .archiveOnMerge)
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         glass = (try? container.decodeIfPresent(AppGlass.self, forKey: .glass)) ?? defaults.glass
+        taskRuntime = (try? container.decodeIfPresent(TaskRuntimeChoice.self, forKey: .taskRuntime)) ?? defaults.taskRuntime
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
         taskUltracode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskUltracode)) ?? defaults.taskUltracode
     }
@@ -165,6 +168,31 @@ enum AppGlass: String, Codable, CaseIterable {
     var effect: Glass { self == .clear ? .clear : .regular }
     /// Clear glass needs the dimming color behind it to stay legible, and Opaque hides the content behind it.
     var dims: Bool { self != .regular }
+}
+
+enum TaskRuntimeChoice: String, Codable, CaseIterable {
+    case automatic
+    case herdr
+    case herdrCore
+    case rex
+
+    var label: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .herdr: "Herdr"
+        case .herdrCore: "Herdr 2"
+        case .rex: "Rex"
+        }
+    }
+
+    var runtime: TaskRuntime? {
+        switch self {
+        case .automatic: nil
+        case .herdr: .herdr
+        case .herdrCore: .herdrCore
+        case .rex: .rex
+        }
+    }
 }
 
 enum AgentsLayout: String, Codable, CaseIterable {

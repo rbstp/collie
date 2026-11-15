@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use collie_core::{
-    AgentKey, CollieCore, CoreError, TaskFolders, TaskOptions, TaskStarted, TerminalSource,
+    AgentKey, CollieCore, CoreError, TaskFolders, TaskOptions, TaskRuntime, TaskStarted,
+    TerminalSource,
 };
 use collied::config::TasksConfig;
 use collied::control::{Reply, Request};
@@ -312,6 +313,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             default_agent: "claude".into(),
             recent_cwds: vec![app_real.to_str().unwrap().into()],
             roots: vec![projects_real.to_str().unwrap().into()],
+            runtimes: Some(vec![TaskRuntime::Herdr]),
         }
     );
     let before = herdr.mutations();
@@ -340,12 +342,38 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 None,
                 None,
                 false,
+                None,
             )
             .await
             .unwrap_err();
         assert!(
             matches!(&err, CoreError::InvalidInput { message: msg, .. } if msg.contains(message)),
             "{cwd} {agent}: {err:?}"
+        );
+    }
+    for (runtime, message) in [
+        (
+            TaskRuntime::HerdrCore,
+            "Herdr 2 is not running on this computer",
+        ),
+        (TaskRuntime::Rex, "Rex is not running on this computer"),
+    ] {
+        let err = core
+            .task_new(
+                m.clone(),
+                s(&app),
+                "claude".into(),
+                "go".into(),
+                None,
+                None,
+                false,
+                Some(runtime),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::InvalidInput { message: msg, .. } if msg == message),
+            "{err:?}"
         );
     }
     assert_eq!(herdr.mutations(), before, "a rejected task reached herdr");
@@ -358,6 +386,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             Some("app task".into()),
             None,
             false,
+            None,
         )
         .await
         .unwrap();
@@ -421,6 +450,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             Some("fresh task".into()),
             Some("fresh".into()),
             false,
+            None,
         )
     };
     assert_eq!(new_task().await.unwrap().terminal_id, NEW_TERMINAL);
@@ -447,6 +477,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "Set it up".into(),
             None,
             false,
+            None,
         )
     };
     let err = clone("file:///tmp/fresh").await.unwrap_err();
@@ -737,7 +768,16 @@ async fn live_scenario(
     let s = |p: &Path| p.to_str().unwrap().to_owned();
     for cwd in [s(&work.join("escape")), "/tmp".into()] {
         let err = core
-            .task_new(m.clone(), cwd, "pi".into(), "go".into(), None, None, false)
+            .task_new(
+                m.clone(),
+                cwd,
+                "pi".into(),
+                "go".into(),
+                None,
+                None,
+                false,
+                None,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::InvalidInput { .. }), "{err:?}");
@@ -777,6 +817,7 @@ async fn live_scenario(
             Some("e2e task".into()),
             None,
             false,
+            None,
         )
         .await
         .unwrap();

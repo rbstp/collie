@@ -2827,12 +2827,12 @@ pub(crate) mod tests {
         let rt =
             Runtime::new(herdr.clone()).with_core(Some(followed(dir.path().join("core.sock"))));
         assert!(
-            rt.task_host().await.unwrap().is_some(),
+            rt.task_host(None).await.unwrap().is_some(),
             "herdr is not running"
         );
         let unfollowed = Runtime::new(herdr.clone())
             .with_core(Some(Arc::new(Core::new(dir.path().join("core.sock")))));
-        assert!(unfollowed.task_host().await.unwrap().is_none());
+        assert!(unfollowed.task_host(None).await.unwrap().is_none());
 
         // herdr runs but takes the connection and closes it unanswered.
         let listener = tokio::net::UnixListener::bind(&herdr).unwrap();
@@ -2841,13 +2841,13 @@ pub(crate) mod tests {
                 drop(stream);
             }
         });
-        assert!(rt.task_host().await.is_err(), "herdr does not answer");
+        assert!(rt.task_host(None).await.is_err(), "herdr does not answer");
         busy.abort();
         let _ = busy.await;
         std::fs::remove_file(&herdr).unwrap();
 
         fake_herdr(&herdr, |_| None);
-        assert!(rt.task_host().await.unwrap().is_none(), "herdr answers");
+        assert!(rt.task_host(None).await.unwrap().is_none(), "herdr answers");
     }
 
     #[tokio::test]
@@ -2873,6 +2873,7 @@ pub(crate) mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            runtime: None,
         };
         let (reply, cwd) = drive.task_new(p, &yes).await;
         assert_eq!(reply.unwrap_err().0, protocol::ErrorCode::InvalidParams);

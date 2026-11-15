@@ -240,7 +240,7 @@ struct NewTaskSheet: View {
                         } else {
                             nil
                         }
-                    let errors = [model.optionsError, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
+                    let errors = [model.optionsError, model.runtimeProblem, model.location != .clone ? model.foldersError : nil].compactMap(\.self)
                     // An empty footer still takes room in a Form, which widened the gap to the next section.
                     if note != nil || !errors.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {

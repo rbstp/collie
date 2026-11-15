@@ -1104,7 +1104,9 @@ fn sessions(server: &RexServer) -> Vec<String> {
 
 async fn tasks_scenario(server: &RexServer, bin: &Path) {
     use collied::runtime::TaskHost;
-    use protocol::{AgentKind, Cwd, TaskArchiveParams, TaskNewParams, TaskWorktree, WorkspaceId};
+    use protocol::{
+        AgentKind, Cwd, TaskArchiveParams, TaskNewParams, TaskRuntime, TaskWorktree, WorkspaceId,
+    };
     std::fs::create_dir_all(bin.join("record")).unwrap();
     stand_in(bin, "claude", "claude-code");
     stand_in(bin, "codex", "codex");
@@ -1143,6 +1145,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         panic!("no task options");
     };
     assert_eq!(options.agents, kinds);
+    assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
 
     let new = |agent: &str, prompt: &str, worktree| TaskNewParams {
         op_id: OpId::new("N".repeat(22)).unwrap(),
@@ -1155,6 +1158,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         clone: None,
         resume: None,
         ultracode: false,
+        runtime: None,
     };
     let started = |reply| match reply {
         (
@@ -1266,7 +1270,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     ];
     let Ok(Some(host @ TaskHost::Rex(_))) = Runtime::new(server.root.join("no-herdr.sock"))
         .with_rex(Some(rex.clone()))
-        .task_host()
+        .task_host(None)
         .await
     else {
         panic!("Rex is not where tasks start");
@@ -1341,6 +1345,54 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         left.contains(&session) && left.contains(&codex_session),
         "archive destroys no session: {left:?}"
     );
+
+    // herdr answers, and a task asked of Rex starts there with nothing sent to herdr.
+    let herdr = mock_herdr(&server.root.join("herdr.sock"), |method, _| {
+        (method == "server.agent_manifests").then(|| {
+            serde_json::json!({"result": {"type": "agent_manifest_status", "manifests": [
+                {"agent": "claude", "source": "builtin", "source_kind": "builtin", "local_override_shadowing_remote": false},
+            ]}})
+        })
+    });
+    let beside = Driver::new(
+        server.root.join("herdr.sock"),
+        kinds.clone(),
+        std::slice::from_ref(&work),
+    )
+    .unwrap()
+    .with_rex(Some(rex.clone()));
+    let options = match beside.task_options().await {
+        Ok(Response::TaskOptions(options)) => options,
+        other => panic!("no task options beside herdr: {other:?}"),
+    };
+    assert_eq!(
+        options.runtimes,
+        Some(vec![TaskRuntime::Herdr, TaskRuntime::Rex])
+    );
+    let called = herdr.lock().unwrap().len();
+    let asked = TaskNewParams {
+        runtime: Some(TaskRuntime::Rex),
+        ..new("claude", "start beside herdr", None)
+    };
+    let (group, chosen) = started(beside.task_new(asked, &yes).await);
+    let (chosen_session, _) = ids(&group, &chosen);
+    until("the prompt beside herdr", async || {
+        record("prompts-claude").filter(|p| p.contains("start beside herdr"))
+    })
+    .await;
+    assert_eq!(blocks_of(server, &chosen_session).len(), 1);
+    let after = herdr.lock().unwrap()[called..].to_vec();
+    assert!(
+        !after.iter().any(|m| matches!(
+            m.as_str(),
+            "ping" | "workspace.create" | "agent.start" | "agent.prompt"
+        )),
+        "herdr was asked: {after:?}"
+    );
+    let Ok(Response::TaskArchived { .. }) = drive.task_archive(archive(&chosen), &yes).await else {
+        panic!("the task started beside herdr was not archived");
+    };
+    assert!(blocks_of(server, &chosen_session).is_empty());
 
     stop.send_replace(true);
     task.await.unwrap();

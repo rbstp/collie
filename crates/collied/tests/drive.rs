@@ -543,6 +543,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         clone: None,
         resume: None,
         ultracode: false,
+        runtime: None,
     }
 }
 
@@ -2087,6 +2088,7 @@ async fn ultracode_tasks_prompt_only_once_it_shows() {
         });
         let p = TaskNewParams {
             ultracode: true,
+            runtime: None,
             ..task(&base.join("root/a"), "claude")
         };
         let (reply, _) = drive.task_new(p, &yes()).await;
@@ -2535,6 +2537,7 @@ async fn task_new_refusals() {
         (
             TaskNewParams {
                 ultracode: true,
+                runtime: None,
                 ..task(&base.join("root/a"), "codex")
             },
             "needs Claude Code",

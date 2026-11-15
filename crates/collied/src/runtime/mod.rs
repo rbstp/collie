@@ -238,6 +238,13 @@ pub fn not_running(e: &Error) -> bool {
 }
 
 pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
+
+fn reconnecting() -> String {
+    format!(
+        "{} is reconnecting; try again in a moment",
+        herdr_core::GROUP_LABEL
+    )
+}
 /// Claude Code's ctrl+end, bound to `scroll:bottom`; herdr 0.9.3 has no key name for it.
 const SCROLL_BOTTOM: &str = "\u{1b}[1;5F";
 
@@ -313,9 +320,37 @@ impl Runtime {
     ///
     /// A core whose connection dropped and that collied has not found gone since is the same
     /// error, not a reason to start in Rex.
-    pub async fn task_host(&self) -> Result<Option<TaskHost>, Error> {
+    ///
+    /// A `chosen` runtime is the only place the task may start: when it cannot, the error
+    /// names it and says why, and nothing else is asked.
+    pub async fn task_host(&self, chosen: Option<Owner>) -> Result<Option<TaskHost>, Error> {
         let core = self.core.as_ref();
         let waiting = core.is_some_and(|c| c.reconnecting());
+        let down =
+            |name: &str| Error::Unavailable(format!("{name} is not running on this computer"));
+        match chosen {
+            None => {}
+            Some(Owner::Herdr) => {
+                return match herdr::ping(&self.herdr).await {
+                    Ok(_) => Ok(None),
+                    Err(e) if not_running(&e) => Err(down("Herdr")),
+                    Err(e) => Err(e),
+                };
+            }
+            Some(Owner::Core) => {
+                return match core.filter(|c| c.following()) {
+                    Some(c) => Ok(Some(TaskHost::Core(c.clone()))),
+                    None if waiting => Err(Error::Unavailable(reconnecting())),
+                    None => Err(down(herdr_core::GROUP_LABEL)),
+                };
+            }
+            Some(Owner::Rex) => {
+                return match self.rex.as_ref().filter(|r| r.following()) {
+                    Some(r) => Ok(Some(TaskHost::Rex(r.clone()))),
+                    None => Err(down(rex::NAME)),
+                };
+            }
+        }
         let rex = (self.rex.as_ref()).filter(|r| r.following() && !waiting);
         let host = (core.filter(|c| c.following()))
             .map(|c| TaskHost::Core(c.clone()))
@@ -325,12 +360,9 @@ impl Runtime {
         }
         match herdr::ping(&self.herdr).await {
             Ok(_) => Ok(None),
-            Err(e) if not_running(&e) => host.map(Some).ok_or_else(|| {
-                Error::Unsupported(format!(
-                    "{} is reconnecting; try again in a moment",
-                    herdr_core::GROUP_LABEL
-                ))
-            }),
+            Err(e) if not_running(&e) => host
+                .map(Some)
+                .ok_or_else(|| Error::Unsupported(reconnecting())),
             Err(e) => Err(e),
         }
     }

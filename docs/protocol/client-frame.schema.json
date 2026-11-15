@@ -1068,6 +1068,17 @@
           ],
           "description": "When set, collied starts `agent` resuming this session of `cwd`."
         },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the task must start; absent, collied chooses as it always has. Sent only to a\ncollied whose `TaskOptions` lists `runtimes`: an older one refuses the field."
+        },
         "ultracode": {
           "description": "Claude Code only: start it with ultracode on, checked on screen before the prompt.",
           "type": "boolean"
@@ -1089,6 +1100,14 @@
         "agent"
       ],
       "type": "object"
+    },
+    "TaskRuntime": {
+      "enum": [
+        "herdr",
+        "herdr_core",
+        "rex"
+      ],
+      "type": "string"
     },
     "TaskSessionsParams": {
       "additionalProperties": false,

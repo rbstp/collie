@@ -40,6 +40,9 @@ pub enum Error {
     Rex { code: String, message: String },
     #[error("{0}")]
     Unsupported(String),
+    /// The runtime a task was asked to start in cannot take it, in words the phone shows.
+    #[error("{0}")]
+    Unavailable(String),
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -14,8 +14,9 @@ use protocol::{
     AgentSlashDraftParams, AgentStatus, AgentTypeTextParams, CloneSource, Cwd, ErrorCode,
     FolderName, OpId, OutputPatch, PaneCloseParams, ReadParams, ReadSource, Request, Response,
     SendTextParams, SessionId, TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskOptions,
-    TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo, TaskWorktreesParams,
-    TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams, WorkspaceId, limits,
+    TaskRuntime, TaskSessionInfo, TaskSessionsParams, TaskWorktree, TaskWorktreeInfo,
+    TaskWorktreesParams, TerminalId, TerminalRead, TerminalRunParams, WorkspaceCloseParams,
+    WorkspaceId, limits,
 };
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use tokio::io::AsyncReadExt;
@@ -106,6 +107,7 @@ pub fn herdr_fail(e: runtime::Error) -> Fail {
     let (code, message) = match &e {
         runtime::Error::Herdr { code, message } => (code, message),
         runtime::Error::Unsupported(why) => return (ErrorCode::Internal, why.clone()),
+        runtime::Error::Unavailable(why) => return (ErrorCode::InvalidParams, why.clone()),
         runtime::Error::Core { kind, .. } if kind == "not_found" => {
             return (ErrorCode::NotFound, "not found".to_owned());
         }
@@ -998,7 +1000,7 @@ impl Driver {
     }
 
     pub async fn task_options(&self) -> Reply {
-        let host = self.runtime.task_host().await.map_err(herdr_fail)?;
+        let host = self.runtime.task_host(None).await.map_err(herdr_fail)?;
         let (known, snap) = if host.is_some() {
             let known: Vec<String> = (runtime::TASK_KINDS.iter())
                 .filter(|k| runtime::task_cli(k).is_some())
@@ -1052,11 +1054,29 @@ impl Driver {
             .iter()
             .filter_map(|r| r.to_str().and_then(|r| Cwd::new(r).ok()))
             .collect();
+        // herdr answered unless another runtime took the task in its place.
+        let runtimes = [
+            (host.is_none(), TaskRuntime::Herdr),
+            (
+                self.runtime.core().is_some_and(|c| c.following()),
+                TaskRuntime::HerdrCore,
+            ),
+            (
+                self.runtime.rex().is_some_and(|r| r.following()),
+                TaskRuntime::Rex,
+            ),
+        ];
         Ok(Response::TaskOptions(TaskOptions {
             agents,
             default_agent,
             recent_cwds,
             roots,
+            runtimes: Some(
+                runtimes
+                    .into_iter()
+                    .filter_map(|(up, r)| up.then_some(r))
+                    .collect(),
+            ),
         }))
     }
 
@@ -1071,7 +1091,7 @@ impl Driver {
     pub async fn task_worktrees(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
         authorized(auth)?;
         let requested = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
-        let core = (self.runtime.task_host().await)
+        let core = (self.runtime.task_host(None).await)
             .map_err(herdr_fail)?
             .is_some();
         let list = self.worktree_list(&requested, core).await?;
@@ -1177,7 +1197,12 @@ impl Driver {
         };
         // Decided before any folder is created or cloned, so a task herdr-core or Rex cannot
         // start leaves nothing behind.
-        let host = match self.runtime.task_host().await {
+        let chosen = p.runtime.map(|r| match r {
+            TaskRuntime::Herdr => Owner::Herdr,
+            TaskRuntime::HerdrCore => Owner::Core,
+            TaskRuntime::Rex => Owner::Rex,
+        });
+        let host = match self.runtime.task_host(chosen).await {
             Ok(host) => host,
             Err(e) => return (Err(herdr_fail(e)), None),
         };
@@ -3392,6 +3417,7 @@ mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            runtime: None,
         };
         let yes: Authorized = Arc::new(|| true);
         let failed = drive
@@ -3423,6 +3449,7 @@ mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            runtime: None,
         };
         let yes: Authorized = Arc::new(|| true);
         let (code, message) = drive

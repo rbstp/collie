@@ -35,6 +35,52 @@ final class NewTaskSheetTests: XCTestCase {
         }
     }
 
+    func testAChosenRuntimeIsSentOnlyToACollieThatListsRuntimes() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let prefs = FileManager.default.temporaryDirectory.appending(path: "prefs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: prefs) }
+        core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+        let start = { (file: URL?, runtimes: [TaskRuntime]?) async -> NewTaskModel in
+            core.state.withLock { $0.options.runtimes = runtimes }
+            let model = NewTaskModel(core: core, machines: [machine], prefsFile: file)
+            await model.loadOptions()
+            model.prompt = "keep this prompt"
+            model.cwd = "/Users/me/app"
+            _ = await model.start()
+            return model
+        }
+
+        let automatic = await start(nil, nil)
+        XCTAssertNil(automatic.error)
+        XCTAssertNil(automatic.runtimeProblem)
+
+        DevicePrefs.update(in: prefs) { $0.taskRuntime = .rex }
+        let listed = await start(prefs, [.herdr, .rex])
+        XCTAssertNil(listed.runtimeProblem)
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex])
+
+        let older = await start(prefs, nil)
+        XCTAssertEqual(older.error, NewTaskModel.collieTooOld)
+        XCTAssertEqual(older.runtimeProblem, NewTaskModel.collieTooOld)
+        XCTAssertEqual(older.prompt, "keep this prompt")
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex], "nothing sent to an older collied")
+
+        // collied's refusal is what counts, so a runtime it did not list is still asked for.
+        core.state.withLock { $0.options.runtimes = [.herdr] }
+        let missing = NewTaskModel(core: core, machines: [machine], prefsFile: prefs)
+        await missing.loadOptions()
+        XCTAssertEqual(missing.runtimeProblem, "Rex is not running on this computer")
+        missing.prompt = "keep this prompt"
+        missing.cwd = "/Users/me/app"
+        core.set(error: .InvalidInput(field: nil, message: "Rex is not running on this computer"))
+        let refused = await missing.start()
+        XCTAssertNil(refused)
+        XCTAssertEqual(missing.error, "Rex is not running on this computer")
+        XCTAssertEqual(missing.prompt, "keep this prompt")
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex, .rex])
+    }
+
     func testCloneTakesARepositoryAndShowsProgressWhileCloning() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")

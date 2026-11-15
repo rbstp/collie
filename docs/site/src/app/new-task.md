@@ -41,6 +41,15 @@ Choose **Resume** and a folder to list its recent Claude Code and Codex sessions
 - **Name workspace**, under the agent, shows a field for the herdr workspace's label.
 - Codex tasks start with `--no-daemon`: see [Codex](../agents/codex.md).
 
+## Where tasks start
+
+**Settings > Sessions > Start tasks in** picks where New task starts agents, on every machine:
+
+- **Automatic**, the default: herdr while it runs, otherwise Herdr 2, otherwise Rex.
+- **Herdr**, **Herdr 2** or **Rex**: there and nowhere else, for prompts, folders, clones, Git worktrees, pull requests and Resume.
+
+When the machine last reported the runtime you chose as missing, a red line under the location says so before you tap **Start**. If the machine cannot start the task there, the sheet says why, such as "Rex is not running on this computer", and keeps your prompt; nothing starts anywhere else. A machine whose `collied` is too old for the setting starts no task until you update `collied` or choose Automatic.
+
 ## Archive
 
 **Archive**, in a session's **More** menu or an agent's long-press menu, cleans up a finished task:
@@ -54,7 +63,7 @@ Archiving the last pane of a repository workspace with linked worktree sessions 
 
 ## Herdr 2
 
-When herdr is not running on the machine and herdr-core (Herdr 2) is, **New task** starts the agent in Herdr 2, in a terminal of its own in the machine's **Herdr 2** group. While herdr runs, tasks start in herdr. You change no setting.
+When herdr is not running on the machine and herdr-core (Herdr 2) is, **New task** starts the agent in Herdr 2, in a terminal of its own in the machine's **Herdr 2** group. While herdr runs, tasks start in herdr. You change no setting, unless you want tasks in Herdr 2 while herdr runs: choose it in [Where tasks start](#where-tasks-start).
 
 - You can start Claude Code and Codex, once `collied` finds them on the machine. Copilot CLI does not start there: it reports no status in Herdr 2, so collie could not tell when it is ready. Such a task fails before collie creates or clones a folder.
 - Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in herdr, but the task label is not kept: nothing in Herdr 2 would show it. One task works in a worktree at a time: **Open** refuses a checkout another Herdr 2 task already records. If the task fails after the agent starts, the agent keeps running and the checkout stays; the error names them.

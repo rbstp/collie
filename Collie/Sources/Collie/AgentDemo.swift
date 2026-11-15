@@ -433,24 +433,24 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     func taskOptions(machineId: String) async throws -> TaskOptions {
         guard isSample || screenshotDemo else { throw CoreError.NotImplemented }
-        return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"])
+        return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"], runtimes: [.herdr])
     }
 
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders {
         throw CoreError.NotImplemented
     }
 
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         throw CoreError.NotImplemented
     }
 
     func taskWorktrees(machineId: String, cwd: String) async throws -> WorktreeListing { throw CoreError.NotImplemented }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted { throw CoreError.NotImplemented }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted { throw CoreError.NotImplemented }
-    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted { throw CoreError.NotImplemented }
-    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted { throw CoreError.NotImplemented }
     func taskSessions(machineId: String, cwd: String) async throws -> [TaskSession] { throw CoreError.NotImplemented }
-    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted { throw CoreError.NotImplemented }
+    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?, runtime: TaskRuntime?) async throws -> TaskStarted { throw CoreError.NotImplemented }
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 
