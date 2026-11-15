@@ -444,6 +444,7 @@ impl Block {
             Some(r) => agents::kind(r.app.as_deref(), cli),
             None => Some(cli?.to_owned()),
         };
+        let read_only = agents::read_only(kind.as_deref(), record.is_some());
         let id = format!("{PREFIX}{block_id}");
         let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
         Some(AgentInfo {
@@ -465,7 +466,7 @@ impl Block {
                 }),
             interactive_ready: false,
             launch_pending: false,
-            read_only: record.is_none(),
+            read_only,
         })
     }
 }

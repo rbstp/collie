@@ -410,7 +410,9 @@ impl Driver {
 
     async fn writable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
         match self.current_agent(terminal_id).await? {
-            (current, Err((ErrorCode::AgentBlocked, _))) if current.agent.is_some() => Ok(current),
+            (current, Err((ErrorCode::AgentBlocked, _))) if current.agent.is_some() => {
+                takes_input(&current).map(|()| current)
+            }
             (current, ready) => ready.and_then(|()| takes_input(&current)).map(|()| current),
         }
     }
@@ -2937,7 +2939,7 @@ fn takes_input(a: &AgentInfo) -> Result<(), Fail> {
     if a.read_only {
         return fail(
             ErrorCode::AgentNotReady,
-            "the agent reports no status, so it takes no input from the phone",
+            "nothing says whether the agent shows a dialog, so it takes no input from the phone",
         );
     }
     Ok(())
@@ -3449,6 +3451,98 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+    }
+
+    /// Copilot CLI reports `idle` at its folder trust prompt and with a picker open (#741).
+    #[tokio::test]
+    async fn a_herdr_core_copilot_takes_no_input_whatever_it_reports() {
+        fn copilot(state: &str) -> serde_json::Value {
+            core_tests::terminal(
+                "t1",
+                serde_json::json!({"state": state, "app": "copilot"}),
+                "/opt/homebrew/bin/copilot",
+            )
+        }
+        type Answer = fn(&str) -> serde_json::Value;
+        let answers: [(&str, Answer, ErrorCode); 2] = [
+            (
+                "idle",
+                |m| {
+                    if m == "terminal.get" {
+                        copilot("idle")
+                    } else {
+                        serde_json::Value::Null
+                    }
+                },
+                ErrorCode::AgentNotReady,
+            ),
+            (
+                "blocked",
+                |m| {
+                    if m == "terminal.get" {
+                        copilot("blocked")
+                    } else {
+                        serde_json::Value::Null
+                    }
+                },
+                ErrorCode::AgentBlocked,
+            ),
+        ];
+        for (state, answer, prompt_error) in answers {
+            let dir = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(dir.path()).unwrap();
+            let seen = core_tests::fake_core(&root.join("core.sock"), answer).await;
+            let core = core_tests::core_of(&root, serde_json::json!([copilot(state)]));
+            let a = core.agents().unwrap().remove(0);
+            assert_eq!(
+                (a.agent.as_deref(), a.agent_status.as_str(), a.read_only),
+                (Some("copilot"), state, true)
+            );
+            let drive = core_driver(&root, core);
+            let yes: Authorized = Arc::new(|| true);
+            let op = || OpId::new("P".repeat(22)).unwrap();
+            let terminal = TerminalId::new(core_id()).unwrap();
+            let refused = |r: Reply| r.unwrap_err().0;
+            let prompt = AgentPromptParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::PromptText::new("hi".to_owned()).unwrap(),
+                expected_draft: None,
+            };
+            assert_eq!(refused(drive.prompt(prompt, &yes).await), prompt_error);
+            let typed = AgentTypeTextParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::PromptText::new("yes".to_owned()).unwrap(),
+            };
+            assert_eq!(
+                refused(drive.type_text(typed, &yes).await),
+                ErrorCode::AgentNotReady
+            );
+            let keys = AgentSendKeysParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                keys: vec![Key::Enter],
+            };
+            assert_eq!(
+                refused(drive.send_keys(keys, &yes).await.0),
+                ErrorCode::AgentNotReady
+            );
+            let text = SendTextParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::TypedText::new("/x".to_owned()).unwrap(),
+            };
+            assert_eq!(
+                refused(drive.send_text(text, &yes).await),
+                ErrorCode::AgentNotReady
+            );
+            let calls = crate::lock(&seen).calls.clone();
+            assert!(
+                calls.iter().all(|c| c["method"] == "terminal.get"),
+                "{state}: {calls:?}"
+            );
+        }
     }
 
     #[tokio::test]

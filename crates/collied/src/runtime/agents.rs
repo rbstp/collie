@@ -46,6 +46,13 @@ pub(super) fn title(raw: &str) -> &str {
         .trim_end()
 }
 
+/// Without a report nothing says a dialog is open. Copilot CLI 1.0.106 and later reports
+/// `idle` at its folder trust prompt and with a picker open (#741), so its report says
+/// nothing either.
+pub(super) fn read_only(kind: Option<&str>, reported: bool) -> bool {
+    !reported || kind == Some("copilot")
+}
+
 /// A group's status: its most urgent agent's.
 pub(super) fn group_status(agents: &[AgentInfo]) -> &str {
     let rank = |s: &str| match s {
