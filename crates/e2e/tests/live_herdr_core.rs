@@ -1102,12 +1102,13 @@ async fn input_scenario(core: &CoreSession) {
     rt.agent_send_keys(&a.pane_id, &["esc"]).await.unwrap();
     shows(&claude, "amended esc").await;
 
-    // herdr-core keeps a program's status while it is suspended and after it exits, with
-    // the shell leading the terminal; collied lists no terminal a shell leads.
+    // herdr-core 0.1.16 keeps a program's status while it is suspended and after it exits,
+    // with the shell leading the terminal, and 0.1.19 drops it; collied lists no terminal a
+    // shell leads either way. The stand-in reports again when resumed, for a core that dropped it.
     let shell = run_argv(core, "collie-shell", &work, &["/bin/sh", "-i"]);
     std::fs::write(
         work.join("reporter"),
-        "printf '\\033]7501;state=idle:app=codex\\033\\\\'\nwhile [ ! -e leave ]; do sleep 0.1; done\n",
+        "report() { printf '\\033]7501;state=idle:app=codex\\033\\\\'; }\ntrap report CONT\nreport\nwhile [ ! -e leave ]; do sleep 0.1; done\n",
     )
     .unwrap();
     let leads = async |argv0: &str| {
@@ -1119,7 +1120,12 @@ async fn input_scenario(core: &CoreSession) {
     };
     let listed = async |yes: bool| {
         until("the listing", async || {
-            (find(&shell).await.is_some() == yes).then_some(())
+            let agents = rt.agent_list().await.ok()?;
+            let n = agents
+                .iter()
+                .filter(|a| a.terminal_id.ends_with(&format!(":{shell}")))
+                .count();
+            (n == usize::from(yes)).then_some(())
         })
         .await;
     };
@@ -1135,19 +1141,12 @@ async fn input_scenario(core: &CoreSession) {
     core.hc(&["keys", "--json", &shell, "ctrl+z"]);
     leads("/bin/sh").await;
     listed(false).await;
-    let held = || core.hc(&["get", "--json", &shell])["status"]["app"].clone();
-    assert_eq!(
-        held(),
-        "codex",
-        "herdr-core holds a suspended program's status"
-    );
     core.hc(&["send", "--json", &shell, "fg"]);
     leads("collie-reporter").await;
     listed(true).await;
     std::fs::write(work.join("leave"), "").unwrap();
     leads("/bin/sh").await;
     listed(false).await;
-    assert_eq!(held(), "codex", "and an exited one's");
 
     // Every key, and Ctrl+End, a notice digit and a paste through a typing attach, which
     // leaves the size a desktop client chose.
