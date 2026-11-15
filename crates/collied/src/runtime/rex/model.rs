@@ -50,6 +50,8 @@ struct Block {
     /// The agent's session, with the pid it was found for: it holds only while that process
     /// leads the terminal.
     session: Option<(u32, String)>,
+    /// Its program exited; the block stays until it is closed.
+    exited: bool,
 }
 
 /// One server's sessions and terminal blocks, from reads and the events that follow them.
@@ -70,7 +72,7 @@ pub(super) struct Model {
 
 /// Rex's ids are `session:<uuid>` and `block:<uuid>`; anything else is skipped, so every id
 /// collied makes fits the phone's terminal ids.
-fn valid(id: &str, kind: &str) -> bool {
+pub(super) fn valid(id: &str, kind: &str) -> bool {
     id.strip_prefix(kind)
         .and_then(|u| u.strip_prefix(':'))
         .is_some_and(|u| {
@@ -247,6 +249,7 @@ impl Model {
 
     pub(super) fn process(&mut self, session: &str, block: &str, seq: u64, p: Process) {
         if let Some(b) = self.block(session, block) {
+            b.exited |= p.child.is_none() && p.last_exit.is_some();
             b.child = p.child;
             b.foreground.read(seq, p.foreground);
             self.touched.insert((session.to_owned(), block.to_owned()));
@@ -365,6 +368,19 @@ impl Model {
     pub(super) fn has(&self, block: &str) -> bool {
         self.sessions.values().any(|s| s.blocks.contains_key(block))
     }
+
+    /// Known, or skipped until it reports again: either way still on the server.
+    pub(super) fn holds(&self, block: &str) -> bool {
+        self.has(block) || self.failed.contains(block)
+    }
+
+    pub(super) fn exited(&self, block: &str) -> bool {
+        (self.sessions.values()).any(|s| s.blocks.get(block).is_some_and(|b| b.exited))
+    }
+
+    pub(super) fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
 }
 
 impl Block {
@@ -394,6 +410,7 @@ impl Block {
                     self.title.event(seq, t.title);
                 }
             }
+            "child_exited" => self.exited = true,
             "size_changed" => {
                 if let Ok(size) = serde_json::from_value::<Size>(e.payload) {
                     self.size.event(seq, cells(size));

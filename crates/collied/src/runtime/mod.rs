@@ -13,7 +13,7 @@ pub mod screen;
 use self::herdr_core::Core;
 use self::rex::Rex;
 
-pub use agents::pane;
+pub use agents::{STRIPPED, TASK_KINDS, pane, task_cli};
 pub use herdr::{Error, PaneRead};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +92,67 @@ pub struct Poll {
     /// False when a followed core or Rex answered in herdr's place: herdr's agents are then
     /// not known to be gone, and what collied keeps for them must stay.
     pub herdr: bool,
+}
+
+/// A terminal a followed core or Rex holds, shell or agent, with the folders it works in.
+pub struct Occupant {
+    pub id: String,
+    pub task: bool,
+    /// The checkout collied recorded for the worktree task it started there.
+    pub worktree: Option<String>,
+    pub cwd: String,
+    pub foreground_cwd: Option<String>,
+}
+
+/// Where a new task starts when herdr is not running: a followed core, else a followed Rex.
+#[derive(Clone)]
+pub enum TaskHost {
+    Core(Arc<Core>),
+    Rex(Arc<Rex>),
+}
+
+impl TaskHost {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Core(_) => herdr_core::GROUP_LABEL,
+            Self::Rex(_) => rex::NAME,
+        }
+    }
+
+    /// A task agent in a terminal of its own, started as `task_argv` builds it; returns its id.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start(
+        &self,
+        cwd: &str,
+        name: &str,
+        label: Option<&str>,
+        kind: &str,
+        worktree: Option<&str>,
+        cli: &str,
+        args: &[&str],
+    ) -> Result<String, Error> {
+        match self {
+            Self::Core(core) => core.start(cwd, name, kind, worktree, cli, args).await,
+            Self::Rex(rex) => {
+                let argv = agents::task_argv(cli, args);
+                rex.start_task(cwd, name, label, worktree, argv).await
+            }
+        }
+    }
+
+    pub fn finished(&self, id: &str) -> bool {
+        match self {
+            Self::Core(core) => core.finished(id),
+            Self::Rex(rex) => rex.finished(id),
+        }
+    }
+
+    pub fn owner(&self) -> Owner {
+        match self {
+            Self::Core(_) => Owner::Core,
+            Self::Rex(_) => Owner::Rex,
+        }
+    }
 }
 
 pub struct PaneProcesses {
@@ -246,16 +307,49 @@ impl Runtime {
     }
 
     /// Where a new task starts: herdr while it answers, which gives the agent herdr's screen
-    /// rules, focus and workspace; the followed core only when herdr is not running. A herdr
-    /// that runs but does not answer is an error, not a reason to start in the core.
-    pub async fn task_core(&self) -> Result<Option<Arc<Core>>, Error> {
-        let Some(core) = self.core.as_ref().filter(|c| c.following()) else {
+    /// rules, focus and workspace; when herdr is not running, the followed core, else the
+    /// followed Rex. A herdr that runs but does not answer is an error, not a reason to start
+    /// elsewhere.
+    pub async fn task_host(&self) -> Result<Option<TaskHost>, Error> {
+        let core = (self.core.as_ref()).filter(|c| c.following());
+        let rex = (self.rex.as_ref()).filter(|r| r.following());
+        let Some(host) = (core.map(|c| TaskHost::Core(c.clone())))
+            .or_else(|| rex.map(|r| TaskHost::Rex(r.clone())))
+        else {
             return Ok(None);
         };
         match herdr::ping(&self.herdr).await {
             Ok(_) => Ok(None),
-            Err(e) if not_running(&e) => Ok(Some(core.clone())),
+            Err(e) if not_running(&e) => Ok(Some(host)),
             Err(e) => Err(e),
+        }
+    }
+
+    /// Every terminal of the followed core and Rex, `owner`'s required: `None` while it is not
+    /// followed or does not answer, when nothing is known about what works where. The other
+    /// one counts while it is followed.
+    pub async fn occupants(&self, owner: Owner) -> Option<Vec<Occupant>> {
+        let core = (self.core.as_ref()).filter(|c| owner == Owner::Core || c.following());
+        let rex = (self.rex.as_ref()).filter(|r| owner == Owner::Rex || r.following());
+        let mut all = match core {
+            Some(core) => core.occupants()?,
+            None if owner == Owner::Core => return None,
+            None => Vec::new(),
+        };
+        match rex {
+            Some(rex) => all.extend(rex.occupants().await.ok()?),
+            None if owner == Owner::Rex => return None,
+            None => {}
+        }
+        Some(all)
+    }
+
+    /// The checkout recorded for the worktree task collied started in `id`.
+    pub fn task_worktree(&self, id: &str) -> Option<String> {
+        match Owner::of(id) {
+            Owner::Herdr => None,
+            Owner::Core => self.core.as_ref()?.worktree(id),
+            Owner::Rex => self.rex.as_ref()?.worktree(id),
         }
     }
 

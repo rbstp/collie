@@ -970,3 +970,378 @@ async fn drive_scenario(server: &RexServer) {
     stop.send_replace(true);
     task.await.unwrap();
 }
+
+/// herdr's and Claude Code's session variables, as a Rex server started inside a herdr pane
+/// running Claude Code would hold them: a task agent must get none.
+const STARTER: [&str; 16] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_SOCKET_PATH",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_BIN_PATH",
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+
+/// A stand-in agent CLI: it records its environment and arguments, reports OSC 7501 as `app`
+/// and records each line typed into it. Perl, as one process that never execs another of the
+/// same name: Rex sends no `process_changed` when the foreground process execs a program of
+/// the same name, so a bash script that execs bash would keep the first one's `argv[0]`.
+fn stand_in(bin: &Path, cli: &str, app: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let record = bin.join("record");
+    let record = record.display();
+    let script = format!(
+        r#"#!/usr/bin/perl
+$| = 1;
+open(my $e, '>', '{record}/env-{cli}') or die;
+print $e "$_=$ENV{{$_}}\n" for sort keys %ENV;
+close $e;
+open(my $a, '>', '{record}/args-{cli}') or die;
+print $a "$_\n" for @ARGV;
+close $a;
+print "\e]7501;state=idle:app={app}\e\\";
+while (my $p = <STDIN>) {{
+    open(my $f, '>>', '{record}/prompts-{cli}') or die;
+    print $f $p;
+    close $f;
+}}
+select(undef, undef, undef, 600);
+"#
+    );
+    let path = bin.join(cli);
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(dir)
+        .args([
+            "-c",
+            "user.name=e2e",
+            "-c",
+            "user.email=e2e@example.invalid",
+        ])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// New task, a worktree task and archive with Rex alone (no herdr, no herdr-core). collied
+/// finds stand-in `claude` and `codex` CLIs first on its `PATH`; the server holds dummy values
+/// for every starter variable, which point nowhere, and its home's login profile puts a
+/// folder of its own on `PATH`.
+#[test]
+fn live_rex_tasks() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let (bin, path) = match std::env::var("COLLIE_E2E_BIN") {
+        Ok(bin) => (bin, std::env::var("PATH").unwrap_or_default()),
+        Err(_) => {
+            let bin = format!("/tmp/rxt-{}", std::process::id());
+            let path = format!("{bin}:{}", std::env::var("PATH").unwrap_or_default());
+            (bin, path)
+        }
+    };
+    // A scratch HOME and configuration, so the owner's git and gh setup never reach the
+    // archive.
+    let home = format!("{bin}/home");
+    let config = format!("{bin}/home/.config");
+    let gh = format!("{bin}/home/.config/gh");
+    let env = [
+        ("COLLIE_E2E_BIN", bin.as_str()),
+        ("PATH", path.as_str()),
+        ("HOME", home.as_str()),
+        ("XDG_CONFIG_HOME", config.as_str()),
+        ("GH_CONFIG_DIR", gh.as_str()),
+    ];
+    if std::env::var_os("COLLIE_E2E_BIN").is_none() {
+        let _scratch = TempDir(bin.clone().into());
+        in_child_with("live_rex_tasks", &env);
+        return;
+    }
+    std::fs::create_dir_all(&gh).unwrap();
+    let dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
+    let mut server = RexServer::start_with(&cli, "t", &dummies);
+    let rt = runtime();
+    rt.block_on(tasks_scenario(&server, Path::new(&bin)));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+fn blocks_of(server: &RexServer, session: &str) -> Vec<serde_json::Value> {
+    let listed = server.rex(&["api", "call", "-s", session, "session.list_blocks"]);
+    listed["blocks"].as_array().cloned().unwrap_or_default()
+}
+
+fn process_of(server: &RexServer, session: &str, block: &str) -> serde_json::Value {
+    let args = serde_json::json!({ "block_id": block }).to_string();
+    let method = "com.superlogical.terminal.process";
+    server.rex(&["api", "call", "-s", session, method, &args])
+}
+
+fn sessions(server: &RexServer) -> Vec<String> {
+    let listed = server.rex(&["api", "call", "session.list"]);
+    (listed["sessions"].as_array().into_iter().flatten())
+        .filter_map(|s| s["session_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+async fn tasks_scenario(server: &RexServer, bin: &Path) {
+    use collied::runtime::TaskHost;
+    use protocol::{AgentKind, Cwd, TaskArchiveParams, TaskNewParams, TaskWorktree, WorkspaceId};
+    std::fs::create_dir_all(bin.join("record")).unwrap();
+    stand_in(bin, "claude", "claude-code");
+    stand_in(bin, "codex", "codex");
+    let record = |name: &str| std::fs::read_to_string(bin.join("record").join(name)).ok();
+    // What the user's login shell reads first: whichever shell the account has.
+    let profiled = server.root.join("profiled");
+    let profile = format!("export PATH='{}':\"$PATH\"\n", profiled.display());
+    for file in [".zprofile", ".bash_profile", ".profile"] {
+        std::fs::write(server.root.join("home").join(file), &profile).unwrap();
+    }
+
+    let work = std::fs::canonicalize(&server.work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "start"]);
+
+    let rex = Arc::new(Rex::new(server.socket.clone()).with_tasks(bin.join("rex-tasks.json")));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    tokio::time::timeout(Duration::from_secs(5), rex.settled())
+        .await
+        .unwrap();
+    let kinds = vec![
+        AgentKind::new("claude").unwrap(),
+        AgentKind::new("codex").unwrap(),
+    ];
+    let drive = Driver::new(
+        server.root.join("no-herdr.sock"),
+        kinds.clone(),
+        std::slice::from_ref(&work),
+    )
+    .unwrap()
+    .with_rex(Some(rex.clone()));
+    let yes: Authorized = Arc::new(|| true);
+
+    let Ok(Response::TaskOptions(options)) = drive.task_options().await else {
+        panic!("no task options");
+    };
+    assert_eq!(options.agents, kinds);
+
+    let new = |agent: &str, prompt: &str, worktree| TaskNewParams {
+        op_id: OpId::new("N".repeat(22)).unwrap(),
+        cwd: Cwd::new(work.to_str().unwrap()).unwrap(),
+        agent: AgentKind::new(agent).unwrap(),
+        prompt: Some(PromptText::new(prompt.to_owned()).unwrap()),
+        label: Some(Label::new("e2e").unwrap()),
+        new_folder: None,
+        worktree,
+        clone: None,
+        resume: None,
+        ultracode: false,
+    };
+    let started = |reply| match reply {
+        (
+            Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+            }),
+            _,
+        ) => (workspace_id, terminal_id),
+        (other, _) => panic!("task not started: {other:?}"),
+    };
+    let ids = |group: &WorkspaceId, agent: &TerminalId| {
+        let session = group.as_str().strip_prefix("rex:").unwrap().to_owned();
+        let block = agent.as_str().strip_prefix("rex:").unwrap().to_owned();
+        (session, block)
+    };
+
+    let (group, claude) = started(
+        drive
+            .task_new(new("claude", "fix the test", None), &yes)
+            .await,
+    );
+    let (session, block) = ids(&group, &claude);
+    assert!(session.starts_with("session:") && block.starts_with("block:"));
+    until("the prompt in Claude Code", async || {
+        record("prompts-claude").filter(|p| p.contains("fix the test"))
+    })
+    .await;
+    assert_eq!(record("args-claude").as_deref(), Some(""));
+    let stripped = |env: String| {
+        for name in STARTER {
+            assert!(
+                !env.lines().any(|l| l.starts_with(&format!("{name}="))),
+                "{name} reached the agent"
+            );
+        }
+        env
+    };
+    let env = stripped(record("env-claude").unwrap());
+    let path = (env.lines())
+        .find_map(|l| l.strip_prefix("PATH="))
+        .unwrap()
+        .to_owned();
+    assert!(
+        path.starts_with(&format!("{}:", profiled.display())),
+        "the login profile's PATH: {path}"
+    );
+    assert!(env.contains(&format!("REX_BLOCK={block}")));
+    let blocks = blocks_of(server, &session);
+    assert_eq!(blocks.len(), 1, "a session of its own: {blocks:?}");
+    assert!(blocks[0]["owner"].is_null(), "given up: {}", blocks[0]);
+    assert_eq!(
+        blocks[0]["label"],
+        rex.get(claude.as_str()).unwrap().name.unwrap()
+    );
+    let listed = server.rex(&["api", "call", "session.list"]);
+    assert!(
+        (listed["sessions"].as_array().into_iter().flatten())
+            .any(|s| s["session_id"] == session.as_str() && s["label"] == "e2e"),
+        "{listed}"
+    );
+
+    let branch = TaskWorktree::Create {
+        branch: "feat/rex-task".to_owned(),
+    };
+    let (group, codex) = started(
+        drive
+            .task_new(new("codex", "review it", Some(branch)), &yes)
+            .await,
+    );
+    let (codex_session, codex_block) = ids(&group, &codex);
+    let checkout = work.join(".worktree/feat-rex-task");
+    until("the prompt in Codex", async || {
+        record("prompts-codex").filter(|p| p.contains("review it"))
+    })
+    .await;
+    assert_eq!(record("args-codex").as_deref(), Some("--no-daemon\n"));
+    stripped(record("env-codex").unwrap());
+    assert!(
+        git(&work, &["worktree", "list", "--porcelain"])
+            .contains(&format!("worktree {}\nHEAD", checkout.display()))
+    );
+    assert_eq!(
+        process_of(server, &codex_session, &codex_block)["foreground"]["cwd"],
+        checkout.to_str().unwrap()
+    );
+
+    // An argument vector reaches the program unchanged through the login shell.
+    let argv = bin.join("argv");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = format!(
+            "#!/bin/bash\nprintf '%s\\0' \"$@\" > '{}/record/argv'\nexec sleep 600\n",
+            bin.display()
+        );
+        std::fs::write(&argv, script).unwrap();
+        std::fs::set_permissions(&argv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let hostile = [
+        "two words",
+        "it's \"quoted\"",
+        "; touch pwned",
+        "$(touch pwned)",
+        "`touch pwned`",
+        "line\nbreak",
+        "-n",
+        "$HOME",
+        "*",
+    ];
+    let Ok(Some(host @ TaskHost::Rex(_))) = Runtime::new(server.root.join("no-herdr.sock"))
+        .with_rex(Some(rex.clone()))
+        .task_host()
+        .await
+    else {
+        panic!("Rex is not where tasks start");
+    };
+    let hostile_id = host
+        .start(
+            work.to_str().unwrap(),
+            "collie-argv",
+            None,
+            "claude",
+            None,
+            argv.to_str().unwrap(),
+            &hostile,
+        )
+        .await
+        .unwrap();
+    let got = until("the arguments", async || record("argv")).await;
+    let got: Vec<&str> = got.strip_suffix('\0').unwrap().split('\0').collect();
+    assert_eq!(got, hostile);
+    assert!(!work.join("pwned").exists());
+    server.rex(&["block", "close", hostile_id.strip_prefix("rex:").unwrap()]);
+
+    let archive = |id: &TerminalId| TaskArchiveParams {
+        op_id: OpId::new("A".repeat(22)).unwrap(),
+        terminal_id: id.clone(),
+        confirm: true,
+    };
+    // A shell the test starts at the repository, then moves into the checkout with `cd`: the
+    // archive must see its new folder and leave the checkout alone.
+    let (shell_session, shell) = new_session(server, "collie-cd", &["/bin/sh", "-i"]);
+    let cd = format!("cd '{}'\n", checkout.display());
+    server.rex(&["send", "-b", &shell, &cd]);
+    until("the shell's new folder", async || {
+        let p = process_of(server, &shell_session, &shell);
+        (p["foreground"]["cwd"].as_str() == checkout.to_str()).then_some(())
+    })
+    .await;
+    let refused = drive.task_archive(archive(&codex), &yes).await;
+    let Err((_, message)) = refused else {
+        panic!("archived under a shell in the checkout: {refused:?}");
+    };
+    assert!(message.contains("did not start"), "{message}");
+    assert!(checkout.exists());
+    assert_eq!(blocks_of(server, &codex_session).len(), 1);
+    server.rex(&["block", "close", &shell]);
+    until("the shell to close", async || {
+        blocks_of(server, &shell_session).is_empty().then_some(())
+    })
+    .await;
+
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&codex), &yes).await
+    else {
+        panic!("the worktree task was not archived");
+    };
+    assert!(
+        message.starts_with("Removed worktree checkout"),
+        "{message}"
+    );
+    assert!(!checkout.exists());
+    assert!(!git(&work, &["worktree", "list"]).contains("feat-rex-task"));
+    assert!(blocks_of(server, &codex_session).is_empty());
+
+    let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&claude), &yes).await
+    else {
+        panic!("the task was not archived");
+    };
+    assert!(message.starts_with("Closed pane."), "{message}");
+    assert!(blocks_of(server, &session).is_empty());
+    assert!(work.exists());
+    let left = sessions(server);
+    assert!(
+        left.contains(&session) && left.contains(&codex_session),
+        "archive destroys no session: {left:?}"
+    );
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}

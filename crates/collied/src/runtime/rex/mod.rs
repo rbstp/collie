@@ -22,6 +22,7 @@ mod input;
 mod model;
 mod screen;
 mod sessions;
+mod tasks;
 mod wire;
 
 #[cfg(test)]
@@ -35,6 +36,7 @@ pub use discovery::socket_path;
 pub use input::{STATUS_CHANGED, Seen};
 pub use model::{Listing, PREFIX};
 
+pub const NAME: &str = "Rex";
 pub const NOT_YET: &str = "not available for Rex agents yet";
 pub const GROUP_CLOSE: &str =
     "a Rex session cannot be closed from the phone; close its agents one at a time";
@@ -192,6 +194,9 @@ struct Inner {
     /// foreground pid they were reported under. Kept outside the model, which a reconnect
     /// drops, and applied when the block is read again.
     codex: BTreeMap<String, (u32, String)>,
+    tasks: tasks::Tasks,
+    /// Task blocks whose program exited or that closed, as their events said.
+    ended: BTreeSet<String>,
 }
 
 struct Live {
@@ -208,6 +213,8 @@ struct Live {
 pub struct Rex {
     socket: PathBuf,
     claude_sessions: Option<PathBuf>,
+    /// Where the tasks collied starts here are recorded.
+    tasks: Option<PathBuf>,
     inner: Mutex<Inner>,
     wake: Notify,
     settled: watch::Sender<bool>,
@@ -236,6 +243,7 @@ impl Rex {
         Self {
             socket,
             claude_sessions: None,
+            tasks: None,
             inner: Mutex::default(),
             wake: Notify::new(),
             settled: watch::channel(false).0,
@@ -259,7 +267,13 @@ impl Rex {
     pub fn listing(&self) -> Option<Listing> {
         let inner = self.lock();
         let live = inner.live.as_ref().filter(|l| l.synced)?;
-        Some(live.model.listing())
+        let mut listing = live.model.listing();
+        tasks::name(&mut listing, &inner.tasks);
+        Some(listing)
+    }
+
+    pub fn following(&self) -> bool {
+        self.lock().live.as_ref().is_some_and(|l| l.synced)
     }
 
     pub fn get(&self, id: &str) -> Result<AgentInfo, Error> {
@@ -431,6 +445,9 @@ impl Rex {
             }
             return;
         }
+        if let Some(block) = tasks::ended(&e).filter(|b| inner.tasks.contains_key(b)) {
+            inner.ended.insert(block);
+        }
         let Some(live) = inner.live.as_mut() else {
             return;
         };
@@ -496,6 +513,7 @@ impl Rex {
         })?;
         self.read_dirty(client).await?;
         self.live(|live| live.synced = true)?;
+        self.prune_tasks();
         self.settled.send_replace(true);
         tracing::info!(socket = %self.socket.display(), version, "following Rex");
         Ok(())

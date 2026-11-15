@@ -544,6 +544,7 @@ pub async fn start_with(
         Arc::new(
             Rex::new(s)
                 .with_claude_sessions(sessions)
+                .with_tasks(cfg.data_dir.join(config::REX_TASKS_FILE))
                 .with_herdr_seen(herdr_seen.clone()),
         )
     });
