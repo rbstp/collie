@@ -124,7 +124,7 @@ async fn an_older_api_revision_is_refused_in_plain_words_whatever_the_server_say
     ] {
         let (why, report) = refused_after_hello(CloseCode::Policy, reason).await;
         assert!(
-            why.contains("API revision 13") && why.contains("quit Rex and open it again"),
+            why.contains("API revision 13") && why.contains("so restart the Rex server"),
             "{why}"
         );
         assert!(why.contains(&crate::printable(reason)), "{why}");

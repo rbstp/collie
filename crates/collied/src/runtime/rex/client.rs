@@ -175,7 +175,7 @@ pub(super) async fn open(stream: UnixStream) -> Result<(Client, Pump, Welcome), 
 /// started from until it restarts.
 pub(super) fn revision_refused(reason: &str) -> String {
     format!(
-        "does not speak API revision {API_REVISION}, which collied needs; a Rex server keeps the API revision of the build it started from, so quit Rex and open it again (the server said: {reason})"
+        "does not speak API revision {API_REVISION}, which collied needs; a Rex server keeps the API revision of the build it started from, so restart the Rex server (the server said: {reason})"
     )
 }
 
