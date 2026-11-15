@@ -11,6 +11,7 @@ use super::*;
 use crate::runtime::{Owner, Runtime};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+mod approvals;
 mod input;
 
 pub(super) const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";

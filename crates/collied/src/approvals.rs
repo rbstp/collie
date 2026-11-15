@@ -20,7 +20,8 @@ use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
 use crate::runtime::herdr_core::{self, Core};
-use crate::runtime::{self, AgentInfo, Runtime, WorkspaceInfo};
+use crate::runtime::rex::Rex;
+use crate::runtime::{self, AgentInfo, Owner, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
 
 pub const TTL: Duration = Duration::from_secs(600);
@@ -40,6 +41,11 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
 const MAX_HOOKS: usize = 64;
+/// Each Rex screen read makes Rex render the whole scrollback, and Claude Code reports each
+/// dialog anew (a new `state_change_seq`): a blocked Rex agent's screen is read on this many
+/// reconciles of a report, for a dialog still drawing, then not until its next report or a
+/// decision. A decision checks the screen itself before it sends a key.
+const REX_READS: u8 = 3;
 
 /// What collied saw on an agent's screen. Never leaves collied except as the snippet and
 /// the sealed alert context.
@@ -107,6 +113,8 @@ struct Inner {
     /// later alert replaces it, and it is cleared once the agent there is no longer blocked.
     notified: HashMap<String, ApprovalId>,
     hooks: HashMap<String, Hooked>,
+    /// A blocked Rex agent's report and the reconciles that read its screen.
+    rex_reads: HashMap<String, (u64, u8)>,
 }
 
 impl Inner {
@@ -279,6 +287,28 @@ impl Approvals {
         self
     }
 
+    pub fn with_rex(mut self, rex: Option<Arc<Rex>>) -> Self {
+        self.runtime = self.runtime.with_rex(rex);
+        self
+    }
+
+    fn read_due(&self, a: &AgentInfo) -> bool {
+        if Owner::of(&a.terminal_id) != Owner::Rex {
+            return true;
+        }
+        let mut inner = self.lock();
+        let read = (inner.rex_reads)
+            .entry(a.terminal_id.clone())
+            .or_insert((a.state_change_seq, 0));
+        if read.0 != a.state_change_seq {
+            *read = (a.state_change_seq, 0);
+        }
+        read.1 < REX_READS && {
+            read.1 += 1;
+            true
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         crate::lock(&self.inner)
     }
@@ -358,6 +388,9 @@ impl Approvals {
             self.count(&inner);
         }
         for (a, id) in live {
+            if !self.read_due(a) {
+                continue;
+            }
             let Ok(screen) = self.screen(a).await else {
                 continue;
             };
@@ -388,6 +421,9 @@ impl Approvals {
                 .collect()
         };
         for a in fresh {
+            if !self.read_due(a) {
+                continue;
+            }
             if let Err(e) = self.create(a, workspaces).await {
                 tracing::debug!(terminal = %a.terminal_id, error = %e, "no approval yet");
             }
@@ -396,8 +432,12 @@ impl Approvals {
         {
             let mut inner = self.lock();
             let Inner {
-                pending, notified, ..
+                pending,
+                notified,
+                rex_reads,
+                ..
             } = &mut *inner;
+            rex_reads.retain(|t, _| agents.iter().any(|a| a.terminal_id == *t && is_blocked(a)));
             notified.retain(|t, id| {
                 let ended = !pending.contains_key(t)
                     && !agents.iter().any(|a| a.terminal_id == *t && is_blocked(a));
@@ -612,6 +652,7 @@ impl Approvals {
                 inner.pending.remove(terminal);
                 self.count(&inner);
             }
+            inner.rex_reads.remove(terminal);
             inner.remember(id.clone());
         }
         let _ = self.events.send(Event::ApprovalResolved {

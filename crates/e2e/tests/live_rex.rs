@@ -6,14 +6,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use collie_core::{AgentState, CollieCore, MachineFlock};
+use collied::approvals::Approvals;
+use collied::audit::Audit;
 use collied::config::TasksConfig;
 use collied::drive::{Authorized, Driver};
 use collied::runtime::rex::{GROUP_CLOSE, Rex};
 use collied::runtime::{AgentInfo, Error, Runtime};
 use collied::server::{self, ServerConfig};
 use common::*;
-use protocol::{AgentSendKeysParams, ErrorCode, Key, KeyCombo, OpId, TerminalId};
-use tokio::sync::watch;
+use protocol::{
+    AgentAnswerNoticeParams, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams,
+    Approval, ApprovalDecideParams, ApprovalOutcome, Decision, DraftText, ErrorCode, Event, Key,
+    KeyCombo, Label, NoticeDigit, OpId, PromptText, Response, SlashCommand, TerminalId,
+};
+use tokio::sync::{broadcast, watch};
 
 /// A stand-in agent: it reports OSC 7501 as Claude Code does, from the process that leads the
 /// terminal, and moves on once the test creates `go`, then `block`, in its folder. One
@@ -638,6 +644,321 @@ async fn input_scenario(server: &RexServer) {
         drive.send_keys(keys, &yes).await.0.unwrap_err().0,
         ErrorCode::AgentNotReady
     );
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
+/// A stand-in Claude Code that asks the same permission question when the test creates
+/// `go`, then twice in a row from `go2`, in one process so its reports come from the
+/// foreground process. Arrows move the cursor and redraw; Enter answers with the option, Esc
+/// with `esc`, each appended to `answers`, then it reports `working`. Once `again` exists it
+/// reports the dialog anew without being answered, as a second identical prompt would.
+const ASKER: &str = r#"use POSIX; use utf8; binmode STDOUT, ':utf8'; $| = 1;
+sub st { print "\e]7501;$_[0]\e\\" }
+sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+my $t = POSIX::Termios->new; $t->getattr(0);
+$t->setlflag($t->getlflag & ~(ECHO|ICANON|ISIG|IEXTEN));
+$t->setiflag($t->getiflag & ~(ICRNL|IXON|INLCR|IGNCR|ISTRIP|BRKINT|PARMRK));
+$t->setcc(VMIN, 1); $t->setcc(VTIME, 0);
+$t->setattr(0, TCSANOW);
+my @opts = ("Yes", "Yes, and don't ask again for touch commands", "No");
+my ($cur, $flipped) = (0, 0);
+sub draw {
+  print "\e[2J\e[H", "\x{2500}" x 40, "\n Bash command\n\n   touch /tmp/collie-rex-approval\n",
+    "   Create an empty file\n\n Do you want to proceed?\n";
+  printf "%s%d. %s\n", ($_ == $cur ? " \x{276f} " : "   "), $_ + 1, $opts[$_] for 0 .. $#opts;
+  print "\n Esc to cancel \x{b7} Tab to amend\n";
+}
+sub blocked { st("state=blocked:app=claude-code:kind=permission:msg=approve Bash") }
+sub answer {
+  open my $f, '>>', 'answers' or die; print $f "$_[0]\n"; close $f;
+  print "\e[2J\e[Hanswered $_[0]\n"; st("state=working:app=claude-code");
+}
+sub ask {
+  $cur = 0; draw(); blocked();
+  my $rin = ''; vec($rin, 0, 1) = 1;
+  while (1) {
+    if (-e "again" && !$flipped) { $flipped = 1; st("state=working:app=claude-code"); draw(); blocked() }
+    next unless select(my $r = $rin, undef, undef, 0.05);
+    sysread(STDIN, my $k, 16) or exit;
+    if ($k eq "\e[B") { $cur++ if $cur < $#opts; draw() }
+    elsif ($k eq "\e[A") { $cur-- if $cur > 0; draw() }
+    elsif ($k eq "\r") { answer($cur + 1); return }
+    elsif ($k eq "\e") { answer("esc"); return }
+  }
+}
+st("state=idle:app=claude-code");
+wait_for("go"); ask();
+wait_for("go2"); ask(); ask();
+select(undef, undef, undef, 600);
+"#;
+
+#[test]
+fn live_rex_approvals() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "a");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(approvals_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+async fn approvals_scenario(server: &RexServer) {
+    let (_, block) = new_session(server, "collie-asks", &["/usr/bin/perl", "-e", ASKER]);
+    let agent = format!("rex:{block}");
+    let rex = Arc::new(Rex::new(server.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let none = server.root.join("no-herdr.sock");
+    let rt = Runtime::new(none.clone()).with_rex(Some(rex.clone()));
+    let audit = Arc::new(Audit::open(&server.root.join("audit.log")).unwrap());
+    let (tx, mut events) = broadcast::channel(64);
+    let approvals = Approvals::new(none, "nMAC".into(), tx, audit, None).with_rex(Some(rex));
+    let find = async || -> Option<AgentInfo> {
+        (rt.agent_list().await.ok()?.into_iter()).find(|a| a.terminal_id == agent)
+    };
+    let idle = until("the asker's idle report", async || {
+        find().await.filter(|a| a.agent_status == "idle")
+    })
+    .await;
+
+    // Each dialog is a new blocked report, read and raised once.
+    let raise = async |events: &mut broadcast::Receiver<Event>, after: u64| {
+        let blocked = until("a new dialog", async || {
+            find()
+                .await
+                .filter(|a| a.agent_status == "blocked" && a.state_change_seq != after)
+        })
+        .await;
+        let approval = until("the approval", async || {
+            approvals.observe(&rt.agent_list().await.ok()?, &[]).await;
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|e| match e {
+                Event::ApprovalNeeded { approval } => Some(approval),
+                _ => None,
+            })
+        })
+        .await;
+        assert_eq!(
+            approval.options,
+            [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+        );
+        (blocked.state_change_seq, approval)
+    };
+    let yes: Authorized = Arc::new(|| true);
+    let decide = async |a: &Approval, decision: Decision| {
+        let p = ApprovalDecideParams {
+            approval_id: a.approval_id.clone(),
+            decision,
+            choice: None,
+            nonce: a.nonce.clone(),
+            note: None,
+        };
+        match approvals.decide("phone", "nPHONE", p, &yes).await {
+            Ok(Response::ApprovalResolved { outcome, .. }) => outcome,
+            other => panic!("{other:?}"),
+        }
+    };
+    let answers = server.work.join("answers");
+    let answered = async |want: &str| {
+        until(want, async || {
+            let got = std::fs::read_to_string(&answers).unwrap_or_default();
+            (got.lines().collect::<Vec<_>>().join(" ") == want).then_some(())
+        })
+        .await;
+    };
+
+    // Deny is "3. No": two arrows, a read that finds the cursor there, then Enter.
+    std::fs::write(server.work.join("go"), "").unwrap();
+    let (seq1, first) = raise(&mut events, idle.state_change_seq).await;
+    assert!(matches!(
+        decide(&first, Decision::Deny).await,
+        ApprovalOutcome::Applied {
+            decision: Decision::Deny,
+            ..
+        }
+    ));
+    answered("3").await;
+
+    // Approve is Enter on "1. Yes"; the same question then asks again at once.
+    std::fs::write(server.work.join("go2"), "").unwrap();
+    let (seq2, second) = raise(&mut events, seq1).await;
+    assert!(matches!(
+        decide(&second, Decision::Approve).await,
+        ApprovalOutcome::Applied {
+            decision: Decision::Approve,
+            ..
+        }
+    ));
+    answered("3 1").await;
+    let (seq3, third) = raise(&mut events, seq2).await;
+    assert_ne!(third.approval_id, second.approval_id);
+    assert_eq!(third.snippet, second.snippet);
+
+    // The same dialog reported anew: the decision meant for the one before answers nothing.
+    std::fs::write(server.work.join("again"), "").unwrap();
+    until("the dialog reported anew", async || {
+        find()
+            .await
+            .filter(|a| a.agent_status == "blocked" && a.state_change_seq != seq3)
+    })
+    .await;
+    assert_eq!(
+        decide(&third, Decision::Approve).await,
+        ApprovalOutcome::Superseded
+    );
+    let (_, fourth) = raise(&mut events, seq3).await;
+    assert!(matches!(
+        decide(&fourth, Decision::Approve).await,
+        ApprovalOutcome::Applied { .. }
+    ));
+    answered("3 1 1").await;
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
+/// A stand-in Claude Code input box, idle: typed and pasted text shows in the box, Enter
+/// logs `prompt <text>` to `log`, Ctrl+U clears, Ctrl+End logs `end` and takes down the
+/// "Jump to bottom" banner `banner` puts up, and a digit in an empty box under the notice
+/// `notice` puts up logs `notice <digit>` and takes it down.
+const BOXED: &str = r#"use POSIX; use utf8; binmode STDOUT, ':utf8'; $| = 1;
+my $t = POSIX::Termios->new; $t->getattr(0);
+$t->setlflag($t->getlflag & ~(ECHO|ICANON|ISIG|IEXTEN));
+$t->setiflag($t->getiflag & ~(ICRNL|IXON|INLCR|IGNCR|ISTRIP|BRKINT|PARMRK));
+$t->setcc(VMIN, 1); $t->setcc(VTIME, 0);
+$t->setattr(0, TCSANOW);
+sub logit { open my $f, '>>', 'log' or die; print $f "$_[0]\n"; close $f }
+my $buf = '';
+sub shown { (-e 'banner' ? 1 : 0) . (-e 'notice' ? 1 : 0) }
+sub draw {
+  print "\e[2J\e[H";
+  print "\e[44m Jump to bottom \e[0m\n" if -e 'banner';
+  print "\x{2726} Heads up: plans can change\n  1: Show me  0: Dismiss\n\n" if -e 'notice';
+  my $rule = "\x{2500}" x 40;
+  print "$rule\n\x{276f} ", ($buf eq '' ? "\e[2mTry \"fix lint errors\"\e[0m" : $buf), "\n$rule\n";
+}
+print "\e]7501;state=idle:app=claude-code\e\\";
+my $was = shown(); draw();
+my $rin = ''; vec($rin, 0, 1) = 1;
+while (1) {
+  if (shown() ne $was) { $was = shown(); draw() }
+  next unless select(my $r = $rin, undef, undef, 0.05);
+  sysread(STDIN, my $k, 4096) or exit;
+  utf8::decode($k);
+  while ($k =~ s/^(\e\[1;5F|.)//s) {
+    my $c = $1;
+    if ($c eq "\e[1;5F") { logit("end"); unlink 'banner' }
+    elsif ($c eq "\r") { logit("prompt $buf"); $buf = '' }
+    elsif ($c eq "\x15") { $buf = '' }
+    elsif ($c eq "\x7f") { chop $buf }
+    elsif ($c =~ /^\d$/ && $buf eq '' && -e 'notice') { logit("notice $c"); unlink 'notice' }
+    elsif ($c ge ' ') { $buf .= $c }
+  }
+  $was = shown(); draw();
+}
+"#;
+
+#[test]
+fn live_rex_drive() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "d");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(drive_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+/// What drive does with a Claude Code on screen, through Rex's screens and input together.
+async fn drive_scenario(server: &RexServer) {
+    let (_, block) = new_session(server, "collie-box", &["/usr/bin/perl", "-e", BOXED]);
+    let agent = format!("rex:{block}");
+    let rex = Arc::new(Rex::new(server.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let none = server.root.join("no-herdr.sock");
+    let rt = Runtime::new(none.clone()).with_rex(Some(rex.clone()));
+    let drive = Driver::new(none, vec![], &[]).unwrap().with_rex(Some(rex));
+    let yes: Authorized = Arc::new(|| true);
+    until("the box's idle report", async || {
+        (rt.agent_get(&agent).await.ok()).filter(|a| a.agent_status == "idle")
+    })
+    .await;
+    let terminal = TerminalId::new(agent.clone()).unwrap();
+    let shows = async |text: &str| {
+        until(text, async || {
+            let screen = rt.agent_read(&agent, "visible", None).await.ok()?.text;
+            screen.contains(text).then_some(())
+        })
+        .await;
+    };
+    let log = server.work.join("log");
+    let logged = async |want: &str| {
+        until(want, async || {
+            let got = std::fs::read_to_string(&log).unwrap_or_default();
+            (got.lines().collect::<Vec<_>>().join(", ") == want).then_some(())
+        })
+        .await;
+    };
+    let prompt = |text: &str| AgentPromptParams {
+        op_id: OpId::new(text.repeat(22)[..22].to_owned()).unwrap(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new(text.to_owned()).unwrap(),
+        expected_draft: None,
+    };
+    shows("Try \"fix lint errors\"").await;
+
+    // A prompt reads the box empty, then pastes and presses Enter.
+    assert_eq!(drive.prompt(prompt("a"), &yes).await, Ok(Response::Ok));
+    logged("prompt a").await;
+
+    // The slash mirror pastes the command without Enter, then clears it.
+    let slash = |command: &str, expected: Option<&str>| AgentSlashDraftParams {
+        terminal_id: terminal.clone(),
+        command: SlashCommand::new(command.to_owned()).unwrap(),
+        expected_draft: expected.map(|d| DraftText::new(d.to_owned()).unwrap()),
+    };
+    assert_eq!(
+        drive.slash_draft(slash("/model", None), &yes).await,
+        Ok(Response::Ok)
+    );
+    shows("\u{276f} /model").await;
+    assert_eq!(
+        drive.slash_draft(slash("", Some("/model")), &yes).await,
+        Ok(Response::Ok)
+    );
+    shows("Try \"fix lint errors\"").await;
+
+    // Scrolled up: no prompt, and Ctrl+End brings the transcript back.
+    std::fs::write(server.work.join("banner"), "").unwrap();
+    shows("Jump to bottom").await;
+    assert_eq!(
+        drive.prompt(prompt("b"), &yes).await.unwrap_err().0,
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(drive.scroll_bottom(&terminal, &yes).await, Ok(Response::Ok));
+    logged("prompt a, end").await;
+
+    // A notice's option is its digit alone.
+    std::fs::write(server.work.join("notice"), "").unwrap();
+    shows("1: Show me").await;
+    let notice = AgentAnswerNoticeParams {
+        terminal_id: terminal.clone(),
+        digit: NoticeDigit::new(1).unwrap(),
+        label: Label::new("Show me".to_owned()).unwrap(),
+    };
+    assert_eq!(drive.answer_notice(&notice, &yes).await, Ok(Response::Ok));
+    logged("prompt a, end, notice 1").await;
 
     stop.send_replace(true);
     task.await.unwrap();
