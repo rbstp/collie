@@ -46,10 +46,11 @@ pub(super) fn title(raw: &str) -> &str {
         .trim_end()
 }
 
-/// `reported` is the kind a status's `app` names. Only Claude Code and Codex are known to
-/// report `blocked` at their dialogs; Copilot CLI 1.0.106 and later reports `idle` at its
-/// folder trust prompt and pickers (#741), and other programs were never checked. A report
-/// naming another CLI than the one leading the terminal is a previous program's.
+/// `reported` is the kind a status's `app` names. Claude Code's and Codex's reports were
+/// checked: they report `blocked` at their permission and question dialogs. Copilot CLI
+/// 1.0.106 and later reports `idle` at its folder trust prompt and pickers (#741), and other
+/// programs were never checked. A report naming another CLI than the one leading the
+/// terminal is a previous program's.
 pub(super) fn read_only(reported: Option<&str>, cli: Option<&str>) -> bool {
     !reported.is_some_and(|k| TASK_KINDS.contains(&k) && cli.is_none_or(|c| c == k))
 }

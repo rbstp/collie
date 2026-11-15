@@ -3564,6 +3564,34 @@ mod tests {
                 "{kind} {state}: {calls:?}"
             );
         }
+
+        // A Codex installed with npm leads its terminal as `node`, which names no CLI.
+        fn npm_codex() -> serde_json::Value {
+            term("codex", "idle", "node")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let seen = core_tests::fake_core(&root.join("core.sock"), |m| match m {
+            "terminal.keys" => serde_json::json!({"turn": 0, "status": "idle"}),
+            m => core_get(m, npm_codex),
+        })
+        .await;
+        let core = core_tests::core_of(&root, serde_json::json!([npm_codex()]));
+        assert!(!core.agents().unwrap()[0].read_only);
+        let keys = AgentSendKeysParams {
+            op_id: OpId::new("P".repeat(22)).unwrap(),
+            terminal_id: TerminalId::new(core_id()).unwrap(),
+            keys: vec![Key::Enter],
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let sent = core_driver(&root, core).send_keys(keys, &yes).await.0;
+        assert_eq!(sent, Ok(Response::Ok));
+        assert!(
+            crate::lock(&seen)
+                .calls
+                .iter()
+                .any(|c| c["method"] == "terminal.keys")
+        );
     }
 
     fn core_get(method: &str, terminal: fn() -> serde_json::Value) -> serde_json::Value {
