@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | In herdr only; in [Herdr Core](../app/new-task.md#herdr-core) and Rex, you can only watch Copilot CLI |
+| [New task](../app/new-task.md) | In herdr only; in [Herdr Core](../app/new-task.md#herdr-core) and [Rex](../app/new-task.md#rex), you can only watch Copilot CLI |
 
 ## Set up
 

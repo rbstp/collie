@@ -1,6 +1,6 @@
 # New task
 
-**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr Core](#herdr-core) when herdr is not running there. Write what the agent should do, choose where it runs, then tap **Start** at the top right. While the task starts, **Start** shows a spinner and the title reads "Starting the task…", then "Waiting for the agent…".
+**New task** starts Claude Code, Codex or Copilot CLI in a new herdr workspace on the machine you pick, or Claude Code or Codex in [Herdr Core](#herdr-core) or [Rex](#rex) when herdr is not running there or when you [choose one](#where-tasks-start). Write what the agent should do, choose where it runs, then tap **Start** at the top right. While the task starts, **Start** shows a spinner and the title reads "Starting the task…", then "Waiting for the agent…".
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/new-task-light.png" width="300" height="652" loading="lazy" alt="The New task sheet: prompt, location, folder and agent picker">
@@ -33,7 +33,7 @@ Check the branch and path before you tap **Start**. If the agent fails to start,
 
 ## Resume a session
 
-Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr or Herdr Core, are left out.
+Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr, Herdr Core or Rex, are left out.
 
 ## Options
 
@@ -73,3 +73,13 @@ When herdr is not running on the machine and herdr-core (Herdr Core) is, **New t
 - Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in herdr, but the task label is not kept: nothing in Herdr Core would show it. One task works in a worktree at a time: **Open** refuses a checkout another Herdr Core task already records. If the task fails after the agent starts, the agent keeps running and the checkout stays; the error names them.
 - When Claude Code asks whether to trust the folder, or shows another startup question, the task stops without sending your prompt. Answer it on the machine: Claude Code reports nothing while it asks, so no approval reaches the phone.
 - **Archive** of a worktree task collie started (Create, pull request or Open) ends that task's agent and removes the checkout, **uncommitted changes included**, then runs `gh poi`; its answer names the agent it ended. It closes nothing while another herdr or Herdr Core terminal or task works in the checkout (a Resume started there included), while herdr runs and has the checkout open or does not answer, or while the worktree is locked. Windows in other apps, such as Terminal.app, an IDE or tmux, are not checked: close them first. A task whose agent already exited no longer shows, so you cannot archive it from the phone: remove its checkout on the machine. For a regular folder, an agent collie did not start, or a folder you picked that happens to be a worktree, it ends only that agent, keeps the folder and runs `gh poi` as in herdr. collie does not [archive a Herdr Core task by itself](pull-requests.md#archive-when-the-pull-request-merges) when its pull request merges.
+
+## Rex
+
+When neither herdr nor Herdr Core is running on the machine and Rex is, **New task** starts the agent in Rex, in a Rex session of its own, which Rex.app lists under the task's label or name. While herdr or Herdr Core runs, tasks start there; to start them in Rex anyway, choose Rex in [Where tasks start](#where-tasks-start).
+
+- You can start Claude Code and Codex, once `collied` finds them on the machine. Copilot CLI does not start in Rex, for the reason it does not start in Herdr Core. The agent starts through your login shell, so it finds what your profile puts on its `PATH`, as in your own Rex terminals.
+- Folders, clones, Git worktrees, pull requests, Resume and Ultracode work as in Herdr Core, and a startup question stops the task the same way. **Name workspace** names the Rex session.
+- **Archive** works as in [Herdr Core](#herdr-core): for a worktree task collie started, it ends the agent and removes the checkout, **uncommitted changes included**, unless anything else works in it, a shell in Rex.app included. Then it removes the task's Rex session if nothing else is left in it ([Archive](#archive)). An agent that exits on its own leaves its session, empty, in Rex.app: close it there.
+- If `collied` loses Rex while a task starts, the error says an agent may have been started. Such an agent keeps an 80 by 24 screen and stays after it exits; archive or close it from the phone.
+- collie does not archive a Rex task by itself when its pull request merges.

@@ -1,6 +1,6 @@
 # collie
 
-collie lets you watch and steer your coding agents in [herdr](https://github.com/herdrdev/herdr) and herdr-core (Herdr Core) from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where they run, and the Collie app reaches it over your own tailnet.
+collie lets you watch and steer your coding agents in [herdr](https://github.com/herdrdev/herdr), herdr-core (Herdr Core) and Rex from an iPhone and an Apple Watch. A small daemon, `collied`, runs on the Mac or Linux machine where they run, and the Collie app reaches it over your own tailnet.
 
 <div class="screenshots">
 <img class="screenshot-light" src="images/agents-light.png" width="300" height="652" loading="lazy" alt="The Agents tab: six agents, one blocked on an approval">
@@ -30,7 +30,7 @@ The [Security overview](security/overview.md) and the [privacy policy](privacy.m
 
 ## The parts
 
-- **`collied`** runs on an Apple silicon Mac or an x86_64 Linux machine, talks to herdr and serves the phone over the tailnet.
+- **`collied`** runs on an Apple silicon Mac or an x86_64 Linux machine, talks to herdr, Herdr Core and Rex and serves the phone over the tailnet.
 - **Collie** is the iPhone app, with notifications and Live Activities.
 - **CollieWatch** shows approvals, agents and a usage complication, all through the iPhone.
 - **[CollieBar](desktop/colliebar.md)** on macOS and **[CollieTray](desktop/collietray.md)** on Omarchy are optional desktop companions.

@@ -23,7 +23,7 @@ With the largest text sizes (**Settings > Accessibility > Display & Text Size > 
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]
-> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core also [collied's](../agents/codex.md#herdr-core). In Herdr Core, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI needs none, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
+> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core and Rex also [collied's](../agents/codex.md#herdr-core-and-rex). In Herdr Core and Rex, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI needs none, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
 
 ### Open a file
 
