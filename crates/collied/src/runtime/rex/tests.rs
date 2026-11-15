@@ -11,21 +11,21 @@ use super::*;
 use crate::runtime::{Owner, Runtime};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
-const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";
+pub(super) const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";
 const S2: &str = "session:019a7d2e-0000-7000-8000-000000000002";
-const B1: &str = "block:019a7d2e-0000-7000-8000-0000000000b1";
-const B2: &str = "block:019a7d2e-0000-7000-8000-0000000000b2";
+pub(super) const B1: &str = "block:019a7d2e-0000-7000-8000-0000000000b1";
+pub(super) const B2: &str = "block:019a7d2e-0000-7000-8000-0000000000b2";
 const B3: &str = "block:019a7d2e-0000-7000-8000-0000000000b3";
-const T0: &str = "2026-11-12T16:47:01.000001Z";
+pub(super) const T0: &str = "2026-11-12T16:47:01.000001Z";
 const T1: &str = "2026-11-12T16:47:02.000001Z";
 const T2: &str = "2026-11-12T16:47:03.000001Z";
 
-fn id(block: &str) -> String {
+pub(super) fn id(block: &str) -> String {
     format!("rex:{block}")
 }
 
 /// A Claude Code in `block` of `session`, pid `pid`, that reported `state` at `at`.
-fn claude(fake: &Fake, session: &str, block: &str, pid: u32, state: &str, at: &str) {
+pub(super) fn claude(fake: &Fake, session: &str, block: &str, pid: u32, state: &str, at: &str) {
     let mut s = fake.state();
     if !s.sessions.iter().any(|(id, _)| id == session) {
         s.sessions.push((session.to_owned(), "work".to_owned()));
@@ -38,7 +38,7 @@ fn claude(fake: &Fake, session: &str, block: &str, pid: u32, state: &str, at: &s
     );
 }
 
-async fn eventually(what: &str, mut ready: impl FnMut() -> bool) {
+pub(super) async fn eventually(what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !ready() {
         assert!(
@@ -50,7 +50,7 @@ async fn eventually(what: &str, mut ready: impl FnMut() -> bool) {
 }
 
 /// Follows until the first reads are done; the task ends with the connection.
-async fn follow(rex: &Arc<Rex>) -> tokio::task::JoinHandle<(Error, bool)> {
+pub(super) async fn follow(rex: &Arc<Rex>) -> tokio::task::JoinHandle<(Error, bool)> {
     let task = tokio::spawn({
         let rex = rex.clone();
         async move { rex.attempt().await }
@@ -85,13 +85,26 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "com.superlogical.terminal.process",
             "com.superlogical.terminal.program_status",
             "com.superlogical.terminal.title",
+            "com.superlogical.terminal.size",
+            "com.superlogical.terminal.format",
+            "com.superlogical.terminal.blob_read",
         ]
     );
     let terminal: Vec<&str> = Method::ALL
         .into_iter()
         .filter_map(Method::terminal)
         .collect();
-    assert_eq!(terminal, ["process", "program_status", "title"]);
+    assert_eq!(
+        terminal,
+        [
+            "process",
+            "program_status",
+            "title",
+            "size",
+            "format",
+            "blob_read"
+        ]
+    );
 }
 
 /// Why `attempt` and `probe` do not follow a server that closes right after the hello.
@@ -124,7 +137,7 @@ async fn an_older_api_revision_is_refused_in_plain_words_whatever_the_server_say
     ] {
         let (why, report) = refused_after_hello(CloseCode::Policy, reason).await;
         assert!(
-            why.contains("API revision 13") && why.contains("quit Rex and open it again"),
+            why.contains("API revision 13") && why.contains("so restart the Rex server"),
             "{why}"
         );
         assert!(why.contains(&crate::printable(reason)), "{why}");
@@ -363,14 +376,9 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
 
     let unsupported = |r: Result<_, Error>| matches!(r, Err(Error::Unsupported(w)) if w == NOT_YET);
     assert_eq!(Owner::of(&id(B1)), Owner::Rex);
-    assert!(unsupported(
-        rt.agent_read(&id(B1), "visible", None).await.map(|_| ())
-    ));
-    assert!(unsupported(rt.detection_text(&id(B1)).await.map(|_| ())));
     assert!(unsupported(rt.agent_prompt(&id(B1), "hi", "idle").await));
     assert!(unsupported(rt.agent_send_keys(&id(B1), &["enter"]).await));
     assert!(unsupported(rt.agent_focus(&id(B1)).await));
-    assert!(unsupported(rt.watch(&id(B1)).map(|_| ())));
     let group = format!("rex:{S1}");
     assert!(
         matches!(rt.workspace_close(&group).await, Err(Error::Unsupported(w)) if w == GROUP_CLOSE)
@@ -687,7 +695,7 @@ async fn a_session_renamed_before_it_is_read_shows_its_new_label() {
 }
 
 #[derive(Clone, Default)]
-struct Logs(Arc<std::sync::Mutex<Vec<u8>>>);
+pub(super) struct Logs(pub(super) Arc<std::sync::Mutex<Vec<u8>>>);
 
 impl std::io::Write for Logs {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {

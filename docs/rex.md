@@ -1,6 +1,6 @@
 # Rex backend plan
 
-Spike for [#703](https://github.com/rbstp/collie/issues/703), 2026-11-12. This page is the plan, the evidence behind it and the follow-up issues for "Phase 8: Rex integration". Phase 1 (#704) is built: [Shape](#shape) says how, and [architecture.md](architecture.md#rex) what collied does with Rex. Most of the design reuses herdr-core's: its plan is [herdr-core.md](herdr-core.md), and what collied does with it is in [architecture.md](architecture.md#herdr-core-herdr-2).
+Spike for [#703](https://github.com/rbstp/collie/issues/703), 2026-11-12. This page is the plan, the evidence behind it and the follow-up issues for "Phase 8: Rex integration". Phases 1 (#704) and 2 (#705) are built: [Shape](#shape) says how, and [architecture.md](architecture.md#rex) what collied does with Rex. Most of the design reuses herdr-core's: its plan is [herdr-core.md](herdr-core.md), and what collied does with it is in [architecture.md](architecture.md#herdr-core-herdr-2).
 
 ## Summary
 
@@ -28,7 +28,7 @@ Read, not run:
 - Rex.app's binary, for its client actions and the message it answers them with while Remote Control is off. Rex.app was never opened.
 - collied's runtime (`crates/collied/src/runtime`), [herdr-core.md](herdr-core.md) and [architecture.md](architecture.md#herdr-core-herdr-2).
 
-Not verified: Codex and Copilot CLI in Rex, collied's own lookup of Claude Code's session file ([Mapping](#mapping)), a program with a keyboard protocol, Linux, Rex.app (the size it gives a block it owns, whether it follows a focus change made on the server), a server started by `--autostart` (what environment it passes on), sessions restored after a server restart, and builds other than 1940.
+Not verified: Codex and Copilot CLI in Rex, collied's own lookup of Claude Code's session file ([Mapping](#mapping)), a program with a keyboard protocol, Linux, Rex.app (whether it follows a focus change made on the server; the size it gives a block it owns was checked in #705, [Screen](#4-screen)), a server started by `--autostart` (what environment it passes on), sessions restored after a server restart, and builds other than 1940.
 
 ## What Rex is
 
@@ -54,11 +54,11 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 | `herdr_snapshot` (archive's occupancy check) | `session.snapshot` | herdr only, beside the core's `occupants()` | herdr only, beside Rex's blocks and their `process` folders | herdr only, unchanged |
 | `agent_get` (ready check) | `agent.get` | `terminal.get` | `terminal.program_status` and `terminal.process` | equivalent |
 | `pane_get` (an open worktree's root pane, `still_new`) | `pane.get` | herdr only (`herdr_only`) | herdr only: both callers follow herdr's `worktree.open` and `agent.start`; Rex's occupancy comes from its own listing | herdr only, unchanged |
-| `pane_columns` | `pane.layout` | `terminal.get` `cols` | `terminal.size` | equivalent, exact |
-| `detection_text` (approvals, menus, startup checks) | `pane.read` `detection` | `terminal.read` | `terminal.format {format: text}`, its last `rows` lines | equivalent (verified) |
-| `agent_read`, `pane_read` (ANSI, `visible`, `recent`) | `agent.read`, `pane.read` | emulator on a watch-only attach | `terminal.format {format: vt, max_bytes}`, then `terminal.blob_read` of the tail, into collied's emulator | built (verified for the screen) |
-| `watch` | nothing to hold, reads polled | watch-only attach | nothing to hold, reads polled as for herdr | equivalent ([Screen](#4-screen)) |
-| `agent_explain` | `agent.explain` | `status.kind` | the status record's `kind` | replaced (verified) |
+| `pane_columns` | `pane.layout` | `terminal.get` `cols` | `terminal.size`, then `size_changed` | equivalent, exact (built) |
+| `detection_text` (approvals, menus, startup checks) | `pane.read` `detection` | `terminal.read` | the emulated screen as text, read as for `agent_read` | equivalent (built; equals `format` text, verified) |
+| `agent_read`, `pane_read` (ANSI, `visible`, `recent`) | `agent.read`, `pane.read` | emulator on a watch-only attach | `terminal.format {format: vt, max_bytes}` (`unwrap` with history), then `terminal.blob_read` of the tail, into collied's emulator | built |
+| `watch` | nothing to hold, reads polled | watch-only attach | nothing to hold, reads polled as for herdr | built ([Screen](#4-screen)) |
+| `agent_explain` | `agent.explain` | `status.kind` | the status record's `kind` | replaced (built) |
 | `agent_prompt`, `type_text` | `agent.prompt`, `pane.send_input` | `terminal.send` (`if`, `force`) | `block.event` paste, then `block.event` key Enter | equivalent, without `if` (verified) |
 | `agent_send_keys`, `scroll_bottom`, `notice_digit` | `agent.send_keys`, `pane.send_text` | `terminal.keys` | `block.event` key | equivalent, except `cmd`, `ctrl+[`, `ctrl+alt+[` and `ctrl+shift` combinations, refused (verified, [Input](#5-input)) |
 | `pane_send_text` (slash mirror, notes) | `pane.send_text` | typing attach | `block.event` paste, no Enter | equivalent (verified) |
@@ -107,7 +107,14 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 - `rex block stream` answered "not implemented" in this build. A data connection (`data.connect`, then `/api/data` with `rex.data.terminal.v1`) delivered its first bytes 0.5 to 2.9 ms after the ticket: a binary Ghostty snapshot (`GHOSTSNP`), then the program's output with Rex's own messages as `ESC _ rex1;<nonce>;<json> ESC \` (`resize` right after the snapshot, `theme`, `child_exited`). `alacritty_terminal` cannot read the snapshot, and nothing lines the stream up with `format`: `format` answers `content`, `id`, `total` and `eof`, and the stream carries only those messages and, for a resume, a byte count of its own. Seeding an emulator from `format` and then following the stream could apply output twice or drop it.
 - So reads and watches poll `format` VT, as collied polls herdr's reads for a watch (every 250 ms, every 1 s once the screen has not changed for 5 s): one `format` with `max_bytes`, then `blob_read` of the tail the phone's lines need, cut at a line break, emulated afresh. Each poll is the terminal's whole current state, so output is never applied twice and never lost from what the screen and its history hold; output a program overwrites between two polls is never seen, as with herdr.
 - Cost, measured against a terminal filled with numbered lines (one `format` with `max_bytes: 65536` plus one `blob_read` of the last 64 KB): 0.9 to 1.2 ms at 1,000 lines (0.04 MB of VT), 10 to 14 ms at 10,000 (0.45 MB) and 39 to 46 ms at 100,000 (4.4 MB). What crosses the socket stays bounded; the server's work grows with the scrollback. At 250 ms that is about a sixth of a core while a phone watches a 100,000-line terminal that keeps changing, a twentieth once it is quiet. The data connection's snapshot, by comparison, sent 0.05 MB in 1 ms at 1,000 lines and 4.5 MB in 65 ms at 100,000 before any live output. If polling proves too dear, two later options remain: a data connection used only as a sign that output arrived (its bytes discarded, the snapshot paid once per watch), or libghostty-vt, which the app already builds from pinned tarballs, to restore the snapshot itself (a new native dependency for collied; whether its C API reads Rex's snapshots is unknown).
-- Size: neither `format` nor a data connection changed a terminal's size or owner (verified on a terminal resized to 100x30 with no owner). collied never calls `resize`, `own_block` or `set_theme`, and opens no data connection. A block Rex.app owns has Rex.app's size; not verified with Rex.app attached.
+- Size: neither `format` nor a data connection changed a terminal's size or owner (verified on a terminal resized to 100x30 with no owner). collied never calls `resize`, `own_block` or `set_theme`, and opens no data connection. A block Rex.app owns has Rex.app's size: 198x68, its owner Rex.app's client, and `format` and `blob_read` left both unchanged (verified in #705 on the owner's server, 0.1.0-preview.19).
+- Checked in #705 against 0.1.0-preview.19 (build 1972, API revision 14, speaking 13 to collied), on a scratch server and, read-only, on a Claude Code permission dialog in a block Rex.app owns:
+  - VT rows are joined by `\r\n`, with none after the last row, which may be empty: the whole rendering is fed as it comes. The spike's "final line break dropped" held for a screen with no scrollback; with scrollback it shifts the screen down by one row.
+  - At revision 13 a `format` with `max_bytes` answers `content`, `id` and `total`, and no `eof`; `blob_read` answers `eof`. Nothing in either answer, and no terminal event, says whether the screen changed: Rex has no revision, output event or `updated_at` for a screen. A poll that finds the screen unchanged therefore still calls `format` and, for a terminal over 64 KiB, `blob_read`; it skips only the emulator.
+  - A result's lifetime: `blob_read` documents "about five minutes"; in practice a block keeps its newest four results, with ids counted per block, readable from any connection (300 `format`s in a row left only the last four readable). An older one answers `not_found`. So the server's memory is bounded by four renderings per block: 150 s of polling a 100,000-line terminal (6 MB of VT) every 250 ms left its RSS between 438 and 593 MB, with no growth.
+  - A `blob_read` from inside a character answers its first bytes as replacement characters, one per byte; collied cuts the tail after its first line break, so they never reach the emulator.
+  - A result's first `blob_read` costs more than later ones of the same range: 5 to 6 ms at 1,000 lines and 10 to 12 ms at 100,000, against 0.5 to 1.3 ms (64 KB). `format` itself: 2.6 ms at 1,000 lines, 33 to 48 ms at 100,000.
+  - A whole read through collied (release build, 200 lines asked, median of 20): 1.6 ms for an unchanged 1,000-line terminal, which one `format` answers whole, and 7.9 ms for one that changes every 50 ms; 45 to 58 ms at 100,000 lines whether it changed or not, nearly all of it Rex's `format`.
 
 ### 5. Input
 
@@ -169,7 +176,18 @@ Phase 1 as built (#704):
 - A session's label also comes from `session.attach`, so a rename whose event arrived before the session was listed is kept. A block whose reads fail is skipped and logged rather than dropping the connection; a server that answered and then failed is reported as not followed, with the reason, and logged once per reason. The core and Rex share one record of herdr's reachability.
 - `ServerConfig.rex` names the socket to follow; only the daemon discovers it, so tests never reach the user's server.
 - Phone protocol unchanged: `claude-code` is `claude`, `error` is `unknown`.
-- Emulator (phase 2): collied's `runtime::screen::Screen`, unchanged, fed a fresh `format` VT tail for each read.
+
+Phase 2 as built (#705):
+
+- `runtime/rex/screen.rs` reads screens; `mod.rs` routes them to the listed agent's session, block and size. `Screen` is shared with herdr-core, with one addition, `text`, the screen as plain text for herdr's `detection` source.
+- A read: `format {format: vt, max_bytes: 1}`, then `blob_read` of the last 64 KiB, cut after its first line break and doubled while it holds fewer line breaks than the screen's rows plus the lines asked for, then fed to a fresh `Screen` at the block's size. One answer holds 983,040 bytes as a JSON string, its quotes included (so 983,040 bytes of plain text never fit, checked live): a doubled tail that does not fit is not used, the last one that did is, and that reader never asks for the larger size again. A tail without the screen's rows fails the read. A block whose rendering was 64 KiB or less last time is read by one `format` asking up to 960 KiB, which holds it whole.
+- `unwrap: true` for reads with history, so `recent_unwrapped` joins soft-wrapped rows, which herdr-core's paint cannot; `visible` and `detection` read rows as drawn, since with `unwrap` a line longer than the tail left nothing above the prompt (50 lines, 2,000,000 `x`, then a prompt; `live_rex` checks the rows).
+- Unchanged: each reader (block, source, and lines for a read with history) keeps the tail it fed and the text it read; the same tail at the same size answers that text with no emulator work, and the watch then sends nothing.
+- A result gone before its `blob_read` is formatted again, three times at most; a read that still fails is an error, which a watch skips.
+- `size` is the first read of each block, so no block is listed before its size, and `size_changed` keeps it current; `pane_columns` answers from it.
+- A block whose reads fail is read again on its next block event, not only with its session's next read, and logged once until it is read.
+- `agent.explain` answers the blocked report's `kind` from the model, and the `detection` read gives the screen as text; approvals do not reach Rex yet, since collied's approvals are given herdr and herdr-core only until input exists (#706).
+- The plan's `detection_text` from `format` text was not built: the text keeps every row, so its last `rows` lines are the screen only when the screen is full; the emulator's screen is right either way and costs nothing more.
 
 ## Testing against Rex
 
@@ -182,7 +200,7 @@ As built: CI has no Rex, so `runtime/rex/fake.rs` serves `rex.control.v1` in pro
 Each phase adds the methods it needs to the set the method check requires ([Transport](#3-transport)); `hello` and `help.all` always.
 
 1. Agents and status (M, built in #704): discovery, the personal-server and remote-access checks, the control connection, sessions as groups, status and kind from events, `collied status` and `doctor`, quiet absence, `pane.close`, the refusal of `workspace.close`, the threat model section. Server: `server.version`, `server.status`, `session.list`, `session.attach`, `session.attach_all`, `session.list_blocks`, `block.close`; terminal: `program_status`, `process`, `title`.
-2. Screens (M): reads and watches polled from `format` VT tails into the emulator. Terminal: `format`, `blob_read`, `size`.
+2. Screens (M, built in #705): reads and watches polled from `format` VT tails into the emulator. Terminal: `format`, `blob_read`, `size`.
 3. Input and approvals (M): paste and key events behind the allowlist, the ready check, read-only agents without status, approvals gated on `kind`, collied's own `state_change_seq` (built in #704 from `updated_at`, so every report moves it); tests for two identical prompts in a row and for every key over the socket. Server: `block.event`.
 4. Sessions (S): Claude Code's pid file through collied's lookup, the Codex SessionStart hook with `REX_BLOCK`, then Chat, costs, context, resume and the permission hook's binding. No new method.
 5. Tasks (M): New task, resume, worktrees and archive in Rex when neither herdr nor herdr-core answers, with the sixteen variables stripped, the block disowned and task records kept by block id. Server: `session.create`, `session.disown_block`.
@@ -192,8 +210,8 @@ What a Rex agent cannot do that a herdr one can, after all phases: take a prompt
 
 ## Risks
 
-- **Preview API.** Rex is 0.1.0-preview.16, its API at revision 13, and the user's running server is an older build than the installed CLI. collied pins the revision and fails closed per missing method.
-- **Polling cost.** `format` always renders the whole scrollback (up to 64 MiB), so a watched terminal with 100,000 lines costs the server about 40 ms per poll, four polls a second while it changes ([Screen](#4-screen)).
+- **Preview API.** Rex is 0.1.0-preview.19 (build 1972), its API at revision 14, of which collied speaks revision 13. collied pins the revision and fails closed per missing method.
+- **Polling cost.** At revisions 13 and 14 `format` takes no range, no visible-only and no since parameter, and Rex has no output event, so every poll makes Rex render the whole scrollback (up to 64 MiB): 33 to 48 ms of server time at 100,000 lines (measured), 13 to 19% of a core at four polls a second while the screen changes, a quarter of that once quiet; a whole read through collied takes 45 to 58 ms there ([Screen](#4-screen)). Readers are not deduplicated: a watch, a preview and a draft read of one block each run their own `format`.
 - **Empty sessions.** Archived tasks leave empty Rex sessions behind until the user closes them; a conditional `session.destroy` in Rex would remove them.
 - **The environment.** A Rex server passes its own environment to every terminal; one started from inside a herdr pane or a Claude Code session would hand its variables to every agent, as herdr-core's core did ([herdr-core risks](herdr-core.md#risks)). collied strips them from the agents it starts and `doctor` warns.
 - **No input guard.** Without `if`, a dialog that opens between the ready check and the write takes the prompt's Enter, as with herdr.

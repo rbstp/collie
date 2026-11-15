@@ -369,7 +369,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_columns(&self.herdr, pane_id).await,
             Owner::Core => self.followed()?.columns(pane_id),
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.columns(pane_id),
         }
     }
 
@@ -382,7 +382,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::agent_read(&self.herdr, pane_id, source, lines).await,
             Owner::Core => self.followed()?.read(pane_id, source, lines).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.read(pane_id, source, lines).await,
         }
     }
 
@@ -395,17 +395,16 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_read(&self.herdr, pane_id, source, lines).await,
             Owner::Core => self.followed()?.read(pane_id, source, lines).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.read(pane_id, source, lines).await,
         }
     }
 
     /// Keeps a herdr-core terminal attached until dropped, so a watch's reads come from one
-    /// emulated screen; herdr needs nothing kept.
+    /// emulated screen; herdr and Rex need nothing kept, their reads are polled.
     pub fn watch(&self, pane_id: &str) -> Result<Option<herdr_core::Watch>, Error> {
         match Owner::of(pane_id) {
-            Owner::Herdr => Ok(None),
+            Owner::Herdr | Owner::Rex => Ok(None),
             Owner::Core => self.followed()?.watch(pane_id).map(Some),
-            Owner::Rex => rex_not_yet(),
         }
     }
 
@@ -413,7 +412,7 @@ impl Runtime {
         match Owner::of(target) {
             Owner::Herdr => herdr::agent_explain(&self.herdr, target).await,
             Owner::Core => self.followed()?.explain(target),
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.explain(target),
         }
     }
 
@@ -421,7 +420,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::detection_text(&self.herdr, pane_id).await,
             Owner::Core => self.followed()?.screen_text(pane_id).await,
-            Owner::Rex => rex_not_yet(),
+            Owner::Rex => self.followed_rex()?.screen_text(pane_id).await,
         }
     }
 

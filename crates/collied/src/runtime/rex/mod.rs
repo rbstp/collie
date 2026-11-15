@@ -9,18 +9,23 @@ use tokio::sync::{Notify, watch};
 
 use self::client::{Client, Method, TIMEOUT};
 use self::model::Model;
+use self::screen::Screens;
 use self::wire::{
-    Attached, Blocks, Creators, Help, Process, ServerStatus, Sessions, Status, Tagged, Title,
+    Attached, Blocks, Creators, Help, Process, ServerStatus, Sessions, Size, Status, Tagged, Title,
 };
-use super::{AgentInfo, Error, HerdrSeen};
+use super::herdr::{Explain, MatchedRule};
+use super::{AgentInfo, Error, HerdrSeen, PaneRead};
 
 mod client;
 mod discovery;
 mod model;
+mod screen;
 mod wire;
 
 #[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod screen_tests;
 #[cfg(test)]
 mod tests;
 
@@ -199,7 +204,11 @@ pub struct Rex {
     wake: Notify,
     settled: watch::Sender<bool>,
     pub(super) herdr: Arc<HerdrSeen>,
+    screens: Screens,
 }
+
+/// The connection, session, block and size of a listed agent.
+type Target = (Arc<Client>, String, String, (u16, u16));
 
 fn gone(e: &Error) -> bool {
     matches!(e, Error::Rex { code, .. } if code == "not_found" || code == "session_not_found")
@@ -220,6 +229,7 @@ impl Rex {
             wake: Notify::new(),
             settled: watch::channel(false).0,
             herdr: Arc::default(),
+            screens: Screens::default(),
         }
     }
 
@@ -246,19 +256,58 @@ impl Rex {
             .ok_or_else(not_found)
     }
 
+    fn target(&self, id: &str) -> Result<Target, Error> {
+        let inner = self.lock();
+        let live = inner
+            .live
+            .as_ref()
+            .filter(|l| l.synced)
+            .ok_or_else(not_found)?;
+        let (session, block, size) = live.model.target(id).ok_or_else(not_found)?;
+        self.screens.retain(|b| live.model.has(b));
+        Ok((live.client.clone(), session, block, size))
+    }
+
+    pub fn columns(&self, id: &str) -> Result<Option<u16>, Error> {
+        Ok(Some(self.target(id)?.3.0))
+    }
+
+    /// Polled, as herdr's reads are: nothing is held between reads.
+    pub async fn read(
+        &self,
+        id: &str,
+        source: &str,
+        lines: Option<u32>,
+    ) -> Result<PaneRead, Error> {
+        let (client, session, block, size) = self.target(id)?;
+        let text = (self.screens)
+            .read(&client, &session, &block, size, source, lines)
+            .await?;
+        Ok(PaneRead {
+            text,
+            truncated: false,
+        })
+    }
+
+    /// The visible screen as text, as herdr's `detection` source reads it.
+    pub async fn screen_text(&self, id: &str) -> Result<String, Error> {
+        Ok(self.read(id, screen::DETECTION, None).await?.text)
+    }
+
+    pub fn explain(&self, id: &str) -> Result<Explain, Error> {
+        let inner = self.lock();
+        let kind = (inner.live.as_ref().filter(|l| l.synced))
+            .and_then(|live| live.model.blocked_kind(id))
+            .ok_or_else(not_found)?;
+        Ok(Explain {
+            matched_rule: kind.map(|id| MatchedRule { id }),
+        })
+    }
+
     /// Only a block collied lists as an agent. `block.close` ends its program; a window
     /// whose last block closes closes too, and the session stays.
     pub async fn close(&self, id: &str) -> Result<(), Error> {
-        let (client, session, block) = {
-            let inner = self.lock();
-            let live = inner
-                .live
-                .as_ref()
-                .filter(|l| l.synced)
-                .ok_or_else(not_found)?;
-            let (session, block) = live.model.target(id).ok_or_else(not_found)?;
-            (live.client.clone(), session, block)
-        };
+        let (client, session, block, _) = self.target(id)?;
         let payload = json!({ "session_id": session, "block_id": block });
         client
             .call::<Value>(Method::BlockClose, payload, CLOSE_TIMEOUT)
@@ -491,12 +540,12 @@ impl Rex {
         })?;
         for block in added {
             match self.read_block(client, session, &block).await {
-                Ok(()) => {}
+                Ok(()) => self.live(|live| live.model.recovered(&block))?,
                 Err(e @ (Error::Json(_) | Error::Timeout | Error::Rex { .. })) => {
-                    if !gone(&e) {
-                        tracing::warn!(socket = %self.socket.display(), block, error = %e, "Rex block skipped: its reads failed");
+                    let failed = !gone(&e);
+                    if self.live(|live| live.model.forget(session, &block, failed))? {
+                        tracing::warn!(socket = %self.socket.display(), block, error = %e, "Rex block skipped until it reports again: its reads failed");
                     }
-                    self.live(|live| live.model.forget(session, &block))?;
                 }
                 Err(e) => return Err(e),
             }
@@ -504,14 +553,23 @@ impl Rex {
         Ok(())
     }
 
+    /// The size first: once `process` names an agent it is listed, and read at that size.
     async fn read_block(&self, client: &Client, session: &str, block: &str) -> Result<(), Error> {
-        let (seq, process): (_, Process) = client.terminal(Method::Process, session, block).await?;
+        let (seq, size): (_, Size) = client
+            .terminal(Method::Size, session, block, json!({}))
+            .await?;
+        self.live(|live| live.model.size(session, block, seq, size))?;
+        let (seq, process): (_, Process) = client
+            .terminal(Method::Process, session, block, json!({}))
+            .await?;
         self.live(|live| live.model.process(session, block, seq, process))?;
         let (seq, status): (_, Status) = client
-            .terminal(Method::ProgramStatus, session, block)
+            .terminal(Method::ProgramStatus, session, block, json!({}))
             .await?;
         self.live(|live| live.model.status(session, block, seq, status.records))?;
-        let (seq, title): (_, Title) = client.terminal(Method::Title, session, block).await?;
+        let (seq, title): (_, Title) = client
+            .terminal(Method::Title, session, block, json!({}))
+            .await?;
         self.live(|live| live.model.title(session, block, seq, title.title))?;
         Ok(())
     }

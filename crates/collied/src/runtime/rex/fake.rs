@@ -33,6 +33,11 @@ pub(super) struct Block {
     pub records: Vec<Value>,
     pub process: Value,
     pub title: String,
+    /// What `format` renders as VT, and the size `size` answers.
+    pub screen: String,
+    /// What it renders without `unwrap`, when that differs.
+    pub rows: Option<String>,
+    pub size: (u32, u32),
 }
 
 pub(super) struct State {
@@ -50,6 +55,12 @@ pub(super) struct State {
     pub sessions: Vec<(String, String)>,
     pub blocks: Vec<Block>,
     hooks: Vec<(&'static str, Option<&'static str>, bool, Hook)>,
+    /// `format` results kept for `blob_read`, newest last, at most four per block as Rex
+    /// keeps them: id, block, rendering.
+    pub results: Vec<(u64, String, String)>,
+    next_result: u64,
+    /// The bytes of screen `format` and `blob_read` answered with.
+    pub moved: usize,
 }
 
 impl State {
@@ -76,6 +87,9 @@ impl State {
             records,
             process,
             title: String::new(),
+            screen: String::new(),
+            rows: None,
+            size: (80, 24),
         });
     }
 }
@@ -130,6 +144,9 @@ impl Fake {
             sessions: Vec::new(),
             blocks: Vec::new(),
             hooks: Vec::new(),
+            results: Vec::new(),
+            next_result: 1,
+            moved: 0,
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -354,6 +371,19 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 "process" => Ok(b.process.clone()),
                 "program_status" => Ok(json!({ "records": b.records })),
                 "title" => Ok(json!({ "title": b.title })),
+                "size" => Ok(json!({
+                    "columns": b.size.0, "rows": b.size.1, "cell_width_px": 8,
+                    "cell_height_px": 16, "owner": null, "desired": [],
+                })),
+                "format" => {
+                    let rows = b
+                        .rows
+                        .as_ref()
+                        .filter(|_| payload["args"]["unwrap"] == false);
+                    let screen = rows.unwrap_or(&b.screen).clone();
+                    Ok(format(s, &block, screen, &payload["args"]))
+                }
+                "blob_read" => blob_read(s, &block, &payload["args"]),
                 _ => Err("not_found"),
             },
             None => Err("not_found"),
@@ -375,6 +405,55 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
     if let Some(b) = closed {
         deliver(s, seq, out, block_closed(&b.session, &b.id));
     }
+}
+
+/// The first part, by `max_bytes` as revision 13 answers it: no `eof`, and an id while more
+/// remains. Arguments the tests do not use are ignored.
+fn format(s: &mut State, block: &str, screen: String, args: &Value) -> Value {
+    let max = args["max_bytes"].as_u64().unwrap_or(0) as usize;
+    let total = screen.len();
+    if max == 0 || total <= max {
+        s.moved += total;
+        return json!({ "content": screen, "total": total });
+    }
+    let content = String::from_utf8_lossy(&screen.as_bytes()[..max]).into_owned();
+    s.moved += content.len();
+    let id = s.next_result;
+    s.next_result += 1;
+    s.results.push((id, block.to_owned(), screen));
+    let kept: Vec<usize> = (s.results.iter().enumerate())
+        .filter(|(_, (_, b, _))| b == block)
+        .map(|(i, _)| i)
+        .collect();
+    if kept.len() > 4 {
+        s.results.remove(kept[0]);
+    }
+    json!({ "content": content, "id": id, "total": total })
+}
+
+/// What fits in `max_bytes` once encoded as a JSON string; a start inside a character reads
+/// as replacement characters, as Rex answers it.
+fn blob_read(s: &mut State, block: &str, args: &Value) -> Result<Value, &'static str> {
+    let id = args["id"].as_u64().unwrap_or(0);
+    let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+    let max = args["max_bytes"].as_u64().unwrap_or(49152) as usize;
+    let (_, _, screen) = (s.results.iter())
+        .find(|(i, b, _)| *i == id && b == block)
+        .ok_or("not_found")?;
+    let rest = String::from_utf8_lossy(&screen.as_bytes()[offset.min(screen.len())..]);
+    let mut data = String::new();
+    let mut size = 2;
+    for c in rest.chars() {
+        size += serde_json::to_string(&c).unwrap().len() - 2;
+        if size > max {
+            break;
+        }
+        data.push(c);
+    }
+    let eof = data.len() == rest.len();
+    let total = screen.len();
+    s.moved += data.len();
+    Ok(json!({ "id": id, "data": data, "total": total, "eof": eof }))
 }
 
 pub(super) fn session_created(id: &str, label: &str) -> Value {

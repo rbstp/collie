@@ -48,10 +48,13 @@ pub(super) enum Method {
     Process,
     ProgramStatus,
     Title,
+    Size,
+    Format,
+    BlobRead,
 }
 
 impl Method {
-    pub(super) const ALL: [Self; 12] = [
+    pub(super) const ALL: [Self; 15] = [
         Self::HelpAll,
         Self::ServerVersion,
         Self::ServerStatus,
@@ -64,6 +67,9 @@ impl Method {
         Self::Process,
         Self::ProgramStatus,
         Self::Title,
+        Self::Size,
+        Self::Format,
+        Self::BlobRead,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -80,6 +86,9 @@ impl Method {
             Self::Process => "com.superlogical.terminal.process",
             Self::ProgramStatus => "com.superlogical.terminal.program_status",
             Self::Title => "com.superlogical.terminal.title",
+            Self::Size => "com.superlogical.terminal.size",
+            Self::Format => "com.superlogical.terminal.format",
+            Self::BlobRead => "com.superlogical.terminal.blob_read",
         }
     }
 
@@ -175,7 +184,7 @@ pub(super) async fn open(stream: UnixStream) -> Result<(Client, Pump, Welcome), 
 /// started from until it restarts.
 pub(super) fn revision_refused(reason: &str) -> String {
     format!(
-        "does not speak API revision {API_REVISION}, which collied needs; a Rex server keeps the API revision of the build it started from, so quit Rex and open it again (the server said: {reason})"
+        "does not speak API revision {API_REVISION}, which collied needs; a Rex server keeps the API revision of the build it started from, so restart the Rex server (the server said: {reason})"
     )
 }
 
@@ -247,8 +256,9 @@ impl Client {
         method: Method,
         session: &str,
         block: &str,
+        args: Value,
     ) -> Result<(u64, R), Error> {
-        let payload = json!({ "session_id": session, "block_id": block, "args": {} });
+        let payload = json!({ "session_id": session, "block_id": block, "args": args });
         self.call(method, payload, TIMEOUT).await
     }
 }

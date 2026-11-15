@@ -15,11 +15,27 @@ use tokio::sync::watch;
 const AGENT: &str = r#"$| = 1;
 sub st { print "\e]7501;$_[0]\e\\" }
 sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+print "collie screen probe\r\n";
 st("state=idle:app=claude-code");
 wait_for("go");
 st("state=working:app=claude-code");
 wait_for("block");
 st("state=blocked:app=claude-code:kind=permission:msg=approve Bash");
+select(undef, undef, undef, 600);
+"#;
+
+/// An agent below 100,000 lines of scrollback.
+const LONG: &str = r#"$| = 1;
+print "line $_\r\n" for 1 .. 100000;
+print "\e]7501;state=idle:app=claude-code\e\\";
+select(undef, undef, undef, 600);
+"#;
+
+/// An agent whose last line, soft-wrapped across the whole screen, is longer than any tail.
+const WIDE: &str = r#"$| = 1;
+print "short $_\r\n" for 1 .. 50;
+print "x" x 2000000, "\r\nprompt> ";
+print "\e]7501;state=idle:app=claude-code\e\\";
 select(undef, undef, undef, 600);
 "#;
 
@@ -102,6 +118,60 @@ async fn scenario(server: &RexServer) {
         .collect();
     assert_eq!(groups, [(idle.workspace_id.as_str(), "collie-live")]);
 
+    let size = || server.rex(&["block", "call", "-b", &block, "size"]);
+    let before = size();
+    assert!(before["columns"].as_u64().is_some(), "{before}");
+    let visible = rt.agent_read(&agent, "visible", None).await.unwrap().text;
+    assert!(visible.contains("collie screen probe"), "{visible:?}");
+    let detected = rt.detection_text(&agent).await.unwrap();
+    assert!(detected.starts_with("collie screen probe"), "{detected:?}");
+    let columns = rt.pane_columns(&agent).await.unwrap();
+    assert_eq!(columns.map(u64::from), before["columns"].as_u64());
+    assert_eq!(
+        size(),
+        before,
+        "a read changed the terminal's size or owner"
+    );
+
+    let (_, long) = new_session(server, "collie-long", &["/usr/bin/perl", "-e", LONG]);
+    let long = format!("rex:{long}");
+    let read = until("the long terminal's agent", async || {
+        rt.agent_get(&long).await.ok()?;
+        let read = rt
+            .agent_read(&long, "recent_unwrapped", Some(50))
+            .await
+            .ok()?;
+        read.text.contains("line 100000").then_some(read.text)
+    })
+    .await;
+    let rows: Vec<&str> = read.split("\r\n").collect();
+    assert_eq!(rows.len(), 50, "{read:?}");
+    assert_eq!(rows[0], "line 99951");
+    assert_eq!(rows[49], "line 100000");
+
+    let (_, wide) = new_session(server, "collie-wide", &["/usr/bin/perl", "-e", WIDE]);
+    let wide = format!("rex:{wide}");
+    let read = until("the wide terminal's agent", async || {
+        rt.agent_get(&wide).await.ok()?;
+        let read = rt.agent_read(&wide, "visible", None).await.ok()?;
+        read.text.ends_with("prompt>").then_some(read.text)
+    })
+    .await;
+    let rows: Vec<&str> = read.split("\r\n").collect();
+    let (prompt, xs) = rows.split_last().unwrap();
+    assert_eq!(*prompt, "prompt>");
+    assert!(
+        xs.len() > 1
+            && xs
+                .iter()
+                .all(|r| !r.is_empty() && r.bytes().all(|b| b == b'x'))
+    );
+    assert!(
+        rt.agent_read(&wide, "recent_unwrapped", Some(10))
+            .await
+            .is_err()
+    );
+
     std::fs::write(server.work.join("go"), "").unwrap();
     let working = until("the working report", async || find("working").await).await;
     std::fs::write(server.work.join("block"), "").unwrap();
@@ -112,6 +182,11 @@ async fn scenario(server: &RexServer) {
         blocked.state_change_seq,
     ];
     assert!(seqs[0] != seqs[1] && seqs[1] != seqs[2], "{seqs:?}");
+    let explained = rt.agent_explain(&agent).await.unwrap();
+    assert_eq!(
+        explained.matched_rule.map(|r| r.id).as_deref(),
+        Some("permission")
+    );
 
     assert!(matches!(
         rt.workspace_close(&idle.workspace_id).await,
