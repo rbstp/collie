@@ -1362,7 +1362,9 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     };
     assert!(
         message.starts_with("Closed pane.")
-            && message.contains("Kept its Rex session, which holds another block or window."),
+            && message.contains(
+                "Kept its Rex session, which still holds something or could not be read."
+            ),
         "{message}"
     );
     let kept = blocks_of(server, &session);

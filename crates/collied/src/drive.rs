@@ -2409,7 +2409,7 @@ impl Driver {
             return fail(
                 ErrorCode::Internal,
                 format!(
-                    "Worktree removal failed ({message}) after closing {terminal_id}; gh poi was skipped."
+                    "Worktree removal failed ({message}) after closing {terminal_id}; gh poi was skipped.{session}"
                 ),
             );
         }

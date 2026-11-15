@@ -119,7 +119,9 @@ impl Rex {
         }
         Ok(Some(match remove_empty(&client, &session).await {
             Ok(true) => "Removed its Rex session.".to_owned(),
-            Ok(false) => "Kept its Rex session, which holds another block or window.".to_owned(),
+            Ok(false) => {
+                "Kept its Rex session, which still holds something or could not be read.".to_owned()
+            }
             Err(e) => format!("Could not remove its Rex session ({e})."),
         }))
     }

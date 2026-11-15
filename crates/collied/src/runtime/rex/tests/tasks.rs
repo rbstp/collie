@@ -561,7 +561,7 @@ async fn archive_closes_only_the_tasks_block_and_removes_its_recorded_worktree()
     };
     assert!(
         message.starts_with(&format!(
-            "Removed worktree checkout {at} and closed {task}. Kept its Rex session, which holds another block or window."
+            "Removed worktree checkout {at} and closed {task}. Kept its Rex session, which still holds something or could not be read."
         )),
         "{message}"
     );
@@ -698,6 +698,54 @@ async fn a_task_without_a_worktree_is_archived_with_the_session_collied_created_
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn a_tasks_session_with_a_detached_block_or_a_window_left_is_kept() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (rex, rt) = followed(&fake, &root).await;
+    let host = host(&rt).await;
+    let drive = driver(&root, rex.clone());
+    let yes: Authorized = Arc::new(|| true);
+    for name in [NAME, "collie-0a1b2c3e"] {
+        let task = host
+            .start(
+                root.to_str().unwrap(),
+                name,
+                None,
+                "claude",
+                None,
+                "/opt/bin/claude",
+                &[],
+            )
+            .await
+            .unwrap();
+        eventually("the task listed", || rex.get(&task).is_ok()).await;
+        let session = fake.state().block(block_of(&task)).session.clone();
+        if name == NAME {
+            // Only `session.list_blocks` shows a detached block.
+            shell(&fake, &session, SHELL, &root);
+            fake.state().block(SHELL).detached = true;
+        } else {
+            // Only the view shows this window.
+            fake.state().bare_windows.push(session.clone());
+        }
+        let Ok(Response::TaskArchived { message }) = drive.task_archive(archive(&task), &yes).await
+        else {
+            panic!("not archived");
+        };
+        assert!(
+            message.contains("Kept its Rex session"),
+            "{name}: {message}"
+        );
+        assert!(
+            fake.state().sessions.iter().any(|(s, _)| *s == session),
+            "{name}"
+        );
+    }
+    assert!(!fake.calls().iter().any(|c| c == "session.destroy"));
 }
 
 #[tokio::test]
