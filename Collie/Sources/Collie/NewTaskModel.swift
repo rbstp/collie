@@ -30,6 +30,7 @@ final class NewTaskModel {
     var machineId: String? {
         didSet {
             guard oldValue != machineId else { return }
+            error = nil
             cancelUpload(on: oldValue)
             attachments = []
             attachmentError = nil

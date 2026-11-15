@@ -69,7 +69,8 @@ final class NewTaskSheetTests: XCTestCase {
 
         // collied's refusal is what counts, so a runtime it did not list is still asked for.
         core.state.withLock { $0.options.runtimes = [.herdr] }
-        let missing = NewTaskModel(core: core, machines: [machine], prefsFile: prefs)
+        let other = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let missing = NewTaskModel(core: core, machines: [machine, other], prefsFile: prefs)
         await missing.loadOptions()
         XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
         missing.prompt = "keep this prompt"
@@ -81,6 +82,13 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertNil(missing.runtimeProblem, "one message on screen")
         XCTAssertEqual(missing.prompt, "keep this prompt")
         XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex, .rex])
+
+        // Another computer's sheet shows its own hint, not the last one's refusal.
+        core.set(error: nil)
+        missing.machineId = "m2"
+        await missing.loadOptions()
+        XCTAssertNil(missing.error)
+        XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
     }
 
     func testCloneTakesARepositoryAndShowsProgressWhileCloning() async throws {

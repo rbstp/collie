@@ -1010,6 +1010,113 @@ async fn a_tasks_record_goes_when_its_block_closes() {
     assert!(rex.finished(&started));
 }
 
+/// herdr with one workspace, `w1`, open on the linked checkout `LINKED` names, whose pane
+/// `term_1` is herdr's task.
+static LINKED: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+
+fn linked_herdr(root: &Path, repo: &Path, checkout: &Path) {
+    LINKED
+        .set((repo.display().to_string(), checkout.display().to_string()))
+        .unwrap();
+    fake_herdr(&root.join("herdr.sock"), |method| {
+        let (repo, checkout) = LINKED.get().unwrap();
+        match method {
+            "worktree.list" => Some(json!({"type": "worktree_list",
+                "source": {"source_checkout_path": repo},
+                "worktrees": [{"path": checkout, "branch": "feat", "open_workspace_id": "w1",
+                    "is_bare": false, "is_linked_worktree": true}]})),
+            "session.snapshot" => Some(json!({"type": "session_snapshot", "snapshot": {
+                "agents": [],
+                "workspaces": [{"workspace_id": "w1", "number": 1, "label": "feat",
+                    "agent_status": "idle", "worktree": {"repo_root": repo,
+                    "checkout_path": checkout, "is_linked_worktree": true}}],
+                "panes": [{"pane_id": "w1:p1", "terminal_id": "term_1", "workspace_id": "w1",
+                    "tab_id": "w1:t1", "cwd": checkout}]}})),
+            // Another path, so the archive ends there and runs no cleanup.
+            "worktree.remove" => Some(json!({"type": "worktree_removed", "workspace_id": "w1",
+                "force": true, "worktree": {"path": "/elsewhere", "branch": "feat",
+                "open_workspace_id": null, "is_bare": false, "is_linked_worktree": true}})),
+            _ => None,
+        }
+    });
+}
+
+fn herdr_beside(root: &Path, rex: Arc<Rex>) -> Driver {
+    Driver::new(
+        root.join("herdr.sock"),
+        vec![claude_kind()],
+        &[root.to_owned()],
+    )
+    .unwrap()
+    .with_rex(Some(rex))
+}
+
+#[tokio::test]
+async fn a_rex_block_in_the_checkout_refuses_herdrs_open_and_archive() {
+    let (_dir, root, repo, checkout) = worktree();
+    let fake = Fake::start().await;
+    fake.state()
+        .sessions
+        .push((S1.to_owned(), "mine".to_owned()));
+    shell(&fake, S1, SHELL, &checkout);
+    let (rex, _) = followed(&fake, &root).await;
+    linked_herdr(&root, &repo, &checkout);
+    let drive = herdr_beside(&root, rex);
+    let yes: Authorized = Arc::new(|| true);
+    let p = TaskNewParams {
+        op_id: OpId::new("o".repeat(22)).unwrap(),
+        cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+        agent: claude_kind(),
+        prompt: Some(PromptText::new("go".to_owned()).unwrap()),
+        label: None,
+        new_folder: None,
+        worktree: Some(protocol::TaskWorktree::Open {
+            path: Cwd::new(checkout.to_str().unwrap()).unwrap(),
+        }),
+        clone: None,
+        resume: None,
+        ultracode: false,
+        runtime: None,
+    };
+    let (reply, _) = drive.task_new(p, &yes).await;
+    let why = "a Rex block works in this checkout";
+    assert_eq!(
+        reply.unwrap_err(),
+        (ErrorCode::InvalidParams, why.to_owned())
+    );
+    let refused = drive.task_archive(archive("term_1"), &yes).await;
+    assert_eq!(
+        refused.unwrap_err(),
+        (
+            ErrorCode::InvalidParams,
+            format!("{why}; nothing was closed")
+        )
+    );
+    assert!(checkout.exists());
+}
+
+// herdr asked Rex nothing before tasks could start beside it: Rex failing never holds it back.
+#[tokio::test]
+async fn a_rex_that_does_not_list_its_blocks_never_holds_herdrs_archive_back() {
+    let (_dir, root, repo, checkout) = worktree();
+    let fake = Fake::start().await;
+    fake.state()
+        .sessions
+        .push((S1.to_owned(), "mine".to_owned()));
+    shell(&fake, S1, SHELL, &checkout);
+    let (rex, _) = followed(&fake, &root).await;
+    fake.state().hang_up = Some("session.list");
+    linked_herdr(&root, &repo, &checkout);
+    let yes: Authorized = Arc::new(|| true);
+    let archived = herdr_beside(&root, rex)
+        .task_archive(archive("term_1"), &yes)
+        .await;
+    let Ok(Response::TaskArchived { message }) = archived else {
+        panic!("held back: {archived:?}");
+    };
+    assert!(message.starts_with("Herdr removed a checkout"), "{message}");
+}
+
 #[tokio::test]
 async fn a_herdr_core_archive_names_rex_when_rex_does_not_list_its_blocks() {
     let (_dir, root, _repo, checkout) = worktree();

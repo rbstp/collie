@@ -383,9 +383,10 @@ impl Runtime {
         }
     }
 
-    /// Every terminal of the followed core and Rex, `owner`'s required; the other one counts
-    /// while it is followed. Fails, naming the runtime, while one of them is not followed or
-    /// does not answer, when nothing is known about what works where.
+    /// Every terminal of the followed core and Rex. `owner`'s runtime is required (neither is
+    /// for `Owner::Herdr`), and the other one counts while it is followed. Fails, naming the
+    /// runtime, while a required one is not followed or a counted one does not answer, when
+    /// nothing is known about what works where.
     pub async fn occupants(&self, owner: Owner) -> Result<Vec<Occupant>, String> {
         let not_followed = |name: &str| format!("{name} is not followed right now");
         let core = (self.core.as_ref()).filter(|c| owner == Owner::Core || c.following());

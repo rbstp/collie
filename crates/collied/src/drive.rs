@@ -1433,7 +1433,7 @@ impl Driver {
         // from under the other.
         if matches!(worktree, TaskWorktree::Open { .. }) {
             let other = match &host {
-                Some(_) => self.herdr_in_checkout(&path).await.map(str::to_owned),
+                Some(_) => self.herdr_in_checkout(&path).await,
                 None => self.followed_in_checkout(&path).await,
             };
             if let Some(why) = other {
@@ -2261,7 +2261,11 @@ impl Driver {
         let snapshot = match self.runtime.herdr_snapshot().await {
             Ok(snapshot) => snapshot,
             Err(e) if runtime::not_running(&e) => return None,
-            Err(_) => return Some("herdr did not answer"),
+            Err(_) => {
+                return Some(
+                    "herdr did not answer, so collied cannot tell whether it works in this checkout",
+                );
+            }
         };
         if (snapshot.panes.iter()).any(|p| {
             works_in(checkout, p.cwd.as_deref()) || works_in(checkout, p.foreground_cwd.as_deref())
@@ -2277,17 +2281,28 @@ impl Driver {
             .then_some("herdr has this checkout open in a workspace")
     }
 
-    /// Why a terminal of a followed core or Rex may work in `checkout`.
-    async fn followed_in_checkout(&self, checkout: &Cwd) -> Option<String> {
-        match self.runtime.occupants(Owner::Herdr).await {
-            Err(why) => Some(why),
-            Ok(all) => (all.iter())
-                .any(|o| {
-                    works_in(checkout, Some(&o.cwd))
-                        || works_in(checkout, o.foreground_cwd.as_deref())
-                })
-                .then(|| "a Herdr 2 or Rex terminal works in this checkout".to_owned()),
+    /// A terminal of a followed core or Rex that lists one working in `checkout`. herdr is
+    /// never held back by a runtime that does not list its terminals: before tasks could start
+    /// beside it, herdr asked them nothing.
+    async fn followed_in_checkout(&self, checkout: &Cwd) -> Option<&'static str> {
+        let inside = |all: Vec<runtime::Occupant>| {
+            all.iter().any(|o| {
+                works_in(checkout, Some(&o.cwd)) || works_in(checkout, o.foreground_cwd.as_deref())
+            })
+        };
+        if (self.runtime.core())
+            .and_then(|c| c.occupants())
+            .is_some_and(inside)
+        {
+            return Some("a Herdr 2 terminal works in this checkout");
         }
+        let rex = self.runtime.rex().filter(|r| r.following());
+        if let Some(rex) = rex
+            && rex.occupants().await.is_ok_and(inside)
+        {
+            return Some("a Rex block works in this checkout");
+        }
+        None
     }
 
     /// Like herdr's `worktree.remove`: the task's terminal ends, then the checkout goes.
@@ -3607,7 +3622,7 @@ mod tests {
             .start_worktree_task(open(&repo, &checkout, None), &source, None, &yes)
             .await
             .unwrap_err();
-        let why = "a Herdr 2 or Rex terminal works in this checkout";
+        let why = "a Herdr 2 terminal works in this checkout";
         assert_eq!(refused, (ErrorCode::InvalidParams, why.to_owned()));
         let archive = TaskArchiveParams {
             op_id: OpId::new("a".repeat(22)).unwrap(),

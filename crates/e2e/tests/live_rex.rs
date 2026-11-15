@@ -1394,6 +1394,23 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     };
     assert!(blocks_of(server, &chosen_session).is_empty());
 
+    // A herdr that takes the connection and never answers leaves Rex to answer task.options.
+    let busy = server.root.join("busy.sock");
+    let listener = tokio::net::UnixListener::bind(&busy).unwrap();
+    let closer = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            drop(stream);
+        }
+    });
+    let stuck = Driver::new(busy, kinds.clone(), std::slice::from_ref(&work))
+        .unwrap()
+        .with_rex(Some(rex.clone()));
+    let Ok(Response::TaskOptions(options)) = stuck.task_options().await else {
+        panic!("no task options while herdr does not answer");
+    };
+    assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
+    closer.abort();
+
     stop.send_replace(true);
     task.await.unwrap();
 }
