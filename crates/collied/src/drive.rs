@@ -122,7 +122,10 @@ pub fn herdr_fail(e: runtime::Error) -> Fail {
             return (ErrorCode::NotFound, "not found".to_owned());
         }
         runtime::Error::Rex { code, .. } => {
-            return (ErrorCode::Internal, format!("Rex refused: {code}"));
+            return (
+                ErrorCode::Internal,
+                format!("Rex refused: {}", crate::printable(code)),
+            );
         }
         _ => return (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned()),
     };

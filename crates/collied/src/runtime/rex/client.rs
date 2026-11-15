@@ -23,7 +23,7 @@ use crate::runtime::Error;
 pub(super) const PROTOCOL: &str = "rex.control.v1";
 /// The revision whose shapes collied reads, sent as both the newest and the oldest it
 /// speaks, so an older server closes the connection rather than answer in older shapes.
-pub const API_REVISION: u32 = 13;
+pub(super) const API_REVISION: u32 = 13;
 pub(super) const TERMINAL: &str = "com.superlogical.terminal";
 pub(super) const TIMEOUT: Duration = Duration::from_secs(5);
 /// The message limit Rex documents for this revision, and the most collied reads.
@@ -138,7 +138,7 @@ pub(super) async fn open(stream: UnixStream) -> Result<(Client, Pump, Welcome), 
         let welcome = loop {
             match ws.next().await {
                 Some(Ok(Message::Text(text))) => break serde_json::from_str::<Incoming>(&text)?,
-                Some(Ok(Message::Close(frame))) => return Err(closed(frame)),
+                Some(Ok(Message::Close(frame))) => return Err(refused(frame)),
                 Some(Ok(_)) => {}
                 Some(Err(e)) => return Err(ws_error(e)),
                 None => return Err(Error::Closed),
@@ -152,7 +152,8 @@ pub(super) async fn open(stream: UnixStream) -> Result<(Client, Pump, Welcome), 
         if welcome.protocol != PROTOCOL || welcome.api_revision != API_REVISION {
             return Err(Error::Unsupported(format!(
                 "answered with {} at API revision {}, not {PROTOCOL} at {API_REVISION}",
-                welcome.protocol, welcome.api_revision
+                crate::printable(&welcome.protocol),
+                welcome.api_revision
             )));
         }
         let (sink, stream) = ws.split();
@@ -178,11 +179,11 @@ pub(super) fn revision_refused(reason: &str) -> String {
     )
 }
 
-fn closed(frame: Option<CloseFrame>) -> Error {
+/// Before the welcome, the server closes with a policy violation only when it shares no API
+/// revision with collied; its reason's wording is its own.
+fn refused(frame: Option<CloseFrame>) -> Error {
     match frame {
-        Some(f)
-            if f.code == CloseCode::Policy && f.reason.starts_with("no common API revision") =>
-        {
+        Some(f) if f.code == CloseCode::Policy => {
             Error::Unsupported(revision_refused(&crate::printable(&f.reason)))
         }
         _ => Error::Closed,
@@ -270,7 +271,7 @@ impl Pump {
             };
             let text = match message {
                 Message::Text(text) => text,
-                Message::Close(frame) => break closed(frame),
+                Message::Close(_) => break Error::Closed,
                 _ => continue,
             };
             match serde_json::from_str::<Incoming>(&text) {

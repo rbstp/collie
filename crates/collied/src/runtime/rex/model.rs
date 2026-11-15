@@ -163,6 +163,21 @@ impl Model {
         self.sessions.contains_key(session)
     }
 
+    /// The label `session.attach` answers: a rename that came before the session was listed
+    /// found nothing to apply to.
+    pub(super) fn relabel(&mut self, session: &str, seq: u64, label: String) {
+        if let Some(s) = self.sessions.get_mut(session) {
+            s.label.read(seq, label);
+        }
+    }
+
+    /// A block whose reads failed, until a later read of its session adds it again.
+    pub(super) fn forget(&mut self, session: &str, block: &str) {
+        if let Some(s) = self.sessions.get_mut(session) {
+            s.blocks.remove(block);
+        }
+    }
+
     /// Adds the terminal blocks listed on this machine that were neither read nor closed
     /// since; returns them, for their reads. A block whose `host_id` is not the server's runs
     /// on another machine and is skipped, so the phone never reaches one through Rex.
@@ -283,7 +298,7 @@ impl Block {
     }
 
     /// A block is an agent once its foreground process reports OSC 7501 or runs an agent
-    /// CLI. Every Rex agent is read-only until input is built (#706).
+    /// CLI. One with no status is read-only, since nothing says a dialog is open.
     fn agent(&self, session_id: &str, block_id: &str) -> Option<AgentInfo> {
         let fg = self.foreground.value.as_ref()?;
         let argv0 = fg.argv0.as_deref().unwrap_or(&fg.name);
@@ -323,7 +338,7 @@ impl Block {
             agent_session: None,
             interactive_ready: false,
             launch_pending: false,
-            read_only: true,
+            read_only: record.is_none(),
         })
     }
 }

@@ -594,7 +594,7 @@ pub struct Core {
     claude_sessions: Option<PathBuf>,
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
-    pub(super) herdr: HerdrSeen,
+    pub(super) herdr: Arc<HerdrSeen>,
     held: Mutex<HashMap<String, Weak<Hold>>>,
 }
 
@@ -623,9 +623,15 @@ impl Core {
             claude_sessions: None,
             inner: Mutex::default(),
             settled: watch::channel(false).0,
-            herdr: HerdrSeen::default(),
+            herdr: Arc::default(),
             held: Mutex::default(),
         }
+    }
+
+    /// Shared with a followed Rex, so herdr's loss and return are logged once.
+    pub fn with_herdr_seen(mut self, seen: Arc<HerdrSeen>) -> Self {
+        self.herdr = seen;
+        self
     }
 
     /// Claude Code's `sessions` folder, where each process keeps `<pid>.json`.
@@ -2404,7 +2410,7 @@ pub(crate) mod tests {
     }
 
     /// A herdr that answers `ping`, `answer`'s methods, and an error for anything else.
-    fn fake_herdr(socket: &Path, answer: fn(&str) -> Option<Value>) {
+    pub(crate) fn fake_herdr(socket: &Path, answer: fn(&str) -> Option<Value>) {
         let listener = tokio::net::UnixListener::bind(socket).unwrap();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -2479,9 +2485,17 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn core_of(root: &Path, terminals: Value) -> Arc<Core> {
-        let core = Core::new(root.join("core.sock"));
+        following(Core::new(root.join("core.sock")), terminals)
+    }
+
+    pub(crate) fn following(core: Core, terminals: Value) -> Arc<Core> {
         core.lock().live = Some(live(10, terminals));
         Arc::new(core)
+    }
+
+    /// As when the core's connection ends.
+    pub(crate) fn unfollow(core: &Core) {
+        core.lock().live = None;
     }
 
     fn archive_params() -> protocol::TaskArchiveParams {

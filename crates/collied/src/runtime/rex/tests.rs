@@ -9,6 +9,7 @@ use super::model::Model;
 use super::wire::{BlockRef, Process, Record, SessionRef};
 use super::*;
 use crate::runtime::{Owner, Runtime};
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 const S1: &str = "session:019a7d2e-0000-7000-8000-000000000001";
 const S2: &str = "session:019a7d2e-0000-7000-8000-000000000002";
@@ -54,7 +55,10 @@ async fn follow(rex: &Arc<Rex>) -> tokio::task::JoinHandle<(Error, bool)> {
         let rex = rex.clone();
         async move { rex.attempt().await }
     });
-    eventually("the first reads", || rex.following() || task.is_finished()).await;
+    eventually("the first reads", || {
+        rex.listing().is_some() || task.is_finished()
+    })
+    .await;
     task
 }
 
@@ -90,20 +94,16 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
     assert_eq!(terminal, ["process", "program_status", "title"]);
 }
 
-#[tokio::test]
-async fn an_older_api_revision_is_refused_in_plain_words() {
+/// Why `attempt` and `probe` do not follow a server that closes right after the hello.
+async fn refused_after_hello(code: CloseCode, reason: &'static str) -> (String, Report) {
     let fake = Fake::start().await;
-    fake.state().refuse_revision = true;
+    fake.state().close = Some((code, reason));
     let rex = Rex::new(fake.socket.clone());
     let (ended, followed) = rex.attempt().await;
     assert!(!followed);
     let Error::Unsupported(why) = ended else {
         panic!("{ended:?}")
     };
-    assert!(
-        why.contains("API revision 13") && why.contains("quit Rex and open it again"),
-        "{why}"
-    );
     let hello = fake.state().hello.clone();
     assert_eq!(
         (
@@ -112,8 +112,36 @@ async fn an_older_api_revision_is_refused_in_plain_words() {
         ),
         (Some(13), Some(13))
     );
-    assert_eq!(rex.report().refused.as_deref(), Some(why.as_str()));
     assert!(matches!(probe(&fake.socket).await, Err(Error::Unsupported(w)) if w == why));
+    (why, rex.report())
+}
+
+#[tokio::test]
+async fn an_older_api_revision_is_refused_in_plain_words_whatever_the_server_says() {
+    for reason in [
+        "no common API revision: the client needs 13 or newer, this server speaks 0 through 12",
+        "client too new\u{7}",
+    ] {
+        let (why, report) = refused_after_hello(CloseCode::Policy, reason).await;
+        assert!(
+            why.contains("API revision 13") && why.contains("quit Rex and open it again"),
+            "{why}"
+        );
+        assert!(why.contains(&crate::printable(reason)), "{why}");
+        assert!(!why.contains('\u{7}'));
+        assert_eq!(report.refused.as_deref(), Some(why.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn a_server_that_answers_then_fails_is_running_and_not_followed() {
+    let (why, report) = refused_after_hello(CloseCode::Normal, "bye").await;
+    assert!(
+        why.starts_with("accepted the connection, then failed"),
+        "{why}"
+    );
+    assert!(!why.contains("API revision"), "{why}");
+    assert_eq!(report.refused.as_deref(), Some(why.as_str()));
 }
 
 #[tokio::test]
@@ -174,7 +202,7 @@ async fn a_listener_admitting_anonymous_callers_is_refused_and_tailnet_access_wa
     }
     let rex = Arc::new(Rex::new(fake.socket.clone()));
     let _task = follow(&rex).await;
-    assert!(rex.following());
+    assert!(rex.listing().is_some());
     assert_eq!(
         rex.report().remote,
         ["built-in Tailscale", "tailnet listener tailnet://:7297"]
@@ -238,6 +266,7 @@ async fn it_subscribes_before_it_reads_and_keeps_what_changed_in_between() {
     let at = |m: &str| calls.iter().position(|c| c == m).unwrap();
     assert!(at("session.attach_all") < at("session.list"));
     assert!(at("session.list") < at("session.attach"));
+    assert!(at("session.attach") < at("session.list_blocks"));
     eventually("the later session", || rex.get(&id(B3)).is_ok()).await;
     assert_eq!(status_of(&rex, B1).unwrap().0, "done");
     assert_eq!(status_of(&rex, B2).unwrap().0, "blocked");
@@ -302,6 +331,10 @@ async fn reports_move_the_state_change_seq_and_a_reconnect_reads_everything_agai
     assert!(third != second && third != first);
     assert_eq!(status_of(&rex, B2).unwrap().1, kept);
     assert_eq!(status_of(&rex, B3).unwrap(), ("unknown".to_owned(), 0));
+    assert!(
+        rex.get(&id(B3)).unwrap().read_only,
+        "no status, so no input"
+    );
 }
 
 #[tokio::test]
@@ -325,7 +358,7 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
     let snapshot = rt.session_snapshot().await.unwrap();
     assert_eq!(snapshot.panes[0].workspace_id, format!("rex:{S1}"));
     assert!(rt.agent_list().await.unwrap().len() == 1);
-    assert!(rt.agent_get(&id(B1)).await.unwrap().read_only);
+    assert!(!rt.agent_get(&id(B1)).await.unwrap().read_only);
     assert_eq!(fake.calls().len(), before, "listing called the server");
 
     let unsupported = |r: Result<_, Error>| matches!(r, Err(Error::Unsupported(w)) if w == NOT_YET);
@@ -480,4 +513,236 @@ fn a_stale_record_or_a_shell_in_front_lists_no_agent_and_other_hosts_are_skipped
             0
         )
     );
+}
+
+fn group(rex: &Rex, session: &str) -> Option<String> {
+    let groups = rex.listing()?.groups(0);
+    let id = format!("rex:{session}");
+    groups
+        .into_iter()
+        .find(|g| g.workspace_id == id)
+        .map(|g| g.label)
+}
+
+#[tokio::test]
+async fn events_after_the_reads_keep_agents_and_groups_current() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    claude(&fake, S2, B2, 20, "idle", T0);
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    let title = |rex: &Rex| rex.get(&id(B1)).ok().and_then(|a| a.title);
+
+    fake.emit(|_| {
+        let title = json!({ "title": "\u{2733} Fix the flaky test" });
+        vec![fake::block_event(S1, B1, "title_changed", title)]
+    });
+    eventually("the title", || {
+        title(&rex).as_deref() == Some("Fix the flaky test")
+    })
+    .await;
+
+    fake.emit(|_| {
+        let renamed = json!({ "type": "session_label_changed", "payload": { "label": "renamed" } });
+        vec![fake::session_event(S1, renamed)]
+    });
+    eventually("the label", || {
+        group(&rex, S1).as_deref() == Some("renamed")
+    })
+    .await;
+
+    // A shell takes the terminal back: the record Claude Code left is not an agent's.
+    fake.emit(|_| {
+        let zsh = fake::process(50, "-zsh", "zsh");
+        vec![fake::block_event(S1, B1, "process_changed", zsh)]
+    });
+    eventually("the agent to leave", || rex.get(&id(B1)).is_err()).await;
+
+    fake.emit(|_| {
+        let removed = json!({ "ids": [""], "reason": "foreground" });
+        vec![
+            fake::block_event(S1, B1, "program_status_removed", removed),
+            fake::block_event(
+                S1,
+                B1,
+                "process_changed",
+                fake::process(10, "claude", "2.1.322"),
+            ),
+        ]
+    });
+    eventually("the agent back", || rex.get(&id(B1)).is_ok()).await;
+    let back = rex.get(&id(B1)).unwrap();
+    assert_eq!(
+        (back.agent_status.as_str(), back.read_only),
+        ("unknown", true)
+    );
+
+    fake.emit(|s| {
+        s.add(
+            S1,
+            B3,
+            fake::process(30, "claude", "2.1.322"),
+            vec![fake::record("working", 30, "2.1.322", T0)],
+        );
+        vec![fake::session_event(
+            S1,
+            json!({ "type": "block_created", "payload": { "block_id": B3 } }),
+        )]
+    });
+    eventually("the created block", || rex.get(&id(B3)).is_ok()).await;
+
+    assert_eq!(group(&rex, S2).as_deref(), Some("work"));
+    fake.emit(|s| {
+        s.sessions.retain(|(id, _)| id != S2);
+        vec![json!({ "type": "session_destroyed", "payload": { "session_id": S2 } })]
+    });
+    eventually("the destroyed session's group to leave", || {
+        group(&rex, S2).is_none()
+    })
+    .await;
+    assert!(rex.get(&id(B2)).is_err());
+}
+
+#[tokio::test]
+async fn a_block_closed_while_its_session_is_read_is_never_added_back() {
+    const B4: &str = "block:019a7d2e-0000-7000-8000-0000000000b4";
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    // The list is read with B3 in it, and B3 closes before the answer arrives. The fake
+    // keeps answering B3's reads, so only the closed rule keeps it out.
+    fake.state().hook(
+        Method::SessionListBlocks,
+        None,
+        true,
+        Box::new(|_| vec![fake::block_closed(S1, B3)]),
+    );
+    fake.emit(|s| {
+        for b in [B3, B4] {
+            s.add(
+                S1,
+                b,
+                fake::process(30, "claude", "2.1.322"),
+                vec![fake::record("idle", 30, "2.1.322", T0)],
+            );
+        }
+        vec![fake::session_event(
+            S1,
+            json!({ "type": "block_created", "payload": { "block_id": B4 } }),
+        )]
+    });
+    eventually("the block created beside it", || rex.get(&id(B4)).is_ok()).await;
+    assert!(rex.get(&id(B3)).is_err());
+}
+
+#[tokio::test]
+async fn a_block_whose_reads_fail_is_skipped_beside_a_good_one() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    {
+        let mut s = fake.state();
+        s.add(
+            S1,
+            B2,
+            json!({ "foreground": { "pid": 20, "argv0": "claude" } }),
+            vec![],
+        );
+        let undated = json!({ "state": "idle", "owner": { "pid": 30, "name": "2.1.322" } });
+        s.add(
+            S1,
+            B3,
+            fake::process(30, "claude", "2.1.322"),
+            vec![undated],
+        );
+    }
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    let ids: Vec<String> = (rex.listing().unwrap().agents.into_iter())
+        .map(|a| a.terminal_id)
+        .collect();
+    assert_eq!(ids, [id(B1)]);
+    assert_eq!(rex.report().refused, None);
+}
+
+#[tokio::test]
+async fn a_session_renamed_before_it_is_read_shows_its_new_label() {
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    // The rename's event arrives before the list, with no session to apply to yet.
+    fake.state().hook(
+        Method::SessionList,
+        None,
+        true,
+        Box::new(|s| {
+            s.sessions[0].1 = "renamed".to_owned();
+            let renamed =
+                json!({ "type": "session_label_changed", "payload": { "label": "renamed" } });
+            vec![fake::session_event(S1, renamed)]
+        }),
+    );
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    assert_eq!(group(&rex, S1).as_deref(), Some("renamed"));
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        crate::lock(&self.0).extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn herdr_lost_and_back_is_logged_once_when_the_core_stops_while_herdr_is_down() {
+    use crate::runtime::HerdrSeen;
+    use crate::runtime::herdr_core::{Core, tests as core};
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let count = |line: &str| {
+        String::from_utf8_lossy(&crate::lock(&logs.0))
+            .matches(line)
+            .count()
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let herdr = dir.path().join("herdr.sock");
+    let answer = |method: &str| match method {
+        "agent.list" => Some(json!({ "type": "agent_list", "agents": [] })),
+        "workspace.list" => Some(json!({ "type": "workspace_list", "workspaces": [] })),
+        _ => None,
+    };
+    core::fake_herdr(&herdr, answer);
+    let seen = Arc::new(HerdrSeen::default());
+    let followed = Core::new(dir.path().join("core.sock")).with_herdr_seen(seen.clone());
+    let followed = core::following(followed, json!([]));
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    let rex = Arc::new(Rex::new(fake.socket.clone()).with_herdr_seen(seen));
+    let _task = follow(&rex).await;
+    let rt = Runtime::new(herdr.clone())
+        .with_core(Some(followed.clone()))
+        .with_rex(Some(rex));
+
+    assert!(rt.poll().await.unwrap().herdr);
+    std::fs::remove_file(&herdr).unwrap();
+    assert!(!rt.poll().await.unwrap().herdr);
+    core::unfollow(&followed);
+    assert!(!rt.poll().await.unwrap().herdr);
+    core::fake_herdr(&herdr, answer);
+    assert!(rt.poll().await.unwrap().herdr);
+    assert_eq!(count("herdr unavailable"), 1);
+    assert_eq!(count("herdr reachable again"), 1);
 }

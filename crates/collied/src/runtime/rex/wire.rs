@@ -192,6 +192,18 @@ pub(super) struct Title {
 }
 
 #[derive(Deserialize)]
+pub(super) struct Attached {
+    #[serde(default)]
+    pub view: Option<View>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct View {
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct Label {
     #[serde(default)]
     pub label: String,

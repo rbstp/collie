@@ -9,7 +9,9 @@ use tokio::sync::{Notify, watch};
 
 use self::client::{Client, Method, TIMEOUT};
 use self::model::Model;
-use self::wire::{Blocks, Creators, Help, Process, ServerStatus, Sessions, Status, Tagged, Title};
+use self::wire::{
+    Attached, Blocks, Creators, Help, Process, ServerStatus, Sessions, Status, Tagged, Title,
+};
 use super::{AgentInfo, Error, HerdrSeen};
 
 mod client;
@@ -22,7 +24,6 @@ mod fake;
 #[cfg(test)]
 mod tests;
 
-pub use client::API_REVISION;
 pub use discovery::socket_path;
 pub use model::Listing;
 
@@ -153,14 +154,25 @@ async fn introduce(client: &Client, server_revision: u32) -> Result<Server, Erro
     Ok(server)
 }
 
+/// A server that took the connection and then failed is running: never "not running".
+fn answered(e: Error) -> Error {
+    match e {
+        Error::Unsupported(_) => e,
+        e => Error::Unsupported(format!("accepted the connection, then failed: {e}")),
+    }
+}
+
 /// Connects and asks the server about itself, without following it; for `collied doctor`.
 pub async fn probe(socket: &Path) -> Result<Server, Error> {
     let stream = discovery::connect(socket).await?;
-    let (client, pump, welcome) = client::open(stream).await?;
-    tokio::select! {
-        e = pump.run(&client, |_, _| {}) => Err(e),
-        server = introduce(&client, welcome.api_server_revision) => server,
-    }
+    let answer = async {
+        let (client, pump, welcome) = client::open(stream).await?;
+        tokio::select! {
+            e = pump.run(&client, |_, _| {}) => Err(e),
+            server = introduce(&client, welcome.api_server_revision) => server,
+        }
+    };
+    answer.await.map_err(answered)
 }
 
 #[derive(Default)]
@@ -186,7 +198,7 @@ pub struct Rex {
     inner: Mutex<Inner>,
     wake: Notify,
     settled: watch::Sender<bool>,
-    pub(super) herdr: HerdrSeen,
+    pub(super) herdr: Arc<HerdrSeen>,
 }
 
 fn gone(e: &Error) -> bool {
@@ -207,16 +219,18 @@ impl Rex {
             inner: Mutex::default(),
             wake: Notify::new(),
             settled: watch::channel(false).0,
-            herdr: HerdrSeen::default(),
+            herdr: Arc::default(),
         }
+    }
+
+    /// Shared with the followed core, so herdr's loss and return are logged once.
+    pub fn with_herdr_seen(mut self, seen: Arc<HerdrSeen>) -> Self {
+        self.herdr = seen;
+        self
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         crate::lock(&self.inner)
-    }
-
-    pub fn following(&self) -> bool {
-        self.lock().live.as_ref().is_some_and(|l| l.synced)
     }
 
     /// From the model the events keep current: no call to the server.
@@ -305,16 +319,17 @@ impl Rex {
         }
     }
 
-    /// One connection, until it ends: why, and whether it was followed.
+    /// One connection, until it ends: why, and whether it was followed. A server that was
+    /// never followed keeps why in the report.
     async fn attempt(&self) -> (Error, bool) {
         let ended = self.follow().await;
         let followed = {
             let mut inner = self.lock();
             let followed = inner.live.take().is_some_and(|l| l.synced);
             match &ended {
+                _ if followed => {}
                 Error::Unsupported(why) => inner.refused = Some(why.clone()),
-                _ if !followed => (inner.server, inner.refused) = (None, None),
-                _ => {}
+                _ => (inner.server, inner.refused) = (None, None),
             }
             followed
         };
@@ -329,13 +344,15 @@ impl Rex {
         };
         let (client, pump, welcome) = match client::open(stream).await {
             Ok(opened) => opened,
-            Err(e) => return e,
+            Err(e) => return answered(e),
         };
         let client = Arc::new(client);
-        tokio::select! {
+        let ended = tokio::select! {
             e = pump.run(&client, |seq, e| self.event(seq, e)) => e,
             e = self.sync(&client, welcome.api_server_revision) => e,
-        }
+        };
+        let followed = self.lock().live.as_ref().is_some_and(|l| l.synced);
+        if followed { ended } else { answered(ended) }
     }
 
     /// Never waits: the pump calls it for every event.
@@ -457,9 +474,12 @@ impl Rex {
     ) -> Result<(), Error> {
         let at = json!({ "session_id": session });
         if attach {
-            client
-                .call::<Value>(Method::SessionAttach, at.clone(), TIMEOUT)
+            let (seq, attached): (_, Attached) = client
+                .call(Method::SessionAttach, at.clone(), TIMEOUT)
                 .await?;
+            if let Some(label) = attached.view.and_then(|v| v.label) {
+                self.live(|live| live.model.relabel(session, seq, label))?;
+            }
         }
         let (_, blocks): (_, Blocks) = client.call(Method::SessionListBlocks, at, TIMEOUT).await?;
         let added = self.live(|live| {
@@ -471,8 +491,14 @@ impl Rex {
         })?;
         for block in added {
             match self.read_block(client, session, &block).await {
-                Err(e) if !gone(&e) => return Err(e),
-                _ => {}
+                Ok(()) => {}
+                Err(e @ (Error::Json(_) | Error::Timeout | Error::Rex { .. })) => {
+                    if !gone(&e) {
+                        tracing::warn!(socket = %self.socket.display(), block, error = %e, "Rex block skipped: its reads failed");
+                    }
+                    self.live(|live| live.model.forget(session, &block))?;
+                }
+                Err(e) => return Err(e),
             }
         }
         Ok(())

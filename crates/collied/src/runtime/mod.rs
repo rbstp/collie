@@ -110,8 +110,9 @@ pub struct Runtime {
 
 /// herdr's reachability as calls merged with a followed runtime saw it, so that losing herdr
 /// while another runtime answers is logged once, and a herdr that never answered stays quiet.
+/// One is shared by the core and Rex, whichever answers.
 #[derive(Default)]
-pub(crate) struct HerdrSeen(AtomicU8);
+pub struct HerdrSeen(AtomicU8);
 
 impl HerdrSeen {
     fn seen(&self, error: Option<&Error>) {

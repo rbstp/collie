@@ -1,6 +1,7 @@
 //! A `rex.control.v1` server of the tests' own, in process, on a Unix socket in a temporary
 //! folder: CI has no Rex, and no test reaches the user's.
 
+use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -38,7 +39,10 @@ pub(super) struct State {
     /// Every method called, in order, `hello` first.
     pub calls: Vec<String>,
     pub hello: Value,
-    pub refuse_revision: bool,
+    /// How the server closes the connection after the hello, instead of a welcome.
+    pub close: Option<(CloseCode, &'static str)>,
+    /// Sessions this connection attached to: only theirs send block events, as Rex does.
+    attached: HashSet<String>,
     pub methods: Vec<&'static str>,
     pub terminal: Vec<&'static str>,
     pub listeners: Value,
@@ -108,7 +112,8 @@ impl Fake {
         let state = Arc::new(Mutex::new(State {
             calls: Vec::new(),
             hello: Value::Null,
-            refuse_revision: false,
+            close: None,
+            attached: HashSet::new(),
             methods: (Method::ALL.into_iter())
                 .filter(|m| m.terminal().is_none())
                 .map(Method::name)
@@ -190,16 +195,17 @@ async fn serve(
     let Some(Ok(Message::Text(hello))) = source.next().await else {
         return;
     };
-    let refuse = {
+    let close = {
         let mut s = crate::lock(&state);
         s.calls.push("hello".to_owned());
         s.hello = serde_json::from_str(&hello).unwrap();
-        s.refuse_revision
+        s.attached.clear();
+        s.close
     };
-    if refuse {
+    if let Some((code, reason)) = close {
         let frame = CloseFrame {
-            code: CloseCode::Policy,
-            reason: "no common API revision: the client needs 13 or newer, this server speaks 0 through 12".into(),
+            code,
+            reason: reason.into(),
         };
         let _ = sink.send(Message::Close(Some(frame))).await;
         return;
@@ -224,10 +230,9 @@ async fn serve(
             }
             pushed = pushed.recv() => {
                 let Some(Push::Events(f)) = pushed else { return };
-                let events = f(&mut crate::lock(&state));
-                for e in events {
-                    seq += 1;
-                    out.push(json!({ "type": "event", "seq": seq, "payload": e }));
+                let mut s = crate::lock(&state);
+                for e in f(&mut s) {
+                    deliver(&s, &mut seq, &mut out, e);
                 }
             }
         }
@@ -249,21 +254,27 @@ fn hooked(s: &mut State, method: &str, block: &str, after: bool) -> Vec<Value> {
     hook(s)
 }
 
+/// A block event reaches only a connection attached to its session.
+fn deliver(s: &State, seq: &mut u64, out: &mut Vec<Value>, e: Value) {
+    let session = e["payload"]["session_id"].as_str().unwrap_or_default();
+    if e["payload"]["event"]["type"] == "block_event" && !s.attached.contains(session) {
+        return;
+    }
+    *seq += 1;
+    out.push(json!({ "type": "event", "seq": *seq, "payload": e }));
+}
+
 fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
     let method = request["method"].as_str().unwrap().to_owned();
     let payload = &request["payload"];
     s.calls.push(method.clone());
-    let event = |seq: &mut u64, out: &mut Vec<Value>, e: Value| {
-        *seq += 1;
-        out.push(json!({ "type": "event", "seq": *seq, "payload": e }));
-    };
     let session = payload["session_id"]
         .as_str()
         .unwrap_or_default()
         .to_owned();
     let block = payload["block_id"].as_str().unwrap_or_default().to_owned();
     for e in hooked(s, &method, &block, false) {
-        event(seq, out, e);
+        deliver(s, seq, out, e);
     }
     let answered = *seq;
     let has_session = s.sessions.iter().any(|(id, _)| *id == session);
@@ -309,7 +320,15 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
         ("session.attach_all", _) => Ok(sessions()),
         ("session.list", _) => Ok(sessions()),
         ("session.attach", _) if has_session => {
-            Ok(json!({ "client_id": "client:1", "view": {"revision": 1, "session_id": session} }))
+            s.attached.insert(session.clone());
+            let label = s
+                .sessions
+                .iter()
+                .find(|(id, _)| *id == session)
+                .map(|(_, l)| l);
+            Ok(json!({ "client_id": "client:1", "view": {
+                "revision": 1, "session_id": session, "label": label,
+            }}))
         }
         ("session.list_blocks", _) if has_session => {
             let blocks: Vec<Value> = (s.blocks.iter())
@@ -343,7 +362,7 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
         _ => Err("method_not_found"),
     };
     for e in hooked(s, &method, &block, true) {
-        event(seq, out, e);
+        deliver(s, seq, out, e);
     }
     let id = request["id"].clone();
     out.push(match result {
@@ -354,7 +373,7 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
         }),
     });
     if let Some(b) = closed {
-        event(seq, out, block_closed(&b.session, &b.id));
+        deliver(s, seq, out, block_closed(&b.session, &b.id));
     }
 }
 
