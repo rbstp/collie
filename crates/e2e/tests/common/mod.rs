@@ -539,6 +539,148 @@ pub fn hc_installed() -> bool {
     installed
 }
 
+/// A Rex server of the test's own, as AGENTS.md says: its socket, state, runtime folder,
+/// home and empty config under a short `/tmp` folder, a clean environment, every `rex` call
+/// with `--autostart=false` and `-S`, and only this server stopped, by its pid.
+pub struct RexServer {
+    child: Child,
+    cli: PathBuf,
+    pub root: PathBuf,
+    pub work: PathBuf,
+    pub socket: PathBuf,
+}
+
+impl RexServer {
+    pub fn start(cli: &Path, tag: &str) -> Self {
+        let pid = std::process::id();
+        let root = PathBuf::from(format!("/tmp/r{tag}-{pid}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let work = root.join("work");
+        for dir in ["", "home", "run", "state", "tmp", "work"] {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(root.join(dir))
+                .unwrap();
+        }
+        std::fs::write(root.join("init.lua"), "").unwrap();
+        let socket = root.join("rex.sock");
+        let child = rex_env(&mut Command::new(cli), &root)
+            .args(["--autostart=false", "server", "run", "--listen"])
+            .arg(format!("unix://{}", socket.display()))
+            .arg("--state-dir")
+            .arg(root.join("state"))
+            .arg("--config")
+            .arg(root.join("init.lua"))
+            .arg("--restore=false")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let server = Self {
+            child,
+            cli: cli.to_owned(),
+            root,
+            work,
+            socket,
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while StdUnixStream::connect(&server.socket).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "dedicated Rex server never answered"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        server
+    }
+
+    /// `rex` against this server only.
+    pub fn rex(&self, args: &[&str]) -> Value {
+        let out = rex_env(&mut Command::new(&self.cli), &self.root)
+            .arg("--autostart=false")
+            .arg("-S")
+            .arg(format!("unix://{}", self.socket.display()))
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        serde_json::from_slice(&out.stdout).unwrap_or(Value::Null)
+    }
+
+    pub fn stop(&mut self) -> bool {
+        if self.child.try_wait().ok().flatten().is_some() {
+            return true;
+        }
+        let _ = Command::new("/bin/kill")
+            .arg(self.child.id().to_string())
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if self.child.try_wait().ok().flatten().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+}
+
+impl Drop for RexServer {
+    fn drop(&mut self) {
+        if !self.stop() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A clean environment whose home, runtime folder and config are under `root`: without them
+/// the default socket is the user's.
+fn rex_env<'a>(cmd: &'a mut Command, root: &Path) -> &'a mut Command {
+    let user = std::env::var("USER").unwrap_or_default();
+    cmd.env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", root.join("home"))
+        .env("USER", &user)
+        .env("LOGNAME", &user)
+        .env("SHELL", "/bin/sh")
+        .env("TERM", "xterm-256color")
+        .env("LANG", "en_US.UTF-8")
+        .env("TMPDIR", root.join("tmp"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
+        .env("REX_RUNTIME_DIR", root.join("run"))
+        .env("REX_CONFIG", root.join("init.lua"))
+}
+
+/// The `rex` CLI, found without running it: any `rex` command reaches or starts the user's
+/// server unless told otherwise.
+pub fn rex_cli() -> Option<PathBuf> {
+    let on_path = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("rex"))
+            .find(|p| {
+                std::fs::metadata(p)
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+    });
+    let bundled = ["Rex.app", "Rex Beta.app"].into_iter().map(|app| {
+        PathBuf::from("/Applications")
+            .join(app)
+            .join("Contents/Helpers/Rex Server.rex/Contents/MacOS/rex")
+    });
+    let found = on_path.or_else(|| {
+        let mut bundled = bundled;
+        bundled.find(|p| p.is_file())
+    });
+    if found.is_none() {
+        println!("skipped: Rex (rex) is not installed");
+    }
+    found
+}
+
 /// `root/bin` comes first on PATH, for executables a test provides to herdr's shells.
 pub fn isolated(program: &str, root: &Path) -> Command {
     let mut path = std::ffi::OsString::from(root.join("bin"));
@@ -593,6 +735,7 @@ pub fn server_config(data_dir: &Path, herdr_session: &str) -> ServerConfig {
         terminals: false,
         terminal_grant_ttl: collied::terminal::GRANT_TTL,
         herdr_core: None,
+        rex: None,
     }
 }
 

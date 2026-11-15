@@ -175,6 +175,7 @@ async fn scenario(
             terminals: false,
             terminal_grant_ttl: collied::terminal::GRANT_TTL,
             herdr_core: None,
+            rex: None,
         },
         herdr_socket.clone(),
         &collied::config::TasksConfig {
@@ -1306,6 +1307,7 @@ async fn terminal_phase(
             terminals: true,
             terminal_grant_ttl: Duration::from_secs(3),
             herdr_core: None,
+            rex: None,
         },
         herdr_socket.to_owned(),
     )

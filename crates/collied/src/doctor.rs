@@ -12,7 +12,7 @@ use crate::keychain;
 
 use crate::config::{self, ApnsConfig, ApnsKey, Config};
 use crate::control::{self, Reply, Request};
-use crate::runtime::{self, Runtime, herdr_core};
+use crate::runtime::{self, Runtime, herdr_core, rex};
 use crate::{hooks, push};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -75,9 +75,21 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         Err(_) => None,
     };
     let core_answers = matches!(probed, Some(Ok(_)));
+    let rex_socket = rex::socket_path(|k| std::env::var_os(k));
+    let rex_probed = match &rex_socket {
+        Some(socket) => Some(rex::probe(socket).await),
+        None => None,
+    };
+    let answers = if core_answers {
+        Some("herdr-core")
+    } else if matches!(&rex_probed, Some(Ok(s)) if s.refused().is_none()) {
+        Some("Rex")
+    } else {
+        None
+    };
     match &config {
         Some(config) => {
-            check_herdr(&mut r, config, core_answers).await;
+            check_herdr(&mut r, config, answers).await;
             check_tailnet(&mut r, config, &data_dir.join(config::TSNET_DIR));
         }
         None => {
@@ -87,6 +99,7 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         }
     }
     report_core(&mut r, core, probed);
+    report_rex(&mut r, rex_socket, rex_probed);
     let peers = data_dir.join(config::PEERS_FILE);
     let (s, d) = check_private(&peers, Kind::File, (Status::Warn, "no paired phones"));
     r.line(s, "peers", d);
@@ -765,14 +778,15 @@ fn ownership(meta: &Metadata, want: u32) -> (Status, String) {
     }
 }
 
-/// herdr down is a failure only when herdr-core does not answer either.
-async fn check_herdr(r: &mut Report, config: &Config, core_answers: bool) {
+/// herdr down is a failure only when neither herdr-core nor Rex answers, which `answers`
+/// names.
+async fn check_herdr(r: &mut Report, config: &Config, answers: Option<&str>) {
     let down = |r: &mut Report, detail: String| {
-        if core_answers {
+        if let Some(other) = answers {
             r.line(
                 Status::Ok,
                 "herdr",
-                format!("not running ({detail}); herdr-core answers"),
+                format!("not running ({detail}); {other} answers"),
             );
         } else {
             r.line(Status::Fail, "herdr", detail);
@@ -845,9 +859,14 @@ fn report_core(
         let (s, d) = check_private(folder, Kind::Dir, (Status::Fail, "missing"));
         r.line(s, "herdr-core", d);
     }
-    let Some(pid) = holder else {
-        return;
-    };
+    if let Some(pid) = holder {
+        check_inherited(r, "herdr-core", "the core", pid);
+    }
+}
+
+/// `pid` starts every terminal with its own environment, which must not name a herdr pane or
+/// a Claude Code session.
+fn check_inherited(r: &mut Report, check: &str, server: &str, pid: u32) {
     match env_names(pid).filter(|n| !n.is_empty()) {
         Some(names) => {
             let held: Vec<&str> = INHERITED
@@ -857,9 +876,9 @@ fn report_core(
             if !held.is_empty() {
                 r.line(
                     Status::Warn,
-                    "herdr-core",
+                    check,
                     format!(
-                        "its terminals inherit {} from whatever started the core; start it outside herdr and Claude Code",
+                        "its terminals inherit {} from whatever started {server}; start it outside herdr and Claude Code",
                         held.join(", ")
                     ),
                 );
@@ -867,9 +886,60 @@ fn report_core(
         }
         None => r.line(
             Status::Warn,
-            "herdr-core",
-            format!("could not read the environment of its holder (pid {pid})"),
+            check,
+            format!("could not read the environment of {server} (pid {pid})"),
         ),
+    }
+}
+
+fn report_rex(
+    r: &mut Report,
+    socket: Option<PathBuf>,
+    probed: Option<Result<rex::Server, runtime::Error>>,
+) {
+    let Some(socket) = socket else {
+        return r.line(Status::Ok, "rex", "not running: HOME is not set");
+    };
+    let shown = socket.display();
+    let server = match probed {
+        Some(Ok(server)) => server,
+        Some(Err(runtime::Error::Unsupported(why))) => {
+            return r.line(
+                Status::Warn,
+                "rex",
+                format!("{shown}: not followed: Rex {why}"),
+            );
+        }
+        _ => return r.line(Status::Ok, "rex", format!("not running: {shown}")),
+    };
+    let detail = format!(
+        "{shown}: Rex {} (API revision {})",
+        server.version.as_deref().unwrap_or("of unknown version"),
+        server.api_revision
+    );
+    match server.refused() {
+        Some(why) => r.line(
+            Status::Warn,
+            "rex",
+            format!("{detail}: not followed: it {why}"),
+        ),
+        None => r.line(Status::Ok, "rex", detail),
+    }
+    if let Some(folder) = socket.parent() {
+        let (s, d) = check_private(folder, Kind::Dir, (Status::Fail, "missing"));
+        r.line(s, "rex", d);
+    }
+    let (s, d) = check_private(&socket, Kind::Socket, (Status::Fail, "missing"));
+    r.line(s, "rex", d);
+    for remote in server.remote() {
+        r.line(
+            Status::Warn,
+            "rex",
+            format!("reachable from other machines through {remote}: they reach the agents collie follows outside its allowlist and audit"),
+        );
+    }
+    if let Some(pid) = server.pid {
+        check_inherited(r, "rex", "the Rex server", pid);
     }
 }
 

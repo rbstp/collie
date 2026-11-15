@@ -14,8 +14,7 @@ use tokio::time::timeout;
 
 use crate::drive::{Authorized, Driver, Fail, fail};
 use crate::pulls::{self, Check, Outcome, clean};
-use crate::runtime::AgentInfo;
-use crate::runtime::herdr_core::owns;
+use crate::runtime::{AgentInfo, Owner};
 use crate::{flock, peers};
 
 pub const EVERY_MINUTES: [u32; 4] = [2, 5, 15, 30];
@@ -736,8 +735,8 @@ impl Wakes {
 }
 
 fn listed(agents: &[AgentInfo], terminal_id: &str) -> bool {
-    let core = owns(terminal_id);
-    !agents.iter().any(|a| owns(&a.terminal_id) == core)
+    let owner = Owner::of(terminal_id);
+    !agents.iter().any(|a| Owner::of(&a.terminal_id) == owner)
         || agents.iter().any(|a| a.terminal_id == terminal_id)
 }
 
