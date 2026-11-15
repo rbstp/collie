@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
+        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -31,7 +31,7 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true, keysShown: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
+                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
             )
     )
     prefs.save(to: file)
@@ -48,7 +48,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test(arguments: [
     #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
     #""watchDecisions":"true""#, #""doneAlerts":0"#, #""archiveOnMerge":"on""#, #""taskBases":[]"#,
-    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#,
+    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#, #""taskRuntime":2"#,
 ])
 func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
@@ -96,6 +96,19 @@ func prefsWithoutAKnownGlassKeepRegularAndOtherPreferences(_ json: String) throw
     let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))
     #expect(prefs.glass == .regular)
     #expect(!prefs.wrapLines)
+}
+
+// Automatic sends no runtime, which an older collied requires.
+@Test(arguments: [#"{"wrapLines":false}"#, #"{"wrapLines":false,"taskRuntime":"tmux"}"#])
+func prefsWithoutAKnownTaskRuntimeStartTasksAutomatically(_ json: String) throws {
+    let prefs = try JSONDecoder().decode(DevicePrefs.self, from: Data(json.utf8))
+    #expect(prefs.taskRuntime == .automatic)
+    #expect(prefs.taskRuntime.runtime == nil)
+    #expect(!prefs.wrapLines)
+}
+
+@Test func taskRuntimeChoicesNameTheirRuntime() {
+    #expect(TaskRuntimeChoice.allCases.map(\.runtime) == [nil, .herdr, .herdrCore, .rex])
 }
 
 // Regular must stay the glass every surface drew before the setting; Opaque draws regular glass over the page.

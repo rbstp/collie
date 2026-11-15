@@ -74,7 +74,7 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 | `pane_close` | `pane.close` | `terminal.kill`, `terminal.rm` | `block.close` | equivalent |
 | `agent_manifests` | `server.agent_manifests` | built | built (the CLIs on the machine) | built |
 | `agent_session` (Chat, costs, context, resume, hook binding) | herdr's hooks | pid file; Codex hook | Claude Code's `sessions/<pid>.json` for the foreground pid, read on that block's process and status events (verified, #707); collied's Codex SessionStart hook reading `REX_BLOCK` (verified, #707) | built |
-| `task_core` (where New task starts) | herdr | herdr-core when herdr is not running | Rex when neither answers | built ([Tasks](#8-tasks)) |
+| `task_core` (where New task starts) | herdr | herdr-core when herdr is not running | Rex when neither answers, or when the app asks for Rex | built ([Tasks](#8-tasks)) |
 
 ## Questions
 
@@ -144,7 +144,7 @@ Every runtime call collied makes today (`crates/collied/src/runtime/mod.rs`), wi
 
 ### 8. Tasks
 
-- New task starts in herdr while herdr answers, else in a followed herdr-core, else in a followed Rex: no setting, so a machine that runs both herdr and Rex changes nothing.
+- On Automatic, the app's default, New task starts in herdr while herdr answers, else in a followed herdr-core, else in a followed Rex, so a machine that runs both herdr and Rex changes nothing. The app's **Start tasks in** setting can ask for Rex (or Herdr, or Herdr 2) instead: the task then starts there or nowhere, and collied's error names the runtime and why, such as "Rex is not running on this computer" (#723, Runtime in [architecture.md](architecture.md#herdr-integration-verified-against-093-source-and-live-socket)).
 - A task is a session of its own, as herdr's `workspace.create` makes a workspace: `session.create` with the task's name as label and one window whose block runs `/usr/bin/env -u <name> ... <CLI path> <args>` (`options.command`, `options.cwd`), the API form of `rex new NAME -- COMMAND` (verified with `shell: none`: Claude Code started there and reported). With Rex's default shell (a login shell, not interactive) the agent gets the user's profile `PATH`, as Rex.app's terminals do; with `shell: none` it gets the server's environment. Checked in #708: `options.command` is an argument vector the login shell `exec`s unchanged ([Shape](#shape)). `rex run` and `session.new_window` would put a task in an existing session instead.
 - The `-u` list is herdr-core's sixteen names: a Rex server passes its environment to every terminal (verified), and a server started by a `rex` command inside a herdr pane would carry that pane's variables (not verified: `rex server start --env` suggests only named variables pass).
 - `session.create` makes collied the owner of the new block, which would keep collied's size (80x24) and keep Rex.app from sizing it. collied disowns it at once (`session.disown_block`, which needs the session attached), so Rex.app sizes it as it does the user's own blocks (not checked with Rex.app: on the owner's server the block had no owner afterwards and kept 80x24 while nothing showed it).

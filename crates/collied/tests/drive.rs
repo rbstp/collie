@@ -543,6 +543,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         clone: None,
         resume: None,
         ultracode: false,
+        runtime: None,
     }
 }
 

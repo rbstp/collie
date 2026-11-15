@@ -43,11 +43,12 @@ final class FakeCore: AgentCore {
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
-        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"])
+        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil)
         var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
         var folderPaths: [String] = []
         var taskNews: [String] = []
         var taskPrompts: [String] = []
+        var taskRuntimes: [TaskRuntime?] = []
         var worktreeListing = WorktreeListing(source: "/Users/me/app", worktrees: [
             WorktreeChoice(path: "/Users/me/app-feature", branch: "feature", open: true)
         ])
@@ -317,10 +318,11 @@ final class FakeCore: AgentCore {
         try await call { $0.folderPaths.append(path) }
         return state.withLock { $0.folders }
     }
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) \(newFolder ?? "-")" + (ultracode ? " ultracode" : ""))
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
@@ -329,34 +331,38 @@ final class FakeCore: AgentCore {
         try await call { $0.worktreeCalls.append("list \(cwd)") }
         return state.withLock { $0.worktreeListing }
     }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)")
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("open \(cwd) \(path) \(agent)")
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("pull_request \(cwd) \(number) \(agent)")
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool) async throws -> TaskStarted {
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) clone=\(repository)")
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         if let error = state.withLock({ $0.cloneError }) { throw error }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
@@ -366,10 +372,11 @@ final class FakeCore: AgentCore {
         try await call { $0.sessionCalls.append(cwd) }
         return state.withLock { $0.sessions }
     }
-    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?) async throws -> TaskStarted {
+    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.taskNews.append("\(cwd) resume=\(agent):\(sessionId)")
             $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started

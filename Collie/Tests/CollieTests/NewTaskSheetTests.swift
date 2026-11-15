@@ -35,6 +35,62 @@ final class NewTaskSheetTests: XCTestCase {
         }
     }
 
+    func testAChosenRuntimeIsSentOnlyToACollieThatListsRuntimes() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let prefs = FileManager.default.temporaryDirectory.appending(path: "prefs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: prefs) }
+        core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+        let start = { (file: URL?, runtimes: [TaskRuntime]?) async -> NewTaskModel in
+            core.state.withLock { $0.options.runtimes = runtimes }
+            let model = NewTaskModel(core: core, machines: [machine], prefsFile: file)
+            await model.loadOptions()
+            model.prompt = "keep this prompt"
+            model.cwd = "/Users/me/app"
+            _ = await model.start()
+            return model
+        }
+
+        let automatic = await start(nil, nil)
+        XCTAssertNil(automatic.error)
+        XCTAssertNil(automatic.runtimeProblem)
+
+        DevicePrefs.update(in: prefs) { $0.taskRuntime = .rex }
+        let listed = await start(prefs, [.herdr, .rex])
+        XCTAssertNil(listed.runtimeProblem)
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex])
+
+        let older = await start(prefs, nil)
+        XCTAssertFalse(older.canStart)
+        XCTAssertNil(older.error)
+        XCTAssertEqual(older.runtimeProblem, NewTaskModel.collieTooOld)
+        XCTAssertEqual(older.prompt, "keep this prompt")
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex], "nothing sent to an older collied")
+
+        // collied's refusal is what counts, so a runtime it did not list is still asked for.
+        core.state.withLock { $0.options.runtimes = [.herdr] }
+        let other = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let missing = NewTaskModel(core: core, machines: [machine, other], prefsFile: prefs)
+        await missing.loadOptions()
+        XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
+        missing.prompt = "keep this prompt"
+        missing.cwd = "/Users/me/app"
+        core.set(error: .InvalidInput(field: nil, message: "Rex is reconnecting; try again in a moment"))
+        let refused = await missing.start()
+        XCTAssertNil(refused)
+        XCTAssertEqual(missing.error, "Rex is reconnecting; try again in a moment")
+        XCTAssertNil(missing.runtimeProblem, "one message on screen")
+        XCTAssertEqual(missing.prompt, "keep this prompt")
+        XCTAssertEqual(core.snapshot.taskRuntimes, [nil, .rex, .rex])
+
+        // Another computer's sheet shows its own hint, not the last one's refusal.
+        core.set(error: nil)
+        missing.machineId = "m2"
+        await missing.loadOptions()
+        XCTAssertNil(missing.error)
+        XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
+    }
+
     func testCloneTakesARepositoryAndShowsProgressWhileCloning() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")

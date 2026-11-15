@@ -1041,6 +1041,21 @@ pub struct TaskNewParams {
     /// Claude Code only: start it with ultracode on, checked on screen before the prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ultracode: bool,
+    /// Where the task must start; absent, collied chooses as it always has. Sent only to a
+    /// collied whose `TaskOptions` lists `runtimes`: an older one refuses the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<TaskRuntime>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum TaskRuntime {
+    Herdr,
+    HerdrCore,
+    Rex,
+    #[serde(other)]
+    Unknown,
 }
 
 impl TaskNewParams {
@@ -1814,6 +1829,10 @@ pub struct TaskOptions {
     pub default_agent: AgentKind,
     pub recent_cwds: Vec<Cwd>,
     pub roots: Vec<Cwd>,
+    /// The runtimes a task can start in right now; absent from a collied that refuses
+    /// `TaskNewParams::runtime`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtimes: Option<Vec<TaskRuntime>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2558,6 +2577,51 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    // An older collied refuses any field it does not know, so Automatic must send none.
+    #[test]
+    fn a_task_runtime_is_sent_only_when_chosen_and_options_may_lack_runtimes() {
+        let task = |extra: &str| {
+            parse(&format!(
+                r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/a","agent":"claude","prompt":"go"{extra}}}}}"#
+            ))
+        };
+        let automatic = task("").unwrap();
+        assert!(
+            !serde_json::to_string(&automatic)
+                .unwrap()
+                .contains("runtime")
+        );
+        for (extra, runtime) in [
+            (r#","runtime":"herdr""#, TaskRuntime::Herdr),
+            (r#","runtime":"herdr_core""#, TaskRuntime::HerdrCore),
+            (r#","runtime":"rex""#, TaskRuntime::Rex),
+        ] {
+            let frame = task(extra).unwrap();
+            let Request::TaskNew(p) = &frame.request else {
+                panic!("not a task");
+            };
+            assert_eq!(p.runtime, Some(runtime));
+            assert!(serde_json::to_string(&frame).unwrap().contains(extra));
+        }
+        let Request::TaskNew(p) = task(r#","runtime":"tmux""#).unwrap().request else {
+            panic!("not a task");
+        };
+        assert_eq!(p.runtime, Some(TaskRuntime::Unknown));
+        let older: TaskOptions = serde_json::from_str(
+            r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"]}"#,
+        )
+        .unwrap();
+        assert_eq!(older.runtimes, None);
+        let newer: TaskOptions = serde_json::from_str(
+            r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"],"runtimes":["rex","tmux"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            newer.runtimes,
+            Some(vec![TaskRuntime::Rex, TaskRuntime::Unknown])
+        );
     }
 
     #[test]

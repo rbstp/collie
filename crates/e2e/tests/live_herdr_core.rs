@@ -1327,6 +1327,7 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
         clone: None,
         resume: None,
         ultracode: false,
+        runtime: None,
     };
     let started = |reply| match reply {
         (

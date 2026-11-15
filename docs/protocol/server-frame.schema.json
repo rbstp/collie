@@ -2048,6 +2048,16 @@
             "$ref": "#/$defs/Cwd"
           },
           "type": "array"
+        },
+        "runtimes": {
+          "description": "The runtimes a task can start in right now; absent from a collied that refuses\n`TaskNewParams::runtime`.",
+          "items": {
+            "$ref": "#/$defs/TaskRuntime"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2057,6 +2067,15 @@
         "roots"
       ],
       "type": "object"
+    },
+    "TaskRuntime": {
+      "enum": [
+        "herdr",
+        "herdr_core",
+        "rex",
+        "unknown"
+      ],
+      "type": "string"
     },
     "TaskSessionInfo": {
       "properties": {

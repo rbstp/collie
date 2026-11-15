@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var report: ColdStartReport?
     @State private var keepKeyboard = DevicePrefs.load(from: DevicePrefs.file).keepKeyboard
     @State private var defaultSessionView = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView
+    @State private var taskRuntime = DevicePrefs.load(from: DevicePrefs.file).taskRuntime
     @State private var historyLines = DevicePrefs.load(from: DevicePrefs.file).historyLines
     @State private var watchDecisions = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
     @State private var doneAlerts = DevicePrefs.load(from: DevicePrefs.file).doneAlerts
@@ -65,6 +66,10 @@ struct SettingsView: View {
                 Section {
                     Picker("Default view", selection: $defaultSessionView) {
                         ForEach(SessionView.allCases, id: \.self) { Text($0.label) }
+                    }
+                    .tint(.primary)
+                    Picker("Start tasks in", selection: $taskRuntime) {
+                        ForEach(TaskRuntimeChoice.allCases, id: \.self) { Text($0.label) }
                     }
                     .tint(.primary)
                     Toggle("Archive when the PR merges", isOn: $archiveOnMerge)
@@ -129,6 +134,9 @@ struct SettingsView: View {
             }
             .onChange(of: defaultSessionView) { _, view in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.defaultSessionView = view }
+            }
+            .onChange(of: taskRuntime) { _, choice in
+                DevicePrefs.update(in: DevicePrefs.file) { $0.taskRuntime = choice }
             }
             .onChange(of: historyLines) { _, lines in
                 DevicePrefs.update(in: DevicePrefs.file) { $0.historyLines = lines }

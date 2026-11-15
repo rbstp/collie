@@ -276,6 +276,20 @@ impl Rex {
         self.lock().live.as_ref().is_some_and(|l| l.synced)
     }
 
+    /// Answered and not refused, but not followed: not read yet, or lost and not found gone
+    /// since.
+    pub fn reconnecting(&self) -> bool {
+        let inner = self.lock();
+        inner.server.is_some()
+            && inner.refused.is_none()
+            && !inner.live.as_ref().is_some_and(|l| l.synced)
+    }
+
+    /// Why collied does not follow the server that answered last.
+    pub fn refused(&self) -> Option<String> {
+        self.lock().refused.clone()
+    }
+
     pub fn get(&self, id: &str) -> Result<AgentInfo, Error> {
         (self.listing())
             .and_then(|l| l.agents.into_iter().find(|a| a.terminal_id == id))
