@@ -343,10 +343,15 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
             session_id,
         } => {
             let reporter = peer.and_then(|p| u32::try_from(p).ok());
-            if let (Some(core), Some(reporter)) = (state.runtime.core(), reporter)
-                && !core.bind(&terminal_id, &session_id, reporter)
-            {
-                tracing::info!(terminal = ?terminal_id, "Codex session report not bound to a herdr-core terminal");
+            let bound = reporter.and_then(|reporter| {
+                if crate::runtime::rex::owns(&terminal_id) {
+                    (state.runtime.rex()).map(|r| r.bind(&terminal_id, &session_id, reporter))
+                } else {
+                    (state.runtime.core()).map(|c| c.bind(&terminal_id, &session_id, reporter))
+                }
+            });
+            if bound == Some(false) {
+                tracing::info!(terminal = ?terminal_id, "Codex session report not bound to a herdr-core terminal or Rex block");
             }
             Reply::Noted
         }

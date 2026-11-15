@@ -510,12 +510,15 @@ pub(crate) fn claude_session(sessions: &Path, pid: u32) -> Option<String> {
 }
 
 /// Trusted only while that pid is alive and started before the file says it did, so a file
-/// left by a process whose pid was reused is refused.
+/// left by a process whose pid was reused is refused, and only from a file of the user's.
 fn claim(sessions: &Path, pid: i32) -> Option<Claim> {
     if pid <= 0 {
         return None;
     }
     let (file, _, _) = open(&sessions.join(format!("{pid}.json")))?;
+    if file.metadata().ok()?.uid() != rustix::process::geteuid().as_raw() {
+        return None;
+    }
     let mut bytes = Vec::new();
     file.take(SESSION_BYTES).read_to_end(&mut bytes).ok()?;
     let v = serde_json::from_slice::<Value>(&bytes).ok()?;

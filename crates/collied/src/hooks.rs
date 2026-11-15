@@ -38,31 +38,48 @@ pub async fn run(control_path: &Path) {
     if read.is_err() {
         return;
     }
-    let terminal = std::env::var("HC_TERMINAL_ID").ok();
-    let Some(request) = request(&raw, terminal) else {
-        return;
+    let var = |name| std::env::var(name).ok().filter(|v: &String| !v.is_empty());
+    let terminals: Vec<String> = [
+        var("HC_TERMINAL_ID"),
+        var("REX_BLOCK").map(|b| format!("{}{b}", crate::runtime::rex::PREFIX)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let send = async {
+        for request in requests(&raw, &terminals) {
+            let _ = control::request(control_path, &request).await;
+        }
     };
-    let _ = tokio::time::timeout(DEADLINE, control::request(control_path, &request)).await;
+    let _ = tokio::time::timeout(DEADLINE, send).await;
 }
 
-/// A SessionStart outside a herdr-core terminal reports nothing: herdr's own hook binds it.
-fn request(raw: &[u8], terminal: Option<String>) -> Option<Request> {
-    let input = serde_json::from_slice::<Input>(raw).ok()?;
+/// A SessionStart outside a herdr-core terminal or a Rex block reports nothing: herdr's own
+/// hook binds it. A terminal can inherit the other runtime's variable from the server that
+/// runs it, so each is reported and collied keeps only the one whose terminal Codex leads.
+fn requests(raw: &[u8], terminals: &[String]) -> Vec<Request> {
+    let Ok(input) = serde_json::from_slice::<Input>(raw) else {
+        return Vec::new();
+    };
     match input.hook_event_name.as_deref() {
-        Some("SessionStart") => Some(Request::Session {
-            terminal_id: terminal.filter(|t| !t.is_empty())?,
-            session_id: input.session_id,
-        }),
+        Some("SessionStart") => (terminals.iter())
+            .map(|t| Request::Session {
+                terminal_id: t.clone(),
+                session_id: input.session_id.clone(),
+            })
+            .collect(),
         None | Some("PermissionRequest") => {
             let shown = shown(&input.tool_name, &input.tool_input);
-            Report::new(&input.tool_name, shown.clone())?;
-            Some(Request::Hook {
+            if Report::new(&input.tool_name, shown.clone()).is_none() {
+                return Vec::new();
+            }
+            vec![Request::Hook {
                 session_id: input.session_id,
                 tool_name: input.tool_name,
                 shown,
-            })
+            }]
         }
-        Some(_) => None,
+        Some(_) => Vec::new(),
     }
 }
 
@@ -270,28 +287,35 @@ mod tests {
     }
 
     #[test]
-    fn codex_session_start_reports_only_from_a_herdr_core_terminal() {
+    fn codex_session_start_reports_only_from_a_herdr_core_terminal_or_a_rex_block() {
         let start = br#"{"session_id":"01a199ed-7993-7261-8219-300d543d764b","transcript_path":"/x.jsonl","cwd":"/w","hook_event_name":"SessionStart","model":"m","permission_mode":"default","source":"startup"}"#;
-        match request(start, Some("t3".into())) {
-            Some(Request::Session {
-                terminal_id,
-                session_id,
-            }) => assert_eq!(
-                (terminal_id.as_str(), session_id.as_str()),
-                ("t3", "01a199ed-7993-7261-8219-300d543d764b")
-            ),
-            other => panic!("{other:?}"),
-        }
-        assert!(request(start, None).is_none());
-        assert!(request(start, Some(String::new())).is_none());
+        let both = ["t3".to_owned(), "rex:block:01a1dd68".to_owned()];
+        let reported: Vec<(String, String)> = (requests(start, &both).into_iter())
+            .map(|r| match r {
+                Request::Session {
+                    terminal_id,
+                    session_id,
+                } => (terminal_id, session_id),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        let session = "01a199ed-7993-7261-8219-300d543d764b".to_owned();
+        assert_eq!(
+            reported,
+            [
+                ("t3".to_owned(), session.clone()),
+                ("rex:block:01a1dd68".to_owned(), session)
+            ]
+        );
+        assert!(requests(start, &[]).is_empty());
         let permission = br#"{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
         assert!(matches!(
-            request(permission, Some("t3".into())),
-            Some(Request::Hook { .. })
+            requests(permission, &both)[..],
+            [Request::Hook { .. }]
         ));
         let stop = br#"{"hook_event_name":"Stop","session_id":"s"}"#;
-        assert!(request(stop, Some("t3".into())).is_none());
-        assert!(request(b"not json", Some("t3".into())).is_none());
+        assert!(requests(stop, &both).is_empty());
+        assert!(requests(b"not json", &both).is_empty());
     }
 
     #[test]

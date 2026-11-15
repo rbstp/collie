@@ -532,15 +532,21 @@ pub async fn start_with(
         None => vec![config::home_dir()?],
     };
     let herdr_seen = Arc::new(HerdrSeen::default());
+    let sessions = crate::hooks::claude_dir().ok().map(|d| d.join("sessions"));
     let core = cfg.herdr_core.clone().map(|s| {
-        let sessions = crate::hooks::claude_dir().ok().map(|d| d.join("sessions"));
         Arc::new(
             Core::new(s)
+                .with_claude_sessions(sessions.clone())
+                .with_herdr_seen(herdr_seen.clone()),
+        )
+    });
+    let rex = (cfg.rex.clone()).map(|s| {
+        Arc::new(
+            Rex::new(s)
                 .with_claude_sessions(sessions)
                 .with_herdr_seen(herdr_seen.clone()),
         )
     });
-    let rex = (cfg.rex.clone()).map(|s| Arc::new(Rex::new(s).with_herdr_seen(herdr_seen.clone())));
     let drive = Arc::new(
         Driver::new(herdr_socket.clone(), tasks.agents.clone(), &roots)?
             .with_transcripts(Transcripts::from_env())

@@ -20,6 +20,7 @@ mod client;
 mod discovery;
 mod model;
 mod screen;
+mod sessions;
 mod wire;
 
 #[cfg(test)]
@@ -30,7 +31,7 @@ mod screen_tests;
 mod tests;
 
 pub use discovery::socket_path;
-pub use model::Listing;
+pub use model::{Listing, PREFIX};
 
 pub const NOT_YET: &str = "not available for Rex agents yet";
 pub const GROUP_CLOSE: &str =
@@ -200,6 +201,7 @@ struct Live {
 /// server and never runs the `rex` CLI: an absent socket means none runs.
 pub struct Rex {
     socket: PathBuf,
+    claude_sessions: Option<PathBuf>,
     inner: Mutex<Inner>,
     wake: Notify,
     settled: watch::Sender<bool>,
@@ -225,6 +227,7 @@ impl Rex {
     pub fn new(socket: PathBuf) -> Self {
         Self {
             socket,
+            claude_sessions: None,
             inner: Mutex::default(),
             wake: Notify::new(),
             settled: watch::channel(false).0,
@@ -422,7 +425,9 @@ impl Rex {
         let Some(live) = inner.live.as_mut() else {
             return;
         };
-        if let Some(session) = live.model.event(seq, e) {
+        let read = live.model.event(seq, e);
+        sessions::claude(&mut live.model, self.claude_sessions.as_deref());
+        if let Some(session) = read {
             live.dirty.insert(session);
             drop(inner);
             self.wake.notify_one();
@@ -570,7 +575,10 @@ impl Rex {
         let (seq, title): (_, Title) = client
             .terminal(Method::Title, session, block, json!({}))
             .await?;
-        self.live(|live| live.model.title(session, block, seq, title.title))?;
+        self.live(|live| {
+            live.model.title(session, block, seq, title.title);
+            sessions::claude(&mut live.model, self.claude_sessions.as_deref());
+        })?;
         Ok(())
     }
 }
