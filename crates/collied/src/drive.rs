@@ -2939,7 +2939,7 @@ fn takes_input(a: &AgentInfo) -> Result<(), Fail> {
     if a.read_only {
         return fail(
             ErrorCode::AgentNotReady,
-            "nothing says whether the agent shows a dialog, so it takes no input from the phone",
+            "the agent's status cannot show when it has a dialog open, so it takes no input from the phone",
         );
     }
     Ok(())
@@ -3453,50 +3453,67 @@ mod tests {
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
     }
 
-    /// Copilot CLI reports `idle` at its folder trust prompt and with a picker open (#741).
+    /// Only Claude Code and Codex report `blocked` at their dialogs; Copilot CLI reports
+    /// `idle` at its folder trust prompt (#741), and a core keeps a report after its program
+    /// exits (0.1.16).
     #[tokio::test]
-    async fn a_herdr_core_copilot_takes_no_input_whatever_it_reports() {
-        fn copilot(state: &str) -> serde_json::Value {
-            core_tests::terminal(
-                "t1",
-                serde_json::json!({"state": state, "app": "copilot"}),
-                "/opt/homebrew/bin/copilot",
-            )
+    async fn a_herdr_core_agent_takes_no_input_unless_a_verified_cli_reports() {
+        fn term(app: &str, state: &str, argv0: &str) -> serde_json::Value {
+            core_tests::terminal("t1", serde_json::json!({"state": state, "app": app}), argv0)
         }
+        fn copilot_idle() -> serde_json::Value {
+            term("copilot", "idle", "/opt/homebrew/bin/copilot")
+        }
+        fn copilot_blocked() -> serde_json::Value {
+            term("copilot", "blocked", "/opt/homebrew/bin/copilot")
+        }
+        fn stale_claude() -> serde_json::Value {
+            term("claude-code", "idle", "/opt/homebrew/bin/copilot")
+        }
+        fn unknown_app() -> serde_json::Value {
+            term("devin", "idle", "/usr/local/bin/devin")
+        }
+        type Terminal = fn() -> serde_json::Value;
         type Answer = fn(&str) -> serde_json::Value;
-        let answers: [(&str, Answer, ErrorCode); 2] = [
+        let cases: [(Terminal, Answer, &str, &str, ErrorCode); 4] = [
             (
+                copilot_idle,
+                |m| core_get(m, copilot_idle),
+                "copilot",
                 "idle",
-                |m| {
-                    if m == "terminal.get" {
-                        copilot("idle")
-                    } else {
-                        serde_json::Value::Null
-                    }
-                },
                 ErrorCode::AgentNotReady,
             ),
             (
+                copilot_blocked,
+                |m| core_get(m, copilot_blocked),
+                "copilot",
                 "blocked",
-                |m| {
-                    if m == "terminal.get" {
-                        copilot("blocked")
-                    } else {
-                        serde_json::Value::Null
-                    }
-                },
                 ErrorCode::AgentBlocked,
             ),
+            (
+                stale_claude,
+                |m| core_get(m, stale_claude),
+                "claude",
+                "idle",
+                ErrorCode::AgentNotReady,
+            ),
+            (
+                unknown_app,
+                |m| core_get(m, unknown_app),
+                "devin",
+                "idle",
+                ErrorCode::AgentNotReady,
+            ),
         ];
-        for (state, answer, prompt_error) in answers {
+        for (terminal_of, answer, kind, state, prompt_error) in cases {
             let dir = tempfile::tempdir().unwrap();
             let root = std::fs::canonicalize(dir.path()).unwrap();
             let seen = core_tests::fake_core(&root.join("core.sock"), answer).await;
-            let core = core_tests::core_of(&root, serde_json::json!([copilot(state)]));
+            let core = core_tests::core_of(&root, serde_json::json!([terminal_of()]));
             let a = core.agents().unwrap().remove(0);
             assert_eq!(
                 (a.agent.as_deref(), a.agent_status.as_str(), a.read_only),
-                (Some("copilot"), state, true)
+                (Some(kind), state, true)
             );
             let drive = core_driver(&root, core);
             let yes: Authorized = Arc::new(|| true);
@@ -3537,11 +3554,22 @@ mod tests {
                 refused(drive.send_text(text, &yes).await),
                 ErrorCode::AgentNotReady
             );
+            assert_eq!(
+                refused(drive.scroll_bottom(&terminal, &yes).await),
+                ErrorCode::AgentNotReady
+            );
             let calls = crate::lock(&seen).calls.clone();
             assert!(
                 calls.iter().all(|c| c["method"] == "terminal.get"),
-                "{state}: {calls:?}"
+                "{kind} {state}: {calls:?}"
             );
+        }
+    }
+
+    fn core_get(method: &str, terminal: fn() -> serde_json::Value) -> serde_json::Value {
+        match method {
+            "terminal.get" => terminal(),
+            _ => serde_json::Value::Null,
         }
     }
 

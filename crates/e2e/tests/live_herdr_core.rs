@@ -782,7 +782,7 @@ const DIALOG: &str = "\
 ";
 
 // Each byte it reads, as hex on a line of its own in `keys`.
-const KEY_DUMP: &str = r#"printf '\033]7501;state=idle:app=keydump\033\\'
+const KEY_DUMP: &str = r#"printf '\033]7501;state=idle:app=codex\033\\'
 stty raw -echo
 while :; do dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' >> keys; echo >> keys; done"#;
 
