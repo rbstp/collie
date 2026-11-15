@@ -38,6 +38,9 @@ pub use model::{Listing, PREFIX};
 
 pub const NAME: &str = "Rex";
 pub const NOT_YET: &str = "not available for Rex agents yet";
+/// `session.focus_block` changes only the server's view: Rex.app 0.1.0-preview.19 neither
+/// switched to the session nor came forward (#709).
+pub const FOCUS: &str = "a Rex agent cannot be focused from the phone";
 pub const GROUP_CLOSE: &str =
     "a Rex session cannot be closed from the phone; close its agents one at a time";
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(15);

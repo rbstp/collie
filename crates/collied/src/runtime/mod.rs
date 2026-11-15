@@ -681,6 +681,9 @@ impl Runtime {
     }
 
     pub async fn agent_focus(&self, pane_id: &str) -> Result<(), Error> {
+        if Owner::of(pane_id) == Owner::Rex {
+            return Err(Error::Unsupported(rex::FOCUS.to_owned()));
+        }
         herdr_only(pane_id)?;
         herdr::agent_focus(&self.herdr, pane_id).await
     }
