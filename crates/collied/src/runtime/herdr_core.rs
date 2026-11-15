@@ -588,6 +588,13 @@ impl Core {
         self.lock().live.is_some()
     }
 
+    /// Answered, then lost or not followed yet, and not found gone since: the core is there
+    /// but not answering right now. One it refused, or that was never there, is not.
+    pub fn reconnecting(&self) -> bool {
+        let inner = self.lock();
+        inner.live.is_none() && inner.hello.as_ref().is_some_and(|h| h.problem().is_none())
+    }
+
     /// herdr's hooks exit without `HERDR_PANE_ID`, so herdr-core agents get their session
     /// here: Claude Code's from the file its foreground process keeps, Codex's from the hook.
     pub fn agents(&self) -> Option<Vec<AgentInfo>> {
@@ -2327,6 +2334,15 @@ pub(crate) mod tests {
 
     pub(crate) fn following(core: Core, terminals: Value) -> Arc<Core> {
         core.lock().live = Some(live(10, terminals));
+        Arc::new(core)
+    }
+
+    /// A core that answered (`refused`: one collied does not follow) and is not followed now,
+    /// as while it reconnects after its connection ended.
+    pub(crate) fn answered(root: &Path, refused: bool) -> Arc<Core> {
+        let core = Core::new(root.join("core.sock"));
+        let generation = if refused { GENERATION + 1 } else { GENERATION };
+        core.lock().hello = Some(hello(generation, MIN_VERSION, &METHODS));
         Arc::new(core)
     }
 

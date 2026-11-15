@@ -310,38 +310,52 @@ impl Runtime {
     /// rules, focus and workspace; when herdr is not running, the followed core, else the
     /// followed Rex. A herdr that runs but does not answer is an error, not a reason to start
     /// elsewhere.
+    ///
+    /// A core whose connection dropped and that collied has not found gone since is the same
+    /// error, not a reason to start in Rex.
     pub async fn task_host(&self) -> Result<Option<TaskHost>, Error> {
-        let core = (self.core.as_ref()).filter(|c| c.following());
-        let rex = (self.rex.as_ref()).filter(|r| r.following());
-        let Some(host) = (core.map(|c| TaskHost::Core(c.clone())))
-            .or_else(|| rex.map(|r| TaskHost::Rex(r.clone())))
-        else {
+        let core = self.core.as_ref();
+        let waiting = core.is_some_and(|c| c.reconnecting());
+        let rex = (self.rex.as_ref()).filter(|r| r.following() && !waiting);
+        let host = (core.filter(|c| c.following()))
+            .map(|c| TaskHost::Core(c.clone()))
+            .or_else(|| rex.map(|r| TaskHost::Rex(r.clone())));
+        if host.is_none() && !waiting {
             return Ok(None);
-        };
+        }
         match herdr::ping(&self.herdr).await {
             Ok(_) => Ok(None),
-            Err(e) if not_running(&e) => Ok(Some(host)),
+            Err(e) if not_running(&e) => host.map(Some).ok_or_else(|| {
+                Error::Unsupported(format!(
+                    "{} is reconnecting; try again in a moment",
+                    herdr_core::GROUP_LABEL
+                ))
+            }),
             Err(e) => Err(e),
         }
     }
 
-    /// Every terminal of the followed core and Rex, `owner`'s required: `None` while it is not
-    /// followed or does not answer, when nothing is known about what works where. The other
-    /// one counts while it is followed.
-    pub async fn occupants(&self, owner: Owner) -> Option<Vec<Occupant>> {
+    /// Every terminal of the followed core and Rex, `owner`'s required; the other one counts
+    /// while it is followed. Fails, naming the runtime, while one of them is not followed or
+    /// does not answer, when nothing is known about what works where.
+    pub async fn occupants(&self, owner: Owner) -> Result<Vec<Occupant>, String> {
+        let not_followed = |name: &str| format!("{name} is not followed right now");
         let core = (self.core.as_ref()).filter(|c| owner == Owner::Core || c.following());
         let rex = (self.rex.as_ref()).filter(|r| owner == Owner::Rex || r.following());
         let mut all = match core {
-            Some(core) => core.occupants()?,
-            None if owner == Owner::Core => return None,
+            Some(core) => core.occupants().ok_or_else(|| not_followed("herdr-core"))?,
+            None if owner == Owner::Core => return Err(not_followed("herdr-core")),
             None => Vec::new(),
         };
         match rex {
-            Some(rex) => all.extend(rex.occupants().await.ok()?),
-            None if owner == Owner::Rex => return None,
+            Some(rex) => all.extend(rex.occupants().await.map_err(|e| match e {
+                Error::Closed => not_followed(rex::NAME),
+                e => format!("Rex did not list its blocks ({e})"),
+            })?),
+            None if owner == Owner::Rex => return Err(not_followed(rex::NAME)),
             None => {}
         }
-        Some(all)
+        Ok(all)
     }
 
     /// The checkout recorded for the worktree task collied started in `id`.

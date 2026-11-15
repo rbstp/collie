@@ -63,7 +63,10 @@ pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const UNFOCUSED: &str =
     "a background task or agent below the input box is selected on the machine; nothing was sent";
-const STARTUP_PROMPT: &str = "the agent is blocked on a startup prompt; answer it in the terminal";
+pub(crate) const ELSEWHERE: &str =
+    "the agent runs in another folder than the task's; nothing was sent";
+pub(crate) const STARTUP_PROMPT: &str =
+    "the agent is blocked on a startup prompt; answer it in the terminal";
 pub const CODEX_UPDATE: &str = "Codex is asking to update. Answer it in Terminal.";
 pub const TOO_LONG: &str = "The line is longer than the terminal accepts before its shell prompt shows. Wait for the prompt and try again.";
 const MAX_FOLDERS: usize = 500;
@@ -1539,7 +1542,7 @@ impl Driver {
 
     /// The started agent must still be the one in `pane`; then ultracode is checked and the
     /// prompt sent. `target` reaches the agent: herdr's agent name, or the herdr-core or Rex id.
-    async fn prompt_started(
+    pub(crate) async fn prompt_started(
         &self,
         p: &TaskNewParams,
         pane: &PaneInfo,
@@ -1638,7 +1641,7 @@ impl Driver {
             )
         };
         let pane = self
-            .host_agent_ready(host, &id, &name, &p.agent)
+            .host_agent_ready(host, &id, &name, &p.agent, cwd)
             .await
             .map_err(left)?;
         let (Ok(workspace_id), Ok(terminal_id)) = (
@@ -1656,7 +1659,7 @@ impl Driver {
         })
     }
 
-    async fn start_host_worktree_task(
+    pub(crate) async fn start_host_worktree_task(
         &self,
         host: &TaskHost,
         p: &TaskNewParams,
@@ -1683,9 +1686,8 @@ impl Driver {
         }
         // One task per checkout, as herdr keeps one workspace per worktree: archiving one
         // would end the other and remove its checkout.
-        let Some(occupants) = self.runtime.occupants(host.owner()).await else {
-            return Err(left(invalid(&not_followed(host_name(host.owner())))));
-        };
+        let occupants =
+            (self.runtime.occupants(host.owner()).await).map_err(|why| left(invalid(&why)))?;
         if (occupants.iter()).any(|o| o.worktree.as_deref() == Some(path.as_str())) {
             return Err(left(invalid("the worktree root pane is occupied")));
         }
@@ -1696,13 +1698,15 @@ impl Driver {
 
     /// herdr-core and Rex have no launch state: the agent is ready once it reports idle or done
     /// and keeps that report for `SCREEN_SETTLE`, since Codex 0.166.0 reports idle, then
-    /// working, then idle again while it starts.
-    async fn host_agent_ready(
+    /// working, then idle again while it starts. It must run in `cwd`: Rex starts a block whose
+    /// folder is gone in the home folder instead, and the prompt was meant for `cwd`.
+    pub(crate) async fn host_agent_ready(
         &self,
         host: &TaskHost,
         id: &str,
         name: &str,
         kind: &AgentKind,
+        cwd: &Cwd,
     ) -> Result<PaneInfo, Fail> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let mut listed = false;
@@ -1734,6 +1738,9 @@ impl Driver {
                     match since {
                         Some((seq, at)) if seq == a.state_change_seq => {
                             if at.elapsed() >= SCREEN_SETTLE {
+                                if pane.foreground_cwd.as_deref() != Some(cwd.as_str()) {
+                                    return fail(ErrorCode::AgentNotReady, ELSEWHERE);
+                                }
                                 return Ok(pane);
                             }
                         }
@@ -2239,8 +2246,9 @@ impl Driver {
         // Read from a followed core and Rex only: one whose connection dropped knows nothing
         // about what works in the checkout.
         let owner = Owner::of(terminal_id);
-        let Some(all) = self.runtime.occupants(owner).await else {
-            return refused(&not_followed(host_name(owner)));
+        let all = match self.runtime.occupants(owner).await {
+            Ok(all) => all,
+            Err(why) => return refused(&why),
         };
         let occupants: Vec<_> = (all.into_iter())
             .filter(|o| inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
@@ -2283,8 +2291,9 @@ impl Driver {
         authorized(auth).map_err(closed)?;
         // Read again right before the removal: the runtime may have stopped being followed,
         // or something may have started in the checkout meanwhile.
-        let Some(now) = self.runtime.occupants(owner).await else {
-            return fail(ErrorCode::InvalidParams, not_followed(host_name(owner))).map_err(closed);
+        let now = match self.runtime.occupants(owner).await {
+            Ok(now) => now,
+            Err(why) => return fail(ErrorCode::InvalidParams, why).map_err(closed),
         };
         if (now.iter()).any(|o| {
             o.id != terminal_id && (inside(Some(&o.cwd)) || inside(o.foreground_cwd.as_deref()))
@@ -2477,17 +2486,6 @@ fn host_kinds(host: &TaskHost) -> String {
         "{} starts Claude Code and Codex, and only once found on the machine",
         host.name()
     )
-}
-
-fn host_name(owner: Owner) -> &'static str {
-    match owner {
-        Owner::Rex => runtime::rex::NAME,
-        _ => "herdr-core",
-    }
-}
-
-fn not_followed(name: &str) -> String {
-    format!("{name} is not followed right now")
 }
 
 fn other_source(core: bool) -> &'static str {
@@ -3281,6 +3279,43 @@ mod tests {
         format!("hc:{}:t1", core_tests::ID)
     }
 
+    fn w() -> Cwd {
+        Cwd::new("/w").unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_herdr_core_agent_running_in_another_folder_takes_no_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        // Ready (idle) in /w/sub, the fixture's foreground folder, not in /w.
+        core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(
+                Path::new("/w"),
+                serde_json::json!({"state": "idle", "app": "claude-code"}),
+                "live",
+            ),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let idle = serde_json::json!({"state": "idle", "app": "claude-code"});
+        let t = claude(Path::new("/w"), idle, "live");
+        let core = core_tests::core_of(&root, serde_json::json!([t]));
+        let drive = core_driver(&root, core.clone());
+        let kind = AgentKind::new("claude").unwrap();
+        let host = TaskHost::Core(core);
+        let failed = drive
+            .host_agent_ready(&host, &core_id(), NAME, &kind, &w())
+            .await
+            .unwrap_err();
+        assert_eq!(failed, (ErrorCode::AgentNotReady, ELSEWHERE.to_owned()));
+        let sub = Cwd::new("/w/sub").unwrap();
+        let pane = drive
+            .host_agent_ready(&host, &core_id(), NAME, &kind, &sub)
+            .await
+            .unwrap();
+        assert_eq!(pane.foreground_cwd.as_deref(), Some("/w/sub"));
+    }
+
     #[tokio::test]
     async fn a_claude_code_with_no_status_and_a_menu_on_screen_fails_its_start() {
         let dir = tempfile::tempdir().unwrap();
@@ -3296,7 +3331,7 @@ mod tests {
         let drive = core_driver(&root, core.clone());
         let kind = AgentKind::new("claude").unwrap();
         let failed = drive
-            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind)
+            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
             .await
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
@@ -3317,7 +3352,7 @@ mod tests {
         let kind = AgentKind::new("claude").unwrap();
         let started = tokio::time::Instant::now();
         let failed = drive
-            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind)
+            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
             .await
             .unwrap_err();
         assert_eq!(failed.1, "agent exited before becoming interactive");

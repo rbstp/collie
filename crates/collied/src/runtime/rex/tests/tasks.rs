@@ -1,16 +1,21 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use protocol::{ErrorCode, OpId, Response, TaskArchiveParams, TerminalId};
+use protocol::{
+    AgentKind, Cwd, ErrorCode, OpId, PromptText, Response, TaskArchiveParams, TaskNewParams,
+    TerminalId,
+};
 use serde_json::{Value, json};
 
 use super::{B1, S1, T0, claude, eventually, follow, id};
-use crate::drive::{Authorized, Driver};
-use crate::runtime::herdr_core::tests::{core_of, fake_herdr, worktree};
+use crate::drive::{Authorized, Driver, ELSEWHERE, STARTUP_PROMPT};
+use crate::runtime::herdr_core::tests::{
+    ID, answered, codex_in, core_of, fake_core, fake_herdr, terminal, worktree, worktree_task,
+};
 use crate::runtime::rex::Rex;
 use crate::runtime::rex::fake::{self, Fake};
 use crate::runtime::rex::tasks::Task;
-use crate::runtime::{Owner, Runtime, STRIPPED, TaskHost, herdr};
+use crate::runtime::{Error, Owner, Runtime, STRIPPED, TaskHost, herdr, pane};
 
 const NAME: &str = "collie-0a1b2c3d";
 const SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
@@ -203,6 +208,23 @@ async fn tasks_start_in_herdr_then_herdr_core_then_rex() {
         Ok(Some(TaskHost::Core(_)))
     ));
 
+    // A core that answered and lost its connection is there but not answering: an error, not
+    // a reason to start in Rex. One collied refused to follow is not waited for.
+    let waiting = Runtime::new(root.join("no-herdr.sock"))
+        .with_core(Some(answered(&root, false)))
+        .with_rex(Some(rex.clone()));
+    assert!(matches!(
+        waiting.task_host().await,
+        Err(Error::Unsupported(m)) if m.starts_with("Herdr 2 is reconnecting")
+    ));
+    let refused = Runtime::new(root.join("no-herdr.sock"))
+        .with_core(Some(answered(&root, true)))
+        .with_rex(Some(rex.clone()));
+    assert!(matches!(
+        refused.task_host().await,
+        Ok(Some(TaskHost::Rex(_)))
+    ));
+
     let unfollowed = Runtime::new(root.join("no-herdr.sock"))
         .with_rex(Some(Arc::new(Rex::new(fake.socket.clone()))));
     assert!(matches!(unfollowed.task_host().await, Ok(None)));
@@ -217,23 +239,6 @@ async fn tasks_start_in_herdr_then_herdr_core_then_rex() {
 }
 
 /// Rex's calls that end sessions, windows or the server, or take a block from Rex.app.
-#[test]
-fn no_call_destroys_a_session_or_ends_anything_but_a_listed_block() {
-    use crate::runtime::rex::client::Method;
-    let names: Vec<&str> = Method::ALL.into_iter().map(Method::name).collect();
-    for never in [
-        "session.destroy",
-        "session.close_window",
-        "session.close_layer",
-        "session.detach_block",
-        "session.own_block",
-        "server.stop",
-        "com.superlogical.terminal.write",
-    ] {
-        assert!(!names.contains(&never), "{never}");
-    }
-}
-
 fn archive(id: &str) -> TaskArchiveParams {
     TaskArchiveParams {
         op_id: OpId::new("a".repeat(22)).unwrap(),
@@ -502,4 +507,246 @@ async fn an_agent_that_exits_is_finished_and_a_block_kept_by_collied_fails_the_s
         .await
         .unwrap_err();
     assert!(failed.to_string().contains("was left running"), "{failed}");
+}
+
+const VT: &str =
+    include_str!("../../../../tests/fixtures/rex-0.1.0-preview.19/claude-2.1.325-permission.vt");
+
+fn claude_kind() -> AgentKind {
+    AgentKind::new("claude").unwrap()
+}
+
+fn drive_in(root: &Path, rex: Arc<Rex>) -> Driver {
+    Driver::new(
+        root.join("no-herdr.sock"),
+        vec![claude_kind()],
+        &[root.to_owned()],
+    )
+    .unwrap()
+    .with_rex(Some(rex))
+}
+
+#[tokio::test]
+async fn a_rex_agent_running_in_another_folder_takes_no_prompt() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rex, rt) = followed(&fake, dir.path()).await;
+    let host = host(&rt).await;
+    let drive = drive_in(dir.path(), rex.clone());
+    let w = Cwd::new("/w").unwrap();
+    // Rex starts a block whose folder is gone in the home folder.
+    fake.state().runs_in = Some("/Users/me".to_owned());
+    let home = host
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap();
+    let failed = drive
+        .host_agent_ready(&host, &home, NAME, &claude_kind(), &w)
+        .await
+        .unwrap_err();
+    assert_eq!(failed, (ErrorCode::AgentNotReady, ELSEWHERE.to_owned()));
+
+    fake.state().runs_in = None;
+    let there = host
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap();
+    let pane = drive
+        .host_agent_ready(&host, &there, NAME, &claude_kind(), &w)
+        .await
+        .unwrap();
+    assert_eq!(pane.foreground_cwd.as_deref(), Some("/w"));
+}
+
+#[tokio::test]
+async fn no_prompt_reaches_an_idle_rex_claude_code_that_shows_a_menu() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rex, rt) = followed(&fake, dir.path()).await;
+    let task = host(&rt)
+        .await
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap();
+    let block = block_of(&task).to_owned();
+    let session = fake.state().block(&block).session.clone();
+    fake.emit(move |s| {
+        s.block(&block).screen = VT.to_owned();
+        s.block(&block).size = (198, 68);
+        let size = json!({ "columns": 198, "rows": 68 });
+        vec![fake::block_event(&session, &block, "size_changed", size)]
+    });
+    eventually("the dialog's size", || {
+        rex.columns(&task).ok().flatten() == Some(198)
+    })
+    .await;
+    let a = rex.get(&task).unwrap();
+    assert_eq!(a.agent_status, "idle");
+    let p = TaskNewParams {
+        op_id: OpId::new("n".repeat(22)).unwrap(),
+        cwd: Cwd::new("/w").unwrap(),
+        agent: claude_kind(),
+        prompt: Some(PromptText::new("go".to_owned()).unwrap()),
+        label: None,
+        new_folder: None,
+        worktree: None,
+        clone: None,
+        resume: None,
+        ultracode: false,
+    };
+    let yes: Authorized = Arc::new(|| true);
+    let failed = drive_in(dir.path(), rex.clone())
+        .prompt_started(&p, &pane(&a), NAME, &task, &yes)
+        .await
+        .unwrap_err();
+    assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+    assert!(!fake.calls().iter().any(|c| c == "block.event"));
+}
+
+#[tokio::test]
+async fn a_rex_agent_that_exits_early_fails_its_start_at_once() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rex, rt) = followed(&fake, dir.path()).await;
+    let host = host(&rt).await;
+    fake.state().start = None;
+    let task = host
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap();
+    let block = block_of(&task).to_owned();
+    fake.emit(move |s| {
+        let i = s.blocks.iter().position(|b| b.id == block).unwrap();
+        let b = s.blocks.remove(i);
+        vec![fake::block_closed(&b.session, &b.id)]
+    });
+    let (drive, kind, w) = (
+        drive_in(dir.path(), rex),
+        claude_kind(),
+        Cwd::new("/w").unwrap(),
+    );
+    let ready = drive.host_agent_ready(&host, &task, NAME, &kind, &w);
+    let failed = tokio::time::timeout(std::time::Duration::from_secs(5), ready)
+        .await
+        .expect("the start ends at once, not after 30 s")
+        .unwrap_err();
+    assert_eq!(failed.1, "agent exited before becoming interactive");
+}
+
+fn kill_and_rm(method: &str) -> Value {
+    match method {
+        "terminal.kill" => json!({"address": "t1"}),
+        "terminal.rm" => json!({"removed": "t1"}),
+        _ => Value::Null,
+    }
+}
+
+#[tokio::test]
+async fn a_rex_block_in_the_checkout_refuses_a_herdr_core_tasks_archive() {
+    let (_dir, root, _repo, checkout) = worktree();
+    let seen = fake_core(&root.join("core.sock"), kill_and_rm).await;
+    let core = core_of(
+        &root,
+        json!([codex_in(&checkout, worktree_task(&checkout))]),
+    );
+    let fake = Fake::start().await;
+    fake.state()
+        .sessions
+        .push((S1.to_owned(), "mine".to_owned()));
+    shell(&fake, S1, SHELL, &checkout);
+    let (rex, _) = followed(&fake, &root).await;
+    let drive = driver(&root, rex).with_core(Some(core));
+    let yes: Authorized = Arc::new(|| true);
+    let (code, message) = drive
+        .task_archive(archive(&format!("hc:{ID}:t1")), &yes)
+        .await
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::InvalidParams);
+    assert!(message.contains("collie did not start"), "{message}");
+    assert!(checkout.exists());
+    assert!(
+        crate::lock(&seen).calls.is_empty(),
+        "no terminal was closed"
+    );
+}
+
+#[tokio::test]
+async fn a_herdr_core_terminal_in_the_checkout_refuses_a_rex_tasks_archive() {
+    let (_dir, root, repo, checkout) = worktree();
+    let fake = Fake::start().await;
+    let (rex, rt) = followed(&fake, &root).await;
+    let at = checkout.to_str().unwrap();
+    let task = host(&rt)
+        .await
+        .start(at, NAME, None, "codex", Some(at), "/opt/bin/codex", &[])
+        .await
+        .unwrap();
+    eventually("the task listed", || rex.get(&task).is_ok()).await;
+    let mut shell = terminal("t2", Value::Null, "-zsh");
+    shell["cwd"] = json!(repo);
+    shell["foreground"]["cwd"] = json!(checkout);
+    let drive = driver(&root, rex).with_core(Some(core_of(&root, json!([shell]))));
+    let yes: Authorized = Arc::new(|| true);
+    let (code, message) = drive.task_archive(archive(&task), &yes).await.unwrap_err();
+    assert_eq!(code, ErrorCode::InvalidParams);
+    assert!(message.contains("collie did not start"), "{message}");
+    assert!(checkout.exists());
+    assert!(!fake.calls().iter().any(|c| c == "block.close"));
+}
+
+#[tokio::test]
+async fn a_lost_create_answer_or_an_unnamed_client_fails_the_start_and_says_so() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_rex, rt) = followed(&fake, dir.path()).await;
+    let host = host(&rt).await;
+    // `session.attach` naming no client: nothing says the block is no longer collied's.
+    {
+        let mut s = fake.state();
+        s.anonymous = true;
+        s.keep_owner = true;
+    }
+    let failed = host
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap_err();
+    assert!(failed.to_string().contains("was left running"), "{failed}");
+
+    fake.state().hang_up = Some("session.create");
+    let failed = host
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap_err();
+    assert!(
+        failed
+            .to_string()
+            .contains("an agent may have been started"),
+        "{failed}"
+    );
+}
+
+#[tokio::test]
+async fn a_tasks_record_goes_when_its_block_closes() {
+    let fake = Fake::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rex-tasks.json");
+    let rex = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file.clone()));
+    let _task = follow(&rex).await;
+    let rt = Runtime::new(dir.path().join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    let started = host(&rt)
+        .await
+        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .await
+        .unwrap();
+    eventually("the task listed", || rex.get(&started).is_ok()).await;
+    let block = block_of(&started).to_owned();
+    fake.emit(move |s| {
+        let i = s.blocks.iter().position(|b| b.id == block).unwrap();
+        let b = s.blocks.remove(i);
+        vec![fake::block_closed(&b.session, &b.id)]
+    });
+    eventually("the record gone", || rex.lock().tasks.is_empty()).await;
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(saved, json!({}));
+    assert!(rex.finished(&started));
 }

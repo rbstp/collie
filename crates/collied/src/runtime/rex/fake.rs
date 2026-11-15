@@ -76,6 +76,13 @@ pub(super) struct State {
     pub start: Option<&'static str>,
     /// While set, `session.disown_block` leaves the caller the owner.
     pub keep_owner: bool,
+    /// While set, `session.attach` does not name the caller's client.
+    pub anonymous: bool,
+    /// The folder a created block's program runs in instead of the layout's, as Rex starts
+    /// one whose folder is not a directory in the home folder.
+    pub runs_in: Option<String>,
+    /// A method whose request ends the connection instead of an answer.
+    pub hang_up: Option<&'static str>,
 }
 
 impl State {
@@ -169,6 +176,9 @@ impl Fake {
             created: Vec::new(),
             start: Some("idle"),
             keep_owner: false,
+            anonymous: false,
+            runs_in: None,
+            hang_up: None,
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -265,6 +275,10 @@ async fn serve(
                 let Some(Ok(Message::Text(text))) = next else { return };
                 let request: Value = serde_json::from_str(&text).unwrap();
                 let mut s = crate::lock(&state);
+                if s.hang_up.is_some() && s.hang_up == request["method"].as_str() {
+                    s.calls.push(request["method"].as_str().unwrap().to_owned());
+                    return;
+                }
                 answer(&mut s, &request, &mut seq, &mut out);
             }
             pushed = pushed.recv() => {
@@ -368,7 +382,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 .iter()
                 .find(|(id, _)| *id == session)
                 .map(|(_, l)| l);
-            Ok(json!({ "client_id": CLIENT, "view": {
+            let client = (!s.anonymous).then_some(CLIENT);
+            Ok(json!({ "client_id": client, "view": {
                 "revision": 1, "session_id": session, "label": label,
             }}))
         }
@@ -493,7 +508,10 @@ fn create(s: &mut State, payload: &Value, seq: &mut u64, out: &mut Vec<Value>) -
         i += 2;
     }
     let program = command.get(i).copied().unwrap_or_default();
-    let cwd = options["cwd"].clone();
+    let cwd = s
+        .runs_in
+        .clone()
+        .map_or_else(|| options["cwd"].clone(), Value::from);
     let pid = 900 + n as u32;
     let label = payload["label"].as_str().unwrap_or_default().to_owned();
     s.sessions.push((session.clone(), label.clone()));

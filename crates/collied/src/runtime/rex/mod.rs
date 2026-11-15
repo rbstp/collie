@@ -445,9 +445,7 @@ impl Rex {
             }
             return;
         }
-        if let Some(block) = tasks::ended(&e).filter(|b| inner.tasks.contains_key(b)) {
-            inner.ended.insert(block);
-        }
+        self.task_ended(&mut inner, &e);
         let Some(live) = inner.live.as_mut() else {
             return;
         };

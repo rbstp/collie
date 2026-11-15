@@ -65,8 +65,14 @@ impl Rex {
             "label": label.unwrap_or(name),
             "initial_windows": [{ "layout": { "block": block } }],
         });
-        let (_, created): (_, Created) =
-            client.call(Method::SessionCreate, payload, TIMEOUT).await?;
+        let (_, created): (_, Created) = (client.call(Method::SessionCreate, payload, TIMEOUT))
+            .await
+            .map_err(|e| match e {
+                Error::Rex { .. } => e,
+                e => Error::Unsupported(format!(
+                    "Rex's answer to session.create was lost ({e}); an agent may have been started in a new Rex session"
+                )),
+            })?;
         let session = created.session_id;
         let block = (created.initial_windows.into_iter().flatten())
             .find_map(|w| w.block_ids?.into_iter().next())
@@ -166,6 +172,19 @@ impl Rex {
             .collect())
     }
 
+    /// A task block that closed or whose program exited, from the event pump: a closed one's
+    /// record goes at once, so the file does not grow over one long connection.
+    pub(super) fn task_ended(&self, inner: &mut Inner, e: &Tagged) {
+        let Some((block, closed)) = ended(e).filter(|(b, _)| inner.tasks.contains_key(b)) else {
+            return;
+        };
+        if closed {
+            inner.tasks.remove(&block);
+            self.save_tasks(&inner.tasks);
+        }
+        inner.ended.insert(block);
+    }
+
     /// Once every session is read: a task whose block is gone from the server is forgotten.
     pub(super) fn prune_tasks(&self) {
         let mut inner = self.lock();
@@ -182,19 +201,19 @@ impl Rex {
     }
 }
 
-/// The block an event says closed or whose program exited.
-pub(super) fn ended(e: &Tagged) -> Option<String> {
+/// The block an event says closed (`true`) or whose program exited (`false`).
+pub(super) fn ended(e: &Tagged) -> Option<(String, bool)> {
     if e.kind != "session_event" {
         return None;
     }
     let event = &e.payload["event"];
-    let ended = match event["type"].as_str()? {
+    let closed = match event["type"].as_str()? {
         "block_closed" => true,
-        "block_event" => event["payload"]["name"] == "child_exited",
-        _ => false,
+        "block_event" if event["payload"]["name"] == "child_exited" => false,
+        _ => return None,
     };
     let block = event["payload"]["block_id"].as_str()?;
-    ended.then(|| block.to_owned())
+    Some((block.to_owned(), closed))
 }
 
 /// A task's agent shows its recorded name, as herdr's and herdr-core's do.
@@ -214,9 +233,13 @@ async fn disown(client: &Client, session: &str, block: &str) -> Result<(), Error
     let (_, owners): (_, Owners) = client
         .call(Method::SessionDisownBlock, payload, TIMEOUT)
         .await?;
-    let ours = |o: &super::wire::Owned| o.owner.is_some() && o.owner == attached.client_id;
+    let Some(me) = attached.client_id else {
+        return Err(Error::Unsupported(
+            "session.attach did not name collied's client".to_owned(),
+        ));
+    };
     match (owners.blocks.into_iter().flatten()).find(|o| o.block_id.as_deref() == Some(block)) {
-        Some(o) if !ours(&o) => Ok(()),
+        Some(o) if o.owner.as_deref() != Some(me.as_str()) => Ok(()),
         _ => Err(Error::Unsupported(
             "the block is still collied's after session.disown_block".to_owned(),
         )),
