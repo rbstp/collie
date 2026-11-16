@@ -56,7 +56,7 @@ The app runs Tailscale itself, so you need no Tailscale app and no VPN profile o
 
 WHAT YOU NEED
 Collie Herd is a remote control: your agents keep running on your own machine. Real use needs:
-• herdr or Herdr Core on an Apple silicon Mac or an x86_64 Linux machine, or Rex on a Mac
+• herdr or Herdr Core on an Apple silicon Mac or an x86_64 Linux machine, or Rex on an Apple silicon Mac
 • the free collied daemon on that machine (collie.rbstp.dev)
 • a personal Tailscale account, signed in inside the app and on that machine
 
