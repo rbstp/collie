@@ -197,12 +197,12 @@ Making it easier: the manual part is steps 1 to 4. A script that takes a version
 
 ## Follow-up
 
-Four issues, in this order: the measured gain first, the risk last.
+Four issues, filed as #763 to #766, in this order: the measured gain first, the risk last.
 
-1. **Move libghostty-vt to 1.0.1** for the app (the repository's latest-stable rule, whatever the answer).
-2. **Build libghostty-vt for collied, with no change in behavior**: the shared pins file, a library build split from the xcframework step that runs on any host and target, the local `crates/ghostty-vt-sys`, the notices path and a Linux build of collied in CI. This carries the build cost alone, so a broken Linux link or release job shows before any screen depends on it.
-3. **Follow a watched Rex terminal as a stream**, with Rex's reads through a libghostty-vt screen and polling as the fallback. This is where the [Watch cost](#watch-cost) gain is, and Rex's screens already come out of Ghostty, so the four [differences](#4-fidelity) do not apply to them.
-4. **Move Herdr Core's emulation to libghostty-vt and remove `alacritty_terminal`.** This is where the risk is: the synchronized-update hold, scrollback over-provisioning, and the visible change of `ESC[2J` in `recent` reads, with no measured gain beyond one emulator instead of two.
+1. **Move libghostty-vt to 1.0.1** ([#763](https://github.com/rbstp/collie/issues/763)) for the app (the repository's latest-stable rule, whatever the answer).
+2. **Build libghostty-vt for collied, with no change in behavior** ([#764](https://github.com/rbstp/collie/issues/764)): the shared pins file, a library build split from the xcframework step that runs on any host and target, the local `crates/ghostty-vt-sys`, the notices path and a Linux build of collied in CI. This carries the build cost alone, so a broken Linux link or release job shows before any screen depends on it.
+3. **Follow a watched Rex terminal as a stream** ([#765](https://github.com/rbstp/collie/issues/765)), with Rex's reads through a libghostty-vt screen and polling as the fallback. This is where the [Watch cost](#watch-cost) gain is, and Rex's screens already come out of Ghostty, so the four [differences](#4-fidelity) do not apply to them.
+4. **Move Herdr Core's emulation to libghostty-vt and remove `alacritty_terminal`** ([#766](https://github.com/rbstp/collie/issues/766)). This is where the risk is: the synchronized-update hold, scrollback over-provisioning, and the visible change of `ESC[2J` in `recent` reads, with no measured gain beyond one emulator instead of two.
 
 Between steps 3 and 4 collied carries both emulators (about 1 MB more on macOS, two `Screen` paths), which one user can live with. Swapping the emulator first would put the risky step before the measured gain, and nothing in step 3 needs Herdr Core moved.
 
