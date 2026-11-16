@@ -97,6 +97,10 @@ jobs:
       - name: install rust
         run: rustup toolchain install
 
+      # The pinned Zig on PATH, or downloaded and checked against pins.env; cargo build links the result.
+      - name: build libghostty-vt
+        run: scripts/ghostty/build-collied.sh x86_64-unknown-linux-gnu
+
       - name: test desktop packaging
         run: |
           python3 -m unittest discover -s scripts/desktop -p 'test_*.py'
@@ -163,6 +167,9 @@ jobs:
           echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c
           unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: build libghostty-vt
+        run: scripts/ghostty/build-collied.sh aarch64-apple-darwin
 
       - name: test and build stamped desktop software
         run: |

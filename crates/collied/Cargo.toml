@@ -17,6 +17,7 @@ chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util.workspace = true
 getrandom.workspace = true
+ghostty-vt-sys = { path = "../ghostty-vt-sys" }
 http-body-util = "0.1.5"
 httpdate = "1.0.3"
 hyper = { version = "1.12.0", features = ["client", "http1"] }

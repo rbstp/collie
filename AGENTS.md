@@ -7,6 +7,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 - `crates/protocol`: wire types and `PROTOCOL_VERSION`; `just schema` writes the JSON Schemas to `docs/protocol/`.
 - `crates/collied`: the daemon (macOS and Linux). `crates/collie-core`: the phone's Rust core, exposed to Swift with UniFFI.
 - `crates/tailscale-sys`, `crates/tailnet`, `crates/tls`: libtailscale (pinned submodule plus a patch series), its safe wrapper, mutual TLS.
+- `crates/ghostty-vt-sys`: collied's libghostty-vt, built with Zig by `build.rs` through `scripts/ghostty/build-collied.sh`.
 - `crates/e2e`: phone core against collied over a local test tailnet.
 - `Collie/`: iOS app, extensions and Apple Watch app (XcodeGen `Collie/project.yml`). `Mac/`: the CollieBar menu bar app. `Linux/`: the CollieTray Omarchy bar widget.
 - Generated, never committed: `*.xcodeproj`, the CollieCore xcframework and bindings, the Ghostty xcframework, the app's `Acknowledgements.json`.
@@ -62,7 +63,7 @@ Fast tests that fail only for regressions are a priority: every pull request wai
 
 - Always pin the latest stable release of every dependency: crates, Swift packages, toolchains and tools downloaded in CI (checked against their SHA-256).
 - GitHub Actions are pinned by commit SHA with a version comment: `uses: actions/checkout@<sha> # v7.0.1`.
-- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from its pinned release tarballs (checked against their SHA-256) by `scripts/ghostty/build-xcframework.sh`.
+- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from release tarballs and a Zig pinned in `scripts/ghostty/pins.env` (each checked against its SHA-256), for the app by `scripts/ghostty/build-xcframework.sh` and for collied by `scripts/ghostty/build-collied.sh`. Zig stays at the pinned version, which may be newer than the one Ghostty's CI uses; a build never takes a `zig` of another version from `PATH`.
 
 ## Documentation follows features
 
@@ -92,6 +93,7 @@ docs/site/check-site.sh /tmp/collie-site
 - `testflight` runs the unit tests only before it ships. The UI suite runs in `ci` on the pull request and on a push to `master` that changes what the app builds from, so a UI regression shows on master's `ci` run and does not block a build.
 - Pull requests that change only `docs/site/`, `docs/deploy-pages.md`, `README.md`, `AGENTS.md` or `CLAUDE.md` skip the macOS `rust` and `ios` CI jobs (the `changes` job in `.github/workflows/ci.yml`). A push to `master` follows the same rules over all its commits, and runs every job when the pushed range cannot be worked out (a first push, a rewritten branch). A run on `master` is never cancelled by a later push. Any other path runs `rust`, and `ios` as the next rule says; tests read `docs/protocol/` and `docs/tailnet.md`.
 - The `ios` job also runs only for changes that touch what the app builds from or its tests read: `Collie/`, `crates/collie-core`, `crates/protocol`, `crates/tailnet`, `crates/tls`, `crates/tailscale-sys`, `crates/uniffi-bindgen`, `crates/collied/tests/fixtures/`, `docs/protocol/`, `scripts/ghostty/`, `scripts/notices.py`, `scripts/ios-test-budget.py` and its test, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `about.toml`, `.gitmodules`, the `justfile` and `ci.yml`. A collied-only pull request or push to `master` skips it. When the app starts reading another path, add it to that list in the `changes` job.
+- The `linux` job builds collied for Linux (ubuntu-24.04) only for changes to what collied builds from: `crates/collied`, `crates/ghostty-vt-sys`, `crates/protocol`, `crates/tailnet`, `crates/tls`, `crates/tailscale-sys`, `scripts/ghostty/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.gitmodules` and `ci.yml`. When collied starts building from another path, add it to that list in the `changes` job.
 - After a pull request's `ci` run, `ios-test-budget` comments the budget table on it, beside master's last values. It runs from `master` with a token that writes to pull requests, so it must never check out or run a pull request's code.
 - Keep published iOS, collied, CollieBar and CollieTray releases on the same version, tag and source commit, including UI-only changes.
 - Release details, signing and secrets: `docs/release.md`.

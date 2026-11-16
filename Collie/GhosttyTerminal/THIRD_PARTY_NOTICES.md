@@ -1,7 +1,7 @@
 # Third-party notices: GhosttyVt.xcframework
 
 `GhosttyVt.xcframework` is built by `scripts/ghostty/build-xcframework.sh` from the libghostty-vt
-release tarballs pinned there (`LIBGHOSTTY_VT_VERSION`), with `-Dvt-features=-all,+render-state`.
+release tarballs pinned in `scripts/ghostty/pins.env` (`LIBGHOSTTY_VT_VERSION`), with `-Dvt-features=-all,+render-state`.
 It is linked statically into Collie.app. Keep this file in sync when the pin changes.
 
 | Component | Source | Version | License |

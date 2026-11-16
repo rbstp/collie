@@ -30,6 +30,7 @@ jobs:
     outputs:
       code: ${{ steps.diff.outputs.code }}
       ios: ${{ steps.diff.outputs.ios }}
+      collied: ${{ steps.diff.outputs.collied }}
 
     steps:
       # The whole history's commits and trees, no blobs: a push's before can be any number of commits back.
@@ -49,8 +50,7 @@ jobs:
         run: |
           run_all() {
             echo "::warning::$1: running every job"
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "ios=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' code=true ios=true collied=true >> "$GITHUB_OUTPUT"
             exit 0
           }
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
@@ -74,6 +74,12 @@ jobs:
             echo "ios=true" >> "$GITHUB_OUTPUT"
           else
             echo "ios=false" >> "$GITHUB_OUTPUT"
+          fi
+          # What collied builds from.
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^(crates/(collied|ghostty-vt-sys|protocol|tailnet|tls|tailscale-sys)/|scripts/ghostty/|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+            echo "collied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "collied=false" >> "$GITHUB_OUTPUT"
           fi
 
   rust:
@@ -122,8 +128,16 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             target
+            !target/ghostty
           key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
+
+      # crates/ghostty-vt-sys builds it on a miss, Zig included (about 90 s).
+      - name: cache libghostty-vt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/ghostty/collied
+          key: ghostty-vt-collied-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/pins.env', 'scripts/ghostty/common.sh', 'scripts/ghostty/build-collied.sh') }}
 
       - name: test local tailnet control
         run: go -C crates/tailnet/testcontrol test ./...
@@ -259,7 +273,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: Collie/GhosttyTerminal/GhosttyVt.xcframework
-          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/build-xcframework.sh') }}
+          key: ghostty-vt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/pins.env', 'scripts/ghostty/common.sh', 'scripts/ghostty/build-xcframework.sh') }}
 
       - name: build libghostty-vt
         run: just ios-ghostty
@@ -328,6 +342,59 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           KEEP: ios-cas-${{ github.sha }}
+
+  # The Linux release is the first build of collied for Linux otherwise; this links libghostty-vt
+  # and libtailscale there on the pull request.
+  linux:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.collied != 'false') }}
+    runs-on: ubuntu-24.04
+
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: set up go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
+          cache: false
+
+      - name: install the rust toolchain
+        run: rustup toolchain install
+
+      - name: cache cargo and go builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            target
+            !target/ghostty
+          key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
+          restore-keys: linux-
+
+      - name: cache libghostty-vt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/ghostty/collied
+          key: ghostty-vt-collied-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ghostty/pins.env', 'scripts/ghostty/common.sh', 'scripts/ghostty/build-collied.sh') }}
+
+      - name: build collied and test libghostty-vt
+        run: |
+          cargo test -p ghostty-vt-sys
+          cargo build -p collied
+          target/debug/collied --version
 
   desktop-packaging:
     runs-on: ubuntu-24.04

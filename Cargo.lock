@@ -598,6 +598,7 @@ dependencies = [
  "core-foundation",
  "futures-util",
  "getrandom 0.4.3",
+ "ghostty-vt-sys",
  "http-body-util",
  "httpdate",
  "hyper",
@@ -1012,6 +1013,10 @@ dependencies = [
  "r-efi",
  "rand_core",
 ]
+
+[[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
 
 [[package]]
 name = "glob"

@@ -206,6 +206,19 @@ collied also lists the agents of a running personal Rex server, beside herdr's a
 - Accepted fds are AF_UNIX socketpairs: collied awaits the listener's readability with tokio's `AsyncFd`, accepts, and reads each fd as a non-blocking `tokio::net::UnixStream`.
 - magicsock binds a UDP socket on real interfaces: that is the WireGuard tunnel itself and the one unavoidable non-tailnet socket. No TCP listener exists outside the tailnet.
 
+## libghostty-vt in collied
+
+collied links libghostty-vt, the terminal library the app renders with, ahead of the move from `alacritty_terminal` ([libghostty-vt.md](https://github.com/rbstp/collie/blob/master/docs/libghostty-vt.md#follow-up), #764 to #766). Nothing reads a screen through it yet: `alacritty_terminal` still parses every screen, and a `#[used]` reference in `main.rs` only keeps the library in the link, so a build that cannot resolve it fails.
+
+- `crates/ghostty-vt-sys`: the C functions collied will call, declared by hand from the pinned release's headers (no bindgen, no third-party crate), linked statically. Its test creates a terminal, feeds it bytes and formats them, so a broken link fails `cargo test` on macOS and Linux.
+- `scripts/ghostty/pins.env` holds the version, the `vt-` tag's commit, the two release tarballs' SHA-256s, the Zig version and a Zig SHA-256 per download host (arm64 macOS, x86_64 Linux), and the uucode license pins. The app's `build-xcframework.sh` and collied's `build-collied.sh` both read it, through `common.sh`. Zig is 0.17.1, the version the app already used; Ghostty's own CI builds 1.0.1 with 0.17.0, its `minimum_zig_version`.
+- `build.rs` runs `scripts/ghostty/build-collied.sh <target>`, which writes `target/ghostty/collied/<target>/` (`lib/libghostty-vt.a` and the license texts `scripts/notices.py collied` reads) and does nothing when its stamp (version, Zig version, features, Zig target) matches. Cargo reruns it only when `pins.env`, `common.sh`, `build-collied.sh`, `build.rs` or the archive change, so an archive removed or not restored by CI is built again. A cold build takes about 90 s (arm64 macOS, and Linux x86_64 cross-compiled from it).
+- Zig: a `zig` on `PATH` is used only at the pinned version; otherwise the script downloads the pinned release into `target/ghostty` and checks it against its SHA-256, the same rule as the app's script. A host without a pinned download (aarch64 Linux, Intel macOS) needs Zig 0.17.1 on `PATH`. The tarballs come from `release.files.ghostty.org`, or this repository's `ghostty-vt-<version>` release when that fails, and are checked against `pins.env` either way.
+- Features: `-all,+grid-introspection,+formatter,+snapshot` (grid references and the formatter for screens, the snapshot decoder for Rex streams). Targets: `aarch64-apple-darwin` (Zig `aarch64-macos`, objects for macOS 13.0), `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (`x86_64-linux-gnu`, `aarch64-linux-gnu`, Zig's default glibc), all with `-Dcpu=baseline` and `ReleaseFast`, each built from an empty Zig cache as `PACKAGING-LIBGHOSTTY.md` asks. aarch64 Linux is mapped, not built or tested.
+- No C++ runtime and no new shared library: the Linux archive's only outside symbols are glibc's, and a program linked against it needs only `libc.so.6`.
+- CI: the `rust` job restores `target/ghostty/collied` from a cache keyed on `pins.env` and the two scripts and leaves `target/ghostty` out of the cargo cache, since a missed library build also leaves Zig there. The `linux` job (ubuntu-24.04) runs the crate's test and builds collied for Linux when a change touches what collied builds from. Both `desktop-release.yml` jobs run `build-collied.sh` for their target before `cargo build`.
+- A version bump changes `pins.env` alone, after the checks in [libghostty-vt.md](https://github.com/rbstp/collie/blob/master/docs/libghostty-vt.md#version-bumps); CI rebuilds the app's and collied's libraries, since every cache key hashes it.
+
 ## Mutual TLS
 
 Inside the tunnel, after the whois gate and before the WebSocket upgrade: TLS 1.3 only, RFC 7250 raw public keys (no certificates), ECDSA P-256 with SHA-256 only, and no session resumption (it would skip the key check). Each side pins the other's key by the SHA-256 of its SubjectPublicKeyInfo (`KeyPin`, base64url); the shared verifiers are in `crates/tls`.
@@ -891,7 +904,7 @@ collied runs on Linux with the same protocol, gate, allowlist and approvals as o
 | `aarch64-unknown-linux-gnu` | mapped in `tailscale-sys` (GOARCH `arm64`); needs a cross C compiler in `CC`; not built or tested |
 | any other OS | `compile_error!` in collied |
 
-- Linux builds need Go ≥ 1.27.4, a C compiler (`CC`, default `cc`) and libclang (bindgen), and no code signing.
+- Linux builds need Go ≥ 1.27.4, a C compiler (`CC`, default `cc`), libclang (bindgen) and, on a host other than x86_64, Zig 0.17.1 ([libghostty-vt](#libghostty-vt-in-collied)), and no code signing.
 - `tailscale-sys` sets GOOS `linux` and passes no Apple target or sysroot flags, frameworks or libresolv. The pinned libtailscale, patch series and vendored module patches apply unchanged.
 
 ### Paths

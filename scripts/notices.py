@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "target/tools"
 LIBTAILSCALE = ROOT / "crates/tailscale-sys/libtailscale"
 GHOSTTY_LICENSES = ROOT / "Collie/GhosttyTerminal/GhosttyVt.xcframework/licenses"
+COLLIED_GHOSTTY = ROOT / "target/ghostty/collied"
 
 CARGO_ABOUT = "0.9.2"
 CARGO_ABOUT_SHA256 = {
@@ -22,7 +23,7 @@ CARGO_ABOUT_SHA256 = {
 }
 GO_LICENSES = "v2.0.1"
 
-# Written by scripts/ghostty/build-xcframework.sh from the pinned sources.
+# Written by scripts/ghostty/build-xcframework.sh and build-collied.sh from the pinned sources.
 GHOSTTY = {
     "libghostty-vt": "MIT",
     "simdutf": "MIT AND BSD-3-Clause",
@@ -152,11 +153,11 @@ def go(platforms, tags=""):
     return [first, runtime] + sorted(modules, key=lambda c: c["name"].lower())
 
 
-def ghostty():
-    found = sorted(path.name for path in GHOSTTY_LICENSES.iterdir()) if GHOSTTY_LICENSES.is_dir() else []
+def ghostty(folder, build):
+    found = sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
     if sorted(GHOSTTY) != found:
-        sys.exit(f"{GHOSTTY_LICENSES} lists {found}, expected {sorted(GHOSTTY)}: run just ios-ghostty")
-    return [component(name, None, license, (GHOSTTY_LICENSES / name).read_text()) for name, license in GHOSTTY.items()]
+        sys.exit(f"{folder} lists {found}, expected {sorted(GHOSTTY)}: run {build}")
+    return [component(name, None, license, (folder / name).read_text()) for name, license in GHOSTTY.items()]
 
 
 def main():
@@ -165,14 +166,17 @@ def main():
     kind, out = sys.argv[1], Path(sys.argv[2])
     std, licenses = rust_std()
     if kind == "ios":
-        items = go([("ios", "arm64")], "ios,ts_omit_portmapper") + ghostty()
+        items = go([("ios", "arm64")], "ios,ts_omit_portmapper") + ghostty(GHOSTTY_LICENSES, "just ios-ghostty")
         items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in IOS_FILES]
         # Material Design Icons' license only links Apache-2.0; section 4(a) asks for the full text.
         next(c for c in items if c["name"] == "Symbols Nerd Font")["text"] += "\n" + (licenses / "Apache-2.0.txt").read_text()
         items += [std] + rust("crates/collie-core/Cargo.toml", ["aarch64-apple-ios"])
         content = json.dumps(items, indent=1, ensure_ascii=False) + "\n"
     else:
+        # The library of the host's own target: the release jobs build collied for the runner they run on.
+        host = re.search(r"^host: (\S+)$", subprocess.check_output(["rustc", "-vV"], text=True), re.M)[1]
         items = go([("darwin", "arm64"), ("linux", "amd64")])
+        items += ghostty(COLLIED_GHOSTTY / host / "licenses", "cargo build -p collied")
         items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in COLLIED_FILES]
         items += [std] + rust("crates/collied/Cargo.toml", ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"])
         rule = "-" * 80
