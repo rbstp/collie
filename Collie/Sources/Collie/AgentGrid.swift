@@ -216,6 +216,7 @@ struct AgentCard: View {
     @ScaledMetric(relativeTo: .caption2) private var subagentPreviewHeight: CGFloat = 120
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
+    @Environment(\.runtimeMarks) private var runtimeMarks
 
     @ViewBuilder private var preview: some View {
         if let conversation {
@@ -300,7 +301,8 @@ struct AgentCard: View {
                                 .accessibilityLabel("Followed")
                         }
                         if let workspace {
-                            Text(workspace).layoutPriority(1)
+                            Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
+                                .layoutPriority(1)
                             Text(verbatim: "·").fixedSize()
                         }
                         StatusAge(agent: agent, now: now).fixedSize()

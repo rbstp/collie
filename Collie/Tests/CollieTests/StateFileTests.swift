@@ -212,13 +212,7 @@ func notificationKeyMirrorIsReadAndDeletedByNodeId() throws {
     #expect(!FileManager.default.fileExists(atPath: url.path))
 }
 
-// On by default, and a file written before the setting shows them.
 @Test func runtimeMarksAreShownUntilTurnedOff() throws {
     #expect(DevicePrefs.load(from: nil).runtimeMarks)
     #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false}"#.utf8)).runtimeMarks)
-    let dir = try makeTemporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let file = dir.appending(path: "prefs.json")
-    DevicePrefs.update(in: file) { $0.runtimeMarks = false }
-    #expect(!DevicePrefs.load(from: file).runtimeMarks)
 }

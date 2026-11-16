@@ -3367,3 +3367,11 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     #expect(marks.map { $0?.image } == ["Herdr", "Herdr", "Rex"])
     #expect(marks.allSatisfy { $0.flatMap { UIImage(named: $0.image) } != nil })
 }
+
+@MainActor
+@Test func herdrCoreGroupReadsCoreBesideTheBadgeOnly() {
+    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: true) == "Core")
+    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: false) == "Herdr Core")
+    #expect(RuntimeBadge.groupLabel("api", runtime: .rex, badged: true) == "api")
+    #expect(RuntimeBadge.groupLabel("collie", runtime: .herdr, badged: true) == "collie")
+}

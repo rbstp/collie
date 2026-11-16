@@ -491,6 +491,7 @@ private struct AgentRow: View {
     let followed: Bool
     let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.runtimeMarks) private var runtimeMarks
     @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 6
 
     var body: some View {
@@ -511,7 +512,7 @@ private struct AgentRow: View {
                             .accessibilityLabel("Followed")
                     }
                     if let workspace {
-                        Text(workspace)
+                        Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
                         Text(verbatim: "·").fixedSize()
                     }
                     StatusAge(agent: agent, now: now).fixedSize()
@@ -586,12 +587,17 @@ struct AgentKindLabel: View {
 /// The runtime a session runs in: its project's mark on the corner of the agent's mark. Herdr Core shares herdr's.
 struct RuntimeBadge: ViewModifier {
     let runtime: TaskRuntime?
-    /// Beside the group's label, which already says "Herdr Core".
+    /// Beside the group's label, which then says "Core": "Herdr" here reads "Herdr, Core".
     var grouped = false
     /// False on a grid card, whose fixed column and spacing already hold the overhang: reserving it there truncated "Herdr Core".
     var reservesOverhang = true
     @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 12
     @Environment(\.runtimeMarks) private var shown
+
+    /// "Core" for the Herdr Core group's label beside the badge, whose mark already says herdr.
+    static func groupLabel(_ label: String, runtime: TaskRuntime?, badged: Bool) -> String {
+        badged && runtime == .herdrCore ? "Core" : label
+    }
 
     static func mark(_ runtime: TaskRuntime?) -> (title: String, image: String)? {
         switch runtime {

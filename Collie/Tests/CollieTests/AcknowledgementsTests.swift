@@ -9,4 +9,5 @@ import Testing
     #expect(libtailscale.text.contains("Tailscale & AUTHORS"))
     #expect(items.contains { $0.name == "libghostty-vt" })
     #expect(items.contains { $0.name == "tokio" })
+    #expect(items.contains { $0.name == "herdr logo" })
 }
