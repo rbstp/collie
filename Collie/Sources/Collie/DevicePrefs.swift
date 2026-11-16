@@ -180,7 +180,7 @@ enum TaskRuntimeChoice: String, Codable, CaseIterable {
         switch self {
         case .automatic: "Automatic"
         case .herdr: "Herdr"
-        case .herdrCore: "Herdr 2"
+        case .herdrCore: "Herdr Core"
         case .rex: "Rex"
         }
     }

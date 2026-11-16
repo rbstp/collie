@@ -34,7 +34,7 @@ For each gate, record the exact build, source SHA, deployment version, operator 
 
 Promotional text:
 
-> Approve a blocked Claude Code agent from your Lock Screen, review its Git changes and send key combinations. Now redesigned, with Herdr 2 support.
+> Approve a blocked Claude Code agent from your Lock Screen, review its Git changes and send key combinations. Now redesigned, with Herdr Core support.
 
 Description:
 
@@ -53,7 +53,7 @@ WHAT YOU CAN DO
 
 WHAT YOU NEED
 Collie Herd is a remote control: your agents keep running on your own machine. Real use needs:
-• herdr or herdr-core (Herdr 2) on an Apple silicon Mac or an x86_64 Linux machine
+• herdr or herdr-core (Herdr Core) on an Apple silicon Mac or an x86_64 Linux machine
 • the free collied daemon on that machine (collie.rbstp.dev)
 • a personal Tailscale account, signed in inside the app and on that machine
 
@@ -65,7 +65,7 @@ PRIVACY
 Your agents, transcripts and files stay on your machine, and there is no Collie account. The phone reaches the machine over your own tailnet, inside mutual TLS. Your machine encrypts notification content so that only your phone can read it; the push service sees generic alerts and delivery metadata, as the privacy policy describes.
 
 TESTED WITH
-Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. On Linux, only Arch Linux with Omarchy has been tested. In Herdr 2, some actions are limited; collie.rbstp.dev lists them.
+Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. On Linux, only Arch Linux with Omarchy has been tested. In Herdr Core, some actions are limited; collie.rbstp.dev lists them.
 ```
 
 Recheck these against App Store Connect and the submitted build; use the description only once relay notifications pass the release gates. Answer Apple's [age-rating questionnaire](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/) from actual capabilities: agent-generated and user-controlled content, external links, terminal behavior.

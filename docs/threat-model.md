@@ -7,7 +7,7 @@ Scope: collied on a Mac or Linux machine (a systemd user unit on Linux), Collie.
 | Asset | Where |
 |---|---|
 | Control of every shell and agent | herdr socket (0600, no auth: same UID means full control); the phone reaches it only through collied's allowlist |
-| Control of every herdr-core terminal, and of programs and files on the machines the core added | herdr-core socket (0755 in a 0700 folder, no auth: same UID means full control); the phone reaches it only through collied's allowlist: screen reads, agent input and approval decisions, `pane.close` and `task.archive`, each on a terminal collied lists as an agent, and `task.new`, which starts Claude Code or Codex there while herdr is not running ([herdr-core](#herdr-core-herdr-2)) |
+| Control of every herdr-core terminal, and of programs and files on the machines the core added | herdr-core socket (0755 in a 0700 folder, no auth: same UID means full control); the phone reaches it only through collied's allowlist: screen reads, agent input and approval decisions, `pane.close` and `task.archive`, each on a terminal collied lists as an agent, and `task.new`, which starts Claude Code or Codex there while herdr is not running ([herdr-core](#herdr-core-herdr-core)) |
 | Node keys (0700) | Mac: `~/Library/Application Support/collie/tsnet`. Linux: `<data dir>/tsnet` (data dir `$XDG_DATA_HOME/collie`, else `~/.local/share/collie`), a node apart from any system tailscaled. Phone: app container `Application Support/collie/tsnet` ([protection](#phone-node-key-extraction)) |
 | Machine TLS key | `tls-key.json` in collied's data dir: P-256 PKCS#8, made on first start, 0600, loaded only as a user-owned regular file with no group or world access, never through a symlink. Pinned in the pairing QR and the phone's `machines.json` |
 | Phone TLS key | Secure Enclave, non-exportable P-256, `.privateKeyUsage`, `AfterFirstUnlockThisDeviceOnly`, no user presence (so lock-screen decisions can connect); collie-core gets a signing callback, never the key. Pinned in `peers.json` (`tls_key`) at the confirmed pairing |
@@ -121,7 +121,7 @@ Computer nodes are user-owned, not tag-confined: they get their user's tailnet p
 | Residual | Full compromise of the computer side. Malware can replace collied or its keys, edit `collied.toml` and `peers.json` (owner, paired `StableID`s) and answer the y/N prompt, so the gate protects nothing. Only the tailnet policy, which needs the admin account to change, keeps other users' devices out, and broad grants can admit them: user-owned nodes are not confined service identities. With the node keys and `tls-key.json` it can impersonate the computer to the phone from anywhere, with fake state or approvals. Through the control socket's hook request it can report a tool call other than the dialog's, so the alert names another call; the decision still binds to the screen's fingerprint, and the in-app approval also shows the screen's snippet. macOS Keychain limits: malware can raise a prompt the user may accept, or run the signed collied itself (with its own `--config` or `HOME`) to push with the key without holding it; anyone with the login password can change the ACL or export the item; a `key_path` config or an undeleted `.p8` gets none of this protection. On Linux, malware reads the key and can push from anywhere until the key is revoked. |
 | Phase | Built (Keychain item, systemd credential). Otherwise out of scope. |
 
-### herdr-core (Herdr 2)
+### herdr-core (Herdr Core)
 
 | | |
 |---|---|

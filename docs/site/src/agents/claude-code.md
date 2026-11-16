@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | 5-hour and weekly, with the [status line tap](../install/claude-code.md#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | [Slash command menu](#slash-commands), [notice buttons](#notices), [draft sync](#draft-sync), [prompt suggestions](#prompt-suggestions) and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | Yes |
-| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode, in herdr or [Herdr 2](../app/new-task.md#herdr-2) |
+| [New task](../app/new-task.md) | Yes, with [Resume](../app/new-task.md#resume-a-session) and Ultracode, in herdr or [Herdr Core](../app/new-task.md#herdr-core) |
 
 ## Set up
 
@@ -25,7 +25,7 @@ When the prompt offers to amend, you can add a one-line note. `/effort` and some
 
 ## Slash commands
 
-Start a prompt with `/` and collie copies the command into Claude Code's input box, so its menu shows live on the phone. ↑ and ↓ highlight a command, ⇥ takes it into your prompt, and only **Send** runs it. Dictation and double-tap pastes are not copied. In Herdr 2, the machine's box takes about 3 s to follow each further change, since herdr-core waits for typing to pause before it sends the next keys.
+Start a prompt with `/` and collie copies the command into Claude Code's input box, so its menu shows live on the phone. ↑ and ↓ highlight a command, ⇥ takes it into your prompt, and only **Send** runs it. Dictation and double-tap pastes are not copied. In Herdr Core, the machine's box takes about 3 s to follow each further change, since herdr-core waits for typing to pause before it sends the next keys.
 
 ## Notices
 

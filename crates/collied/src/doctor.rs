@@ -227,7 +227,7 @@ fn check_codex_session_hook(
         );
     }
     let missing = format!(
-        "SessionStart hook `collied hook` not in {}; Herdr 2 and Rex Codex agents get no Chat, context or resume",
+        "SessionStart hook `collied hook` not in {}; Herdr Core and Rex Codex agents get no Chat, context or resume",
         path.display()
     );
     if core_answers || rex_answers {

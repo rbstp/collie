@@ -237,7 +237,7 @@ pub fn not_running(e: &Error) -> bool {
     ))
 }
 
-pub const NOT_YET: &str = "not available for Herdr 2 agents yet";
+pub const NOT_YET: &str = "not available for Herdr Core agents yet";
 
 fn reconnecting(name: &str) -> String {
     format!("{name} is reconnecting; try again in a moment")
@@ -756,7 +756,7 @@ impl Runtime {
         match Owner::of(workspace_id) {
             Owner::Herdr => herdr::workspace_close(&self.herdr, workspace_id).await,
             Owner::Core => Err(Error::Unsupported(
-                "a Herdr 2 group cannot be closed; close its agents one at a time".to_owned(),
+                "a Herdr Core group cannot be closed; close its agents one at a time".to_owned(),
             )),
             Owner::Rex => Err(Error::Unsupported(rex::GROUP_CLOSE.to_owned())),
         }

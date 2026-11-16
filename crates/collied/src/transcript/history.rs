@@ -34,9 +34,9 @@ impl Transcripts {
                 "The transcript for this session is not readable yet. Terminal remains available."
             } else if herdr_core::owns(&agent.terminal_id) {
                 match agent.agent.as_deref() {
-                    Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Herdr 2 core was started inside Claude Code: start the core from a plain terminal.",
+                    Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, Herdr Core was started inside Claude Code: start the core from a plain terminal.",
                     Some("codex") => "Codex has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Codex SessionStart hook, run Codex with --no-daemon, then resume the session.",
-                    _ => "Chat is not available for this Herdr 2 agent.",
+                    _ => "Chat is not available for this Herdr Core agent.",
                 }
             } else if agent.agent.as_deref() == Some("copilot") {
                 "Chat cannot yet confirm which Copilot CLI conversation this pane shows, so it does not guess. It retries once the pane’s title shows the session’s name. Terminal remains available."
