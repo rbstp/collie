@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The iOS test budget: measures a test run against Collie/Tests/budget.json and renders the table.
 
-  measure <budget.json> <xcresult or the folder xcodebuild writes them to> <metrics.json>
-      Run by the ios job in ci.yml. Writes the metrics, prints the table (to the job summary too) and fails over a ceiling.
+  measure [--warn-only] <budget.json> <xcresult or the folder xcodebuild writes them to> <metrics.json>
+      Run by the ios job in ci.yml. Writes the metrics, prints the table (to the job summary too) and fails over a ceiling,
+      or with --warn-only (master) warns.
   comment --pr <artifact.zip> [--baseline <artifact.zip>] --pr-sha <sha> [--baseline-sha <sha>] --conclusion <text>
       Run by ios-test-budget.yml, which holds a token that can write to pull requests: prints the comment's markdown.
       A pull request's artifact is whatever that pull request made it, so it is only ever read through load().
@@ -192,6 +193,7 @@ def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     measuring = commands.add_parser("measure")
+    measuring.add_argument("--warn-only", action="store_true")
     measuring.add_argument("budget", type=Path)
     measuring.add_argument("results", type=Path)
     measuring.add_argument("output", type=Path)
@@ -220,7 +222,9 @@ def main():
                 file.write(text)
         for name in data["retried"]:
             print(f"::warning title=Test passed only on the retry::{name}")
-        if over:
+        if over and args.warn_only:
+            print(f"::warning title=Over the test budget::{summary}")
+        elif over:
             sys.exit(f"{summary} Make the tests cheaper, or raise the ceiling in {args.budget} and say why in the pull request.")
         return
 
