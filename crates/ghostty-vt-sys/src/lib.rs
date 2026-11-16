@@ -1,8 +1,8 @@
 //! libghostty-vt's C API as collied calls it, declared by hand from the headers of the release
 //! `scripts/ghostty/pins.env` pins. A null allocator is libghostty-vt's default one.
-#![allow(non_camel_case_types)]
 
 use std::ffi::c_void;
+use std::mem::{offset_of, size_of};
 use std::os::raw::c_int;
 
 pub type GhosttyResult = c_int;
@@ -71,6 +71,23 @@ pub struct GhosttyReader {
     pub read: GhosttyReaderFn,
     pub userdata: *mut c_void,
 }
+
+// The headers' sizes and offsets on every 64-bit target collied builds for.
+const _: () = {
+    assert!(size_of::<GhosttyGridRef>() == 16);
+    assert!(offset_of!(GhosttyGridRef, x) == 8);
+    assert!(offset_of!(GhosttyGridRef, y) == 10);
+    assert!(size_of::<GhosttyPointCoordinate>() == 8);
+    assert!(offset_of!(GhosttyPointCoordinate, y) == 4);
+    assert!(size_of::<GhosttyPointValue>() == 16);
+    assert!(size_of::<GhosttyPoint>() == 24);
+    assert!(offset_of!(GhosttyPoint, value) == 8);
+    assert!(size_of::<GhosttySelection>() == 40);
+    assert!(offset_of!(GhosttySelection, end) == 16);
+    assert!(offset_of!(GhosttySelection, rectangle) == 32);
+    assert!(size_of::<GhosttyReader>() == 16);
+    assert!(offset_of!(GhosttyReader, userdata) == 8);
+};
 
 unsafe extern "C" {
     pub fn ghostty_terminal_new(
@@ -144,6 +161,30 @@ unsafe extern "C" {
 mod tests {
     use super::*;
     use std::ptr;
+
+    // A misspelled or missing declaration fails this test's link.
+    #[test]
+    fn every_declared_function_links() {
+        let functions = [
+            ghostty_terminal_new as *const (),
+            ghostty_terminal_free as *const (),
+            ghostty_terminal_vt_write as *const (),
+            ghostty_terminal_resize as *const (),
+            ghostty_terminal_set as *const (),
+            ghostty_terminal_get as *const (),
+            ghostty_terminal_grid_ref as *const (),
+            ghostty_snapshot_decoder_new as *const (),
+            ghostty_snapshot_decoder_decode as *const (),
+            ghostty_snapshot_decoder_get as *const (),
+            ghostty_snapshot_decoder_free as *const (),
+            ghostty_formatter_terminal_new as *const (),
+            ghostty_formatter_set as *const (),
+            ghostty_formatter_format_alloc as *const (),
+            ghostty_formatter_free as *const (),
+            ghostty_free as *const (),
+        ];
+        assert!(functions.iter().all(|f| !f.is_null()));
+    }
 
     #[test]
     fn a_terminal_formats_the_bytes_it_was_fed() {

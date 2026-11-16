@@ -13,7 +13,7 @@
 
 ## To build from source
 
-- **Both systems**: Rust (the version in `rust-toolchain.toml`), Go 1.27.4 or later, [Zig](https://ziglang.org) 0.17.1, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st). On an Apple silicon Mac or x86_64 Linux, the build downloads and checks Zig 0.17.1 itself when `PATH` has no Zig of that version; elsewhere, put Zig 0.17.1 on `PATH`.
+- **Both systems**: Rust (the version in `rust-toolchain.toml`), Go 1.27.4 or later, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st). The build downloads and checks the [Zig](https://ziglang.org) it needs on an Apple silicon Mac or x86_64 Linux, so it needs `ziglang.org` reachable the first time; on any other machine, put Zig 0.17.1 on `PATH`.
 - **macOS**: Xcode 27 with the watchOS platform, [XcodeGen](https://github.com/yonaskolb/XcodeGen), `jq`, a Developer ID Application certificate to sign `collied` and CollieBar, and an iPhone 18 Pro simulator for `just ios-test`.
 - **Linux**, where you build only `collied`: a C compiler and libclang, and Node for `just tray-test`.
 

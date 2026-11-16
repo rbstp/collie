@@ -63,7 +63,7 @@ Fast tests that fail only for regressions are a priority: every pull request wai
 
 - Always pin the latest stable release of every dependency: crates, Swift packages, toolchains and tools downloaded in CI (checked against their SHA-256).
 - GitHub Actions are pinned by commit SHA with a version comment: `uses: actions/checkout@<sha> # v7.0.1`.
-- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from release tarballs and a Zig pinned in `scripts/ghostty/pins.env` (each checked against its SHA-256), for the app by `scripts/ghostty/build-xcframework.sh` and for collied by `scripts/ghostty/build-collied.sh`. Zig stays at the pinned version, which may be newer than the one Ghostty's CI uses; a build never takes a `zig` of another version from `PATH`.
+- libtailscale is a submodule pinned by commit with patches in `crates/tailscale-sys/patches`; bumping it follows `docs/architecture.md` (Tailscale section). libghostty-vt is built from release tarballs and a Zig pinned in `scripts/ghostty/pins.env` (each checked against its SHA-256), for the app by `scripts/ghostty/build-xcframework.sh` and for collied by `scripts/ghostty/build-collied.sh`. Zig stays at the pinned version, which may be newer than the one Ghostty's CI uses. On arm64 macOS and x86_64 Linux the builds use only the Zig they download and check, never one on `PATH`; elsewhere a `zig` on `PATH` must be the pinned version.
 
 ## Documentation follows features
 

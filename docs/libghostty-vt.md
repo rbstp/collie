@@ -155,13 +155,13 @@ For scale, the v0.1.20 downloads: collied is 43,290,464 bytes on macOS (archive 
 
 ## Version bumps
 
-The owner's question: can a new version be added easily? Today's iOS bump, from `scripts/ghostty/build-xcframework.sh`:
+The owner's question: can a new version be added easily? A bump, as the spike found it in `scripts/ghostty/build-xcframework.sh` and as it reads since [#764](https://github.com/rbstp/collie/issues/764) moved the pins to `scripts/ghostty/pins.env`:
 
 1. Check the new release's `SHA256SUMS` against its minisign signature with the Ghostty release key (`PACKAGING-LIBGHOSTTY.md`).
-2. In the script: `LIBGHOSTTY_VT_VERSION`, `GHOSTTY_COMMIT` (the `vt-` tag's commit), `SOURCE_SHA256` and `DEPS_SHA256`; `ZIG_VERSION` and `ZIG_SHA256` when `minimum_zig_version` moves; the uucode license URLs and checksums when the dependency tarball's uucode moves.
+2. In `scripts/ghostty/pins.env`: `LIBGHOSTTY_VT_VERSION`, `GHOSTTY_COMMIT` (the `vt-` tag's commit), `SOURCE_SHA256` and `DEPS_SHA256`; when the Zig pin moves (it must stay at or above `minimum_zig_version`), `ZIG_VERSION` and each `ZIG_SHA256_<host>` from ziglang.org's `index.json`, checked against the downloaded tarball; the uucode license URLs and checksums when the dependency tarball's uucode moves.
 3. Run `scripts/ghostty/nerd-font-constraints.py` again (the app's font tables).
-4. Upload both tarballs to a `ghostty-vt-<version>` release of this repository, the script's fallback mirror.
-5. CI follows by itself: the `ios` job's cache key hashes the script, and `scripts/ghostty/` is in the `changes` filter.
+4. Upload both tarballs to a `ghostty-vt-<version>` release of this repository, the scripts' fallback mirror.
+5. CI and local builds follow by themselves: every libghostty-vt cache key (`ci`'s `ios`, `rust` and `linux` jobs, `testflight`, `docs-screenshots`) and both builds' stamps hash `pins.env`, and `scripts/ghostty/` is in the `changes` filters of `ios` and `linux`.
 
 If collied linked the library, the pin could be shared, but not the script or the rest of the path as they stand (verified by reading):
 
@@ -181,7 +181,7 @@ So "one file" would take this work first (inferred, nothing built):
 
 After that, a bump is steps 1 to 5 on the pins file, and CI rebuilds both the app's and collied's library.
 
-[#764](https://github.com/rbstp/collie/issues/764) built that path: step 2 now edits `scripts/ghostty/pins.env`, whose Zig pin holds one checksum per download host, and every libghostty-vt cache key in CI hashes it ([architecture.md](architecture.md#libghostty-vt-in-collied)). Dependabot still does not watch the pin.
+[#764](https://github.com/rbstp/collie/issues/764) built that path ([architecture.md](architecture.md#libghostty-vt-in-collied)). Dependabot still does not watch the pin.
 
 What breaks a bump: a major version (new SONAME, any function may change); a new `minimum_zig_version`; and, with Rex streaming, the snapshot format, which has its own envelope version (1 at both `vt-1.0.0` and `vt-1.0.1`) outside the ABI promise. Rex writes snapshots with its own Ghostty, which moves on Rex's schedule, so collied would refuse an unknown envelope version and poll `format` instead.
 

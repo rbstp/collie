@@ -12,7 +12,7 @@ src="$work/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
 deps="$src-deps"
 out="$root/Collie/GhosttyTerminal/GhosttyVt.xcframework"
 stamp="$out/.collie-build"
-want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES"
+want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES $(inputs_sum "${BASH_SOURCE[0]}")"
 
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -d "$out/licenses" ]; then
     echo "GhosttyVt.xcframework is up to date (libghostty-vt $LIBGHOSTTY_VT_VERSION)"

@@ -14,31 +14,41 @@ sha256_check() {
     fi
 }
 
-# Never a zig on PATH at another version than the pin.
+# The checksum-verified download on the hosts pins.env has one for; elsewhere a zig on PATH, only at
+# the pinned version. The marker is written only after a whole verified extraction, which is then
+# moved into place, so an interrupted download is never trusted.
 find_zig() {
-    if command -v zig >/dev/null && [ "$(zig version)" = "$ZIG_VERSION" ]; then
-        zig="$(command -v zig)"
-        return
-    fi
-    zigdir="$work/zig-$ZIG_VERSION"
-    zig="$zigdir/zig"
-    [ -x "$zig" ] && return
     case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) host=aarch64-macos sha="$ZIG_SHA256_AARCH64_MACOS" ;;
     Linux-x86_64) host=x86_64-linux sha="$ZIG_SHA256_X86_64_LINUX" ;;
     *)
+        if command -v zig >/dev/null && [ "$(zig version)" = "$ZIG_VERSION" ]; then
+            zig="$(command -v zig)"
+            return
+        fi
         echo "no pinned Zig download for $(uname -s) $(uname -m): put Zig $ZIG_VERSION on PATH" >&2
         exit 1
         ;;
     esac
+    zigdir="$work/zig-$ZIG_VERSION"
+    zig="$zigdir/zig"
+    [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
     mkdir -p "$work"
-    tarball="$work/zig-$host-$ZIG_VERSION.tar.xz"
-    curl -fsSL --retry 3 -o "$tarball" "https://ziglang.org/download/$ZIG_VERSION/zig-$host-$ZIG_VERSION.tar.xz"
-    sha256_check "$sha" "$tarball"
+    tmp="$(mktemp -d "$work/.zig-$ZIG_VERSION.XXXXXX")"
+    curl -fsSL --retry 3 -o "$tmp/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-$host-$ZIG_VERSION.tar.xz"
+    sha256_check "$sha" "$tmp/zig.tar.xz"
+    mkdir "$tmp/zig"
+    tar -xJf "$tmp/zig.tar.xz" --strip-components=1 -C "$tmp/zig"
+    echo "$sha" >"$tmp/zig/.collie-sha256"
     rm -rf "$zigdir"
-    mkdir -p "$zigdir"
-    tar -xJf "$tarball" --strip-components=1 -C "$zigdir"
-    rm -f "$tarball"
+    mv "$tmp/zig" "$zigdir"
+    rm -rf "$tmp"
+}
+
+# What a build stamp records of its inputs beyond the pins: the scripts that made it ($1 is the
+# build script).
+inputs_sum() {
+    cat "$here/pins.env" "$here/common.sh" "$1" | cksum
 }
 
 # Unpacks the source and dependency tarballs into $1, as $1/libghostty-vt-<version>[-deps].

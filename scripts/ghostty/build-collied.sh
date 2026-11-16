@@ -21,7 +21,7 @@ esac
 
 out="$work/collied/$target"
 stamp="$out/.collie-build"
-want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES $zig_target"
+want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES $zig_target $(inputs_sum "${BASH_SOURCE[0]}")"
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$out/lib/libghostty-vt.a" ] && [ -d "$out/licenses" ]; then
     exit 0
 fi
@@ -35,14 +35,17 @@ src="$build/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
 
 # PACKAGING-LIBGHOSTTY.md requires an empty ZIG_GLOBAL_CACHE_DIR for every build. The ceiling keeps
 # Ghostty's build from taking this repository's git tags for its version. A baseline CPU, not the
-# build host's, since the release runners build for every machine.
+# build host's, since the release runners build for every machine. ReleaseSafe, unlike the app's
+# ReleaseFast: collied will parse untrusted program output in the process that holds its keys, so a
+# safety-checked fault in the Zig code aborts it (launchd or systemd restarts it) instead of
+# corrupting memory. The C++ parts (simdutf, Highway) get no such checks.
 (
     cd "$src"
     GIT_CEILING_DIRECTORIES="$work" ZIG_GLOBAL_CACHE_DIR="$build/zig-global-cache" "$zig" build \
         --system "$src-deps" \
         -Dtarget="$zig_target" \
         -Dcpu=baseline \
-        -Doptimize=ReleaseFast \
+        -Doptimize=ReleaseSafe \
         -Dvt-features="$VT_FEATURES" \
         --prefix "$build/out"
 )
