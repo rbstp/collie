@@ -73,12 +73,7 @@ final class GitDiffViewTests: XCTestCase {
                         host.additionalSafeAreaInsets.bottom = inset
                         _ = try await waitFor("focused editor above the \(Int(inset)) inset") {
                             host.view.layoutIfNeeded()
-                            guard let field = descendants(host.view).compactMap({ $0 as? UITextView }).first(where: \.isEditable) else { return nil as Bool? }
-                            // The simulator's keyboard service can hang or die and resign the field.
-                            guard field.isFirstResponder else {
-                                field.becomeFirstResponder()
-                                return nil
-                            }
+                            guard let field = descendants(host.view).compactMap({ $0 as? UITextView }).first(where: { $0.isEditable && $0.isFirstResponder }) else { return nil as Bool? }
                             var ancestor = field.superview
                             while ancestor != nil, !(ancestor is UIScrollView) { ancestor = ancestor?.superview }
                             guard let viewport = ancestor as? UIScrollView else { return nil }
