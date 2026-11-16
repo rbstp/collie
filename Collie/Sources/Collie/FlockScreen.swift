@@ -32,6 +32,7 @@ struct FlockScreen: View {
     @State private var swipeOrder: [AgentRoute]?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appGlass) private var glass
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -52,17 +53,20 @@ struct FlockScreen: View {
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             // UIKit's top scroll edge effect follows the pager, not the pages' own scroll views.
             .overlay(alignment: .top) {
-                GeometryReader { geometry in
-                    let background = Color(.systemGroupedBackground)
-                    let height = geometry.safeAreaInsets.top + 12
-                    // Solid under the whole bar: content fading out beside its glass controls showed through as a ghost.
-                    LinearGradient(stops: [.init(color: background, location: geometry.safeAreaInsets.top / height),
-                                           .init(color: background.opacity(0), location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: height)
-                        .offset(y: -geometry.safeAreaInsets.top)
+                if glass != .clear {
+                    GeometryReader { geometry in
+                        let background = Color(.systemGroupedBackground)
+                        let height = geometry.safeAreaInsets.top + 12
+                        // Solid under the whole bar: content fading out beside its glass controls showed through as a ghost,
+                        // and so did the cards as blurred shapes under regular glass.
+                        LinearGradient(stops: [.init(color: background, location: geometry.safeAreaInsets.top / height),
+                                               .init(color: background.opacity(0), location: 1)],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: height)
+                            .offset(y: -geometry.safeAreaInsets.top)
+                    }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
             }
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
@@ -76,11 +80,12 @@ struct FlockScreen: View {
                             ProgressView().controlSize(.small)
                             Text("Connecting…").font(.headline)
                         }
+                        .fixedSize()
                     } else {
                         ViewSwitch(showsUsage: $showsUsage).fixedSize()
                     }
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .sharedBackgroundVisibility(tailnetStarting ? .visible : .hidden)
                 if !showsUsage {
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Layout", systemImage: layout.icon) {
