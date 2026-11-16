@@ -132,9 +132,6 @@ jobs:
           key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
 
-      - name: list target/ghostty after the cargo cache restore
-        run: ls -la target/ghostty 2>&1 || true
-
       # crates/ghostty-vt-sys builds it on a miss, Zig included (about 90 s).
       - name: cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -386,9 +383,6 @@ jobs:
             !target/ghostty
           key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
           restore-keys: linux-
-
-      - name: list target/ghostty after the cargo cache restore
-        run: ls -la target/ghostty 2>&1 || true
 
       - name: cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
