@@ -440,7 +440,7 @@ private struct InboxRow: View {
                 .lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime))
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: item.workspace != nil))
                     }
                     if followed {
                         Image(systemName: "pin.fill")

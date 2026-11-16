@@ -36,6 +36,7 @@ IOS_FILES = [
     ("Symbols Nerd Font", "MIT AND OFL-1.1 AND Apache-2.0 AND CC-BY-4.0 AND Unlicense",
      f"{FONTS}/NerdFonts-LICENSE.txt"),
     ("Octicons", "MIT", "Collie/Resources/Octicons-LICENSE.txt"),
+    ("herdr logo", "Apache-2.0", "Collie/Resources/herdr-LICENSE.txt"),
 ]
 COLLIED_FILES = [
     ("LiteLLM model prices", "MIT", "crates/collied/data/prices-LICENSE.txt"),

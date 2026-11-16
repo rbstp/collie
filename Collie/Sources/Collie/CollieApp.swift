@@ -46,6 +46,7 @@ struct RootView: View {
             .accentColor(app.accent.color)
             .environment(\.appAccent, app.accent.color)
             .environment(\.appGlass, app.glass)
+            .environment(\.runtimeMarks, app.runtimeMarks)
             .environment(\.neutralAccent, app.accent == .neutral)
             .toggleStyle(AccentSwitch(tint: app.accent.switchTint))
             .alert("Approval unavailable", isPresented: Binding(

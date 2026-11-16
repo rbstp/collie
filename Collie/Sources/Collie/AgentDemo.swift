@@ -19,6 +19,7 @@ struct AgentDemo: View {
     @State private var opening: AgentRoute?
     private let accent = DevicePrefs.load(from: DevicePrefs.file).accent
     private let glass = DevicePrefs.load(from: DevicePrefs.file).glass
+    private let runtimeMarks = DevicePrefs.load(from: DevicePrefs.file).runtimeMarks
 
     init?(arguments: [String]) {
         guard let flag = arguments.firstIndex(of: "--terminal-demo"), flag + 1 < arguments.count,
@@ -62,6 +63,7 @@ struct AgentDemo: View {
         .accentColor(accent.color)
         .environment(\.appAccent, accent.color)
         .environment(\.appGlass, glass)
+        .environment(\.runtimeMarks, runtimeMarks)
         .environment(\.neutralAccent, accent == .neutral)
         .toggleStyle(AccentSwitch(tint: accent.switchTint))
         .task {

@@ -3358,3 +3358,12 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
     run.cancel()
     await run.value
 }
+
+@MainActor
+@Test func runtimeMarkNamesEachRuntimeAndShowsNothingWhenUnknown() {
+    #expect(RuntimeBadge.mark(nil) == nil)
+    let marks = [TaskRuntime.herdr, .herdrCore, .rex].map { RuntimeBadge.mark($0) }
+    #expect(marks.map { $0?.title } == ["Herdr", "Herdr Core", "Rex"])
+    #expect(marks.map { $0?.image } == ["Herdr", "Herdr", "Rex"])
+    #expect(marks.allSatisfy { $0.flatMap { UIImage(named: $0.image) } != nil })
+}

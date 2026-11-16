@@ -47,6 +47,9 @@ final class AppModel {
     var glass = DevicePrefs.load(from: DevicePrefs.file).glass {
         didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.glass = glass } }
     }
+    var runtimeMarks = DevicePrefs.load(from: DevicePrefs.file).runtimeMarks {
+        didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.runtimeMarks = runtimeMarks } }
+    }
     var openingAgent: AgentRoute?
     var approvalOpenError: String?
     @ObservationIgnored private var openingApproval: Task<Void, Never>?

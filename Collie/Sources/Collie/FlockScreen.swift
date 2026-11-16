@@ -503,7 +503,7 @@ private struct AgentRow: View {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime))
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil))
                     }
                     if followed {
                         Image(systemName: "pin.fill")
@@ -586,7 +586,12 @@ struct AgentKindLabel: View {
 /// The runtime a session runs in: its project's mark on the corner of the agent's mark. Herdr Core shares herdr's.
 struct RuntimeBadge: ViewModifier {
     let runtime: TaskRuntime?
+    /// Beside the group's label, which already says "Herdr Core".
+    var grouped = false
+    /// False on a grid card, whose fixed column and spacing already hold the overhang: reserving it there truncated "Herdr Core".
+    var reservesOverhang = true
     @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 12
+    @Environment(\.runtimeMarks) private var shown
 
     static func mark(_ runtime: TaskRuntime?) -> (title: String, image: String)? {
         switch runtime {
@@ -598,17 +603,21 @@ struct RuntimeBadge: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        if let (title, image) = Self.mark(runtime) {
+        if shown, let (title, image) = Self.mark(runtime) {
+            // Grows with the text only to 14 pt, so the half that hangs below the agent's mark stays inside a grid
+            // card's 10 pt bottom padding: at Accessibility XL a 29 pt badge crossed the card's edge.
+            let side = min(self.side, 14)
             let offset = CGSize(width: side * 0.25, height: side * 0.5)
             let tile = RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
             content
                 // A gap cut around the badge rather than a rim, so it works on any background, glass included.
                 .mask {
-                    Rectangle()
-                        .overlay(alignment: .bottomTrailing) {
-                            tile.padding(-1.5).frame(width: side, height: side).offset(offset).blendMode(.destinationOut)
-                        }
-                        .compositingGroup()
+                    ZStack(alignment: .bottomTrailing) {
+                        // Past the bounds, so a mark wider than its frame on a grid card is not clipped.
+                        Rectangle().padding(-side)
+                        tile.padding(-1.5).frame(width: side, height: side).offset(offset).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
                 }
                 .overlay(alignment: .bottomTrailing) {
                     Image(image)
@@ -616,10 +625,10 @@ struct RuntimeBadge: ViewModifier {
                         .frame(width: side, height: side)
                         .clipShape(tile)
                         .offset(offset)
-                        .accessibilityLabel(title)
+                        .accessibilityLabel(grouped && runtime == .herdrCore ? "Herdr" : title)
                 }
                 // Room for the corner that hangs past the agent's mark, so it never touches the label beside it.
-                .padding(.trailing, offset.width)
+                .padding(.trailing, reservesOverhang ? offset.width : 0)
         } else {
             content
         }

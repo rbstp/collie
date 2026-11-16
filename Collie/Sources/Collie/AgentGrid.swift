@@ -288,10 +288,11 @@ struct AgentCard: View {
                     // Under the status icon, so the metadata lines up with the title.
                     Group {
                         if let kind = agent.kind {
-                            AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime))
+                            AgentKindLabel(kind: kind, iconOnly: true)
                         }
                     }
                     .frame(width: typeSize.isAccessibilitySize ? nil : 16)
+                    .modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil, reservesOverhang: false))
                     HStack(spacing: 3) {
                         if followed {
                             Image(systemName: "pin.fill")
