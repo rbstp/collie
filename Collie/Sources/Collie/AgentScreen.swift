@@ -581,7 +581,7 @@ private struct AgentHeader: View {
     }
 }
 
-struct SessionBarGlass: View {
+private struct SessionBarGlass: View {
     /// The page under the approval band, which content fades into below its edge.
     var fade: Color?
     @Environment(\.colorScheme) private var colorScheme

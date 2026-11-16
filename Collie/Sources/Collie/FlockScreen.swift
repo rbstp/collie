@@ -53,12 +53,9 @@ struct FlockScreen: View {
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             // UIKit's top scroll edge effect follows the pager, not the pages' own scroll views.
             .overlay(alignment: .top) {
-                GeometryReader { geometry in
-                    if glass == .clear {
-                        SessionBarGlass()
-                            .frame(height: geometry.safeAreaInsets.top)
-                            .offset(y: -geometry.safeAreaInsets.top)
-                    } else {
+                // Clear: nothing behind the bar but its controls' own glass, so content scrolls under it undimmed.
+                if glass != .clear {
+                    GeometryReader { geometry in
                         let background = Color(.systemGroupedBackground)
                         let height = geometry.safeAreaInsets.top + 12
                         // Solid under the whole bar: content fading out beside its glass controls showed through as a ghost,
@@ -69,8 +66,8 @@ struct FlockScreen: View {
                             .frame(height: height)
                             .offset(y: -geometry.safeAreaInsets.top)
                     }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
             }
             .springLoadingBehavior(.disabled)
             .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: showsUsage)
