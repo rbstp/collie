@@ -13,7 +13,7 @@
 
 ## To build from source
 
-- **Both systems**: Rust (the version in `rust-toolchain.toml`), Go 1.27.3 or later, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
+- **Both systems**: Rust (the version in `rust-toolchain.toml`), Go 1.27.4 or later, [just](https://github.com/casey/just), `cargo-deny` and [cargo-nextest](https://nexte.st).
 - **macOS**: Xcode 27 with the watchOS platform, [XcodeGen](https://github.com/yonaskolb/XcodeGen), `jq`, a Developer ID Application certificate to sign `collied` and CollieBar, and an iPhone 18 Pro simulator for `just ios-test`.
 - **Linux**, where you build only `collied`: a C compiler and libclang, and Node for `just tray-test`.
 
