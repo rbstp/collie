@@ -3,15 +3,18 @@
 # Collie/GhosttyTerminal/GhosttyVt.xcframework (ios, ios-simulator, macOS for `swift test`).
 #
 # The tarball SHA-256s are the ones in the release's SHA256SUMS, whose minisign signature was checked
-# against the Ghostty release key in PACKAGING-LIBGHOSTTY.md when pinning.
+# against the Ghostty release key in PACKAGING-LIBGHOSTTY.md when pinning. That key has been
+# RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV (id F5787DDB42320225) through 1.0.1.
 set -euo pipefail
 
 # Moving this pin means rerunning scripts/ghostty/nerd-font-constraints.py.
-LIBGHOSTTY_VT_VERSION=1.0.0
-# The vt-1.0.0 tag, which nerd-font-constraints.py reads Ghostty's font tables from.
-GHOSTTY_COMMIT=0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec
-SOURCE_SHA256=4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676
-DEPS_SHA256=4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29
+LIBGHOSTTY_VT_VERSION=1.0.1
+# The vt-1.0.1 tag, which nerd-font-constraints.py reads Ghostty's font tables from.
+GHOSTTY_COMMIT=108cacb17ed8990840cd14abfce43d8ed8503ca1
+SOURCE_SHA256=333dfce97641ef9b536bb9e08907ad86abaaada50e8f7417b70d9284adef37aa
+DEPS_SHA256=91a4e10960a52bf5bf4b15aa2a2cddaff8a89d6cd903d3055bda4fd17de3356d
+# Ghostty's CI builds libghostty-vt 1.0.1 with Zig 0.17.0 (flake.nix at vt-1.0.1); this stays on the
+# newer 0.17.1 it already used on purpose, since minimum_zig_version is 0.17.0.
 ZIG_VERSION=0.17.1
 ZIG_SHA256=75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
 # Render state only: no Kitty graphics (file, temp-file and shared-memory image media), no input

@@ -6,7 +6,7 @@ It is linked statically into Collie.app. Keep this file in sync when the pin cha
 
 | Component | Source | Version | License |
 |---|---|---|---|
-| libghostty-vt (Ghostty) | https://github.com/ghostty-org/ghostty | 1.0.0 (tag `vt-1.0.0`, `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec`) | MIT, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors |
+| libghostty-vt (Ghostty) | https://github.com/ghostty-org/ghostty | 1.0.1 (tag `vt-1.0.1`, `108cacb17ed8990840cd14abfce43d8ed8503ca1`) | MIT, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors |
 | simdutf (vendored in `pkg/simdutf`) | https://github.com/simdutf/simdutf | 9.0.0 | Apache-2.0 or MIT |
 | Highway (`pkg/highway`) | https://github.com/google/highway | 1.2.0 | Apache-2.0 or BSD-3-Clause |
 | uucode (Unicode property tables) | https://github.com/jacobsandlund/uucode | 0.2.0 (`1fb7343`) | MIT, Copyright (c) 2026 Jacob Sandlund; includes Unicode data (Unicode License v3) and a UTF-8 decoder by Bjoern Hoehrmann (MIT) |
