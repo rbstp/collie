@@ -7,7 +7,7 @@ Text for the next combined release. Confirm its final version and build in App S
 - Rex: follow your agents in Rex beside herdr's. See their status, read the terminal or Chat, send prompts, keys and approval decisions, and start, resume and archive tasks. The main gain for Rex users: Collie Herd runs Tailscale inside the app, so your phone reaches your Mac with no Tailscale app and no VPN to switch on.
 - Choose where new tasks start: herdr, Herdr Core or Rex, in Settings > Sessions > Start tasks in. New task offers only the agents that runtime can start.
 - Each agent shows the mark of what it runs in: herdr, Herdr Core or Rex. Hide the marks in Settings > Sessions > Runtime icons.
-- Choose how opaque the app's glass is: Clear, Regular or Opaque, in Settings > Glass.
+- Choose how opaque the app's glass is: Clear, Regular or Opaque, in Settings > Appearance > Glass.
 - See Claude Code's suggested next prompt in the prompt field, and accept it with the Tab key.
 - An approval no longer shows Claude Code's tip line as part of its context.
 - The New task prompt stays below the navigation bar when you rotate with the keyboard open.
