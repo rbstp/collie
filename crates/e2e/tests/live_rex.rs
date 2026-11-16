@@ -386,6 +386,98 @@ async fn resize(socket: &Path, session: &str, block: &str, columns: u16, rows: u
     let _ = ws.close(None).await;
 }
 
+/// A changing agent below `lines` lines of scrollback: one more line every 0.2 s.
+const TICKING: &str = r#"$| = 1;
+printf "\e[3%dmline %07d\e[0m plain \e[1mbold\e[0m padding text for width\r\n", $_ % 8, $_ for 1 .. $ARGV[0];
+print "\e]7501;state=idle:app=claude-code\e\\";
+for (my $i = 1; ; $i++) { print "tick $i\r\n"; select(undef, undef, undef, 0.2) }
+"#;
+
+/// CPU seconds and resident kilobytes of a process, from `ps`.
+fn usage(pid: u32) -> (f64, u64) {
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "time=,rss=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.split_whitespace();
+    let time = fields.next().unwrap_or("0");
+    let cpu = time
+        .split(':')
+        .fold(0.0, |t, part| t * 60.0 + part.parse::<f64>().unwrap_or(0.0));
+    (cpu, fields.next().and_then(|r| r.parse().ok()).unwrap_or(0))
+}
+
+/// The cost of one phone watch through collied's own watch loop, for 60 s: `COST_LINES` lines
+/// of scrollback (1,000 by default), `COST_WATCH=0` for no watch, and `COLLIED_REX_STREAM=0`
+/// for today's polling.
+#[test]
+#[ignore = "a 60 s measurement, run by hand"]
+fn live_rex_stream_cost() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let lines = std::env::var("COST_LINES").unwrap_or_else(|_| "1000".to_owned());
+    let watching = std::env::var("COST_WATCH").map_or(true, |v| v != "0");
+    let mut server = RexServer::start(&cli, "c");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let (_, block) = new_session(&server, "collie-cost", &["/usr/bin/perl", "-e", TICKING, &lines]);
+        let agent = format!("rex:{block}");
+        let rex = Arc::new(Rex::new(server.socket.clone()));
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(rex.clone().run(stopped));
+        let none = server.root.join("no-herdr.sock");
+        let rt = Runtime::new(none.clone()).with_rex(Some(rex.clone()));
+        let drive = Arc::new(Driver::new(none, vec![], &[]).unwrap().with_rex(Some(rex.clone())));
+        until("the agent's idle report", async || {
+            (rt.agent_get(&agent).await.ok()).filter(|a| a.agent_status == "idle")
+        })
+        .await;
+        let mut watcher = None;
+        if watching {
+            let mut w = drive.watch(TerminalId::new(agent.clone()).unwrap(), 200, false).await.unwrap();
+            w.recv().await.unwrap();
+            watcher = Some(tokio::spawn(async move {
+                let mut sent = 0u32;
+                while w.recv().await.is_some() {
+                    sent += 1;
+                }
+                sent
+            }));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let me = std::process::id();
+        let (rex0, _) = usage(server.pid());
+        let (me0, _) = usage(me);
+        let mut peak = 0;
+        for _ in 0..60 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            peak = peak.max(usage(me).1);
+        }
+        let (rex1, _) = usage(server.pid());
+        let (me1, rss) = usage(me);
+        println!(
+            "cost: {lines} lines, watch {watching}, streamed {}: Rex {:.1}% of a core, collied {:.1}%, collied resident {:.1} MB (peak {:.1} MB)",
+            rex.streamed(&agent),
+            (rex1 - rex0) / 60.0 * 100.0,
+            (me1 - me0) / 60.0 * 100.0,
+            rss as f64 / 1e3,
+            peak as f64 / 1e3,
+        );
+        if let Some(w) = watcher {
+            w.abort();
+        }
+        stop.send_replace(true);
+        task.await.unwrap();
+    });
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
 /// The session in the Claude Code transcript fixture.
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";

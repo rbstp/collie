@@ -602,6 +602,10 @@ impl RexServer {
         server
     }
 
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// `rex` against this server only.
     pub fn rex(&self, args: &[&str]) -> Value {
         let out = rex_env(&mut Command::new(&self.cli), &self.root)
