@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::client::{Client, Method, TERMINAL, TIMEOUT};
 use super::model::{self, Listing, PREFIX};
 use super::wire::{Attached, Blocks, Created, Owners, Process, Sessions, Tagged};
-use super::{Inner, Rex, gone};
+use super::{CLOSE_TIMEOUT, Inner, Rex, gone};
 use crate::runtime::{Error, Occupant};
 
 /// The terminal flavor that runs a command through the user's login shell, which reads the
@@ -23,6 +23,9 @@ pub(super) struct Task {
     /// an archive.
     #[serde(default)]
     pub worktree: Option<String>,
+    /// The session collied created for it: only that session is ever removed, by its archive.
+    #[serde(default)]
+    pub session: Option<String>,
 }
 
 pub(super) type Tasks = BTreeMap<String, Task>;
@@ -89,6 +92,7 @@ impl Rex {
             let task = Task {
                 name: name.to_owned(),
                 worktree: worktree.map(str::to_owned),
+                session: Some(session.clone()),
             };
             inner.tasks.insert(block.clone(), task);
             self.save_tasks(&inner.tasks);
@@ -99,6 +103,27 @@ impl Rex {
             ))
         })?;
         Ok(id)
+    }
+
+    /// Archive's close of the task in `id`: its block, then the session collied created for
+    /// that task, once nothing is left in it. What became of that session, for the archive's
+    /// answer; `None` when collied has no record of creating the block's session for this
+    /// task, and that session then stays.
+    pub async fn close_task(&self, id: &str) -> Result<Option<String>, Error> {
+        let (client, session, block, _) = self.target(id)?;
+        let own = (self.lock().tasks.get(&block))
+            .is_some_and(|t| t.session.as_deref() == Some(session.as_str()));
+        self.close(id).await?;
+        if !own {
+            return Ok(None);
+        }
+        Ok(Some(match remove_empty(&client, &session).await {
+            Ok(true) => "Removed its Rex session.".to_owned(),
+            Ok(false) => {
+                "Kept its Rex session, which still holds something or could not be read.".to_owned()
+            }
+            Err(e) => format!("Could not remove its Rex session ({e})."),
+        }))
     }
 
     /// The checkout recorded for the worktree task collied started in `id`, while Rex lists
@@ -222,6 +247,30 @@ pub(super) fn name(listing: &mut Listing, tasks: &Tasks) {
         let block = a.terminal_id.strip_prefix(PREFIX);
         a.name = block.and_then(|b| tasks.get(b)).map(|t| t.name.clone());
     }
+}
+
+/// Removes `session` when it holds no block, detached ones included, and no window; `false`
+/// when it holds one or Rex's answer leaves it unclear. Rex has no conditional destroy: a
+/// block or window added after `session.list_blocks` answers and before `session.destroy`
+/// arrives, one round trip, would end with the session.
+async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
+    let at = json!({ "session_id": session });
+    let (_, attached): (_, Attached) = client
+        .call(Method::SessionAttach, at.clone(), TIMEOUT)
+        .await?;
+    let (_, blocks): (_, Blocks) = client
+        .call(Method::SessionListBlocks, at.clone(), TIMEOUT)
+        .await?;
+    let windowless = attached
+        .view
+        .is_some_and(|v| v.windows.unwrap_or_default().is_empty());
+    if !windowless || blocks.blocks.is_none_or(|b| !b.is_empty()) {
+        return Ok(false);
+    }
+    client
+        .call::<Value>(Method::SessionDestroy, at, CLOSE_TIMEOUT)
+        .await?;
+    Ok(true)
 }
 
 /// `session.create` makes collied the block's owner, whose size (80x24) the block would keep.

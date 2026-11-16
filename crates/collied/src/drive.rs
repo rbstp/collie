@@ -2211,8 +2211,9 @@ impl Driver {
                     })?;
             }
             authorized(auth)?;
-            self.runtime
-                .pane_close(&pane.pane_id)
+            let session = self
+                .runtime
+                .task_close(&pane.pane_id)
                 .await
                 .map_err(|error| {
                     let (code, message) = herdr_fail(error);
@@ -2228,6 +2229,10 @@ impl Driver {
                 message.push_str(
                     " Kept a shell in its workspace to preserve linked worktree sessions.",
                 );
+            }
+            if let Some(session) = session {
+                message.push(' ');
+                message.push_str(&session);
             }
             (repo, message)
         };
@@ -2358,18 +2363,21 @@ impl Driver {
             )
         };
         authorized(auth).map_err(left)?;
-        if let Err(error) = self.runtime.pane_close(terminal_id).await {
-            let (code, message) = herdr_fail(error);
-            return Err(left((
-                code,
-                format!("Archive could not close agent {terminal_id} ({message})"),
-            )));
-        }
+        let session = match self.runtime.task_close(terminal_id).await {
+            Ok(session) => session.map(|s| format!(" {s}")).unwrap_or_default(),
+            Err(error) => {
+                let (code, message) = herdr_fail(error);
+                return Err(left((
+                    code,
+                    format!("Archive could not close agent {terminal_id} ({message})"),
+                )));
+            }
+        };
         let closed = |(code, message): Fail| {
             (
                 code,
                 format!(
-                    "{message}; agent {terminal_id} was closed, the checkout was left in place and gh poi was skipped."
+                    "{message}; agent {terminal_id} was closed, the checkout was left in place and gh poi was skipped.{session}"
                 ),
             )
         };
@@ -2401,12 +2409,12 @@ impl Driver {
             return fail(
                 ErrorCode::Internal,
                 format!(
-                    "Worktree removal failed ({message}) after closing {terminal_id}; gh poi was skipped."
+                    "Worktree removal failed ({message}) after closing {terminal_id}; gh poi was skipped.{session}"
                 ),
             );
         }
         Ok(format!(
-            "Removed worktree checkout {} and closed {terminal_id}.",
+            "Removed worktree checkout {} and closed {terminal_id}.{session}",
             checkout.as_str()
         ))
     }

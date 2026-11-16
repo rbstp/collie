@@ -764,4 +764,13 @@ impl Runtime {
             Owner::Rex => self.followed_rex()?.close(pane_id).await,
         }
     }
+
+    /// Archive's close: `pane_close`, and for a Rex task the session collied created for it
+    /// too, once empty; what became of that session, for the archive's answer.
+    pub async fn task_close(&self, pane_id: &str) -> Result<Option<String>, Error> {
+        match Owner::of(pane_id) {
+            Owner::Rex => self.followed_rex()?.close_task(pane_id).await,
+            _ => self.pane_close(pane_id).await.map(|()| None),
+        }
+    }
 }

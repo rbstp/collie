@@ -44,6 +44,8 @@ pub(super) struct Block {
     pub events: Vec<Value>,
     /// The client that owns it: the one that created it, until it gives it up.
     pub owner: Option<String>,
+    /// In no window: `session.list_blocks` lists it, the session's view does not.
+    pub detached: bool,
 }
 
 pub(super) struct State {
@@ -83,6 +85,8 @@ pub(super) struct State {
     pub runs_in: Option<String>,
     /// A method whose request ends the connection instead of an answer.
     pub hang_up: Option<&'static str>,
+    /// Sessions whose view shows a window `session.list_blocks` has no block for.
+    pub bare_windows: Vec<String>,
 }
 
 impl State {
@@ -114,6 +118,7 @@ impl State {
             size: (80, 24),
             events: Vec::new(),
             owner: None,
+            detached: false,
         });
     }
 }
@@ -179,6 +184,7 @@ impl Fake {
             anonymous: false,
             runs_in: None,
             hang_up: None,
+            bare_windows: Vec::new(),
         }));
         let push = Arc::new(Mutex::new(None));
         let task = tokio::spawn({
@@ -383,9 +389,19 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 .find(|(id, _)| *id == session)
                 .map(|(_, l)| l);
             let client = (!s.anonymous).then_some(CLIENT);
-            Ok(json!({ "client_id": client, "view": {
-                "revision": 1, "session_id": session, "label": label,
-            }}))
+            // One window per placed block, left out when there is none, as Rex leaves it out.
+            let mut windows: Vec<Value> = (s.blocks.iter())
+                .filter(|b| b.session == session && !b.detached)
+                .map(|b| json!({ "window_id": format!("window:{}", b.id), "label": "w" }))
+                .collect();
+            if s.bare_windows.contains(&session) {
+                windows.push(json!({ "window_id": "window:bare", "label": "w" }));
+            }
+            let mut view = json!({ "revision": 1, "session_id": session, "label": label });
+            if !windows.is_empty() {
+                view["windows"] = json!(windows);
+            }
+            Ok(json!({ "client_id": client, "view": view }))
         }
         ("session.list_blocks", _) if has_session => {
             let blocks: Vec<Value> = (s.blocks.iter())
@@ -393,7 +409,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 .map(|b| {
                     json!({
                         "block_id": b.id, "label": "shell", "creator_name": b.creator,
-                        "host_id": b.host, "placement": "placed",
+                        "host_id": b.host,
+                        "placement": if b.detached { "detached" } else { "placed" },
                     })
                 })
                 .collect();
@@ -422,6 +439,15 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 }
             }
             Ok(json!({ "blocks": owners }))
+        }
+        ("session.destroy", _) if !s.attached.contains(&session) => Err("conflict"),
+        ("session.destroy", _) if has_session => {
+            s.sessions.retain(|(id, _)| *id != session);
+            s.blocks.retain(|b| b.session != session);
+            let destroyed =
+                json!({ "type": "session_destroyed", "payload": { "session_id": session } });
+            deliver(s, seq, out, destroyed);
+            Ok(json!({}))
         }
         ("block.close", _) => match found {
             Some(i) => {
