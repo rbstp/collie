@@ -3,7 +3,8 @@
 # Collie/GhosttyTerminal/GhosttyVt.xcframework (ios, ios-simulator, macOS for `swift test`).
 #
 # The tarball SHA-256s are the ones in the release's SHA256SUMS, whose minisign signature was checked
-# against the Ghostty release key in PACKAGING-LIBGHOSTTY.md when pinning.
+# against the Ghostty release key in PACKAGING-LIBGHOSTTY.md when pinning. That key has been
+# RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV (id F5787DDB42320225) through 1.0.1.
 set -euo pipefail
 
 # Moving this pin means rerunning scripts/ghostty/nerd-font-constraints.py.
