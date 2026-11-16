@@ -31,7 +31,7 @@ The app and `collied` share no protocol revision. Update the side the message na
 
 ## Chat unavailable
 
-- **No session ID**: Chat retries when one arrives. For Codex, install herdr's hook with `herdr integration install codex`.
+- **No session ID**: Chat retries when one arrives. For Codex, install herdr's hook with `herdr integration install codex`, and in Herdr Core or Rex [`collied`'s own](agents/codex.md#herdr-core-and-rex).
 - **A Codex session started before the hook**: finish the turn, then relaunch it in the same pane with `codex resume <session-id> --no-daemon`.
 - **`collied` is older than the app**: update `collied`.
 
@@ -42,6 +42,12 @@ If a Codex agent stays `unknown`, or a finished turn sends no done alert:
 1. Use the herdr version in [Requirements](install/requirements.md), and reinstall its Codex hook with `herdr integration install codex`.
 2. Check the agent's status in `collied status` while it works. A turn that ends in `unknown` sends no done alert.
 3. Relaunch sessions that run on a shared Codex daemon: see [Codex](agents/codex.md#why---no-daemon).
+
+## Rex agents missing
+
+1. Start Rex.app: `collied` never starts Rex, and finds a server that starts later within 30 seconds.
+2. Read the `rex` lines of `collied doctor`. A warning names what keeps `collied` from following the server, such as an API revision it does not speak, which a restart of the Rex server after an update fixes ([Reading `collied doctor`](operate/commands.md#reading-collied-doctor)).
+3. Look for the agent under its Rex session's name in the Agents tab, or under **Rex** for a session with no name. Claude Code, Codex and Copilot CLI appear, as does any program that reports a status; shells do not, nor do terminals Rex runs on other machines.
 
 ## Pairing refused
 
