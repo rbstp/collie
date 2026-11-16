@@ -481,6 +481,7 @@ private struct AgentHeader: View {
     @Binding var showingChat: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.runtimeMarks) private var runtimeMarks
     // Landscape keeps the title in the bar: a header row more left the session two lines of the screen.
     private var stacked: Bool { typeSize.isAccessibilitySize && verticalSizeClass != .compact }
 
@@ -553,6 +554,11 @@ private struct AgentHeader: View {
                     HStack(spacing: 6) {
                         if let kind = agent.kind {
                             AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                                .modifier(RuntimeBadge(runtime: agent.runtime))
+                        }
+                        // The header shows no group label, which would say "Herdr Core" beside the shared mark.
+                        if runtimeMarks, agent.runtime == .herdrCore {
+                            Text("Core").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                         }
                         if let left = agent.contextLeft, ContextRing.shows(left) {
                             ContextRing(left: left)

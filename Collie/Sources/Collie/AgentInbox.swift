@@ -391,6 +391,7 @@ private struct InboxRow: View {
     let unseen: Bool
     let wake: Date?
     let now: Date
+    @Environment(\.runtimeMarks) private var runtimeMarks
     @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 5
 
     var body: some View {
@@ -440,7 +441,7 @@ private struct InboxRow: View {
                 .lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true)
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: item.workspace != nil))
                     }
                     if followed {
                         Image(systemName: "pin.fill")
@@ -448,7 +449,8 @@ private struct InboxRow: View {
                             .accessibilityLabel("Followed")
                     }
                     if let workspace = item.workspace {
-                        Text(workspace).layoutPriority(1)
+                        Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
+                            .layoutPriority(1)
                         if showsMachine || item.stale {
                             Text(verbatim: "·").fixedSize()
                         }

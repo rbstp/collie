@@ -161,7 +161,8 @@ jobs:
           key="$({ xcodebuild -version; git rev-parse HEAD:Cargo.lock HEAD:Cargo.toml HEAD:rust-toolchain.toml HEAD:about.toml \
             HEAD:justfile HEAD:.github/workflows/ci.yml HEAD:scripts/notices.py HEAD:scripts/ghostty HEAD:crates/collie-core \
             HEAD:crates/protocol HEAD:crates/tailnet HEAD:crates/tls HEAD:crates/tailscale-sys HEAD:crates/uniffi-bindgen \
-            HEAD:Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts HEAD:Collie/Resources/Octicons-LICENSE.txt; } | shasum -a 256)"
+            HEAD:Collie/GhosttyTerminal/Sources/GhosttyTerminal/Fonts HEAD:Collie/Resources/Octicons-LICENSE.txt \
+            HEAD:Collie/Resources/herdr-LICENSE.txt; } | shasum -a 256)"
           echo "key=ios-native-${key%% *}" >> "$GITHUB_OUTPUT"
 
       # Before the boot below, which slows every restore for minutes.

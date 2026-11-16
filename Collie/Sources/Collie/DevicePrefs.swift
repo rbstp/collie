@@ -20,6 +20,7 @@ struct DevicePrefs: StateFile, Equatable {
     var accent = AppAccent.blue
     var glass = AppGlass.regular
     var taskRuntime = TaskRuntimeChoice.automatic
+    var runtimeMarks = true
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
     var taskUltracode: [String: Bool] = [:]
@@ -73,6 +74,7 @@ extension DevicePrefs {
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         glass = (try? container.decodeIfPresent(AppGlass.self, forKey: .glass)) ?? defaults.glass
         taskRuntime = (try? container.decodeIfPresent(TaskRuntimeChoice.self, forKey: .taskRuntime)) ?? defaults.taskRuntime
+        runtimeMarks = (try? container.decodeIfPresent(Bool.self, forKey: .runtimeMarks)) ?? defaults.runtimeMarks
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
         taskUltracode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskUltracode)) ?? defaults.taskUltracode
     }

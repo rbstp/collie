@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
+        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","runtimeMarks":false,"taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -31,7 +31,7 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true, keysShown: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
+                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, runtimeMarks: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
             )
     )
     prefs.save(to: file)
@@ -48,7 +48,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test(arguments: [
     #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
     #""watchDecisions":"true""#, #""doneAlerts":0"#, #""archiveOnMerge":"on""#, #""taskBases":[]"#,
-    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#, #""taskRuntime":2"#,
+    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#, #""taskRuntime":2"#, #""runtimeMarks":"off""#,
 ])
 func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")
@@ -210,4 +210,9 @@ func notificationKeyMirrorIsReadAndDeletedByNodeId() throws {
     #expect(NotificationKey.Mirror.read(nodeId: nodeId).map { $0.withUnsafeBytes { Data($0) } } == vectorKey.withUnsafeBytes { Data($0) })
     NotificationKey.Mirror.delete(nodeId: nodeId)
     #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
+@Test func runtimeMarksAreShownUntilTurnedOff() throws {
+    #expect(DevicePrefs.load(from: nil).runtimeMarks)
+    #expect(try JSONDecoder().decode(DevicePrefs.self, from: Data(#"{"wrapLines":false}"#.utf8)).runtimeMarks)
 }

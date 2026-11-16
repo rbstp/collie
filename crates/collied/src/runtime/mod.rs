@@ -263,6 +263,14 @@ impl Owner {
             Self::Herdr
         }
     }
+
+    pub fn runtime(self) -> protocol::TaskRuntime {
+        match self {
+            Self::Herdr => protocol::TaskRuntime::Herdr,
+            Self::Core => protocol::TaskRuntime::HerdrCore,
+            Self::Rex => protocol::TaskRuntime::Rex,
+        }
+    }
 }
 
 fn rex_not_yet<T>() -> Result<T, Error> {

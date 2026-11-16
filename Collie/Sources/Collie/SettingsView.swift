@@ -72,6 +72,7 @@ struct SettingsView: View {
                         ForEach(TaskRuntimeChoice.allCases, id: \.self) { Text($0.label) }
                     }
                     .tint(.primary)
+                    Toggle("Runtime icons", isOn: $app.runtimeMarks)
                     Toggle("Archive when the PR merges", isOn: $archiveOnMerge)
                 } header: {
                     Text("Sessions")

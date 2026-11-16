@@ -491,6 +491,7 @@ private struct AgentRow: View {
     let followed: Bool
     let now: Date
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.runtimeMarks) private var runtimeMarks
     @ScaledMetric(relativeTo: .subheadline) private var lift: CGFloat = 6
 
     var body: some View {
@@ -503,7 +504,7 @@ private struct AgentRow: View {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true)
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil))
                     }
                     if followed {
                         Image(systemName: "pin.fill")
@@ -511,7 +512,7 @@ private struct AgentRow: View {
                             .accessibilityLabel("Followed")
                     }
                     if let workspace {
-                        Text(workspace)
+                        Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
                         Text(verbatim: "·").fixedSize()
                     }
                     StatusAge(agent: agent, now: now).fixedSize()
@@ -579,6 +580,63 @@ struct AgentKindLabel: View {
         case "copilot": ("Copilot", "Copilot")
         case "terminal": ("Terminal", "Ghostty")
         default: nil
+        }
+    }
+}
+
+/// The runtime a session runs in: its project's mark on the corner of the agent's mark. Herdr Core shares herdr's.
+struct RuntimeBadge: ViewModifier {
+    let runtime: TaskRuntime?
+    /// Beside the group's label, which then says "Core": "Herdr" here reads "Herdr, Core".
+    var grouped = false
+    /// False on a grid card, whose fixed column and spacing already hold the overhang: reserving it there truncated "Herdr Core".
+    var reservesOverhang = true
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 12
+    @Environment(\.runtimeMarks) private var shown
+
+    /// "Core" for the Herdr Core group's label beside the badge, whose mark already says herdr.
+    static func groupLabel(_ label: String, runtime: TaskRuntime?, badged: Bool) -> String {
+        badged && runtime == .herdrCore ? "Core" : label
+    }
+
+    static func mark(_ runtime: TaskRuntime?) -> (title: String, image: String)? {
+        switch runtime {
+        case .herdr: ("Herdr", "Herdr")
+        case .herdrCore: ("Herdr Core", "Herdr")
+        case .rex: ("Rex", "Rex")
+        case nil: nil
+        }
+    }
+
+    func body(content: Content) -> some View {
+        if shown, let (title, image) = Self.mark(runtime) {
+            // Grows with the text only to 14 pt, so the half that hangs below the agent's mark stays inside a grid
+            // card's 10 pt bottom padding: at Accessibility XL a 29 pt badge crossed the card's edge.
+            let side = min(self.side, 14)
+            let offset = CGSize(width: side * 0.25, height: side * 0.5)
+            let tile = RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
+            content
+                // A gap cut around the badge rather than a rim, so it works on any background, glass included.
+                .mask {
+                    ZStack(alignment: .bottomTrailing) {
+                        // Past the bounds, so a mark wider than its frame on a grid card is not clipped.
+                        Rectangle().padding(-side)
+                        tile.padding(-1.5).frame(width: side, height: side).offset(offset).blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Image(image)
+                        .resizable()
+                        .frame(width: side, height: side)
+                        .clipShape(tile)
+                        .offset(offset)
+                        .accessibilityLabel(grouped && runtime == .herdrCore ? "Herdr" : title)
+                }
+                // Room for the corner that hangs past the agent's mark, so it never touches the label beside it.
+                .padding(.trailing, reservesOverhang ? offset.width : 0)
+        } else {
+            content
         }
     }
 }

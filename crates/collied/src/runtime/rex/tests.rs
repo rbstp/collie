@@ -378,6 +378,8 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
     assert_eq!(poll.workspaces[0].number, 1);
     let snapshot = rt.session_snapshot().await.unwrap();
     assert_eq!(snapshot.panes[0].workspace_id, format!("rex:{S1}"));
+    let listed = crate::flock::map_agents(&snapshot.agents, &mut Default::default(), 0, None);
+    assert_eq!(listed[0].runtime, Some(protocol::TaskRuntime::Rex));
     assert!(rt.agent_list().await.unwrap().len() == 1);
     assert!(!rt.agent_get(&id(B1)).await.unwrap().read_only);
     assert_eq!(fake.calls().len(), before, "listing called the server");
