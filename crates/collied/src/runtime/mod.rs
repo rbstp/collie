@@ -648,6 +648,16 @@ impl Runtime {
         }
     }
 
+    /// Text pasted without Enter. Rex brackets a paste itself, for a program that turned
+    /// bracketed paste on.
+    pub async fn pane_paste(&self, pane_id: &str, text: &str) -> Result<(), Error> {
+        let paste = match Owner::of(pane_id) {
+            Owner::Herdr | Owner::Core => format!("\u{1b}[200~{text}\u{1b}[201~"),
+            Owner::Rex => text.to_owned(),
+        };
+        self.pane_send_text(pane_id, &paste).await
+    }
+
     pub async fn scroll_bottom(&self, pane_id: &str) -> Result<(), Error> {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::pane_send_text(&self.herdr, pane_id, SCROLL_BOTTOM).await,

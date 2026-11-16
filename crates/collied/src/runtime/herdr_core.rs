@@ -1821,12 +1821,16 @@ pub(crate) mod tests {
         /// The kinds of the frames each client wrote after its attach.
         kinds: Vec<u8>,
         /// What clients typed on their attaches.
-        typed: Vec<u8>,
+        pub(crate) typed: Vec<u8>,
         /// Attaches that ended.
         closed: usize,
         /// Line-mode calls, as `{method, params}`.
         pub(crate) calls: Vec<Value>,
+        /// Each attach's paint, from what clients typed before it; `ready` when unset.
+        pub(crate) paint: Option<Paint>,
     }
+
+    type Paint = fn(&[u8]) -> Vec<u8>;
 
     /// A core that answers every attach with a one-line paint, and every line-mode call with
     /// `answer` (else an error), recording what clients asked.
@@ -1894,7 +1898,11 @@ pub(crate) mod tests {
                         .write_all(&frame(0, DATA, &serde_json::to_vec(&answer).unwrap()))
                         .await
                         .unwrap();
-                    writer.write_all(&frame(7, DATA, b"ready")).await.unwrap();
+                    let paint = {
+                        let r = crate::lock(&record);
+                        r.paint.map_or_else(|| b"ready".to_vec(), |p| p(&r.typed))
+                    };
+                    writer.write_all(&frame(7, DATA, &paint)).await.unwrap();
                     while let Ok((_, kind, payload)) = a.frame().await {
                         let mut r = crate::lock(&record);
                         r.kinds.push(kind);

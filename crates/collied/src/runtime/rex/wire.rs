@@ -329,7 +329,7 @@ pub(super) struct Size {
 }
 
 /// `format` with `max_bytes`: the first part, and the result's id while more remains.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(super) struct Formatted {
     #[serde(default)]
     pub content: String,

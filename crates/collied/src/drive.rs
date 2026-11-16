@@ -962,9 +962,8 @@ impl Driver {
             return fail(ErrorCode::AgentNotReady, "the input box is not empty");
         }
         authorized(auth)?;
-        let paste = format!("\u{1b}[200~{}\u{1b}[201~", p.command.as_str());
         self.runtime
-            .pane_send_text(&a.pane_id, &paste)
+            .pane_paste(&a.pane_id, p.command.as_str())
             .await
             .map_err(herdr_fail)?;
         let deadline = tokio::time::Instant::now() + SCREEN_SETTLE;
@@ -3518,6 +3517,45 @@ mod tests {
         let typed = (crate::lock(&seen).calls.iter())
             .any(|c| c["method"] == "terminal.send" || c["method"] == "terminal.keys");
         assert!(!typed, "no prompt or key was typed");
+    }
+
+    /// Claude Code's input box, holding what was typed into it.
+    fn claude_box(typed: &[u8]) -> Vec<u8> {
+        let typed = String::from_utf8_lossy(typed)
+            .replace("\u{1b}[200~", "")
+            .replace("\u{1b}[201~", "");
+        let rule = "─".repeat(40);
+        format!("⏺ Done.\r\n\r\n{rule}\r\n❯ {typed}\r\n{rule}\r\n").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn the_slash_mirror_types_its_command_into_herdr_core_as_a_bracketed_paste() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let idle = || serde_json::json!({"state": "idle", "app": "claude-code"});
+        let seen = core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(
+                Path::new("/w"),
+                serde_json::json!({"state": "idle", "app": "claude-code"}),
+                "live",
+            ),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        crate::lock(&seen).paint = Some(claude_box);
+        let core = core_tests::core_of(
+            &root,
+            serde_json::json!([claude(Path::new("/w"), idle(), "live")]),
+        );
+        let drive = core_driver(&root, core);
+        let p = AgentSlashDraftParams {
+            terminal_id: TerminalId::new(core_id()).unwrap(),
+            command: protocol::SlashCommand::new("/model").unwrap(),
+            expected_draft: None,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        assert_eq!(drive.slash_draft(p, &yes).await, Ok(Response::Ok));
+        assert_eq!(crate::lock(&seen).typed, b"\x1b[200~/model\x1b[201~");
     }
 
     #[tokio::test]
