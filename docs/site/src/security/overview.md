@@ -10,7 +10,7 @@ Your phone can drive every agent on your machine, so `collied` treats every requ
 
 ## What the phone can do
 
-`collied` accepts only a fixed set of requests, never herdr's privileged methods.
+`collied` accepts only a fixed set of requests, and never calls the privileged methods of herdr, Herdr Core or Rex.
 
 - **Approvals** answer only the prompt you saw, once, while it is still on screen; typing keys or text into a prompt skips these checks and Face ID ([details](../reference/threat-model.md#keys-and-text-on-a-blocked-prompt)).
 - **Apple Watch** decisions are off by default and need the watch unlocked and on your wrist.
@@ -29,5 +29,6 @@ Only your phone can read what alerts and Live Activities show, labels included: 
 ## Your part
 
 - Keep the [tailnet policy](../install/tailnet-policy.md) tight and check the login name when you pair.
+- If you use Rex, turn off its built-in Tailscale and tailnet listeners unless you want other machines to reach your agents: `collied` warns about them in `collied doctor` and still follows the server.
 - If you lose a phone, run `collied peers revoke <label or StableID>` on each machine and remove its node in the Tailscale admin console ([Revocation](../reference/tailnet.md#revocation)).
 - If a machine is compromised, remove it in the app and its node in the Tailscale admin console. With direct APNs, also revoke its key in the Apple Developer portal ([Revocation](../reference/tailnet.md#revocation)).
