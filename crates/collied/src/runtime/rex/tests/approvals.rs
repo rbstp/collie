@@ -356,3 +356,56 @@ async fn an_approval_raised_on_a_dialog_still_drawing_is_replaced_once_it_is_dra
     );
     assert_eq!(raised.len(), 1);
 }
+
+/// Copilot CLI draws a numbered menu like Claude Code's, and only Claude Code's is parsed: a
+/// blocked Copilot raises an approval with nothing to decide, and a decision sends nothing.
+#[tokio::test]
+async fn a_blocked_copilot_raises_an_approval_with_no_option_and_takes_no_decision() {
+    let fake = Fake::start().await;
+    let record = json!({
+        "state": "blocked", "kind": "permission", "app": "copilot", "updated_at": T0,
+        "owner": { "pid": 10, "name": "copilot" },
+    });
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        let copilot = fake::process(10, "/opt/homebrew/bin/copilot", "copilot");
+        s.add(S1, B1, copilot, vec![record]);
+        s.block(B1).screen = include_str!("../../../../tests/fixtures/copilot/shell.detection.txt")
+            .replace('\n', "\r\n");
+    }
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _following = follow(&rex).await;
+    let dir = tempfile::tempdir().unwrap();
+    let none = dir.path().join("no-herdr.sock");
+    let rt = Runtime::new(none.clone()).with_rex(Some(rex.clone()));
+    let audit = Arc::new(Audit::open(&dir.path().join("audit.log")).unwrap());
+    let (tx, mut events) = broadcast::channel(64);
+    let approvals = Approvals::new(none, "nMAC".into(), tx, audit, None).with_rex(Some(rex));
+    let agents = rt.agent_list().await.unwrap();
+    assert!(agents[0].read_only);
+    approvals.observe(&agents, &[] as &[WorkspaceInfo]).await;
+    let raised: Vec<Approval> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|e| match e {
+            Event::ApprovalNeeded { approval } => Some(approval),
+            _ => None,
+        })
+        .collect();
+    let [a] = raised.as_slice() else {
+        panic!("{raised:?}")
+    };
+    assert!(a.options.is_empty() && a.choices.is_empty());
+    assert!(!a.accepts_input && !a.has_text_field);
+    let auth: Authorized = Arc::new(|| true);
+    let p = ApprovalDecideParams {
+        approval_id: a.approval_id.clone(),
+        decision: Decision::Approve,
+        choice: None,
+        nonce: a.nonce.clone(),
+        note: None,
+    };
+    let refused = approvals.decide("phone", "nPHONE", p, &auth).await;
+    assert_eq!(refused.unwrap_err().0, protocol::ErrorCode::InvalidParams);
+    assert!(fake.state().block(B1).events.is_empty());
+    assert!(!fake.calls().iter().any(|c| c == "block.event"));
+}

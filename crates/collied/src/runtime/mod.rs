@@ -73,8 +73,8 @@ pub struct AgentInfo {
     pub interactive_ready: bool,
     #[serde(default)]
     pub launch_pending: bool,
-    /// A herdr-core agent with no OSC 7501 status: nothing tells collied a dialog is open
-    /// (Copilot's folder trust prompt reports nothing), so it takes no input from the phone.
+    /// A herdr-core or Rex agent whose status cannot tell collied a dialog is open
+    /// ([`agents::read_only`]), so it takes no input from the phone.
     #[serde(skip)]
     pub read_only: bool,
 }

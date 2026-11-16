@@ -470,6 +470,8 @@ fn agent(
         .as_deref()
         .zip(pid)
         .and_then(|(kind, pid)| session(kind, &t.address, pid));
+    let reported = (t.status.as_ref()).and_then(|s| agents::kind(s.app.as_deref(), None));
+    let read_only = agents::read_only(reported.as_deref(), cli);
     Some(AgentInfo {
         terminal_id: id.clone(),
         workspace_id: group.to_owned(),
@@ -485,7 +487,7 @@ fn agent(
         agent_session: session.map(|value| AgentSession { value }),
         interactive_ready: false,
         launch_pending: false,
-        read_only: t.status.is_none(),
+        read_only,
     })
 }
 

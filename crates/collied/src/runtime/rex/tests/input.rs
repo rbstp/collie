@@ -103,63 +103,84 @@ async fn keys_rex_cannot_send_as_herdr_does_send_nothing_at_all() {
     assert!(!fake.calls().iter().any(|c| c == "block.event"));
 }
 
+/// Copilot CLI reports `idle` at its folder trust prompt and with a picker open (#741).
 #[tokio::test]
-async fn an_agent_with_no_status_takes_no_prompt_answer_or_key() {
+async fn an_agent_with_no_status_or_copilot_takes_no_prompt_answer_or_key() {
     let fake = Fake::start().await;
-    claude(&fake, S1, B1, 10, "idle", T0);
-    fake.state()
-        .add(S1, B3, fake::process(30, "claude", "2.1.322"), vec![]);
+    let copilot = |state: &str, pid| {
+        json!({
+            "state": state, "app": "copilot", "updated_at": T0,
+            "owner": { "pid": pid, "name": "copilot" },
+        })
+    };
+    let process = |pid| fake::process(pid, "/opt/homebrew/bin/copilot", "copilot");
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        s.add(S1, B1, process(10), vec![copilot("idle", 10)]);
+        s.add(S1, B2, process(20), vec![copilot("blocked", 20)]);
+        s.add(S1, B3, fake::process(30, "claude", "2.1.322"), vec![]);
+    }
     let (rex, _rt, dir) = followed(&fake).await;
-    assert!(rex.get(&id(B3)).unwrap().read_only);
+    let shown = |b: &str| {
+        let a = rex.get(&id(b)).unwrap();
+        (a.agent, a.agent_status, a.read_only)
+    };
+    assert_eq!(shown(B1), (Some("copilot".into()), "idle".into(), true));
+    assert_eq!(shown(B2), (Some("copilot".into()), "blocked".into(), true));
+    assert_eq!(shown(B3), (Some("claude".into()), "unknown".into(), true));
     let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
         .unwrap()
         .with_rex(Some(rex));
     let yes: Authorized = Arc::new(|| true);
     let op = || OpId::new("P".repeat(22)).unwrap();
-    let terminal = TerminalId::new(id(B3)).unwrap();
     let refused = |r: Result<protocol::Response, (ErrorCode, String)>| r.unwrap_err().0;
 
-    let prompt = AgentPromptParams {
-        op_id: op(),
-        terminal_id: terminal.clone(),
-        text: PromptText::new("hi".to_owned()).unwrap(),
-        expected_draft: None,
-    };
-    assert_eq!(
-        refused(drive.prompt(prompt, &yes).await),
-        ErrorCode::AgentNotReady
-    );
-    let typed = AgentTypeTextParams {
-        op_id: op(),
-        terminal_id: terminal.clone(),
-        text: PromptText::new("yes".to_owned()).unwrap(),
-    };
-    assert_eq!(
-        refused(drive.type_text(typed, &yes).await),
-        ErrorCode::AgentNotReady
-    );
-    let keys = AgentSendKeysParams {
-        op_id: op(),
-        terminal_id: terminal.clone(),
-        keys: vec![Key::Enter],
-    };
-    assert_eq!(
-        refused(drive.send_keys(keys, &yes).await.0),
-        ErrorCode::AgentNotReady
-    );
-    let text = SendTextParams {
-        op_id: op(),
-        terminal_id: terminal.clone(),
-        text: TypedText::new("/x".to_owned()).unwrap(),
-    };
-    assert_eq!(
-        refused(drive.send_text(text, &yes).await),
-        ErrorCode::AgentNotReady
-    );
-    assert_eq!(
-        refused(drive.scroll_bottom(&terminal, &yes).await),
-        ErrorCode::AgentNotReady
-    );
+    for (block, prompt_error) in [
+        (B1, ErrorCode::AgentNotReady),
+        (B2, ErrorCode::AgentBlocked),
+        (B3, ErrorCode::AgentNotReady),
+    ] {
+        let terminal = TerminalId::new(id(block)).unwrap();
+        let prompt = AgentPromptParams {
+            op_id: op(),
+            terminal_id: terminal.clone(),
+            text: PromptText::new("hi".to_owned()).unwrap(),
+            expected_draft: None,
+        };
+        assert_eq!(refused(drive.prompt(prompt, &yes).await), prompt_error);
+        let typed = AgentTypeTextParams {
+            op_id: op(),
+            terminal_id: terminal.clone(),
+            text: PromptText::new("yes".to_owned()).unwrap(),
+        };
+        assert_eq!(
+            refused(drive.type_text(typed, &yes).await),
+            ErrorCode::AgentNotReady
+        );
+        let keys = AgentSendKeysParams {
+            op_id: op(),
+            terminal_id: terminal.clone(),
+            keys: vec![Key::Enter],
+        };
+        assert_eq!(
+            refused(drive.send_keys(keys, &yes).await.0),
+            ErrorCode::AgentNotReady
+        );
+        let text = SendTextParams {
+            op_id: op(),
+            terminal_id: terminal.clone(),
+            text: TypedText::new("/x".to_owned()).unwrap(),
+        };
+        assert_eq!(
+            refused(drive.send_text(text, &yes).await),
+            ErrorCode::AgentNotReady
+        );
+        assert_eq!(
+            refused(drive.scroll_bottom(&terminal, &yes).await),
+            ErrorCode::AgentNotReady
+        );
+    }
     assert!(!fake.calls().iter().any(|c| c == "block.event"));
 }
 
