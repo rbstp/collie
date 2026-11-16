@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+import contextlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 spec = importlib.util.spec_from_file_location('budget', Path(__file__).with_name('ios-test-budget.py'))
@@ -162,6 +166,46 @@ class RenderTests(unittest.TestCase):
         self.assertEqual((summary, failed), ('Within every enforced ceiling.', []))
         self.assertIn('| UI tests | n/a | 2 | n/a | 2 | pass |', table)
         self.assertIn('| Slowest UI test | n/a | 500 s | n/a | not enforced | |', table)
+
+
+class MeasureCommandTests(unittest.TestCase):
+    def measure(self, *flags, results='Test.xcresult'):
+        """Runs `measure` on a run whose UI suite took 41 s against a 40.5 s ceiling, as ci.yml does."""
+        tests = tree(ui=[case('Suite/testOne()', 41)])
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'budget.json').write_text(json.dumps({**CEILINGS, 'ui_tests': 1, 'ui_launches': 0, 'unit_seconds': 0}))
+            argv = ['ios-test-budget.py', 'measure', *flags, str(folder / 'budget.json'), str(folder / results), str(folder / 'metrics.json')]
+            out = io.StringIO()
+            with mock.patch('sys.argv', argv), mock.patch.dict(os.environ, {'GITHUB_STEP_SUMMARY': str(folder / 'summary.md')}), \
+                    mock.patch.object(budget, 'xcresulttool', lambda _, kind, *rest: tests if kind == 'tests' else {'testRuns': []}), \
+                    contextlib.redirect_stdout(out):
+                try:
+                    budget.main()
+                    code = None
+                except SystemExit as error:
+                    code = error.code
+            metrics = json.loads((folder / 'metrics.json').read_text()) if (folder / 'metrics.json').exists() else None
+            summary = (folder / 'summary.md').read_text() if (folder / 'summary.md').exists() else ''
+        return code, out.getvalue(), metrics, summary
+
+    def test_a_pull_request_fails_over_a_ceiling(self):
+        code, _, metrics, summary = self.measure()
+        self.assertIn('Over the ceiling: UI suite.', code)
+        self.assertEqual(metrics['metrics']['ui_seconds'], 41)
+        self.assertIn('| UI suite | n/a | 41 s | n/a | 40 s | fail |', summary)
+
+    def test_master_warns_over_a_ceiling_and_keeps_the_report(self):
+        code, out, metrics, summary = self.measure('--warn-only')
+        self.assertIsNone(code)
+        self.assertIn('::warning title=Over the test budget::Over the ceiling: UI suite.', out)
+        self.assertEqual(metrics['metrics']['ui_seconds'], 41)
+        self.assertIn('| UI suite | n/a | 41 s | n/a | 40 s | fail |', summary)
+
+    def test_master_still_fails_when_the_tests_did_not_run(self):
+        code, _, metrics, _ = self.measure('--warn-only', results='Logs')
+        self.assertIn('the tests did not run', code)
+        self.assertIsNone(metrics)
 
 
 if __name__ == '__main__':

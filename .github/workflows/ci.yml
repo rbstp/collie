@@ -14,8 +14,9 @@ on:
       - 'docs/deploy-pages.md'
       - 'docs/site/**'
 
+# A pull request cancels its older run. A push to master never does: each run covers only its own push's commits.
 concurrency:
-  group: test-${{ github.ref }}
+  group: test-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -31,8 +32,8 @@ jobs:
       ios: ${{ steps.diff.outputs.ios }}
 
     steps:
+      # The whole history's commits and trees, no blobs: a push's before can be any number of commits back.
       - name: checkout
-        if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -44,13 +45,23 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+          run_all() {
+            echo "::warning::$1: running every job"
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "ios=true" >> "$GITHUB_OUTPUT"
             exit 0
+          }
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            range="$BASE_SHA...$HEAD_SHA"
+          else
+            # Every commit of the push, as when a stack merges. A first push (all zeros), a rewritten
+            # branch or a missing commit has no usable range: fail open.
+            git merge-base --is-ancestor "$BEFORE" "$GITHUB_SHA" || run_all "no range from $BEFORE to $GITHUB_SHA"
+            range="$BEFORE..$GITHUB_SHA"
           fi
-          files="$(git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")"
+          files="$(git diff --no-renames --name-only "$range")" || run_all "git diff $range failed"
           printf '%s\n' "$files"
           # Only paths no test reads: tests read docs/protocol/ and docs/tailnet.md.
           if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$|README\.md$|AGENTS\.md$|CLAUDE\.md$)'; then
@@ -285,9 +296,10 @@ jobs:
           key: ios-cas-${{ github.sha }}
 
       # Fails over a ceiling in Collie/Tests/budget.json, and reports after failed tests too.
+      # On master a passed ceiling only warns: pull requests enforce it, and a slow runner there leaves nothing to act on.
       - name: check the test budget
         if: ${{ !cancelled() }}
-        run: python3 scripts/ios-test-budget.py measure Collie/Tests/budget.json target/ios/DerivedData/Logs/Test "$RUNNER_TEMP/ios-test-metrics.json"
+        run: python3 scripts/ios-test-budget.py measure ${{ github.event_name == 'push' && '--warn-only' || '' }} Collie/Tests/budget.json target/ios/DerivedData/Logs/Test "$RUNNER_TEMP/ios-test-metrics.json"
 
       # ios-test-budget.yml compares a pull request's metrics with master's.
       - name: keep the test metrics
@@ -309,8 +321,9 @@ jobs:
     steps:
       - name: delete superseded compilation caches
         run: |
-          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key \
-            --jq 'if any(.[]; .key == env.KEEP) then .[] | select(.key != env.KEEP) | .id else empty end' |
+          # Only entries older than this run's: master's runs end in any order.
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key,createdAt \
+            --jq 'sort_by(.createdAt) | .[:(map(.key) | index(env.KEEP)) // 0][] | .id' |
             while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
         env:
           GH_TOKEN: ${{ github.token }}
