@@ -96,6 +96,7 @@ struct RootView: View {
                                 }
                             }
                             .padding(8)
+                            .appGlass(in: .rect(cornerRadius: 12))
                         }
                     }
                 }

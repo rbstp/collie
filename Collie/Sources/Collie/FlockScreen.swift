@@ -53,7 +53,6 @@ struct FlockScreen: View {
             .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             // UIKit's top scroll edge effect follows the pager, not the pages' own scroll views.
             .overlay(alignment: .top) {
-                // Clear: nothing behind the bar but its controls' own glass, so content scrolls under it undimmed.
                 if glass != .clear {
                     GeometryReader { geometry in
                         let background = Color(.systemGroupedBackground)
@@ -81,11 +80,12 @@ struct FlockScreen: View {
                             ProgressView().controlSize(.small)
                             Text("Connecting…").font(.headline)
                         }
+                        .fixedSize()
                     } else {
                         ViewSwitch(showsUsage: $showsUsage).fixedSize()
                     }
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .sharedBackgroundVisibility(tailnetStarting ? .visible : .hidden)
                 if !showsUsage {
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Layout", systemImage: layout.icon) {
