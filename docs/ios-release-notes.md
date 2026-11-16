@@ -13,6 +13,7 @@ Text for the next combined release. Confirm its final version and build in App S
 - The New task prompt stays below the navigation bar when you rotate with the keyboard open.
 - Herdr 2 is now named Herdr Core.
 - In Herdr Core and Rex, only Claude Code and Codex take prompts and keys from the phone. Other agents show their status and screen, read-only.
+- Tailscale inside the app and collied is updated to 1.104.7. It fixes a rare problem with connections that sat idle, and connections to Tailscale that some network equipment broke.
 
 Update collied on each machine: Rex agents, the choice of where tasks start, the runtime marks, the Herdr Core name and the approval fix all need it. You can update the app and collied in either order.
 
@@ -32,6 +33,7 @@ Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copi
 - Open New task, show the keyboard and rotate the phone. Check that the prompt row stays below the navigation bar.
 - With collied updated, check that the app says Herdr Core, never Herdr 2.
 - Connect to a machine still running collied 0.1.18. Check that the app connects without a version message, that no runtime marks and no Rex agents appear, that the Herdr Core group still reads "Herdr 2", and that New task with Start tasks in set to Rex says collied is too old and keeps Start dimmed.
+- Leave the app in the background with the phone idle for about 15 minutes, then open it. Check that the agents load without a manual retry. On a fresh install, if you have one, check that pairing and signing in to Tailscale still work.
 - Check session visibility, question answers, approvals, notifications, Live Activities and reconnection with your paired machines.
 
 Use Claude Code CLI, Codex CLI or GitHub Copilot CLI for these checks. Other herdr integrations and other Linux distributions have not been validated with Collie.
