@@ -25,10 +25,16 @@ func prefsFile() throws -> URL {
     try makeTemporaryDirectory().appending(path: "prefs.json")
 }
 
+// Fields in a window that cannot become key still take focus, but without the system keyboard: its service hung a
+// test host on CI for six minutes.
+private final class KeylessWindow: UIWindow {
+    override var canBecomeKey: Bool { false }
+}
+
 @MainActor
 func hosting(_ host: UIViewController, body: @MainActor (UIWindow) async throws -> Void) async throws {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-    let window = UIWindow(windowScene: scene)
+    let window = KeylessWindow(windowScene: scene)
     window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
     window.rootViewController = host
     let previous = scene.keyWindow
