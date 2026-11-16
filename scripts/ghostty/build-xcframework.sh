@@ -12,6 +12,8 @@ LIBGHOSTTY_VT_VERSION=1.0.1
 GHOSTTY_COMMIT=108cacb17ed8990840cd14abfce43d8ed8503ca1
 SOURCE_SHA256=333dfce97641ef9b536bb9e08907ad86abaaada50e8f7417b70d9284adef37aa
 DEPS_SHA256=91a4e10960a52bf5bf4b15aa2a2cddaff8a89d6cd903d3055bda4fd17de3356d
+# Ghostty's CI builds libghostty-vt 1.0.1 with Zig 0.17.0 (flake.nix at vt-1.0.1); this stays on the
+# newer 0.17.1 it already used on purpose, since minimum_zig_version is 0.17.0.
 ZIG_VERSION=0.17.1
 ZIG_SHA256=75f1bc7a1e9852f17ec9a0c1895f767c4ec56d46bc8a834920eece1d0359dd8d
 # Render state only: no Kitty graphics (file, temp-file and shared-memory image media), no input
