@@ -35,10 +35,13 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(app.buttons["Backspace"].isEnabled, app.debugDescription)
 
         // The terminal view has no prompt field: the keyboard types straight into the terminal.
-        XCTAssertFalse(app.textFields.firstMatch.exists, app.debugDescription)
+        // Queries stay in the main window where they can (see type(_:into:)): around the keyboard, accessibility queries stalled
+        // for 10 to 40 s on the hosted runner.
+        XCTAssertFalse(app.element(Match(.textField, NSPredicate(value: true))).exists, app.debugDescription)
         app.withInteractionOptions(2) { app.buttons["Keyboard"].tap() }
+        // No timed wait for the keyboard here: the tap on Control waits for the app to idle, and typing fails unless the terminal
+        // input has the focus.
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
         let control = app.buttons["Control"]
         control.tap()
         XCTAssertTrue(control.isSelected, app.debugDescription)
@@ -126,7 +129,8 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
         app.withInteractionOptions(2) { keyboardButton.tap() }
         XCTAssertTrue(keyboard.appears(within: 5), app.debugDescription)
-        let composerReturn = try XCTUnwrap(returns.allElementsBoundByIndex.first { !keyboard.frame.intersects($0.frame) }, app.debugDescription)
+        // The keyboard's own return key is in the keyboard's window.
+        let composerReturn = app.element(Match(.button, "Return"))
         XCTAssertTrue(composerReturn.isHittable, app.debugDescription)
         composerReturn.tap()
         XCTAssertTrue(keyboard.disappears(within: 5), app.debugDescription)
