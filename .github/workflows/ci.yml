@@ -233,10 +233,12 @@ jobs:
           restore-keys: ios-sim-
 
       # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot saturates the runner for
-      # minutes, so it starts after the native build's restores; restoring the cargo cache while it booted killed it twice
-      # (SimLaunchHost crashed with SIGBUS), and xcodebuild then ran the UI suite inside a second boot.
+      # minutes, so it starts after the native build's restores: twice SimLaunchHost crashed with SIGBUS while the cargo
+      # cache restored during the boot, and xcodebuild then ran the UI suite inside a second boot.
       - name: boot the simulator
-        run: xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
+        run: |
+          xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/simulator-boot.pid"
 
       - name: install just and xcodegen
         run: |
@@ -283,10 +285,16 @@ jobs:
       - name: test the budget script
         run: python3 scripts/test-ios-test-budget.py
 
+      # A boot still in progress is left to xcodebuild, which waits for it. A simulator that died is booted again before the
+      # tests rather than during them; the job goes on if that boot does not finish, since xcodebuild boots it too.
       - name: check the simulator
+        timeout-minutes: 10
+        continue-on-error: true
         run: |
-          xcrun simctl list devices booted | grep -q 'iPhone 18 Pro (' ||
-            echo "::warning::The simulator booted earlier in the job is down; xcodebuild boots it again for the tests."
+          kill -0 "$(cat "$RUNNER_TEMP/simulator-boot.pid")" 2> /dev/null && exit 0
+          xcrun simctl list devices booted | grep -q 'iPhone 18 Pro (' && exit 0
+          echo "::warning::The simulator booted earlier in the job is not booted; booting it again before the tests."
+          xcrun simctl bootstatus 'iPhone 18 Pro' -b
 
       - name: test
         run: |
