@@ -433,7 +433,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     func taskOptions(machineId: String) async throws -> TaskOptions {
         guard isSample || screenshotDemo else { throw CoreError.NotImplemented }
-        return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"], runtimes: [.herdr])
+        return TaskOptions(agents: ["claude", "codex", "copilot"], defaultAgent: "claude", recentCwds: ["/Users/demo/collie", "/Users/demo/website"], roots: ["/Users/demo"], runtimes: [.herdr], runtimeAgents: [])
     }
 
     func taskFolders(machineId: String, path: String) async throws -> TaskFolders {

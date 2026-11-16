@@ -30,6 +30,7 @@ final class NewTaskModel {
     var machineId: String? {
         didSet {
             guard oldValue != machineId else { return }
+            options = nil
             error = nil
             cancelUpload(on: oldValue)
             attachments = []
@@ -156,10 +157,20 @@ final class NewTaskModel {
         )
     }
 
+    /// The chosen runtime's kinds from `runtimeAgents`; `agents` on Automatic or when collied lists none for it.
+    var offeredAgents: [String]? {
+        guard let options else { return nil }
+        guard let runtime = runtimeChoice.runtime, let listed = options.runtimeAgents.first(where: { $0.runtime == runtime }) else {
+            return options.agents
+        }
+        return listed.agents
+    }
+
     /// What `task.options` says stops the chosen runtime, not why: collied's refusal says that, and replaces it.
     var runtimeProblem: String? {
         guard error == nil, let runtime = runtimeChoice.runtime, let options else { return nil }
         guard let offered = options.runtimes else { return Self.collieTooOld }
+        if offeredAgents?.isEmpty == true { return "\(runtimeChoice.label) cannot start any allowed agent on this computer" }
         return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not available on this computer right now"
     }
 
@@ -239,7 +250,9 @@ final class NewTaskModel {
             let loaded = try await core.taskOptions(machineId: machineId)
             guard machineId == self.machineId else { return }
             options = loaded
-            if !loaded.agents.contains(agent) { agent = loaded.defaultAgent }
+            if let offered = offeredAgents, !offered.contains(agent) {
+                agent = offered.contains(loaded.defaultAgent) ? loaded.defaultAgent : offered.first ?? ""
+            }
         } catch {
             guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)

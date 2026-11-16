@@ -286,7 +286,7 @@ struct NewTaskSheet: View {
 
                 Section {
                     if model.location != .resume {
-                        if let agents = model.options?.agents {
+                        if let agents = model.offeredAgents, !agents.isEmpty {
                             Picker(selection: $model.agent) {
                                 ForEach(agents, id: \.self) { AgentKindLabel(kind: $0).tag($0) }
                             } label: {
@@ -308,7 +308,7 @@ struct NewTaskSheet: View {
                             if model.agent == "claude" {
                                 Toggle("Ultracode", isOn: $model.ultracode)
                             }
-                        } else if model.optionsError == nil {
+                        } else if model.options == nil, model.optionsError == nil {
                             ProgressView()
                         }
                     }

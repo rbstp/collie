@@ -43,7 +43,7 @@ final class FakeCore: AgentCore {
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
-        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil)
+        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil, runtimeAgents: [])
         var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
         var folderPaths: [String] = []
         var taskNews: [String] = []

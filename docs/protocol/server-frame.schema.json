@@ -1981,6 +1981,24 @@
         }
       ]
     },
+    "RuntimeAgents": {
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/AgentKind"
+          },
+          "type": "array"
+        },
+        "runtime": {
+          "$ref": "#/$defs/TaskRuntime"
+        }
+      },
+      "required": [
+        "runtime",
+        "agents"
+      ],
+      "type": "object"
+    },
     "SessionId": {
       "pattern": "^[0-9a-f][0-9a-f-]{35}$",
       "type": "string"
@@ -2046,6 +2064,13 @@
         "roots": {
           "items": {
             "$ref": "#/$defs/Cwd"
+          },
+          "type": "array"
+        },
+        "runtime_agents": {
+          "description": "The allowed kinds each runtime starts on this computer: herdr's while it answers,\nherdr-core's and Rex's while collied has a socket path for them, followed or not. Empty\nfrom an older collied.",
+          "items": {
+            "$ref": "#/$defs/RuntimeAgents"
           },
           "type": "array"
         },

@@ -425,9 +425,46 @@ async fn a_task_its_chosen_runtime_refuses_starts_nowhere_and_creates_no_folder(
 }
 
 // A task asked of Rex must be possible to set up while herdr or herdr-core is the problem;
-// Automatic still refuses the start as it did.
-#[tokio::test]
-async fn options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not() {
+// Automatic still refuses the start as it did. The test runs again with a stand-in Claude Code
+// first on its `PATH`, so `task_cli` finds one on every runner.
+#[test]
+fn options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not() {
+    const STAND_IN: &str = "COLLIED_TEST_STAND_IN_CLAUDE";
+    if std::env::var_os(STAND_IN).is_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let tools = tempfile::tempdir().unwrap();
+        let claude = tools.path().join("claude");
+        std::fs::write(&claude, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(std::iter::once(tools.path().to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
+        let test = format!(
+            "{}::options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not",
+            module_path!().split_once("::").unwrap().1
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test.as_str(), "--exact", "--nocapture"])
+            .env("PATH", path)
+            .env(STAND_IN, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        print!("{stdout}");
+        eprint!("{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "child run failed: {}", out.status);
+        assert!(stdout.contains("1 passed"), "child did not run the test");
+        return;
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(answer_from_a_followed_rex_while_herdr_does_not());
+}
+
+async fn answer_from_a_followed_rex_while_herdr_does_not() {
     let fake = Fake::start().await;
     let (_dir, root, repo, _) = worktree();
     let (rex, _) = followed(&fake, &root).await;
@@ -450,18 +487,27 @@ async fn options_and_worktrees_answer_from_a_followed_rex_while_herdr_does_not()
     .with_core(Some(answered(&root, false)))
     .with_rex(Some(rex));
     let yes: Authorized = Arc::new(|| true);
-    for drive in [&busy_herdr, &reconnecting] {
-        match drive.task_options().await {
-            Ok(Response::TaskOptions(o)) => {
-                assert_eq!(o.runtimes, Some(vec![protocol::TaskRuntime::Rex]));
-            }
-            Err((code, why)) => {
-                // No Claude Code on this machine's PATH: the kinds, not herdr, stop it.
-                assert_eq!(code, ErrorCode::NotFound, "{why}");
-                assert!(why.contains("Herdr 2 or Rex starts"), "{why}");
-            }
-            Ok(other) => panic!("{other:?}"),
-        }
+    let hosts = [
+        (&busy_herdr, &[protocol::TaskRuntime::Rex][..]),
+        (
+            &reconnecting,
+            &[protocol::TaskRuntime::HerdrCore, protocol::TaskRuntime::Rex],
+        ),
+    ];
+    for (drive, hosts) in hosts {
+        let Ok(Response::TaskOptions(o)) = drive.task_options().await else {
+            panic!("no task options");
+        };
+        assert_eq!(o.agents, [claude_kind()]);
+        assert_eq!(o.runtimes, Some(vec![protocol::TaskRuntime::Rex]));
+        // Without herdr's answer, no kinds for herdr.
+        let starts: Vec<_> = (hosts.iter())
+            .map(|&runtime| protocol::RuntimeAgents {
+                runtime,
+                agents: vec![claude_kind()],
+            })
+            .collect();
+        assert_eq!(o.runtime_agents, starts);
         let listed = TaskWorktreesParams {
             cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
         };

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use collie_core::{
-    AgentKey, CollieCore, CoreError, TaskFolders, TaskOptions, TaskRuntime, TaskStarted,
-    TerminalSource,
+    AgentKey, CollieCore, CoreError, RuntimeAgents, TaskFolders, TaskOptions, TaskRuntime,
+    TaskStarted, TerminalSource,
 };
 use collied::config::TasksConfig;
 use collied::control::{Reply, Request};
@@ -314,6 +314,10 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             recent_cwds: vec![app_real.to_str().unwrap().into()],
             roots: vec![projects_real.to_str().unwrap().into()],
             runtimes: Some(vec![TaskRuntime::Herdr]),
+            runtime_agents: vec![RuntimeAgents {
+                runtime: TaskRuntime::Herdr,
+                agents: vec!["claude".into()],
+            }],
         }
     );
     let before = herdr.mutations();

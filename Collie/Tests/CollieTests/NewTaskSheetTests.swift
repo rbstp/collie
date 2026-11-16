@@ -91,6 +91,63 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(missing.runtimeProblem, "Rex is not available on this computer right now")
     }
 
+    func testAChosenRuntimeOffersOnlyTheKindsCollieSaysItStarts() async throws {
+        let core = FakeCore()
+        let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let prefs = FileManager.default.temporaryDirectory.appending(path: "prefs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: prefs) }
+        let offer = { (rex: [String]?) in
+            core.state.withLock {
+                $0.options.agents = ["claude", "codex", "copilot"]
+                $0.options.runtimes = [.herdr, .rex]
+                $0.options.runtimeAgents = [RuntimeAgents(runtime: .herdr, agents: ["claude", "codex", "copilot"])]
+                    + (rex.map { [RuntimeAgents(runtime: .rex, agents: $0)] } ?? [])
+            }
+        }
+
+        offer(["claude", "codex"])
+        let automatic = NewTaskModel(core: core, machines: [mac], prefsFile: prefs)
+        await automatic.loadOptions()
+        XCTAssertEqual(automatic.offeredAgents, ["claude", "codex", "copilot"])
+        XCTAssertEqual(automatic.agent, "codex")
+
+        DevicePrefs.update(in: prefs) { $0.taskRuntime = .rex }
+        let model = NewTaskModel(core: core, machines: [mac, linux], prefsFile: prefs)
+        await model.loadOptions()
+        XCTAssertEqual(model.offeredAgents, ["claude", "codex"])
+        XCTAssertEqual(model.agent, "codex")
+        model.prompt = "go"
+        model.cwd = "/Users/me/app"
+        XCTAssertTrue(model.canStart)
+
+        // The last computer's choice is never started on the next one before its kinds load.
+        offer(["claude"])
+        model.machineId = "m2"
+        XCTAssertNil(model.offeredAgents)
+        XCTAssertFalse(model.canStart)
+        await model.loadOptions()
+        XCTAssertEqual(model.offeredAgents, ["claude"])
+        XCTAssertEqual(model.agent, "claude")
+        XCTAssertTrue(model.canStart)
+        XCTAssertNil(model.runtimeProblem)
+
+        offer([])
+        model.machineId = "m1"
+        await model.loadOptions()
+        XCTAssertEqual(model.agent, "")
+        XCTAssertFalse(model.canStart)
+        XCTAssertEqual(model.runtimeProblem, "Rex cannot start any allowed agent on this computer")
+
+        // A collied that does not say which kinds Rex starts: offered as before.
+        offer(nil)
+        model.machineId = "m2"
+        await model.loadOptions()
+        XCTAssertEqual(model.offeredAgents, ["claude", "codex", "copilot"])
+        XCTAssertEqual(model.agent, "codex")
+        XCTAssertNil(model.runtimeProblem)
+    }
+
     func testCloneTakesARepositoryAndShowsProgressWhileCloning() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")

@@ -1833,6 +1833,18 @@ pub struct TaskOptions {
     /// `TaskNewParams::runtime`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtimes: Option<Vec<TaskRuntime>>,
+    /// The allowed kinds each runtime starts on this computer: herdr's while it answers,
+    /// herdr-core's and Rex's while collied has a socket path for them, followed or not. Empty
+    /// from an older collied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_agents: Vec<RuntimeAgents>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct RuntimeAgents {
+    pub runtime: TaskRuntime,
+    pub agents: Vec<AgentKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2621,6 +2633,29 @@ mod tests {
         assert_eq!(
             newer.runtimes,
             Some(vec![TaskRuntime::Rex, TaskRuntime::Unknown])
+        );
+        assert!(older.runtime_agents.is_empty());
+        assert!(
+            !serde_json::to_string(&older)
+                .unwrap()
+                .contains("runtime_agents")
+        );
+        let kinds: TaskOptions = serde_json::from_str(
+            r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"],"runtime_agents":[{"runtime":"rex","agents":["codex"]},{"runtime":"tmux","agents":[]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            kinds.runtime_agents,
+            [
+                RuntimeAgents {
+                    runtime: TaskRuntime::Rex,
+                    agents: vec![AgentKind::new("codex").unwrap()],
+                },
+                RuntimeAgents {
+                    runtime: TaskRuntime::Unknown,
+                    agents: vec![],
+                },
+            ]
         );
     }
 

@@ -693,6 +693,14 @@ pub struct TaskOptions {
     pub roots: Vec<String>,
     /// None from a collied too old to start a task in a chosen runtime.
     pub runtimes: Option<Vec<TaskRuntime>>,
+    /// Empty from a collied too old to say which kinds each runtime starts.
+    pub runtime_agents: Vec<RuntimeAgents>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct RuntimeAgents {
+    pub runtime: TaskRuntime,
+    pub agents: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -2008,6 +2016,14 @@ impl CollieCore {
                 roots: o.roots.into_iter().map(String::from).collect(),
                 runtimes: (o.runtimes)
                     .map(|r| r.into_iter().filter_map(TaskRuntime::known).collect()),
+                runtime_agents: (o.runtime_agents.into_iter())
+                    .filter_map(|r| {
+                        Some(RuntimeAgents {
+                            runtime: TaskRuntime::known(r.runtime)?,
+                            agents: r.agents.into_iter().map(String::from).collect(),
+                        })
+                    })
+                    .collect(),
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -5542,6 +5558,16 @@ mod tailnet_tests {
                                     protocol::TaskRuntime::Rex,
                                     protocol::TaskRuntime::Unknown,
                                 ]),
+                                runtime_agents: vec![
+                                    protocol::RuntimeAgents {
+                                        runtime: protocol::TaskRuntime::Unknown,
+                                        agents: vec![AgentKind::new("pi").unwrap()],
+                                    },
+                                    protocol::RuntimeAgents {
+                                        runtime: protocol::TaskRuntime::Rex,
+                                        agents: vec![AgentKind::new("claude").unwrap()],
+                                    },
+                                ],
                             }))
                         }
                         Request::TaskFolders(p) => {
@@ -6007,6 +6033,13 @@ mod tailnet_tests {
         assert_eq!(options.recent_cwds, vec!["/src/collie".to_owned()]);
         assert_eq!(options.roots, vec!["/src".to_owned()]);
         assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
+        assert_eq!(
+            options.runtime_agents,
+            [RuntimeAgents {
+                runtime: TaskRuntime::Rex,
+                agents: vec!["claude".into()],
+            }]
+        );
         assert_eq!(
             rt.block_on(core.task_folders(id(), "/src/".into()))
                 .unwrap(),
