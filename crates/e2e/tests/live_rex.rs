@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use collie_core::{AgentState, CollieCore, MachineFlock};
+use collie_core::{AgentState, CollieCore, CoreError, MachineFlock};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::config::TasksConfig;
@@ -418,10 +418,17 @@ async fn phone_scenario(
     std::fs::write(work.join("report"), "").unwrap();
     let mut codex_chat = None;
     for _ in 0..50 {
-        let page = phone
+        // The session can bind between history's two lookups, which asks for a retry.
+        let page = match phone
             .agent_history(m.clone(), codex_id.clone(), None, None, None)
             .await
-            .unwrap();
+        {
+            Err(CoreError::AgentNotReady) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            page => page.unwrap(),
+        };
         if page.available {
             codex_chat = Some(page);
             break;
