@@ -14,8 +14,9 @@ on:
       - 'docs/deploy-pages.md'
       - 'docs/site/**'
 
+# A pull request cancels its older run. A push to master never does: each run covers only its own push's commits.
 concurrency:
-  group: test-${{ github.ref }}
+  group: test-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -47,7 +48,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           run_all() {
-            echo "$1: running every job"
+            echo "::warning::$1: running every job"
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "ios=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -320,8 +321,9 @@ jobs:
     steps:
       - name: delete superseded compilation caches
         run: |
-          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key \
-            --jq 'if any(.[]; .key == env.KEEP) then .[] | select(.key != env.KEEP) | .id else empty end' |
+          # Only entries older than this run's: master's runs end in any order.
+          gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key,createdAt \
+            --jq 'sort_by(.createdAt) | .[:(map(.key) | index(env.KEEP)) // 0][] | .id' |
             while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
         env:
           GH_TOKEN: ${{ github.token }}
