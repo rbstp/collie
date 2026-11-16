@@ -223,6 +223,169 @@ async fn scenario(server: &RexServer) {
     task.await.unwrap();
 }
 
+/// A changing agent: 3,000 colored lines, then forty more each time the test creates
+/// `more1`, `more2`, `more3` in its folder.
+const STREAMED: &str = r#"$| = 1;
+sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+printf "\e[3%dmline %d\e[0m plain \e[1mbold\e[0m\r\n", $_ % 8, $_ for 1 .. 3000;
+print "\e]7501;state=idle:app=claude-code\e\\";
+for my $round (1 .. 3) {
+    wait_for("more$round");
+    print "round $round line $_\r\n" for 1 .. 40;
+}
+select(undef, undef, undef, 600);
+"#;
+
+#[test]
+fn live_rex_stream() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "s");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(stream_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+/// A watched terminal read through its stream reads as polling reads it: after output, after
+/// a resize and after the stream is dropped and followed again.
+async fn stream_scenario(server: &RexServer) {
+    let (session, block) = new_session(server, "collie-stream", &["/usr/bin/perl", "-e", STREAMED]);
+    let agent = format!("rex:{block}");
+    let rex = Arc::new(Rex::new(server.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    until("the agent's idle report", async || {
+        (rt.agent_get(&agent).await.ok()).filter(|a| a.agent_status == "idle")
+    })
+    .await;
+    let reads = async || {
+        (
+            rt.agent_read(&agent, "recent_unwrapped", Some(200))
+                .await
+                .unwrap()
+                .text,
+            rt.agent_read(&agent, "visible", None).await.unwrap().text,
+            rt.detection_text(&agent).await.unwrap(),
+        )
+    };
+    let streamed = async |last: &str| {
+        until(last, async || {
+            let read = reads().await;
+            (rex.streamed(&agent) && read.0.ends_with(last)).then_some(read)
+        })
+        .await
+    };
+    let polled = async |last: &str| {
+        until(last, async || {
+            let read = reads().await;
+            (!rex.streamed(&agent) && read.0.ends_with(last)).then_some(read)
+        })
+        .await
+    };
+
+    let held = rt.watch(&agent).unwrap();
+    let first = streamed("line 3000\u{1b}[0m plain \u{1b}[0m\u{1b}[1mbold\u{1b}[0m").await;
+    std::fs::write(server.work.join("more1"), "").unwrap();
+    let round1 = streamed("round 1 line 40").await;
+    drop(held);
+    assert_eq!(polled("round 1 line 40").await, round1, "after output");
+    assert!(first.0.contains("line 2801"), "{:?}", first.0);
+
+    let held = rt.watch(&agent).unwrap();
+    streamed("round 1 line 40").await;
+    resize(&server.socket, &session, &block, 100, 30).await;
+    until("the new size", async || {
+        (rt.pane_columns(&agent).await.ok()? == Some(100)).then_some(())
+    })
+    .await;
+    std::fs::write(server.work.join("more2"), "").unwrap();
+    let round2 = streamed("round 2 line 40").await;
+    // Thirty rows: lines 12 to 40 and the cursor's empty row.
+    assert!(
+        round2.1.starts_with("round 2 line 12\r\n"),
+        "{:?}",
+        round2.1
+    );
+    drop(held);
+    assert_eq!(polled("round 2 line 40").await, round2, "after a resize");
+
+    let held = rt.watch(&agent).unwrap();
+    streamed("round 2 line 40").await;
+    rex.cut_streams();
+    until("the stream to drop", async || {
+        (!rex.streamed(&agent)).then_some(())
+    })
+    .await;
+    std::fs::write(server.work.join("more3"), "").unwrap();
+    let round3 = streamed("round 3 line 40").await;
+    drop(held);
+    assert_eq!(
+        polled("round 3 line 40").await,
+        round3,
+        "after a dropped stream"
+    );
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
+/// Resizes a block as its owner, on a control connection of the test's own: a block follows
+/// its owner's size, and collied never resizes.
+async fn resize(socket: &Path, session: &str, block: &str, columns: u16, rows: u16) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let stream = tokio::net::UnixStream::connect(socket).await.unwrap();
+    let mut request = "ws://localhost/api/control".into_client_request().unwrap();
+    request
+        .headers_mut()
+        .insert("Sec-WebSocket-Protocol", "rex.control.v1".parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
+        .await
+        .unwrap();
+    let hello = serde_json::json!({
+        "type": "hello", "api_revision": 13, "api_min_revision": 13,
+        "client": {"kind": "other", "name": "e2e", "version": "0"},
+    });
+    ws.send(Message::text(hello.to_string())).await.unwrap();
+    let calls = [
+        (
+            "session.attach",
+            serde_json::json!({ "session_id": session }),
+        ),
+        (
+            "session.own_block",
+            serde_json::json!({ "session_id": session, "block_ids": [block], "mode": "take" }),
+        ),
+        (
+            "com.superlogical.terminal.resize",
+            serde_json::json!({ "session_id": session, "block_id": block, "args": { "columns": columns, "rows": rows } }),
+        ),
+    ];
+    for (id, (method, payload)) in calls.into_iter().enumerate() {
+        let id = id.to_string();
+        let request = serde_json::json!({ "type": "request", "id": id, "method": method, "payload": payload });
+        ws.send(Message::text(request.to_string())).await.unwrap();
+        loop {
+            let Some(Ok(Message::Text(text))) = ws.next().await else {
+                continue;
+            };
+            let reply: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if reply["type"] == "response" && reply["id"] == id.as_str() {
+                assert!(reply["error"].is_null(), "{method}: {reply}");
+                break;
+            }
+        }
+    }
+    let _ = ws.close(None).await;
+}
+
 /// The session in the Claude Code transcript fixture.
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";

@@ -339,6 +339,21 @@ impl Rex {
         Ok(Some(Watch::new(h)))
     }
 
+    /// Whether a watch holds this terminal's stream restored.
+    pub fn streamed(&self, id: &str) -> bool {
+        (crate::lock(&self.held).get(id))
+            .and_then(Weak::upgrade)
+            .is_some_and(|h| crate::lock(&h.screen).is_some())
+    }
+
+    /// Drops every stream's connection, as a lost one would be; for tests (prototype).
+    #[doc(hidden)]
+    pub fn cut_streams(&self) {
+        for h in crate::lock(&self.held).values().filter_map(Weak::upgrade) {
+            h.cut.notify_one();
+        }
+    }
+
     /// From the stream while a watch holds one restored, else polled.
     pub async fn read(
         &self,

@@ -33,6 +33,7 @@ pub(super) type Slot = Arc<Mutex<Option<Ghost>>>;
 /// A watched terminal followed as a stream; the stream ends with the last watch.
 pub(super) struct Hold {
     pub(super) screen: Slot,
+    pub(super) cut: Arc<tokio::sync::Notify>,
     task: tokio::task::AbortHandle,
 }
 
@@ -54,9 +55,11 @@ impl Watch {
 
 pub(super) fn hold(rex: Arc<Rex>, id: String) -> Arc<Hold> {
     let screen = Slot::default();
-    let task = tokio::spawn(follow(rex, id, screen.clone()));
+    let cut = Arc::new(tokio::sync::Notify::new());
+    let task = tokio::spawn(follow(rex, id, screen.clone(), cut.clone()));
     Arc::new(Hold {
         screen,
+        cut,
         task: task.abort_handle(),
     })
 }
@@ -68,9 +71,9 @@ enum Ended {
     Dropped(Error),
 }
 
-async fn follow(rex: Arc<Rex>, id: String, slot: Slot) {
+async fn follow(rex: Arc<Rex>, id: String, slot: Slot, cut: Arc<tokio::sync::Notify>) {
     loop {
-        let ended = once(&rex, &id, &slot).await;
+        let ended = once(&rex, &id, &slot, &cut).await;
         *crate::lock(&slot) = None;
         match ended {
             Ended::Unsupported(why) => {
@@ -94,7 +97,7 @@ struct Ticket {
     ticket: String,
 }
 
-async fn once(rex: &Rex, id: &str, slot: &Slot) -> Ended {
+async fn once(rex: &Rex, id: &str, slot: &Slot, cut: &tokio::sync::Notify) -> Ended {
     let dropped = Ended::Dropped;
     let (client, session, block, _) = match rex.target(id) {
         Ok(t) => t,
@@ -190,7 +193,11 @@ async fn once(rex: &Rex, id: &str, slot: &Slot) -> Ended {
     apply(slot, &mut live, &pending);
     drop(pending);
     loop {
-        match ws.next().await {
+        let next = tokio::select! {
+            next = ws.next() => next,
+            () = cut.notified() => return dropped(Error::Closed),
+        };
+        match next {
             Some(Ok(Message::Binary(b))) => apply(slot, &mut live, &b),
             Some(Ok(Message::Close(frame))) => {
                 let why = frame.map_or_else(String::new, |f| crate::printable(&f.reason));
