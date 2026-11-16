@@ -288,7 +288,7 @@ struct AgentCard: View {
                     // Under the status icon, so the metadata lines up with the title.
                     Group {
                         if let kind = agent.kind {
-                            AgentKindLabel(kind: kind, iconOnly: true)
+                            AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime))
                         }
                     }
                     .frame(width: typeSize.isAccessibilitySize ? nil : 16)

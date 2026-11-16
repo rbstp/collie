@@ -407,6 +407,9 @@ pub struct AgentSummary {
     pub pull_request: Option<PullRequestSummary>,
     #[uniffi(default = None)]
     pub pr_watch: Option<PrWatchSummary>,
+    /// None from a collied too old to say, or for a runtime this app does not know.
+    #[uniffi(default = None)]
+    pub runtime: Option<TaskRuntime>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -3821,6 +3824,7 @@ fn agent_summary(a: &protocol::Agent) -> AgentSummary {
             url: w.url.clone(),
             every_minutes: w.every_minutes,
         }),
+        runtime: a.runtime.and_then(TaskRuntime::known),
     }
 }
 
@@ -4185,6 +4189,18 @@ mod tests {
             (s.context_left, s.last_prompt, s.last_activity_ms),
             (None, None, None)
         );
+        assert_eq!(s.runtime, None);
+        for (runtime, known) in [
+            ("rex", Some(TaskRuntime::Rex)),
+            ("herdr_core", Some(TaskRuntime::HerdrCore)),
+            ("tmux", None),
+        ] {
+            let json = older.replace('}', &format!(r#","runtime":"{runtime}"}}"#));
+            assert_eq!(
+                agent_summary(&serde_json::from_str(&json).unwrap()).runtime,
+                known
+            );
+        }
         let newer = older.replace(
             r#""last_line":null"#,
             r#""last_line":"Fixed it.","context_left":42,"last_prompt":"fix it","last_activity_ms":9"#,
@@ -5272,6 +5288,7 @@ mod tailnet_tests {
                 subagents: Vec::new(),
                 pull_request: None,
                 pr_watch: None,
+                runtime: None,
             }],
             approvals: Vec::new(),
             terminals: Vec::new(),

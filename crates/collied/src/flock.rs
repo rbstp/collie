@@ -206,6 +206,7 @@ pub fn map_agent(
         subagents: derived.subagents,
         pull_request: None,
         pr_watch: None,
+        runtime: Some(Owner::of(&a.terminal_id).runtime()),
     })
 }
 
@@ -449,6 +450,7 @@ mod tests {
         assert_eq!(a.status, AgentStatus::Working);
         assert_eq!(a.status_since_ms, 1000);
         assert_eq!(a.last_line, None);
+        assert_eq!(a.runtime, Some(protocol::TaskRuntime::Herdr));
         let b = &flock.agents[1];
         assert_eq!(b.name.as_deref(), Some("api-fixer"));
         assert_eq!(b.title.as_deref(), Some("Fix flaky test"));

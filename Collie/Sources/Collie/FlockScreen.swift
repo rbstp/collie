@@ -503,7 +503,7 @@ private struct AgentRow: View {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true)
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime))
                     }
                     if followed {
                         Image(systemName: "pin.fill")
@@ -579,6 +579,49 @@ struct AgentKindLabel: View {
         case "copilot": ("Copilot", "Copilot")
         case "terminal": ("Terminal", "Ghostty")
         default: nil
+        }
+    }
+}
+
+/// The runtime a session runs in: its project's mark on the corner of the agent's mark. Herdr Core shares herdr's.
+struct RuntimeBadge: ViewModifier {
+    let runtime: TaskRuntime?
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 12
+
+    static func mark(_ runtime: TaskRuntime?) -> (title: String, image: String)? {
+        switch runtime {
+        case .herdr: ("Herdr", "Herdr")
+        case .herdrCore: ("Herdr Core", "Herdr")
+        case .rex: ("Rex", "Rex")
+        case nil: nil
+        }
+    }
+
+    func body(content: Content) -> some View {
+        if let (title, image) = Self.mark(runtime) {
+            let offset = CGSize(width: side * 0.25, height: side * 0.5)
+            let tile = RoundedRectangle(cornerRadius: side * 0.22, style: .continuous)
+            content
+                // A gap cut around the badge rather than a rim, so it works on any background, glass included.
+                .mask {
+                    Rectangle()
+                        .overlay(alignment: .bottomTrailing) {
+                            tile.padding(-1.5).frame(width: side, height: side).offset(offset).blendMode(.destinationOut)
+                        }
+                        .compositingGroup()
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Image(image)
+                        .resizable()
+                        .frame(width: side, height: side)
+                        .clipShape(tile)
+                        .offset(offset)
+                        .accessibilityLabel(title)
+                }
+                // Room for the corner that hangs past the agent's mark, so it never touches the label beside it.
+                .padding(.trailing, offset.width)
+        } else {
+            content
         }
     }
 }

@@ -553,6 +553,11 @@ private struct AgentHeader: View {
                     HStack(spacing: 6) {
                         if let kind = agent.kind {
                             AgentKindLabel(kind: kind, iconOnly: true).font(.caption).foregroundStyle(.secondary)
+                                .modifier(RuntimeBadge(runtime: agent.runtime))
+                        }
+                        // The header shows no group label, which would say "Herdr Core" beside the shared mark.
+                        if agent.runtime == .herdrCore {
+                            Text("Core").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
                         }
                         if let left = agent.contextLeft, ContextRing.shows(left) {
                             ContextRing(left: left)

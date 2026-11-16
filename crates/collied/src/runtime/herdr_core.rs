@@ -2145,6 +2145,8 @@ pub(crate) mod tests {
             (1, 1, 1)
         );
         assert_eq!(snap.panes[0].terminal_id, agents[0].terminal_id);
+        let listed = crate::flock::map_agents(&snap.agents, &mut Default::default(), 0, None);
+        assert_eq!(listed[0].runtime, Some(protocol::TaskRuntime::HerdrCore));
         let poll = rt.poll().await.unwrap();
         assert_eq!(poll.workspaces[0].label, GROUP_LABEL);
         assert_eq!(poll.agents.len(), 1);

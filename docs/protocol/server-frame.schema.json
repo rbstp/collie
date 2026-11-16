@@ -83,6 +83,16 @@
           ],
           "description": "The pull request of the agent's branch, as `gh` on the machine last read it."
         },
+        "runtime": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "status": {
           "$ref": "#/$defs/AgentStatus"
         },

@@ -671,6 +671,7 @@ mod tests {
             subagents: Vec::new(),
             pull_request: None,
             pr_watch: None,
+            runtime: None,
         }
     }
 

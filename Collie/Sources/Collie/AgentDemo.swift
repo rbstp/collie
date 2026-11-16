@@ -174,7 +174,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 lastPrompt: "the approval tests are flaky, fix them", lastActivityMs: now - 4_000,
                 subagents: subagentDemo ? ["Review approval flow", "Run approval tests", "Check retry handling", "Inspect test fixtures", "Review documentation"].enumerated().map { index, title in
                     SubagentSummary(agentType: "general-purpose", title: title, activity: title, startedAtMs: now - UInt64(5 + index) * 60_000, tokens: 12_000, calledTools: true)
-                } : []
+                } : [],
+                runtime: .herdr
             ),
             AgentSummary(
                 terminalId: "term_2", workspaceId: "ws_collie", kind: "claude", name: nil, title: "add approval tests",
@@ -183,29 +184,30 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 lastPrompt: "add approval tests for the deny path", lastActivityMs: now - 42_000,
                 subagents: subagentDemo ? [
                     SubagentSummary(agentType: "general-purpose", title: "Review deny path", activity: "Reading approval tests", startedAtMs: now - 180_000, tokens: 4_000, calledTools: true)
-                ] : []
+                ] : [],
+                runtime: .herdr
             ),
             AgentSummary(
                 terminalId: "term_3", workspaceId: "ws_site", kind: "claude", name: nil, title: "update the docs",
                 status: .idle, statusSinceMs: now - 900_000, cwd: "/Users/demo/website",
                 lastLine: "The docs now describe the inbox and the context ring.", contextLeft: 12,
-                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000
+                lastPrompt: "update the docs for the new release", lastActivityMs: now - 900_000, runtime: .herdrCore
             ),
             AgentSummary(
                 terminalId: "term_4", workspaceId: "ws_site", kind: "codex", name: nil, title: "dark mode",
                 status: .done, statusSinceMs: now - 3_600_000, cwd: "/Users/demo/website",
                 lastLine: "Dark mode follows the system setting on every page.", contextLeft: 91,
-                lastPrompt: "add dark mode to the website", lastActivityMs: now - 3_600_000
+                lastPrompt: "add dark mode to the website", lastActivityMs: now - 3_600_000, runtime: .herdrCore
             ),
             AgentSummary(
                 terminalId: "term_5", workspaceId: "ws_api", kind: "claude", name: nil, title: "rate limiter",
                 status: .idle, statusSinceMs: now - 259_200_000, cwd: "/Users/demo/api",
                 lastLine: "The rate limiter is merged.", contextLeft: 55,
-                lastPrompt: "merge the rate limiter PR", lastActivityMs: now - 259_200_000
+                lastPrompt: "merge the rate limiter PR", lastActivityMs: now - 259_200_000, runtime: .rex
             ),
             AgentSummary(
                 terminalId: "term_6", workspaceId: "ws_api", kind: "copilot", name: nil, title: "triage issues",
-                status: .idle, statusSinceMs: now - 7_200_000, cwd: "/Users/demo/api", lastLine: nil
+                status: .idle, statusSinceMs: now - 7_200_000, cwd: "/Users/demo/api", lastLine: nil, runtime: .rex
             ),
         ]
         #if DEBUG
@@ -565,7 +567,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
             details: MachineDetails(name: "MacBook Pro", nodeId: "nDEMO", herdrSession: "default"),
             workspaces: [
                 WorkspaceSummary(workspaceId: "ws_collie", label: "collie", number: 1, status: .blocked, cwd: "/Users/demo/collie"),
-                WorkspaceSummary(workspaceId: "ws_site", label: "website", number: 2, status: .done, cwd: "/Users/demo/website"),
+                WorkspaceSummary(workspaceId: "ws_site", label: "Herdr Core", number: 2, status: .done, cwd: "/Users/demo/website"),
                 WorkspaceSummary(workspaceId: "ws_api", label: "api", number: 3, status: .idle, cwd: "/Users/demo/api"),
             ],
             agents: currentAgents, approvalsCount: simulation.withLock { $0.resolved ? 0 : 1 }, planUsage: usage, starred: stars.withLock { $0 }

@@ -1484,6 +1484,8 @@ pub struct Agent {
     pub pull_request: Option<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_watch: Option<PrWatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<TaskRuntime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2815,6 +2817,18 @@ mod tests {
             (None, &None, None)
         );
         assert_eq!(serde_json::to_string(&a).unwrap(), older);
+        assert_eq!(a.runtime, None);
+        let core = Agent {
+            runtime: Some(TaskRuntime::HerdrCore),
+            ..a.clone()
+        };
+        let json = serde_json::to_string(&core).unwrap();
+        assert!(json.ends_with(r#""runtime":"herdr_core"}"#));
+        let newer = json.replace("herdr_core", "tmux");
+        assert_eq!(
+            serde_json::from_str::<Agent>(&newer).unwrap().runtime,
+            Some(TaskRuntime::Unknown)
+        );
         let full = Agent {
             last_line: Some("Done.".into()),
             context_left: Some(100),
