@@ -160,6 +160,12 @@ pub struct PaneProcesses {
     pub attach: Option<String>,
 }
 
+/// What keeps a watched terminal followed; dropping it ends the follow with the last watch.
+pub enum Watch {
+    Core(herdr_core::Watch),
+    Rex(rex::Watch),
+}
+
 /// herdr, and beside it a herdr-core core and a Rex server when they are followed. Calls are
 /// routed by id: `hc:` ids are herdr-core's, `rex:` ids Rex's, and neither reaches herdr.
 #[derive(Clone)]
@@ -564,12 +570,13 @@ impl Runtime {
         }
     }
 
-    /// Keeps a herdr-core terminal attached until dropped, so a watch's reads come from one
-    /// emulated screen; herdr and Rex need nothing kept, their reads are polled.
-    pub fn watch(&self, pane_id: &str) -> Result<Option<herdr_core::Watch>, Error> {
+    /// Keeps a herdr-core terminal attached, or a Rex terminal followed as a stream, until
+    /// dropped, so a watch's reads come from one screen; herdr's reads are polled.
+    pub fn watch(&self, pane_id: &str) -> Result<Option<Watch>, Error> {
         match Owner::of(pane_id) {
-            Owner::Herdr | Owner::Rex => Ok(None),
-            Owner::Core => self.followed()?.watch(pane_id).map(Some),
+            Owner::Herdr => Ok(None),
+            Owner::Core => Ok(Some(Watch::Core(self.followed()?.watch(pane_id)?))),
+            Owner::Rex => Ok(self.followed_rex()?.watch(pane_id)?.map(Watch::Rex)),
         }
     }
 

@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,7 @@ mod input;
 mod model;
 mod screen;
 mod sessions;
+mod stream;
 mod tasks;
 mod wire;
 
@@ -35,6 +36,7 @@ mod tests;
 pub use discovery::socket_path;
 pub use input::{STATUS_CHANGED, Seen};
 pub use model::{Listing, PREFIX};
+pub use stream::Watch;
 
 pub const NAME: &str = "Rex";
 pub const NOT_YET: &str = "not available for Rex agents yet";
@@ -225,6 +227,10 @@ pub struct Rex {
     screens: Screens,
     /// One call's input at a time, so another call's key never lands among its keys.
     input: tokio::sync::Mutex<()>,
+    /// Watched terminals followed as streams, by agent id.
+    held: Mutex<HashMap<String, Weak<stream::Hold>>>,
+    /// Off with `COLLIED_REX_STREAM=0`, for comparing with polling (prototype).
+    streaming: bool,
 }
 
 /// The connection, session, block and size of a listed agent.
@@ -253,6 +259,8 @@ impl Rex {
             herdr: Arc::default(),
             screens: Screens::default(),
             input: tokio::sync::Mutex::default(),
+            held: Mutex::default(),
+            streaming: std::env::var_os("COLLIED_REX_STREAM").is_none_or(|v| v != "0"),
         }
     }
 
@@ -315,13 +323,41 @@ impl Rex {
         Ok(Some(self.target(id)?.3.0))
     }
 
-    /// Polled, as herdr's reads are: nothing is held between reads.
+    /// Follows the terminal as a stream until the last watch of it is dropped.
+    pub fn watch(self: &Arc<Self>, id: &str) -> Result<Option<Watch>, Error> {
+        self.target(id)?;
+        if !self.streaming {
+            return Ok(None);
+        }
+        let mut held = crate::lock(&self.held);
+        held.retain(|_, h| h.strong_count() > 0);
+        if let Some(h) = held.get(id).and_then(Weak::upgrade) {
+            return Ok(Some(Watch::new(h)));
+        }
+        let h = stream::hold(self.clone(), id.to_owned());
+        held.insert(id.to_owned(), Arc::downgrade(&h));
+        Ok(Some(Watch::new(h)))
+    }
+
+    /// From the stream while a watch holds one restored, else polled.
     pub async fn read(
         &self,
         id: &str,
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
+        let slot = crate::lock(&self.held)
+            .get(id)
+            .and_then(Weak::upgrade)
+            .map(|h| h.screen.clone());
+        if let Some(text) =
+            slot.and_then(|s| crate::lock(&s).as_ref().map(|g| g.read(source, lines)))
+        {
+            return Ok(PaneRead {
+                text,
+                truncated: false,
+            });
+        }
         let (client, session, block, size) = self.target(id)?;
         let text = (self.screens)
             .read(&client, &session, &block, size, source, lines)

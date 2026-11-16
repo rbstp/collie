@@ -96,6 +96,7 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "session.create",
             "session.disown_block",
             "session.destroy",
+            "data.connect",
         ]
     );
     let terminal: Vec<&str> = Method::ALL
