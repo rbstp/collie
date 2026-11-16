@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 jobs:
-  # rust and ios are required checks, so a pull request skips them with if
+  # rust and ios are required checks, so a pull request skips them, and linux, with if
   # (a skipped job passes) rather than with paths-ignore (which would leave them pending).
   changes:
     runs-on: ubuntu-24.04
@@ -127,10 +127,13 @@ jobs:
             ~/.cargo/git/db
             ~/go/pkg/mod
             ~/Library/Caches/go-build
-            target
+            target/*
             !target/ghostty
           key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
+
+      - name: list target/ghostty after the cargo cache restore
+        run: ls -la target/ghostty 2>&1 || true
 
       # crates/ghostty-vt-sys builds it on a miss, Zig included (about 90 s).
       - name: cache libghostty-vt
@@ -379,10 +382,13 @@ jobs:
             ~/.cargo/git/db
             ~/go/pkg/mod
             ~/.cache/go-build
-            target
+            target/*
             !target/ghostty
           key: linux-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
           restore-keys: linux-
+
+      - name: list target/ghostty after the cargo cache restore
+        run: ls -la target/ghostty 2>&1 || true
 
       - name: cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
