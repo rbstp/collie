@@ -3,9 +3,8 @@ use std::time::Duration;
 
 use crate::runtime::{AgentInfo, Owner};
 
-/// Equal to the shortest turn that alerts (`turns::MIN_TURN_MS`), so input this recent came
-/// after the turn began.
-pub const ACTIVE_WITHIN: Duration = Duration::from_secs(30);
+/// The shortest turn that alerts, so input this recent came after the turn began.
+pub const ACTIVE_WITHIN: Duration = Duration::from_millis(crate::turns::MIN_TURN_MS);
 
 /// The desktop session as macOS reports it.
 #[derive(Debug, Clone, Copy)]
@@ -22,9 +21,9 @@ impl Session {
     }
 }
 
-/// herdr counts a finished turn as seen, and reports it `idle` rather than `done`, only when
-/// its tab is active and the client's terminal has not reported losing focus. Herdr Core and
-/// Rex report no such thing.
+/// herdr reports a finished turn `done` rather than `idle` when its tab is not active or the
+/// client's terminal reported losing focus, unless herdr suppressed the completion (an agent
+/// process exit ends `idle` whatever the focus). Herdr Core and Rex report no such thing.
 pub fn herdr_saw(a: &AgentInfo) -> bool {
     Owner::of(&a.terminal_id) == Owner::Herdr && a.agent_status == "idle"
 }
@@ -56,7 +55,7 @@ pub fn desktop(_client_socket: &Path) -> (Option<bool>, Option<bool>) {
 }
 
 /// Public calls only, none behind a privacy prompt: CoreGraphics for the session and the
-/// window list (owner and layer, never titles or pixels), libproc for the user's own processes.
+/// window list (owner and layer, never titles or pixels), libproc for process names and children, and for the sockets of the user's own processes.
 #[cfg(target_os = "macos")]
 mod mac {
     use std::ffi::c_void;
