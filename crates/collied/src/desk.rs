@@ -138,8 +138,8 @@ mod mac {
         walk(root, socket, MAX_PIDS)
     }
 
-    // Sockets are read only of processes named herdr, as its clients are: every other process
-    // under the application is left alone.
+    // Sockets are read only of herdr's own clients, the herdr CLI and Herdr.app (`sheprd`), by
+    // process name: every other process under the application is left alone.
     pub(super) fn walk(root: i32, socket: &Path, limit: usize) -> Option<bool> {
         let want = socket.as_os_str().as_bytes();
         let mut stack = vec![root];
@@ -160,7 +160,7 @@ mod mac {
     fn is_herdr(pid: i32) -> bool {
         let mut name = [0u8; 64];
         let n = unsafe { libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) };
-        n > 0 && name.get(..n as usize) == Some(b"herdr".as_slice())
+        n > 0 && matches!(name.get(..n as usize), Some(b"herdr" | b"sheprd"))
     }
 
     fn children(pid: i32) -> Vec<i32> {
@@ -318,8 +318,6 @@ mod tests {
         let other = dir.path().join("herdr.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         let _other = UnixListener::bind(&other).unwrap();
-        let herdr = dir.path().join("herdr");
-        std::fs::copy("/bin/sleep", &herdr).unwrap();
         let me = std::process::id() as i32;
 
         let stream = UnixStream::connect(&path).unwrap();
@@ -328,19 +326,25 @@ mod tests {
             Some(false),
             "a process not named herdr is not a client"
         );
-        let mut child = Command::new(&herdr)
-            .arg("30")
-            .stdin(Stdio::from(std::os::fd::OwnedFd::from(stream)))
-            .spawn()
-            .unwrap();
-        let found = mac::hosts_client(me, &path);
-        let another = mac::hosts_client(me, &other);
-        let capped = mac::walk(me, &path, 1);
-        child.kill().unwrap();
-        child.wait().unwrap();
-        assert_eq!(found, Some(true), "a herdr child holds it");
-        assert_eq!(another, Some(false));
-        assert_eq!(capped, None, "past the limit");
+        for name in ["herdr", "sheprd"] {
+            let client = dir.path().join(name);
+            std::fs::copy("/bin/sleep", &client).unwrap();
+            let mut child = Command::new(&client)
+                .arg("30")
+                .stdin(Stdio::from(std::os::fd::OwnedFd::from(
+                    stream.try_clone().unwrap(),
+                )))
+                .spawn()
+                .unwrap();
+            let found = mac::hosts_client(me, &path);
+            let another = mac::hosts_client(me, &other);
+            let capped = mac::walk(me, &path, 1);
+            child.kill().unwrap();
+            child.wait().unwrap();
+            assert_eq!(found, Some(true), "a {name} child holds it");
+            assert_eq!(another, Some(false));
+            assert_eq!(capped, None, "past the limit");
+        }
         for root in [0, 1] {
             assert_eq!(mac::hosts_client(root, &path), None, "pid {root}");
         }
