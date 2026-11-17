@@ -110,6 +110,8 @@ pub(super) struct Data {
     pub shaken: Arc<tokio::sync::Notify>,
     /// How each data connection ended: the close code collied sent, `None` for none.
     pub closed: Vec<Option<u16>>,
+    /// Where a connection stops sending the stream, as in the middle of a snapshot.
+    pub hold_at: Option<usize>,
     /// A RESUME is refused, or welcomed and then dropped before any byte.
     pub refuse_resume: bool,
     pub drop_resumed: bool,
@@ -387,8 +389,13 @@ async fn serve_data(
     let ended = loop {
         let more = {
             let mut s = crate::lock(&state);
-            let more = s.data.stream[sent..].to_vec();
-            sent = s.data.stream.len();
+            let end = s
+                .data
+                .hold_at
+                .unwrap_or(usize::MAX)
+                .min(s.data.stream.len());
+            let more = s.data.stream[sent.min(end)..end].to_vec();
+            sent = end.max(sent);
             s.data.sent = sent;
             more
         };

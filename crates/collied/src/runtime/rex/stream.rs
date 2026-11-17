@@ -80,9 +80,10 @@ impl Streams {
     /// A program whose output trips one of libghostty-vt's `ReleaseSafe` checks aborts collied,
     /// and the service manager restarts it; it would abort again as soon as a phone watched
     /// that terminal and its snapshot came back. A marker left by a run that ended inside a
-    /// stream turns streaming off for the next run, so one abort does not become a loop.
+    /// stream turns streaming off for the next run, so one abort does not become a loop. That
+    /// run removes it, since it never streams: one that cannot stays off.
     pub(super) fn marked(marker: PathBuf) -> Self {
-        let off = marker.exists();
+        let off = !matches!(std::fs::remove_file(&marker), Err(e) if e.kind() == std::io::ErrorKind::NotFound);
         if off {
             tracing::warn!(marker = %marker.display(), "collied stopped while it followed a Rex terminal as a stream, perhaps in libghostty-vt: this run reads Rex terminals by polling");
         }
@@ -465,19 +466,32 @@ async fn start(
     if tx.take().is_none() {
         return Err(End::Restart(Error::Closed));
     }
-    let restored = restored.map_err(|refused| match refused {
-        Refused::Ended => End::Restart(Error::Closed),
-        Refused::Envelope(why) => End::Poll(why),
-        Refused::Decoder(code) => End::Poll(format!(
+    let started = match restored {
+        Ok(restored) => Streamed::new(restored.terminal)
+            .map(|s| (s, restored.rest))
+            .ok_or_else(|| End::Poll("libghostty-vt could not trim the history".to_owned())),
+        Err(Refused::Ended) => Err(End::Restart(Error::Closed)),
+        Err(Refused::Envelope(why)) => Err(End::Poll(why)),
+        Err(Refused::Decoder(code)) => Err(End::Poll(format!(
             "libghostty-vt could not read Rex's snapshot (result {code})"
-        )),
-    })?;
-    let mut streamed = Streamed::new(restored.terminal)
-        .ok_or_else(|| End::Poll("libghostty-vt could not trim the history".to_owned()))?;
+        ))),
+    };
+    let (mut streamed, rest) = match started {
+        Ok(started) => started,
+        Err(end) => {
+            close(&mut ws).await;
+            return Err(end);
+        }
+    };
     let mut messages = Messages::new(nonce);
-    streamed.apply(&mut messages, &restored.rest);
+    streamed.apply(&mut messages, &rest);
     for piece in rx.try_iter() {
         streamed.apply(&mut messages, &piece);
+    }
+    if streamed.broken {
+        close(&mut ws).await;
+        let why = "libghostty-vt could not resize the terminal".to_owned();
+        return Err(End::Restart(Error::Unsupported(why)));
     }
     let channel = Channel {
         ws,
@@ -503,12 +517,14 @@ async fn live(
         match next {
             Some(Ok(Message::Binary(b))) => {
                 ch.received += b.len() as u64;
-                if let Some(s) = crate::lock(slot).as_mut() {
+                let broken = crate::lock(slot).as_mut().is_some_and(|s| {
                     s.apply(messages, &b);
-                    if s.broken {
-                        let why = "libghostty-vt could not resize the terminal".to_owned();
-                        return End::Restart(Error::Unsupported(why));
-                    }
+                    s.broken
+                });
+                if broken {
+                    close(&mut ch.ws).await;
+                    let why = "libghostty-vt could not resize the terminal".to_owned();
+                    return End::Restart(Error::Unsupported(why));
                 }
             }
             Some(Ok(Message::Close(frame))) => return closed(frame),

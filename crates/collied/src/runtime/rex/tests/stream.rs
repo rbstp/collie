@@ -252,7 +252,9 @@ async fn a_marker_left_by_an_earlier_run_turns_streaming_off() {
     let marked = tempfile::tempdir().unwrap();
     let marker = marked.path().join("rex-streaming");
     std::fs::write(&marker, "").unwrap();
-    let (fake, _rex, rt, _dir) = streaming_marked(running(), Some(marker)).await;
+    let (fake, _rex, rt, _dir) = streaming_marked(running(), Some(marker.clone())).await;
+    // This run never streams, so a crash in it leaves nothing to find.
+    assert!(!marker.exists());
     assert!(rt.watch(&id(B1)).unwrap().is_none());
     let from = fake.calls().len();
     recent(&rt).await;
@@ -287,4 +289,20 @@ async fn a_screen_that_formats_too_large_is_polled() {
     let from = fake.calls().len();
     recent(&rt).await;
     assert_eq!(formats(&fake, from), 1);
+}
+
+/// A watch that ends while the snapshot is half sent closes with 1000, and its stream ends:
+/// the marker goes with it.
+#[tokio::test]
+async fn a_watch_that_ends_during_the_snapshot_closes_its_stream() {
+    let marked = tempfile::tempdir().unwrap();
+    let marker = marked.path().join("rex-streaming");
+    let (fake, _rex, rt, _dir) = streaming_marked(running(), Some(marker.clone())).await;
+    fake.state().data.hold_at = Some(5000);
+    let watch = rt.watch(&id(B1)).unwrap();
+    eventually("the HELLO", || !fake.state().data.handshakes.is_empty()).await;
+    drop(watch);
+    eventually("the stream closed", || !fake.state().data.closed.is_empty()).await;
+    assert_eq!(fake.state().data.closed, [Some(1000)]);
+    eventually("the marker removed", || !marker.exists()).await;
 }
