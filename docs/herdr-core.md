@@ -178,7 +178,7 @@ Phase 2 adds this to AGENTS.md beside the live-herdr rule. The spike broke it ([
 5. Sessions (S to M): Claude Code's pid file, collied's Codex SessionStart hook, then Chat, costs, context, resume and the hook binding.
 6. Tasks (M): New task, resume, worktrees and archive in herdr-core when herdr is not running, with the starter's variables stripped.
 
-What a herdr-core agent cannot do that a herdr one can, after all phases: be focused on the desktop, sit in the herdr workspace Herdr UI shows it in, close with its whole group, and, when the CLI does not emit OSC 7501 (Devin CLI today), report a status, or, while its report cannot say a dialog is open (Copilot CLI, [below](#copilot-cli-741)), take prompts, typed answers and keys from the phone. Plain shells in herdr-core are not planned.
+What a herdr-core agent cannot do that a herdr one can, after all phases: be focused on the desktop, sit in the herdr workspace Herdr UI shows it in, close with its whole group, and, when the CLI does not emit OSC 7501 (Devin CLI today), report a status, or, while its report cannot say a dialog is open (Copilot CLI, [below](#copilot-cli-741)), take prompts, typed answers and keys from the phone. Plain shells in herdr-core are not planned: they stay off Terminals, and when #755 listed Rex's shells there the owner decided Herdr Core's stay unplanned.
 
 ## Risks
 

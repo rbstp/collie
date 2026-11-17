@@ -139,6 +139,9 @@ pub(super) struct Process {
     pub child: Option<Proc>,
     #[serde(default)]
     pub foreground: Option<Proc>,
+    /// From the foreground's parent up to `child`.
+    #[serde(default)]
+    pub ancestors: Vec<Proc>,
     /// Set once the terminal's program exited.
     #[serde(default)]
     pub last_exit: Option<Value>,
@@ -186,6 +189,8 @@ pub(super) struct StatusRemoved {
 pub(super) struct ProcessChanged {
     #[serde(default)]
     pub foreground: Option<Proc>,
+    #[serde(default)]
+    pub ancestors: Vec<Proc>,
 }
 
 #[derive(Deserialize)]

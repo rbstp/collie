@@ -848,6 +848,16 @@ pub(super) fn record(state: &str, pid: u32, name: &str, at: &str) -> Value {
     })
 }
 
+/// As [`process`], run from a login zsh, as Rex.app's terminals run a command.
+pub(super) fn under_shell(pid: u32, argv0: &str, name: &str) -> Value {
+    let mut p = process(pid, argv0, name);
+    p["ancestors"] = json!([
+        { "pid": 2, "user_id": 501, "name": "zsh", "argv0": "-zsh", "cwd": "/work/app" },
+        { "pid": 1, "user_id": 0, "name": "login" },
+    ]);
+    p
+}
+
 /// A terminal whose foreground process is `pid`, started as `argv0` and named `name`.
 pub(super) fn process(pid: u32, argv0: &str, name: &str) -> Value {
     json!({

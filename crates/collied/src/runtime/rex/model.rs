@@ -7,7 +7,7 @@ use super::wire::{
     BlockEvent, BlockId, BlockRef, Label, Proc, Process, ProcessChanged, Record, SessionCreated,
     SessionEvent, SessionId, SessionRef, Size, StatusChanged, StatusRemoved, Tagged, Title,
 };
-use crate::runtime::{AgentInfo, AgentSession, WorkspaceInfo, agents};
+use crate::runtime::{AgentInfo, AgentSession, PaneInfo, WorkspaceInfo, agents};
 
 pub const PREFIX: &str = "rex:";
 
@@ -44,6 +44,8 @@ struct Block {
     /// The root record only: Claude Code and Codex report without an id.
     status: Stamped<Option<Record>>,
     foreground: Stamped<Option<Proc>>,
+    /// A shell runs the foreground process: one of its ancestors is a shell.
+    under_shell: Stamped<bool>,
     child: Option<Proc>,
     title: Stamped<String>,
     size: Stamped<(u16, u16)>,
@@ -252,6 +254,7 @@ impl Model {
             b.exited |= p.child.is_none() && p.last_exit.is_some();
             b.child = p.child;
             b.foreground.read(seq, p.foreground);
+            b.under_shell.read(seq, p.ancestors.iter().any(shell));
             self.touched.insert((session.to_owned(), block.to_owned()));
         }
     }
@@ -276,21 +279,29 @@ impl Model {
     pub(super) fn listing(&self) -> Listing {
         let mut listing = Listing::default();
         for (session_id, s) in &self.sessions {
-            let agents: Vec<AgentInfo> = (s.blocks.iter())
-                .filter_map(|(block_id, b)| b.agent(session_id, block_id))
-                .collect();
-            if !agents.is_empty() {
-                let label = Some(s.label.value.as_str()).filter(|l| !l.is_empty());
-                listing.sessions.push(WorkspaceInfo {
-                    workspace_id: format!("{PREFIX}{session_id}"),
-                    number: 0,
-                    label: label.unwrap_or("Rex").to_owned(),
-                    active_tab_id: None,
-                    agent_status: agents::group_status(&agents).to_owned(),
-                    worktree: None,
-                });
-                listing.agents.extend(agents);
+            let mut agents = Vec::new();
+            let mut terminals = Vec::new();
+            for (block_id, b) in &s.blocks {
+                match b.agent(session_id, block_id) {
+                    Some(a) => agents.push(a),
+                    None if b.shell() => terminals.push(b.terminal(session_id, block_id)),
+                    None => {}
+                }
             }
+            if agents.is_empty() && terminals.is_empty() {
+                continue;
+            }
+            let label = Some(s.label.value.as_str()).filter(|l| !l.is_empty());
+            listing.sessions.push(WorkspaceInfo {
+                workspace_id: format!("{PREFIX}{session_id}"),
+                number: 0,
+                label: label.unwrap_or("Rex").to_owned(),
+                active_tab_id: None,
+                agent_status: agents::group_status(&agents).to_owned(),
+                worktree: None,
+            });
+            listing.agents.extend(agents);
+            listing.terminals.extend(terminals);
         }
         listing
     }
@@ -339,13 +350,20 @@ impl Model {
         }
     }
 
-    /// The session, block and size of a listed agent; nothing else is ever reached.
-    pub(super) fn target(&self, id: &str) -> Option<(String, String, (u16, u16))> {
+    /// The session, block and size of a listed block, and what it is listed as; nothing else
+    /// is ever reached.
+    pub(super) fn target(&self, id: &str) -> Option<(String, String, (u16, u16), Listed)> {
         let block = id.strip_prefix(PREFIX)?;
         self.sessions.iter().find_map(|(session, s)| {
             let b = s.blocks.get(block)?;
-            b.agent(session, block)?;
-            Some((session.clone(), block.to_owned(), b.size.value))
+            let listed = if b.agent(session, block).is_some() {
+                Listed::Agent
+            } else if b.shell() {
+                Listed::Terminal
+            } else {
+                return None;
+            };
+            Some((session.clone(), block.to_owned(), b.size.value, listed))
         })
     }
 
@@ -403,6 +421,7 @@ impl Block {
             "process_changed" => {
                 if let Ok(p) = serde_json::from_value::<ProcessChanged>(e.payload) {
                     self.foreground.event(seq, p.foreground);
+                    self.under_shell.event(seq, p.ancestors.iter().any(shell));
                 }
             }
             "title_changed" => {
@@ -420,6 +439,13 @@ impl Block {
         }
     }
 
+    /// A block that is no agent is a terminal while a shell runs in it, in front or above the
+    /// program in front (`vim` started from zsh), so it stays listed while a command runs. A
+    /// program Rex started with no shell is neither.
+    fn shell(&self) -> bool {
+        (self.foreground.value.as_ref()).is_some_and(|fg| shell(fg) || self.under_shell.value)
+    }
+
     /// A block is an agent once its foreground process reports OSC 7501 or runs an agent
     /// CLI. One with no status is read-only, since nothing says a dialog is open.
     fn agent(&self, session_id: &str, block_id: &str) -> Option<AgentInfo> {
@@ -428,7 +454,7 @@ impl Block {
         // A shell leads the terminal, so input would reach it: a status Rex still holds is
         // that of a program that exited, or of one a shell wrapper runs without handing it
         // the terminal.
-        if agents::shell(argv0) {
+        if shell(fg) {
             return None;
         }
         // Rex keeps a record after its program exits into another one; only the foreground
@@ -470,6 +496,33 @@ impl Block {
             read_only,
         })
     }
+
+    /// A program's title never leaves the machine, as for herdr's shells.
+    fn terminal(&self, session_id: &str, block_id: &str) -> PaneInfo {
+        let id = format!("{PREFIX}{block_id}");
+        let workspace_id = format!("{PREFIX}{session_id}");
+        PaneInfo {
+            pane_id: id.clone(),
+            terminal_id: id,
+            tab_id: workspace_id.clone(),
+            workspace_id,
+            cwd: self.child.as_ref().and_then(|c| c.cwd.clone()),
+            foreground_cwd: (self.foreground.value.as_ref()).and_then(|f| f.cwd.clone()),
+            agent: None,
+            label: None,
+        }
+    }
+}
+
+/// What a listed block is to the phone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Listed {
+    Agent,
+    Terminal,
+}
+
+fn shell(p: &Proc) -> bool {
+    agents::shell(p.argv0.as_deref().unwrap_or(&p.name))
 }
 
 fn cells(size: Size) -> (u16, u16) {
@@ -487,10 +540,12 @@ fn change_seq(updated_at: &str) -> u64 {
     u64::from_be_bytes(seq)
 }
 
-/// What a followed Rex lists: its agents, and one group per session that holds one.
+/// What a followed Rex lists: its agents, its terminals, and one group per session that
+/// holds either.
 #[derive(Default)]
 pub struct Listing {
     pub(crate) agents: Vec<AgentInfo>,
+    pub(crate) terminals: Vec<PaneInfo>,
     sessions: Vec<WorkspaceInfo>,
 }
 

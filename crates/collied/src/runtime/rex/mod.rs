@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
 use self::client::{Client, Method, TIMEOUT};
-use self::model::Model;
+use self::model::{Listed, Model};
 use self::screen::Screens;
 use self::wire::{
     Attached, Blocks, Creators, Help, Process, ServerStatus, Sessions, Size, Status, Tagged, Title,
@@ -230,8 +230,8 @@ pub struct Rex {
     streams: stream::Streams,
 }
 
-/// The connection, session, block and size of a listed agent.
-type Target = (Arc<Client>, String, String, (u16, u16));
+/// The connection, session, block and size of a listed block, and what it is listed as.
+type Target = (Arc<Client>, String, String, (u16, u16), Listed);
 
 fn gone(e: &Error) -> bool {
     matches!(e, Error::Rex { code, .. } if code == "not_found" || code == "session_not_found")
@@ -310,9 +310,9 @@ impl Rex {
             .as_ref()
             .filter(|l| l.synced)
             .ok_or_else(not_found)?;
-        let (session, block, size) = live.model.target(id).ok_or_else(not_found)?;
+        let (session, block, size, listed) = live.model.target(id).ok_or_else(not_found)?;
         self.screens.retain(|b| live.model.has(b));
-        Ok((live.client.clone(), session, block, size))
+        Ok((live.client.clone(), session, block, size, listed))
     }
 
     pub fn columns(&self, id: &str) -> Result<Option<u16>, Error> {
@@ -339,7 +339,7 @@ impl Rex {
         source: &str,
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
-        let (client, session, block, size) = self.target(id)?;
+        let (client, session, block, size, _) = self.target(id)?;
         if let Some(text) = self.streams.read(id, source, lines) {
             return Ok(PaneRead {
                 text,
@@ -370,10 +370,10 @@ impl Rex {
         })
     }
 
-    /// Only a block collied lists as an agent. `block.close` ends its program; a window
-    /// whose last block closes closes too, and the session stays.
+    /// Only a block collied lists, as an agent or a terminal. `block.close` ends its program;
+    /// a window whose last block closes closes too, and the session stays.
     pub async fn close(&self, id: &str) -> Result<(), Error> {
-        let (client, session, block, _) = self.target(id)?;
+        let (client, session, block, ..) = self.target(id)?;
         let payload = json!({ "session_id": session, "block_id": block });
         client
             .call::<Value>(Method::BlockClose, payload, CLOSE_TIMEOUT)

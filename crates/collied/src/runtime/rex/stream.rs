@@ -401,7 +401,7 @@ async fn start(
     id: &str,
     stop: &mut oneshot::Receiver<()>,
 ) -> Result<(Channel, Streamed, Messages), End> {
-    let (client, session, block, _) = rex.target(id).map_err(End::Restart)?;
+    let (client, session, block, ..) = rex.target(id).map_err(End::Restart)?;
     let args = json!({
         "session_id": session, "block_id": block, "data_ref_id": "terminal", "subprotocol": PROTOCOL,
     });

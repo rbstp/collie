@@ -658,11 +658,12 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
     assert!(checkout.exists());
     assert!(!fake.calls().iter().any(|c| c == "block.close"));
 
-    // Neither the shell, which is no agent, nor an id Rex does not list is ever closed.
-    for other in [id(SHELL), id(B1)] {
-        let (code, _) = drive.task_archive(archive(&other), &yes).await.unwrap_err();
-        assert_eq!(code, ErrorCode::NotFound, "{other}");
-    }
+    // An id Rex does not list is never closed.
+    let (code, _) = drive
+        .task_archive(archive(&id(B1)), &yes)
+        .await
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::NotFound);
     assert!(!fake.calls().iter().any(|c| c == "block.close"));
 }
 
