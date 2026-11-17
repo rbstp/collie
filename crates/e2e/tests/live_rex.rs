@@ -1432,7 +1432,7 @@ fn live_rex_terminals() {
     let Some(cli) = rex_cli() else {
         return;
     };
-    let mut server = RexServer::start(&cli, "t");
+    let mut server = RexServer::start(&cli, "m");
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -1442,9 +1442,20 @@ fn live_rex_terminals() {
     assert!(server.stop(), "dedicated Rex server did not stop");
 }
 
+/// A stand-in agent run under `sh -c`, which stays in front: idle, then working once the test
+/// creates `go`, then gone once it creates `quit`.
+const WRAPPED: &str = r#"$| = 1;
+sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+print "\e]7501;state=idle:app=claude-code\e\\";
+wait_for("go");
+print "\e]7501;state=working:app=claude-code\e\\";
+wait_for("quit");
+"#;
+
 /// A login shell, as Rex.app opens one, is a terminal in its session's group, stays one while
 /// it runs a command, takes the phone's lines, keys and text, and is streamed while watched;
-/// a program Rex runs with no shell is not listed (#755).
+/// a program Rex runs with no shell is not listed, and neither is a shell while an agent under
+/// it works (#755).
 async fn terminals_scenario(server: &RexServer) {
     std::fs::write(server.root.join("home/.zshrc"), "").unwrap();
     let work = server.work.to_str().unwrap();
@@ -1513,6 +1524,16 @@ async fn terminals_scenario(server: &RexServer) {
         (fg["argv0"].as_str()?.starts_with('-')).then(|| fg["name"].clone())
     })
     .await;
+    // Rex.app's terminals run the account's login shell; the lines below are POSIX.
+    if !["sh", "bash", "zsh", "dash", "ksh"]
+        .iter()
+        .any(|s| login_shell == *s)
+    {
+        println!("skipped: the login shell is {login_shell}, not a POSIX shell");
+        stop.send_replace(true);
+        task.await.unwrap();
+        return;
+    }
     drive
         .terminal_run(line("echo collie-$((6*7)); sleep 600"), &yes)
         .await
@@ -1546,11 +1567,47 @@ async fn terminals_scenario(server: &RexServer) {
     drive.terminal_send_text(typed, &yes).await.unwrap();
     let enter = AgentSendKeysParams {
         op_id: op(),
-        terminal_id: id,
+        terminal_id: id.clone(),
         keys: vec![Key::Enter],
     };
     drive.terminal_send_keys(enter, &yes).await.unwrap();
     streamed(&rt, &control, &session, &block, "typed-2").await;
+
+    // An agent under `sh -c` that keeps the terminal: while it works, the block is no terminal
+    // and a line for the shell is refused; once it exits, the shell is listed again.
+    let ctrl_c = AgentSendKeysParams {
+        op_id: op(),
+        terminal_id: id.clone(),
+        keys: vec![Key::Combo(KeyCombo::new("ctrl+c").unwrap())],
+    };
+    drive.terminal_send_keys(ctrl_c, &yes).await.unwrap();
+    until("the shell in front again", async || {
+        (foreground()["name"] == login_shell).then_some(())
+    })
+    .await;
+    std::fs::write(server.work.join("wrapped.pl"), WRAPPED).unwrap();
+    drive
+        .terminal_run(line("sh -c '/usr/bin/perl wrapped.pl; true'"), &yes)
+        .await
+        .unwrap();
+    until("the wrapper in front", async || {
+        (foreground()["argv0"] == "sh").then_some(())
+    })
+    .await;
+    std::fs::write(server.work.join("go"), "").unwrap();
+    until("the working agent's shell unlisted", async || {
+        listed().await.filter(|l| l.is_empty())
+    })
+    .await;
+    assert!(rt.agent_list().await.unwrap().is_empty());
+    let refused = drive.terminal_run(line("yes"), &yes).await.unwrap_err();
+    assert_eq!(refused.0, ErrorCode::NotFound, "{refused:?}");
+    std::fs::write(server.work.join("quit"), "").unwrap();
+    let back = until("the shell listed again", async || {
+        listed().await.filter(|l| !l.is_empty())
+    })
+    .await;
+    assert_eq!(back, shown);
 
     stop.send_replace(true);
     task.await.unwrap();

@@ -617,6 +617,58 @@ fn a_shell_or_what_it_runs_is_a_terminal_and_a_program_rex_started_alone_is_not(
     assert_eq!(listed(&model).0, Vec::<String>::new());
 }
 
+/// `sh -c 'cd x && claude'` keeps `sh` in front, and Rex names it as the owner of the agent's
+/// reports: shell input there would reach the agent past every agent check.
+#[test]
+fn a_shell_keeping_a_working_agent_under_it_is_no_terminal() {
+    let mut model = Model::new(Some(fake::HOST.to_owned()));
+    let session = SessionRef {
+        session_id: S1.to_owned(),
+        label: "work".to_owned(),
+    };
+    model.sessions(1, vec![session]);
+    let me = std::process::id();
+    let gone = {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        child.wait().unwrap();
+        child.id()
+    };
+    let wrapper = "block:0000000000000000000000000000000000d1";
+    let working = json!([fake::record("working", me, "bash", T0)]);
+    let sh = fake::under_shell(me, "sh", "bash");
+    read(
+        &mut model,
+        wrapper,
+        fake::HOST,
+        super::client::TERMINAL,
+        sh,
+        working,
+    );
+    let listed = |model: &Model| {
+        let l = model.listing();
+        (
+            l.terminals.len(),
+            l.agents.len(),
+            model.target(&id(wrapper)).is_some(),
+        )
+    };
+    assert_eq!(listed(&model), (0, 0, false));
+
+    let report = |model: &mut Model, seq, state: &str, pid| {
+        let r = fake::record(state, pid, "bash", &format!("2026-11-12T16:48:0{seq}Z"));
+        let e = fake::status_changed(S1, wrapper, r);
+        model.event(seq, serde_json::from_value(e).unwrap());
+    };
+    report(&mut model, 2, "blocked", me);
+    assert_eq!(listed(&model), (0, 0, false));
+    // Idle or done, as a suspended agent's report is: the user can type `fg`.
+    report(&mut model, 3, "idle", me);
+    assert_eq!(listed(&model), (1, 0, true));
+    // A record whose owner is gone is a program that left.
+    report(&mut model, 4, "working", gone);
+    assert_eq!(listed(&model), (1, 0, true));
+}
+
 #[tokio::test]
 async fn terminals_are_listed_per_session_from_the_model_without_reading_a_screen() {
     const S3: &str = "session:019a7d2e-0000-7000-8000-000000000003";

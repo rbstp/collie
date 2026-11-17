@@ -665,6 +665,29 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
         .unwrap_err();
     assert_eq!(code, ErrorCode::NotFound);
     assert!(!fake.calls().iter().any(|c| c == "block.close"));
+
+    // Archiving the user's shell, a terminal, closes its block alone: the task's block, its
+    // checkout and its session stay.
+    let session = fake.state().block(block_of(&task)).session.clone();
+    let Ok(Response::TaskArchived { message }) =
+        drive.task_archive(archive(&id(SHELL)), &yes).await
+    else {
+        panic!("the shell was not archived");
+    };
+    assert!(
+        message.starts_with("Closed pane. Its folder was left in place."),
+        "{message}"
+    );
+    assert!(checkout.exists());
+    let state = fake.state();
+    assert!(!state.blocks.iter().any(|b| b.id == SHELL));
+    assert!(state.blocks.iter().any(|b| b.id == block_of(&task)));
+    assert!(state.sessions.iter().any(|(s, _)| *s == session));
+    assert!(!state.calls.iter().any(|c| c.contains("destroy")));
+    assert_eq!(
+        state.calls.iter().filter(|c| *c == "block.close").count(),
+        1
+    );
 }
 
 #[tokio::test]

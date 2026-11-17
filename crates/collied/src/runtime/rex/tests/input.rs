@@ -444,3 +444,50 @@ async fn an_agent_started_in_a_terminal_during_a_run_never_gets_its_enter() {
     ));
     assert_eq!(events(&fake, B2), [paste("ls")]);
 }
+
+#[tokio::test]
+async fn a_shell_keeping_a_working_agent_under_it_takes_no_terminal_input() {
+    let fake = Fake::start().await;
+    let me = std::process::id();
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        let sh = fake::under_shell(me, "sh", "bash");
+        s.add(S1, B2, sh, vec![fake::record("working", me, "bash", T0)]);
+    }
+    let (rex, rt, dir) = followed(&fake).await;
+    let shell = id(B2);
+    assert!(not_found(
+        rt.pane_send_input(&shell, "yes", &["enter"]).await
+    ));
+    assert!(not_found(rt.pane_send_keys(&shell, &["enter"]).await));
+    let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+        .unwrap()
+        .with_rex(Some(rex.clone()));
+    let yes: Authorized = Arc::new(|| true);
+    let run = TerminalRunParams {
+        op_id: OpId::new("W".repeat(22)).unwrap(),
+        terminal_id: TerminalId::new(&shell).unwrap(),
+        text: PromptText::new("yes".to_owned()).unwrap(),
+    };
+    assert_eq!(
+        drive.terminal_run(run.clone(), &yes).await.unwrap_err().0,
+        ErrorCode::NotFound
+    );
+    assert!(events(&fake, B2).is_empty());
+
+    fake.emit(move |s| {
+        let idle = fake::record("idle", me, "bash", "2026-11-12T16:48:00.000001Z");
+        s.block(B2).records = vec![idle.clone()];
+        vec![fake::status_changed(S1, B2, idle)]
+    });
+    super::eventually("the terminal listed", || {
+        rex.listing().is_some_and(|l| !l.terminals.is_empty())
+    })
+    .await;
+    drive.terminal_run(run, &yes).await.unwrap();
+    assert_eq!(
+        events(&fake, B2),
+        [paste("yes"), key("enter", "", "\r", 13)]
+    );
+}

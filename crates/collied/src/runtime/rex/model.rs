@@ -444,6 +444,22 @@ impl Block {
     /// program Rex started with no shell is neither.
     fn shell(&self) -> bool {
         (self.foreground.value.as_ref()).is_some_and(|fg| shell(fg) || self.under_shell.value)
+            && !self.busy()
+    }
+
+    /// An agent under a shell that keeps the terminal (`sh -c 'cd x && claude'`) is no agent
+    /// here, and Rex names the shell as its record's owner: while that owner lives and the
+    /// record says working or blocked, shell input would reach the agent past every check its
+    /// own input takes, so the block is no terminal either. Idle and done stay listed, so a
+    /// suspended agent never keeps the user from typing `fg`; a reused pid only hides a
+    /// terminal.
+    fn busy(&self) -> bool {
+        (self.status.value.as_ref()).is_some_and(|r| {
+            matches!(r.state.as_str(), "working" | "blocked")
+                && (r.owner.as_ref())
+                    .and_then(|o| i32::try_from(o.pid).ok())
+                    .is_some_and(crate::transcript::alive)
+        })
     }
 
     /// A block is an agent once its foreground process reports OSC 7501 or runs an agent
@@ -506,7 +522,9 @@ impl Block {
             terminal_id: id,
             tab_id: workspace_id.clone(),
             workspace_id,
-            cwd: self.child.as_ref().and_then(|c| c.cwd.clone()),
+            // Rex.app's `login` has no folder; archive's cleanup runs where the shell is.
+            cwd: (self.child.as_ref().and_then(|c| c.cwd.clone()))
+                .or_else(|| self.foreground.value.as_ref().and_then(|f| f.cwd.clone())),
             foreground_cwd: (self.foreground.value.as_ref()).and_then(|f| f.cwd.clone()),
             agent: None,
             label: None,

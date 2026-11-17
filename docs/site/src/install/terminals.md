@@ -22,9 +22,9 @@ Terminals let you use plain shells from the phone. Anything typed there runs as 
 
 ## Use them
 
-**Terminals** in the app lists the machine's shells: herdr's shell panes, including the pane of an agent that exited, and Rex terminals that run a shell, each under its Rex session. A Rex terminal stays listed while a command runs in it. Rex terminals on other machines, Rex terminals that run a program without a shell, such as a session started with `rex new -- top`, and Herdr Core's shells do not appear.
+**Terminals** in the app lists the machine's shells: herdr's shell panes, including the pane of an agent that exited, and Rex terminals that run a shell, each under its Rex session. A Rex terminal stays listed while a command runs in it. Rex terminals on other machines, Rex terminals that run a program without a shell, a Rex terminal while an agent run under its shell works, such as a session started with `rex new -- top`, and Herdr Core's shells do not appear.
 
 1. Open a terminal and unlock it with Face ID or the passcode. One unlock covers that terminal for 5 minutes, or until the app goes to the background.
-2. Tap the terminal and type, as in an agent's [Terminal view](../app/chat-terminal.md#terminal): every key goes to the shell, and Return runs the line. The [key strip](../app/keys.md) works as in an agent session.
+2. Tap the terminal and type, as in an agent's [Terminal view](../app/chat-terminal.md#terminal): every key goes to the shell, and Return runs the line. The [key strip](../app/keys.md) works as in an agent session. In Rex, a line or typed text arrives as a paste, so a program that turned bracketed paste on, such as an editor in normal mode or many REPLs, takes it as text rather than as commands; herdr types it key by key.
 
 `collied` refuses to write to a pane or Rex terminal where an agent now runs. The audit log records each unlock and what you send, never its text.
