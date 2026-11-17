@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::net::UnixListener;
+use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -21,6 +22,8 @@ use super::client::{Method, TERMINAL};
 pub(super) const HOST: &str = "1f4bd4b7-e04f-46e2-ad3b-0e2b89b5447c";
 /// This connection's client id, as `session.attach` names it.
 const CLIENT: &str = "client:1";
+/// Every data connection's channel nonce.
+pub(super) const NONCE: u64 = 422_037_677_951_212_370;
 
 /// Run once, on a request for its method (and block, when named): `after` runs once the
 /// answer is read, so the events it returns carry a later seq than the answer's, yet reach
@@ -89,6 +92,24 @@ pub(super) struct State {
     pub bare_windows: Vec<String>,
     /// A method whose requests are never answered, the connection left open.
     pub unanswered: Option<&'static str>,
+    pub data: Data,
+}
+
+/// The one stream every data connection serves, as Rex serves a block's terminal.
+#[derive(Default)]
+pub(super) struct Data {
+    /// A snapshot and what follows it.
+    pub stream: Vec<u8>,
+    /// The REJECT reason a HELLO gets instead of a WELCOME.
+    pub reject: Option<u8>,
+    /// Each HELLO (1) and RESUME (2), with the count a RESUME named.
+    pub handshakes: Vec<(u8, u64)>,
+    /// How each data connection ended: the close code collied sent, `None` for none.
+    pub closed: Vec<Option<u16>>,
+    /// The bytes of `stream` sent, across its connections.
+    sent: usize,
+    /// The latest WELCOME's reconnect token.
+    token: [u8; 16],
 }
 
 impl State {
@@ -130,11 +151,20 @@ enum Push {
     Drop,
 }
 
+enum DataPush {
+    /// What `stream` gained since the last send.
+    More,
+    Drop,
+}
+
+type Pushes<T> = Arc<Mutex<Option<mpsc::UnboundedSender<T>>>>;
+
 pub(super) struct Fake {
     _dir: tempfile::TempDir,
     pub socket: PathBuf,
     state: Arc<Mutex<State>>,
-    push: Arc<Mutex<Option<mpsc::UnboundedSender<Push>>>>,
+    push: Pushes<Push>,
+    data_push: Pushes<DataPush>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -188,15 +218,16 @@ impl Fake {
             hang_up: None,
             bare_windows: Vec::new(),
             unanswered: None,
+            data: Data::default(),
         }));
-        let push = Arc::new(Mutex::new(None));
+        let push = Pushes::default();
+        let data_push = Pushes::default();
         let task = tokio::spawn({
-            let (state, push) = (state.clone(), push.clone());
+            let (state, push, data_push) = (state.clone(), push.clone(), data_push.clone());
             async move {
                 while let Ok((stream, _)) = listener.accept().await {
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    *crate::lock(&push) = Some(tx);
-                    tokio::spawn(serve(state.clone(), stream, rx));
+                    let (state, push, data_push) = (state.clone(), push.clone(), data_push.clone());
+                    tokio::spawn(accept(state, push, data_push, stream));
                 }
             }
         });
@@ -205,6 +236,7 @@ impl Fake {
             socket,
             state,
             push,
+            data_push,
             task,
         }
     }
@@ -230,25 +262,140 @@ impl Fake {
     pub(super) fn calls(&self) -> Vec<String> {
         self.state().calls.clone()
     }
+
+    /// Adds `bytes` to the stream, sent at once on the open data connection, else on the
+    /// next one that resumes.
+    pub(super) fn data_send(&self, bytes: &[u8]) {
+        self.state().data.stream.extend_from_slice(bytes);
+        if let Some(tx) = crate::lock(&self.data_push).as_ref() {
+            let _ = tx.send(DataPush::More);
+        }
+    }
+
+    /// Ends the latest data connection without a close frame, keeping its stream to resume.
+    pub(super) fn data_drop(&self) {
+        if let Some(tx) = crate::lock(&self.data_push).take() {
+            let _ = tx.send(DataPush::Drop);
+        }
+    }
 }
 
-#[allow(clippy::result_large_err)]
-fn protocol(_: &Request, mut response: Response) -> Result<Response, ErrorResponse> {
-    response.headers_mut().insert(
-        "Sec-WebSocket-Protocol",
-        HeaderValue::from_static("rex.control.v1"),
-    );
-    Ok(response)
+/// Serves `/api/control` or `/api/data`, by the request's path.
+async fn accept(
+    state: Arc<Mutex<State>>,
+    push: Pushes<Push>,
+    data_push: Pushes<DataPush>,
+    stream: UnixStream,
+) {
+    let mut data = false;
+    #[allow(clippy::result_large_err)]
+    let protocol = |request: &Request, mut response: Response| -> Result<Response, ErrorResponse> {
+        data = request.uri().path() == "/api/data";
+        let protocol = match data {
+            true => "rex.data.terminal.v1",
+            false => "rex.control.v1",
+        };
+        (response.headers_mut())
+            .insert("Sec-WebSocket-Protocol", HeaderValue::from_static(protocol));
+        Ok(response)
+    };
+    let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, protocol).await else {
+        return;
+    };
+    if data {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *crate::lock(&data_push) = Some(tx);
+        serve_data(state, ws, rx).await;
+    } else {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *crate::lock(&push) = Some(tx);
+        serve(state, ws, rx).await;
+    }
+}
+
+/// A WELCOME with a new reconnect token, or the REJECT a HELLO is set to get; a RESUME is
+/// welcomed only with the latest token and the exact count of bytes sent, as Rex requires.
+fn welcome(d: &mut Data, first: &[u8]) -> Result<usize, u8> {
+    let count = first
+        .get(17..25)
+        .and_then(|b| b.try_into().ok())
+        .map_or(0, u64::from_le_bytes);
+    d.handshakes.push((first[0], count));
+    let from = match first[0] {
+        1 => match d.reject {
+            Some(reason) => return Err(reason),
+            None => 0,
+        },
+        2 if first[1..17] == d.token && count == d.sent as u64 => d.sent,
+        _ => return Err(0x01),
+    };
+    d.token = [d.handshakes.len() as u8; 16];
+    Ok(from)
+}
+
+async fn serve_data(
+    state: Arc<Mutex<State>>,
+    ws: WebSocketStream<UnixStream>,
+    mut pushed: mpsc::UnboundedReceiver<DataPush>,
+) {
+    let (mut sink, mut source) = ws.split();
+    let Some(Ok(Message::Binary(first))) = source.next().await else {
+        return;
+    };
+    let welcomed = welcome(&mut crate::lock(&state).data, &first);
+    let token = crate::lock(&state).data.token;
+    let answer = match welcomed {
+        Ok(_) => {
+            let mut w = vec![0x81];
+            w.extend_from_slice(&token);
+            w.extend_from_slice(&[0, 0, 0]);
+            w.extend_from_slice(&60_000u32.to_le_bytes());
+            w.extend_from_slice(&NONCE.to_le_bytes());
+            w
+        }
+        Err(reason) => vec![0x82, reason],
+    };
+    if sink.send(Message::binary(answer)).await.is_err() {
+        return;
+    }
+    let Ok(mut sent) = welcomed else {
+        let _ = sink.close().await;
+        return;
+    };
+    let ended = loop {
+        let more = {
+            let mut s = crate::lock(&state);
+            let more = s.data.stream[sent..].to_vec();
+            sent = s.data.stream.len();
+            s.data.sent = sent;
+            more
+        };
+        // Pieces of 1,000 bytes, so the snapshot and Rex's messages are cut across them.
+        for piece in more.chunks(1000) {
+            if sink.send(Message::binary(piece.to_vec())).await.is_err() {
+                return;
+            }
+        }
+        tokio::select! {
+            next = source.next() => match next {
+                Some(Ok(Message::Close(frame))) => break frame.map(|f| u16::from(f.code)),
+                Some(Ok(_)) => {}
+                _ => break None,
+            },
+            pushed = pushed.recv() => match pushed {
+                Some(DataPush::More) => {}
+                Some(DataPush::Drop) | None => break None,
+            },
+        }
+    };
+    crate::lock(&state).data.closed.push(ended);
 }
 
 async fn serve(
     state: Arc<Mutex<State>>,
-    stream: tokio::net::UnixStream,
+    ws: WebSocketStream<UnixStream>,
     mut pushed: mpsc::UnboundedReceiver<Push>,
 ) {
-    let Ok(ws) = tokio_tungstenite::accept_hdr_async(stream, protocol).await else {
-        return;
-    };
     let (mut sink, mut source) = ws.split();
     let Some(Ok(Message::Text(hello))) = source.next().await else {
         return;
@@ -460,6 +607,12 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 closed = Some(s.blocks.remove(i));
                 Ok(json!({ "block_id": block, "revision": 2 }))
             }
+            None => Err("not_found"),
+        },
+        ("data.connect", _) if !s.attached.contains(&session) => Err("bad_request"),
+        ("data.connect", _) => match found {
+            // 16 zero bytes, base64url without padding.
+            Some(_) => Ok(json!({ "ticket": "AAAAAAAAAAAAAAAAAAAAAA", "expires_in_ms": 60000 })),
             None => Err("not_found"),
         },
         ("block.event", _) if !s.attached.contains(&session) => Err("conflict"),

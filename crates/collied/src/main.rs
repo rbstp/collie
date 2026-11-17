@@ -12,11 +12,6 @@ use zeroize::Zeroizing;
 
 const AUTHKEY_ENV: &str = "COLLIE_TS_AUTHKEY";
 
-// Keeps libghostty-vt linked into collied until a screen calls it, so a broken link fails the build.
-#[used]
-static GHOSTTY_VT: unsafe extern "C" fn(ghostty_vt_sys::GhosttyTerminal) =
-    ghostty_vt_sys::ghostty_terminal_free;
-
 #[derive(Parser)]
 #[command(version, about = "collie daemon")]
 struct Cli {

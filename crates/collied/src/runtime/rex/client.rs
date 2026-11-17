@@ -75,6 +75,7 @@ methods! {
     SessionCreate => "session.create",
     SessionDisownBlock => "session.disown_block",
     SessionDestroy => "session.destroy",
+    DataConnect => "data.connect",
 }
 
 impl Method {
@@ -185,7 +186,7 @@ fn refused(frame: Option<CloseFrame>) -> Error {
     }
 }
 
-fn ws_error(e: WsError) -> Error {
+pub(super) fn ws_error(e: WsError) -> Error {
     match e {
         WsError::Io(io) => Error::Io(io),
         WsError::Capacity(_) => Error::LineTooLong,

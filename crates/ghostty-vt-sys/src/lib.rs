@@ -28,6 +28,10 @@ pub const GHOSTTY_FORMATTER_OPT_EXTRAS: c_int = 5;
 pub const GHOSTTY_FORMATTER_FORMAT_PLAIN: c_int = 0;
 pub const GHOSTTY_FORMATTER_FORMAT_VT: c_int = 1;
 
+/// A bitmask of the terminal state VT output restores beyond text and styles.
+pub type GhosttyFormatterExtras = u32;
+pub const GHOSTTY_FORMATTER_EXTRAS_NONE: GhosttyFormatterExtras = 0;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GhosttyGridRef {
@@ -87,6 +91,7 @@ const _: () = {
     assert!(offset_of!(GhosttySelection, rectangle) == 32);
     assert!(size_of::<GhosttyReader>() == 16);
     assert!(offset_of!(GhosttyReader, userdata) == 8);
+    assert!(size_of::<GhosttyFormatterExtras>() == 4);
 };
 
 unsafe extern "C" {
