@@ -50,7 +50,7 @@ If a Codex agent stays `unknown`, or a finished turn sends no done alert:
 
 1. Start Rex.app: `collied` never starts Rex, and finds a server that starts later within 30 seconds.
 2. Read the `rex` lines of `collied doctor`. A warning names what keeps `collied` from following the server, such as an API revision it does not speak, which a restart of the Rex server after an update fixes ([Reading `collied doctor`](operate/commands.md#reading-collied-doctor)).
-3. Look for the agent under its Rex session's name in the Agents tab, or under **Rex** for a session with no name. Claude Code, Codex and Copilot CLI appear, as does any program that reports a status; shells do not, nor do terminals Rex runs on other machines.
+3. Look for the agent under its Rex session's name in the Agents tab, or under **Rex** for a session with no name. Claude Code, Codex and Copilot CLI appear, as does any program that reports a status; shells do not (with [terminals](install/terminals.md) on, they appear under Terminals instead), nor do terminals Rex runs on other machines.
 
 ## Pairing refused
 
