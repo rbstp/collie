@@ -5,7 +5,7 @@
 | Feature | Copilot CLI |
 |---|---|
 | Grid preview, status and Inbox | Yes |
-| [Chat](../app/chat-terminal.md) and Terminal | Yes |
+| [Chat](../app/chat-terminal.md) and Terminal | Chat in herdr only; in Herdr Core and Rex, Terminal only |
 | [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Subagents only |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
@@ -20,7 +20,7 @@
 
 ## Chat
 
-Chat follows `/new`. Copilot names a session after your first prompt; until then, or while two conversations in the pane share a name, Chat cannot tell which one the pane shows and says so. Terminal still works.
+Chat works in herdr only; in Herdr Core and Rex, use Terminal. Chat follows `/new`. Copilot names a session after your first prompt; until then, or while two conversations in the pane share a name, Chat cannot tell which one the pane shows and says so. Terminal still works.
 
 ## Plan usage
 
