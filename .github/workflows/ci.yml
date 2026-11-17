@@ -299,13 +299,14 @@ jobs:
       - name: test the budget script
         run: python3 scripts/test-ios-test-budget.py
 
-      # A boot still in progress is left to xcodebuild, which waits for it. A simulator that died is booted again before the
-      # tests rather than during them; the job goes on if that boot does not finish, since xcodebuild boots it too.
+      # A boot in progress is waited for here: only runs whose xcodebuild started inside it had the UI suite's first launch
+      # hang (#753). A simulator that died is booted again before the tests rather than during them; the job goes on if that
+      # boot does not finish, since xcodebuild boots it too.
       - name: check the simulator
         timeout-minutes: 10
         continue-on-error: true
         run: |
-          kill -0 "$(cat "$RUNNER_TEMP/simulator-boot.pid")" 2> /dev/null && exit 0
+          kill -0 "$(cat "$RUNNER_TEMP/simulator-boot.pid")" 2> /dev/null && { xcrun simctl bootstatus 'iPhone 18 Pro' || true; }
           xcrun simctl list devices booted | grep -q 'iPhone 18 Pro (' && exit 0
           echo "::warning::The simulator booted earlier in the job is not booted; booting it again before the tests."
           xcrun simctl bootstatus 'iPhone 18 Pro' -b
