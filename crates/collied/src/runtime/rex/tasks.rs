@@ -110,7 +110,7 @@ impl Rex {
     /// answer; `None` when collied has no record of creating the block's session for this
     /// task, and that session then stays.
     pub async fn close_task(&self, id: &str) -> Result<Option<String>, Error> {
-        let (client, session, block, _) = self.target(id)?;
+        let (client, session, block, ..) = self.target(id)?;
         let own = (self.lock().tasks.get(&block))
             .is_some_and(|t| t.session.as_deref() == Some(session.as_str()));
         self.close(id).await?;

@@ -645,7 +645,11 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
     fake.state()
         .sessions
         .push((S1.to_owned(), "mine".to_owned()));
-    shell(&fake, S1, SHELL, &repo);
+    // As Rex.app runs it: under `login`, which reports no folder.
+    let zsh = json!({ "pid": 40, "user_id": 501, "name": "zsh", "argv0": "-zsh", "cwd": repo });
+    let login = json!({ "pid": 39, "user_id": 0, "name": "login" });
+    let p = json!({ "last_exit": null, "child": login, "foreground": zsh });
+    fake.state().add(S1, SHELL, p, vec![]);
     fake.emit(|_| vec![fake::session_created(S1, "mine")]);
     eventually("the task listed", || rex.get(&task).is_ok()).await;
     fake.state().block(SHELL).process["foreground"]["cwd"] = json!(checkout.join("src"));
@@ -658,12 +662,42 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
     assert!(checkout.exists());
     assert!(!fake.calls().iter().any(|c| c == "block.close"));
 
-    // Neither the shell, which is no agent, nor an id Rex does not list is ever closed.
-    for other in [id(SHELL), id(B1)] {
-        let (code, _) = drive.task_archive(archive(&other), &yes).await.unwrap_err();
-        assert_eq!(code, ErrorCode::NotFound, "{other}");
-    }
+    // An id Rex does not list is never closed.
+    let (code, _) = drive
+        .task_archive(archive(&id(B1)), &yes)
+        .await
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::NotFound);
     assert!(!fake.calls().iter().any(|c| c == "block.close"));
+
+    // Archiving the user's shell, a terminal, closes its block alone: the task's block, its
+    // checkout and its session stay. The cleanup's repository is the shell's folder, as the
+    // listing last saw it, since `login` has none; authorized only while the shell's block
+    // exists, so `gh poi` is skipped after the close.
+    let session = fake.state().block(block_of(&task)).session.clone();
+    let state = fake.state.clone();
+    let open: Authorized =
+        Arc::new(move || crate::lock(&state).blocks.iter().any(|b| b.id == SHELL));
+    let Ok(Response::TaskArchived { message }) =
+        drive.task_archive(archive(&id(SHELL)), &open).await
+    else {
+        panic!("the shell was not archived");
+    };
+    assert!(
+        message.starts_with("Closed pane. Its folder was left in place.")
+            && message.ends_with("Authorization ended; gh poi was skipped."),
+        "{message}"
+    );
+    assert!(checkout.exists());
+    let state = fake.state();
+    assert!(!state.blocks.iter().any(|b| b.id == SHELL));
+    assert!(state.blocks.iter().any(|b| b.id == block_of(&task)));
+    assert!(state.sessions.iter().any(|(s, _)| *s == session));
+    assert!(!state.calls.iter().any(|c| c.contains("destroy")));
+    assert_eq!(
+        state.calls.iter().filter(|c| *c == "block.close").count(),
+        1
+    );
 }
 
 #[tokio::test]

@@ -3,6 +3,8 @@ mod live;
 mod provider_subagents;
 mod subagents;
 
+pub(crate) use subagents::alive;
+
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

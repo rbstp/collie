@@ -9,7 +9,7 @@ use collie_core::{AgentState, CollieCore, CoreError, MachineFlock};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::config::TasksConfig;
-use collied::drive::{Authorized, Driver};
+use collied::drive::{Authorized, Driver, HOSTS_AGENT};
 use collied::runtime::rex::{GROUP_CLOSE, Rex};
 use collied::runtime::{AgentInfo, Error, Runtime};
 use collied::server::{self, ServerConfig};
@@ -17,7 +17,8 @@ use common::*;
 use protocol::{
     AgentAnswerNoticeParams, AgentPromptParams, AgentSendKeysParams, AgentSlashDraftParams,
     Approval, ApprovalDecideParams, ApprovalOutcome, Decision, DraftText, ErrorCode, Event, Key,
-    KeyCombo, Label, NoticeDigit, OpId, PromptText, Response, SlashCommand, TerminalId,
+    KeyCombo, Label, NoticeDigit, OpId, PromptText, Response, SendTextParams, SlashCommand,
+    TerminalId, TerminalRunParams, TypedText,
 };
 use tokio::sync::{broadcast, watch};
 
@@ -94,7 +95,7 @@ async fn until<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> T {
 
 async fn scenario(server: &RexServer) {
     let (session, block) = new_session(server, "collie-live", &["/usr/bin/perl", "-e", AGENT]);
-    let (_, shell) = new_session(server, "collie-shell", &["/bin/bash", "-c", SHELL]);
+    let (shell_session, shell) = new_session(server, "collie-shell", &["/bin/bash", "-c", SHELL]);
     let agent = format!("rex:{block}");
 
     let rex = Arc::new(Rex::new(server.socket.clone()));
@@ -128,7 +129,15 @@ async fn scenario(server: &RexServer) {
     let groups: Vec<(&str, &str)> = (poll.workspaces.iter())
         .map(|w| (w.workspace_id.as_str(), w.label.as_str()))
         .collect();
-    assert_eq!(groups, [(idle.workspace_id.as_str(), "collie-live")]);
+    // The shell is a terminal, in a group of its own session.
+    let shell_group = format!("rex:{shell_session}");
+    assert_eq!(
+        groups,
+        [
+            (idle.workspace_id.as_str(), "collie-live"),
+            (shell_group.as_str(), "collie-shell")
+        ]
+    );
 
     let size = || server.rex(&["block", "call", "-b", &block, "size"]);
     let before = size();
@@ -1416,6 +1425,169 @@ fn live_rex_tasks() {
     rt.block_on(tasks_scenario(&server, Path::new(&bin)));
     drop(rt);
     assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+#[test]
+fn live_rex_terminals() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "m");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(terminals_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+/// A stand-in agent run under `sh -c`, which stays in front: idle, then working once the test
+/// creates `go`, then gone once it creates `quit`.
+const WRAPPED: &str = r#"$| = 1;
+sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+print "\e]7501;state=idle:app=claude-code\e\\";
+wait_for("go");
+print "\e]7501;state=working:app=claude-code\e\\";
+wait_for("quit");
+"#;
+
+/// An interactive shell is a terminal in its session's group, stays one while it runs a
+/// command, takes the phone's lines, keys and text, and is streamed while watched; a program
+/// Rex runs with no shell is not listed, and neither is a shell whose `sh -c` keeps an agent
+/// in front (#755). The shell is `/bin/sh -i` started directly, with the scratch home: Rex's
+/// default login shell takes the account's home from `login`, and with it the user's own
+/// startup files and history.
+async fn terminals_scenario(server: &RexServer) {
+    let (session, block) = new_session(server, "collie-term", &["/bin/sh", "-i"]);
+    let (_, alone) = new_session(server, "collie-alone", &["/bin/sleep", "600"]);
+    let terminal = format!("rex:{block}");
+
+    let rex = Arc::new(Rex::new(server.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    let drive = Arc::new(
+        Driver::new(server.root.join("no-herdr.sock"), vec![], &[])
+            .unwrap()
+            .with_rex(Some(rex.clone())),
+    );
+    let listed = async || -> Option<Vec<(String, String)>> {
+        let snap = rt.session_snapshot().await.ok()?;
+        let terminals = collied::flock::map_terminals(&snap).into_iter();
+        Some(
+            terminals
+                .map(|t| {
+                    (
+                        t.terminal_id.as_str().to_owned(),
+                        t.workspace_id.as_str().to_owned(),
+                    )
+                })
+                .collect(),
+        )
+    };
+    let shown = until("the shell listed", async || {
+        listed().await.filter(|l| !l.is_empty())
+    })
+    .await;
+    assert_eq!(shown, [(terminal.clone(), format!("rex:{session}"))]);
+    assert!(!format!("{shown:?}").contains(&alone));
+    let snap = rt.session_snapshot().await.unwrap();
+    let groups: Vec<&str> = snap.workspaces.iter().map(|w| w.label.as_str()).collect();
+    assert_eq!(groups, ["collie-term"]);
+    assert!(rt.agent_list().await.unwrap().is_empty());
+
+    let yes: Authorized = Arc::new(|| true);
+    let id = TerminalId::new(terminal.clone()).unwrap();
+    let _watch = drive
+        .watch_terminal(id.clone(), 200, false, yes.clone())
+        .await
+        .unwrap();
+    let control = Control::open(&server.socket, &session).await;
+    let op = || OpId::new("L".repeat(22)).unwrap();
+    let line = |text: &str| TerminalRunParams {
+        op_id: op(),
+        terminal_id: id.clone(),
+        text: PromptText::new(text.to_owned()).unwrap(),
+    };
+    let keys = |key: Key| AgentSendKeysParams {
+        op_id: op(),
+        terminal_id: id.clone(),
+        keys: vec![key],
+    };
+    let ctrl_c = || keys(Key::Combo(KeyCombo::new("ctrl+c").unwrap()));
+    let in_front = |what: &str| {
+        let p = process_of(server, &session, &block);
+        let fg = &p["foreground"];
+        match what {
+            "shell" => fg["pid"] == p["child"]["pid"],
+            name => fg["argv0"] == name,
+        }
+    };
+    until("the shell in front", async || {
+        in_front("shell").then_some(())
+    })
+    .await;
+    drive
+        .terminal_run(line("echo collie-$((6*7)); sleep 600"), &yes)
+        .await
+        .unwrap();
+    streamed(&rt, &control, &session, &block, "collie-42").await;
+    until("sleep in front", async || in_front("sleep").then_some(())).await;
+    assert_eq!(
+        listed().await.unwrap(),
+        shown,
+        "a command ended the terminal"
+    );
+    drive.terminal_send_keys(ctrl_c(), &yes).await.unwrap();
+    until("the shell in front again", async || {
+        in_front("shell").then_some(())
+    })
+    .await;
+
+    let typed = SendTextParams {
+        op_id: op(),
+        terminal_id: id.clone(),
+        text: TypedText::new("echo typed-$((1+1)); sleep 600".to_owned()).unwrap(),
+    };
+    drive.terminal_send_text(typed, &yes).await.unwrap();
+    drive
+        .terminal_send_keys(keys(Key::Enter), &yes)
+        .await
+        .unwrap();
+    streamed(&rt, &control, &session, &block, "typed-2").await;
+    until("sleep in front", async || in_front("sleep").then_some(())).await;
+    drive.terminal_send_keys(ctrl_c(), &yes).await.unwrap();
+    until("the shell in front again", async || {
+        in_front("shell").then_some(())
+    })
+    .await;
+
+    // An agent under `sh -c` that keeps the terminal owns its reports through that `sh`: the
+    // block is no terminal from its first report, idle included, and a line is refused as on
+    // a pane hosting an agent; once it exits, the shell is listed again.
+    std::fs::write(server.work.join("wrapped.pl"), WRAPPED).unwrap();
+    drive
+        .terminal_run(line("sh -c '/usr/bin/perl wrapped.pl; true'"), &yes)
+        .await
+        .unwrap();
+    until("the idle agent's shell unlisted", async || {
+        listed().await.filter(|l| l.is_empty())
+    })
+    .await;
+    assert!(rt.agent_list().await.unwrap().is_empty());
+    let refused = drive.terminal_run(line("yes"), &yes).await.unwrap_err();
+    assert_eq!(refused, (ErrorCode::NotFound, HOSTS_AGENT.to_owned()));
+    std::fs::write(server.work.join("go"), "").unwrap();
+    std::fs::write(server.work.join("quit"), "").unwrap();
+    let back = until("the shell listed again", async || {
+        listed().await.filter(|l| !l.is_empty())
+    })
+    .await;
+    assert_eq!(back, shown);
+
+    stop.send_replace(true);
+    task.await.unwrap();
 }
 
 fn blocks_of(server: &RexServer, session: &str) -> Vec<serde_json::Value> {

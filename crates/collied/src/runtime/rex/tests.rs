@@ -365,7 +365,7 @@ async fn listing_answers_from_the_model_and_rex_ids_never_reach_herdr() {
     let fake = Fake::start().await;
     claude(&fake, S1, B1, 10, "idle", T0);
     fake.state()
-        .add(S1, B2, fake::process(20, "-zsh", "zsh"), vec![]);
+        .add(S1, B2, fake::process(20, "/usr/bin/top", "top"), vec![]);
     let rex = Arc::new(Rex::new(fake.socket.clone()));
     let _task = follow(&rex).await;
     let dir = tempfile::tempdir().unwrap();
@@ -530,6 +530,224 @@ fn a_stale_record_or_a_shell_in_front_lists_no_agent_and_other_hosts_are_skipped
             0
         )
     );
+}
+
+#[test]
+fn a_shell_or_what_it_runs_is_a_terminal_and_a_program_rex_started_alone_is_not() {
+    let mut model = Model::new(Some(fake::HOST.to_owned()));
+    let session = SessionRef {
+        session_id: S1.to_owned(),
+        label: "work".to_owned(),
+    };
+    model.sessions(1, vec![session]);
+    let t = super::client::TERMINAL;
+    let [zsh, vim, claude, top, away] = [
+        "block:0000000000000000000000000000000000c1",
+        "block:0000000000000000000000000000000000c2",
+        "block:0000000000000000000000000000000000c3",
+        "block:0000000000000000000000000000000000c4",
+        "block:0000000000000000000000000000000000c5",
+    ];
+    let none = json!([]);
+    // A shell in front is no agent, whatever a program that left reported.
+    let reported = json!([fake::record("idle", 9, "claude", T0)]);
+    read(
+        &mut model,
+        zsh,
+        fake::HOST,
+        t,
+        fake::process(10, "-zsh", "zsh"),
+        reported,
+    );
+    read(
+        &mut model,
+        vim,
+        fake::HOST,
+        t,
+        fake::under_shell(11, "vim", "vim"),
+        none.clone(),
+    );
+    let cli = fake::under_shell(12, "claude", "2.1.322");
+    read(&mut model, claude, fake::HOST, t, cli, none.clone());
+    let alone = fake::process(13, "/usr/bin/top", "top");
+    read(&mut model, top, fake::HOST, t, alone, none.clone());
+    let other = "0e9d6c1f-4a3b-4a52-9c85-2f6d3f6f2f10";
+    read(
+        &mut model,
+        away,
+        other,
+        t,
+        fake::process(14, "-zsh", "zsh"),
+        none,
+    );
+    let listed = |model: &Model| {
+        let l = model.listing();
+        let terminals: Vec<String> = l.terminals.into_iter().map(|p| p.terminal_id).collect();
+        let agents: Vec<String> = l.agents.into_iter().map(|a| a.terminal_id).collect();
+        (terminals, agents)
+    };
+    assert_eq!(listed(&model), (vec![id(zsh), id(vim)], vec![id(claude)]));
+    let pane = &model.listing().terminals[1];
+    assert_eq!(
+        (
+            pane.workspace_id.as_str(),
+            pane.agent.as_deref(),
+            pane.label.as_deref()
+        ),
+        (format!("rex:{S1}").as_str(), None, None)
+    );
+    assert_eq!(pane.foreground_cwd.as_deref(), Some("/work/app"));
+    assert_eq!(
+        model.target(&id(zsh)).map(|t| t.3),
+        Some(super::model::Listed::Terminal)
+    );
+    assert_eq!(model.target(&id(top)), None);
+    assert_eq!(model.target(&id(away)), None);
+
+    let event = |model: &mut Model, seq, block: &str, p: Value| {
+        let e = fake::block_event(S1, block, "process_changed", p);
+        model.event(seq, serde_json::from_value(e).unwrap());
+    };
+    // A command the phone runs keeps the terminal listed, so its watch goes on; an agent
+    // started there takes it, and a program the shell `exec`s leaves the list.
+    event(&mut model, 2, zsh, fake::under_shell(20, "make", "make"));
+    event(&mut model, 3, vim, fake::under_shell(21, "codex", "codex"));
+    assert_eq!(listed(&model), (vec![id(zsh)], vec![id(vim), id(claude)]));
+    event(&mut model, 4, zsh, fake::process(10, "/usr/bin/top", "top"));
+    assert_eq!(listed(&model).0, Vec::<String>::new());
+}
+
+/// `sh -c 'cd x && claude'` keeps `sh` in front, and Rex names it as the owner of the agent's
+/// reports: shell input there would reach the agent past every agent check.
+#[test]
+fn a_shell_keeping_an_agent_under_it_is_no_terminal() {
+    let mut model = Model::new(Some(fake::HOST.to_owned()));
+    let session = SessionRef {
+        session_id: S1.to_owned(),
+        label: "work".to_owned(),
+    };
+    model.sessions(1, vec![session]);
+    let me = std::process::id();
+    let gone = {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        child.wait().unwrap();
+        child.id()
+    };
+    let wrapper = "block:0000000000000000000000000000000000d1";
+    let idle = json!([fake::record("idle", me, "bash", T0)]);
+    let sh = fake::under_shell(me, "sh", "bash");
+    read(
+        &mut model,
+        wrapper,
+        fake::HOST,
+        super::client::TERMINAL,
+        sh,
+        idle,
+    );
+    // Terminals, a pane hosting an agent, and whether input can reach it.
+    let listed = |model: &Model| {
+        let panes = model.listing().terminals;
+        let terminals = panes.iter().filter(|p| p.agent.is_none()).count();
+        let hosting = panes.iter().filter(|p| p.agent.is_some()).count();
+        assert!(model.listing().agents.is_empty());
+        (terminals, hosting, model.target(&id(wrapper)).is_some())
+    };
+    // The shell in front owns the record: whatever it says, an agent may be at a dialog.
+    assert_eq!(listed(&model), (0, 1, false));
+    assert_eq!(
+        model.listing().terminals[0].agent.as_deref(),
+        Some("claude")
+    );
+
+    let report = |model: &mut Model, seq, state: &str, pid| {
+        let r = fake::record(state, pid, "bash", &format!("2026-11-12T16:48:0{seq}Z"));
+        let e = fake::status_changed(S1, wrapper, r);
+        model.event(seq, serde_json::from_value(e).unwrap());
+    };
+    let front = |model: &mut Model, seq, pid, argv0: &str, name: &str| {
+        let e = fake::block_event(
+            S1,
+            wrapper,
+            "process_changed",
+            fake::process(pid, argv0, name),
+        );
+        model.event(seq, serde_json::from_value(e).unwrap());
+    };
+    report(&mut model, 2, "blocked", me);
+    assert_eq!(listed(&model), (0, 1, false));
+    // Suspended with Ctrl+Z, the login shell leads: idle or done, it is listed for `fg`;
+    // working or blocked under a live owner, it is not.
+    front(&mut model, 3, 2, "-zsh", "zsh");
+    report(&mut model, 4, "idle", me);
+    assert_eq!(listed(&model), (1, 0, true));
+    report(&mut model, 5, "working", me);
+    assert_eq!(listed(&model), (0, 1, false));
+    // A record whose owner is gone is a program that left.
+    report(&mut model, 6, "working", gone);
+    assert_eq!(listed(&model), (1, 0, true));
+
+    // A report credited to the shell in front: a login shell, as Rex.app starts one, stays
+    // listed at idle or done; a shell that is not one is hidden.
+    front(&mut model, 7, me, "-zsh", "zsh");
+    for (seq, state) in [(8, "idle"), (9, "done")] {
+        let r = fake::record(state, me, "zsh", &format!("2026-11-12T16:48:0{seq}Z"));
+        let e = fake::status_changed(S1, wrapper, r);
+        model.event(seq, serde_json::from_value(e).unwrap());
+        assert_eq!(listed(&model), (1, 0, true), "{state}");
+    }
+    front(&mut model, 10, me, "sh", "zsh");
+    assert_eq!(listed(&model), (0, 1, false));
+}
+
+#[tokio::test]
+async fn terminals_are_listed_per_session_from_the_model_without_reading_a_screen() {
+    const S3: &str = "session:019a7d2e-0000-7000-8000-000000000003";
+    const B4: &str = "block:019a7d2e-0000-7000-8000-0000000000b4";
+    let fake = Fake::start().await;
+    claude(&fake, S1, B1, 10, "idle", T0);
+    {
+        let mut s = fake.state();
+        s.sessions.push((S2.to_owned(), "logs".to_owned()));
+        s.sessions.push((S3.to_owned(), "tools".to_owned()));
+        s.add(S1, B2, fake::process(20, "-zsh", "zsh"), vec![]);
+        s.add(S2, B3, fake::under_shell(30, "tail", "tail"), vec![]);
+        s.add(S3, B4, fake::process(40, "/usr/bin/top", "top"), vec![]);
+    }
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    let dir = tempfile::tempdir().unwrap();
+    let rt = Runtime::new(dir.path().join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    let before = fake.calls().len();
+
+    let snap = rt.session_snapshot().await.unwrap();
+    let terminals: Vec<(String, String)> = (crate::flock::map_terminals(&snap).into_iter())
+        .map(|t| {
+            (
+                t.terminal_id.as_str().to_owned(),
+                t.workspace_id.as_str().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        terminals,
+        [(id(B2), format!("rex:{S1}")), (id(B3), format!("rex:{S2}"))]
+    );
+    let groups: Vec<(String, String, u32)> = (snap.workspaces.into_iter())
+        .map(|w| (w.workspace_id, w.label, w.number))
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            (format!("rex:{S1}"), "work".to_owned(), 1),
+            (format!("rex:{S2}"), "logs".to_owned(), 2)
+        ]
+    );
+    let poll = rt.poll().await.unwrap();
+    let agents: Vec<&str> = poll.agents.iter().map(|a| a.terminal_id.as_str()).collect();
+    assert_eq!(agents, [id(B1)]);
+    assert_eq!(poll.workspaces.len(), 2);
+    assert!(rt.agent_get(&id(B2)).await.is_err());
+    assert_eq!(fake.calls().len(), before, "listing called the server");
 }
 
 fn group(rex: &Rex, session: &str) -> Option<String> {

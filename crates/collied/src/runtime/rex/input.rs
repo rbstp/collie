@@ -1,12 +1,13 @@
-//! Pastes and named keys to a listed agent's block, as `block.event`s on the follower's
-//! control connection: the server takes them only from a connection attached to the block's
-//! session, and runs them in the order sent.
+//! Pastes and named keys to a listed agent's or terminal's block, as `block.event`s on the
+//! follower's control connection: the server takes them only from a connection attached to
+//! the block's session, and runs them in the order sent.
 
 use serde::Serialize;
 use serde_json::json;
 
 use super::Rex;
 use super::client::{Method, TIMEOUT};
+use super::model::Listed;
 use crate::runtime::Error;
 
 /// The only events collied sends: a paste, which Rex brackets when the program turned
@@ -34,7 +35,7 @@ struct Press {
 pub const STATUS_CHANGED: &str = "status_changed";
 
 pub(super) const REFUSED: &str =
-    "Rex agents take no cmd key, and no ctrl key that Rex would send as nothing or as ESC [";
+    "Rex takes no cmd key, and no ctrl key that it would send as nothing or as ESC [";
 
 /// Control without Alt on these sends nothing in Rex (build 1972); herdr-core refuses them.
 const CONTROL_SILENT: &[u8] = b"i',-.;=`";
@@ -160,15 +161,21 @@ impl Rex {
         Ok(())
     }
 
+    /// Each event goes only while the block is still listed as `listed`: input meant for an
+    /// agent never reaches a shell, nor a shell's an agent.
     async fn send(
         &self,
         id: &str,
+        listed: Listed,
         events: &[Event<'_>],
         seen: Option<&Seen<'_>>,
     ) -> Result<(), Error> {
         let _one = self.input.lock().await;
-        let (client, session, block, _) = self.target(id)?;
         for event in events {
+            let (client, session, block, _, now) = self.target(id)?;
+            if now != listed {
+                return Err(super::not_found());
+            }
             if let Some(seen) = seen {
                 self.still(id, seen)?;
             }
@@ -192,16 +199,27 @@ impl Rex {
         if enter {
             events.push(Event::Key(press("enter")?));
         }
-        self.send(id, &events, seen).await
+        self.send(id, Listed::Agent, &events, seen).await
     }
 
     /// Every key is checked before the first is sent.
     pub async fn keys(&self, id: &str, keys: &[&str]) -> Result<(), Error> {
-        let events = (keys.iter())
-            .map(|k| press(k).map(Event::Key))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.send(id, &events, None).await
+        self.send(id, Listed::Agent, &presses(keys)?, None).await
     }
+
+    /// Into a listed terminal: `text` pasted, unless empty, then `keys`, every key checked
+    /// before anything is sent.
+    pub async fn terminal(&self, id: &str, text: &str, keys: &[&str]) -> Result<(), Error> {
+        let mut events = presses(keys)?;
+        if !text.is_empty() {
+            events.insert(0, Event::Paste { text });
+        }
+        self.send(id, Listed::Terminal, &events, None).await
+    }
+}
+
+fn presses(keys: &[&str]) -> Result<Vec<Event<'static>>, Error> {
+    keys.iter().map(|k| press(k).map(Event::Key)).collect()
 }
 
 #[cfg(test)]

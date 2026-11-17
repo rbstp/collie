@@ -173,7 +173,7 @@ type Pushes<T> = Arc<Mutex<Option<mpsc::UnboundedSender<T>>>>;
 pub(super) struct Fake {
     _dir: tempfile::TempDir,
     pub socket: PathBuf,
-    state: Arc<Mutex<State>>,
+    pub state: Arc<Mutex<State>>,
     push: Pushes<Push>,
     data_push: Pushes<DataPush>,
     task: tokio::task::JoinHandle<()>,
@@ -846,6 +846,16 @@ pub(super) fn record(state: &str, pid: u32, name: &str, at: &str) -> Value {
         "state": state, "app": "claude-code", "updated_at": at,
         "owner": { "pid": pid, "name": name },
     })
+}
+
+/// As [`process`], run from a login zsh, as Rex.app's terminals run a command.
+pub(super) fn under_shell(pid: u32, argv0: &str, name: &str) -> Value {
+    let mut p = process(pid, argv0, name);
+    p["ancestors"] = json!([
+        { "pid": 2, "user_id": 501, "name": "zsh", "argv0": "-zsh", "cwd": "/work/app" },
+        { "pid": 1, "user_id": 0, "name": "login" },
+    ]);
+    p
 }
 
 /// A terminal whose foreground process is `pid`, started as `argv0` and named `name`.

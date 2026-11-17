@@ -113,6 +113,52 @@ async fn watches_share_one_stream_read_without_format_and_closed_with_the_last()
     assert_eq!(formats(&fake, from), 1);
 }
 
+/// A terminal is streamed while the phone watches it, as an agent is (#755).
+#[tokio::test]
+async fn a_watched_terminal_is_streamed_and_an_unwatched_one_reads_nothing() {
+    let fake = Fake::start().await;
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        s.add(S1, B1, fake::process(10, "-zsh", "zsh"), vec![]);
+        let b = s.block(B1);
+        b.screen = String::from_utf8(FORMAT.to_vec()).unwrap();
+        b.rows = Some(String::from_utf8(ROWS.to_vec()).unwrap());
+        b.size = (100, 30);
+        s.data.stream = running();
+    }
+    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let _task = follow(&rex).await;
+    let dir = tempfile::tempdir().unwrap();
+    let rt = Runtime::new(dir.path().join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    let drive = Arc::new(
+        crate::drive::Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+            .unwrap()
+            .with_rex(Some(rex.clone())),
+    );
+    rt.session_snapshot().await.unwrap();
+    let unread = |m: &String| *m == FORMAT_CALL || m == "data.connect";
+    assert!(!fake.calls().iter().any(unread), "{:?}", fake.calls());
+
+    let granted: crate::drive::Authorized = Arc::new(|| true);
+    let terminal = protocol::TerminalId::new(id(B1)).unwrap();
+    let watcher = drive
+        .watch_terminal(terminal, 200, false, granted)
+        .await
+        .unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    let from = fake.calls().len();
+    rt.pane_read(&id(B1), "recent_unwrapped", Some(200))
+        .await
+        .unwrap();
+    assert_eq!(formats(&fake, from), 0);
+    assert_eq!(fake.state().data.handshakes, [(1, 0)]);
+
+    drop(watcher);
+    eventually("the stream closed", || !fake.state().data.closed.is_empty()).await;
+    assert_eq!(fake.state().data.closed, [Some(1000)]);
+}
+
 #[tokio::test]
 async fn a_dropped_stream_resumes_with_its_latest_token_and_every_byte_received() {
     let stream = running();

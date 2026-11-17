@@ -561,12 +561,16 @@ impl Driver {
         low_data: bool,
         auth: Authorized,
     ) -> Result<Watcher, Fail> {
-        self.shell_pane(&terminal_id).await?;
+        let pane = self.shell_pane(&terminal_id).await?;
+        let hold = self.runtime.watch(&pane.pane_id).map_err(herdr_fail)?;
         let (tx, rx) = mpsc::channel(1);
         let watch = self
             .clone()
             .watch_loop(terminal_id, lines, low_data, Some(auth), tx);
-        let task = tokio::spawn(watch);
+        let task = tokio::spawn(async move {
+            let _hold = hold;
+            watch.await
+        });
         Ok(Watcher { rx, task })
     }
 
@@ -854,7 +858,7 @@ impl Driver {
         let pane = self.shell_pane(&p.terminal_id).await?;
         granted(auth)?;
         self.runtime
-            .pane_send_text(&pane.pane_id, p.text.as_str())
+            .terminal_send_text(&pane.pane_id, p.text.as_str())
             .await
             .map_err(quiet_fail)?;
         Ok(Response::Ok)

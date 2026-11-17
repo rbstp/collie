@@ -204,7 +204,7 @@ impl HerdrSeen {
     }
 }
 
-/// The agents of the runtimes followed beside herdr.
+/// The agents of the runtimes followed beside herdr, and Rex's terminals.
 struct Followed {
     core: Vec<AgentInfo>,
     rex: Option<rex::Listing>,
@@ -218,6 +218,10 @@ impl Followed {
             let after = workspaces.iter().map(|w| w.number).max().unwrap_or(0);
             workspaces.extend(rex.groups(after));
         }
+    }
+
+    fn terminals(&self) -> Vec<PaneInfo> {
+        self.rex.iter().flat_map(|l| l.terminals.clone()).collect()
     }
 
     fn agents(self) -> Vec<AgentInfo> {
@@ -470,6 +474,7 @@ impl Runtime {
         let herdr = herdr::session_snapshot(&self.herdr).await;
         self.merge(herdr, |snap, followed| {
             followed.groups(&mut snap.workspaces);
+            snap.panes.extend(followed.terminals());
             let agents = followed.agents();
             snap.panes.extend(agents.iter().map(pane));
             snap.agents.extend(agents);
@@ -691,7 +696,12 @@ impl Runtime {
         }
     }
 
+    /// The terminal calls below reach a Rex terminal, never a Rex agent; Herdr Core's shells
+    /// are not listed.
     pub async fn pane_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
+        if Owner::of(pane_id) == Owner::Rex {
+            return self.followed_rex()?.terminal(pane_id, "", keys).await;
+        }
         herdr_only(pane_id)?;
         herdr::pane_send_keys(&self.herdr, pane_id, keys).await
     }
@@ -702,8 +712,20 @@ impl Runtime {
         text: &str,
         keys: &[&str],
     ) -> Result<(), Error> {
+        if Owner::of(pane_id) == Owner::Rex {
+            return self.followed_rex()?.terminal(pane_id, text, keys).await;
+        }
         herdr_only(pane_id)?;
         herdr::pane_send_input(&self.herdr, pane_id, text, keys).await
+    }
+
+    /// A Rex terminal takes the text as a paste.
+    pub async fn terminal_send_text(&self, pane_id: &str, text: &str) -> Result<(), Error> {
+        if Owner::of(pane_id) == Owner::Rex {
+            return self.followed_rex()?.terminal(pane_id, text, &[]).await;
+        }
+        herdr_only(pane_id)?;
+        herdr::pane_send_text(&self.herdr, pane_id, text).await
     }
 
     pub async fn agent_focus(&self, pane_id: &str) -> Result<(), Error> {
