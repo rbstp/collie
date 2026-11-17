@@ -195,6 +195,7 @@ pub fn map_agent(
         if tracker.first_skip(&a.terminal_id) {
             tracing::warn!(
                 terminal_id = %crate::printable(&a.terminal_id),
+                workspace_id = %crate::printable(&a.workspace_id),
                 "skipping agent with an invalid id"
             );
         }

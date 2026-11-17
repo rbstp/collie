@@ -2779,7 +2779,7 @@ fn herdr_result<T>(
     let starts = outage_starts(outage, res.is_err());
     res.map_err(|e| {
         if starts {
-            tracing::warn!(error = %e, "herdr call failed");
+            tracing::warn!(error = %crate::printable(&e.to_string()), "herdr call failed");
         }
         (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned())
     })

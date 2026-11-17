@@ -279,7 +279,6 @@ pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watc
         tokio::select! {
             res = listener.accept() => match res {
                 Ok((stream, _)) => {
-                    warned = None;
                     if !same_user(&stream) {
                         state.audit.log("control", "control.connect", None, "rejected: foreign uid");
                         continue;
