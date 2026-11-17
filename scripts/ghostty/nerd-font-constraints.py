@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Writes Collie/GhosttyTerminal/Sources/GhosttyTerminal/NerdFontConstraints.swift from Ghostty's
-# src/font/nerd_font_tables.zig at the commit scripts/ghostty/build-xcframework.sh pins.
+# src/font/nerd_font_tables.zig at the commit scripts/ghostty/pins.env pins.
 import re
 import urllib.request
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "Collie/GhosttyTerminal/Sources/GhosttyTerminal/NerdFontConstraints.swift"
 
-commit = re.search(r"^GHOSTTY_COMMIT=(\w+)", (ROOT / "scripts/ghostty/build-xcframework.sh").read_text(), re.M)[1]
+commit = re.search(r"^GHOSTTY_COMMIT=(\w+)", (ROOT / "scripts/ghostty/pins.env").read_text(), re.M)[1]
 url = f"https://raw.githubusercontent.com/ghostty-org/ghostty/{commit}/src/font/nerd_font_tables.zig"
 zig = urllib.request.urlopen(url).read().decode()
 

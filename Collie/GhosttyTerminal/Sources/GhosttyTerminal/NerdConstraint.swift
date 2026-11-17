@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Ghostty's glyph constraint (`Glyph.RenderOptions.Constraint` in `src/font/Glyph.zig` at the
-/// commit `scripts/ghostty/build-xcframework.sh` pins), which sizes and aligns Nerd Font glyphs
+/// commit `scripts/ghostty/pins.env` pins), which sizes and aligns Nerd Font glyphs
 /// to the cell grid. Rectangles are in points from the cell's bottom-left corner, y up.
 struct NerdConstraint {
     enum Size { case none, fit, cover, fitCover1, stretch }

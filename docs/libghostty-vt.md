@@ -155,13 +155,13 @@ For scale, the v0.1.20 downloads: collied is 43,290,464 bytes on macOS (archive 
 
 ## Version bumps
 
-The owner's question: can a new version be added easily? Today's iOS bump, from `scripts/ghostty/build-xcframework.sh`:
+The owner's question: can a new version be added easily? A bump, as the spike found it in `scripts/ghostty/build-xcframework.sh` and as it reads since [#764](https://github.com/rbstp/collie/issues/764) moved the pins to `scripts/ghostty/pins.env`:
 
 1. Check the new release's `SHA256SUMS` against its minisign signature with the Ghostty release key (`PACKAGING-LIBGHOSTTY.md`).
-2. In the script: `LIBGHOSTTY_VT_VERSION`, `GHOSTTY_COMMIT` (the `vt-` tag's commit), `SOURCE_SHA256` and `DEPS_SHA256`; `ZIG_VERSION` and `ZIG_SHA256` when `minimum_zig_version` moves; the uucode license URLs and checksums when the dependency tarball's uucode moves.
+2. In `scripts/ghostty/pins.env`: `LIBGHOSTTY_VT_VERSION`, `GHOSTTY_COMMIT` (the `vt-` tag's commit), `SOURCE_SHA256` and `DEPS_SHA256`; when the Zig pin moves (it must stay at or above `minimum_zig_version`), `ZIG_VERSION` and each `ZIG_SHA256_<host>` from ziglang.org's `index.json`, checked against the downloaded tarball; the uucode license URLs and checksums when the dependency tarball's uucode moves.
 3. Run `scripts/ghostty/nerd-font-constraints.py` again (the app's font tables).
-4. Upload both tarballs to a `ghostty-vt-<version>` release of this repository, the script's fallback mirror.
-5. CI follows by itself: the `ios` job's cache key hashes the script, and `scripts/ghostty/` is in the `changes` filter.
+4. Upload both tarballs to a `ghostty-vt-<version>` release of this repository, the scripts' fallback mirror.
+5. CI and local builds follow by themselves: every libghostty-vt cache key (`ci`'s `ios`, `rust` and `linux` jobs, `testflight`, `docs-screenshots`) and both builds' stamps hash `pins.env`, and `scripts/ghostty/` is in the `changes` filters of `ios` and `linux`.
 
 If collied linked the library, the pin could be shared, but not the script or the rest of the path as they stand (verified by reading):
 
@@ -180,6 +180,8 @@ So "one file" would take this work first (inferred, nothing built):
 - The binding: only for new functions. 1.x promises additive ABI changes only and keeps the `.1` SONAME, checked by its own CI against a baseline.
 
 After that, a bump is steps 1 to 5 on the pins file, and CI rebuilds both the app's and collied's library.
+
+[#764](https://github.com/rbstp/collie/issues/764) built that path ([architecture.md](architecture.md#libghostty-vt-in-collied)). Dependabot still does not watch the pin.
 
 What breaks a bump: a major version (new SONAME, any function may change); a new `minimum_zig_version`; and, with Rex streaming, the snapshot format, which has its own envelope version (1 at both `vt-1.0.0` and `vt-1.0.1`) outside the ABI promise. Rex writes snapshots with its own Ghostty, which moves on Rex's schedule, so collied would refuse an unknown envelope version and poll `format` instead.
 
@@ -200,7 +202,7 @@ Making it easier: the manual part is steps 1 to 4. A script that takes a version
 Four issues, filed as #763 to #766, in this order: the measured gain first, the risk last.
 
 1. **Move libghostty-vt to 1.0.1** ([#763](https://github.com/rbstp/collie/issues/763)) for the app (the repository's latest-stable rule, whatever the answer). Done: the app pins 1.0.1.
-2. **Build libghostty-vt for collied, with no change in behavior** ([#764](https://github.com/rbstp/collie/issues/764)): the shared pins file, a library build split from the xcframework step that runs on any host and target, the local `crates/ghostty-vt-sys`, the notices path and a Linux build of collied in CI. This carries the build cost alone, so a broken Linux link or release job shows before any screen depends on it.
+2. **Build libghostty-vt for collied, with no change in behavior** ([#764](https://github.com/rbstp/collie/issues/764)): the shared pins file, a library build split from the xcframework step that runs on any host and target, the local `crates/ghostty-vt-sys`, the notices path and a Linux build of collied in CI. This carries the build cost alone, so a broken Linux link or release job shows before any screen depends on it. Done: collied links libghostty-vt 1.0.1 on arm64 macOS and x86_64 Linux, and nothing calls it yet ([architecture.md](architecture.md#libghostty-vt-in-collied)). With 1.0.1, the spike's decoder program read both captured Rex snapshots (1,000 lines, and 96,456 rows near Rex's cap) and, with the live bytes after them, reproduced Rex's own `format`, plain and VT, byte for byte; the spike's 1.0.0 output of the larger one held 592 fewer history rows than Rex's.
 3. **Follow a watched Rex terminal as a stream** ([#765](https://github.com/rbstp/collie/issues/765)), with Rex's reads through a libghostty-vt screen and polling as the fallback. This is where the [Watch cost](#watch-cost) gain is, and Rex's screens already come out of Ghostty, so the four [differences](#4-fidelity) do not apply to them.
 4. **Move Herdr Core's emulation to libghostty-vt and remove `alacritty_terminal`** ([#766](https://github.com/rbstp/collie/issues/766)). This is where the risk is: the synchronized-update hold, scrollback over-provisioning, and the visible change of `ESC[2J` in `recent` reads, with no measured gain beyond one emulator instead of two.
 

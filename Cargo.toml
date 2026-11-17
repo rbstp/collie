@@ -4,6 +4,7 @@ members = [
     "crates/collie-core",
     "crates/collied",
     "crates/e2e",
+    "crates/ghostty-vt-sys",
     "crates/protocol",
     "crates/tailnet",
     "crates/tailscale-sys",
