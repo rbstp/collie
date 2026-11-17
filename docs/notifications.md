@@ -35,15 +35,15 @@ iPhone and Apple Watch show the authenticated preview, as does an iPhone notific
 
 ## Done alert at the desk
 
-collied skips a done alert (#774) only when three signals, read when the turn ends, are all known and true; any missing, stale or failed signal sends it. Approval alerts, pull request watch and archive alerts, Live Activities and Usage are unchanged. Design and calls: [architecture](architecture.md#apns).
+collied skips a done alert (#774) only when three signals, read when the turn ends, are all known and true; any missing or failed signal sends it. Approval alerts, pull request watch and archive alerts, Live Activities and Usage are unchanged. Design and calls: [architecture](architecture.md#apns).
 
-- The pane is focused: the agent is herdr's, and herdr's `session.snapshot` names its pane as `focused_pane_id`.
+- The pane is focused: the agent is herdr's, the turn ended `idle` rather than `done`, and herdr's `session.snapshot` names its pane as `focused_pane_id`. herdr reports `done` for a turn that ends while its tab is not showing or the client's terminal reported losing focus (terminal focus reporting), and `idle` once it counts the turn seen; a terminal that reports no focus counts as focused.
 - Its window is in front: the frontmost normal window's application, or a process under it, holds a client attached to the session collied follows.
-- The user is active: keyboard or pointer input in the last 60 s, the screen unlocked, the display awake and the session on the console.
+- The user is active: keyboard or pointer input in the last 30 s, the shortest turn that alerts, so after the turn began, the screen unlocked, the display awake and the session on the console.
 
-It applies on macOS with herdr only. Herdr Core and Rex report no client's view, and on Linux idle and lock states would need a Wayland client and D-Bus, so those send as before. collied sees the application, not its tab or window: with herdr's terminal in front showing another tab, the alert is skipped.
+It applies on macOS with herdr only. Herdr Core and Rex report no client's view, and on Linux idle and lock states would need a Wayland client and D-Bus, so those send as before. collied itself sees the application, not its tabs or windows; herdr's `done` covers another tab or window, a minimized window and an editor's hidden terminal panel, but only in a terminal that reports focus changes. In one that does not, the alert is skipped while another of its tabs or windows shows. A skipped turn shows as idle in the app, since herdr counts it seen.
 
-To try it on a Mac: run an agent in herdr in a terminal, give it a task of more than 30 s, and keep its pane focused and the terminal in front while moving the mouse now and then. No alert arrives (with `RUST_LOG=info`, collied logs "done alert skipped"). Repeat with another app in front, with the screen locked, or after a minute without input: the alert arrives.
+To try it on a Mac: run an agent in herdr in a terminal, give it a task of more than 30 s, and keep its pane focused and the terminal in front while moving the mouse now and then. No alert arrives (with `RUST_LOG=info`, collied logs "done alert skipped"). Repeat with another tab of the terminal showing, another app in front, the screen locked, or 30 s without input: the alert arrives.
 
 ## Observations from device testing
 

@@ -2957,10 +2957,10 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
     }
 }
 
-/// Only a herdr agent's pane can be known to be focused; herdr is asked only when the desktop
-/// already says the user is active with a client of this session in front.
+/// The desktop is read only for a turn herdr saw, and herdr asked only when the desktop says
+/// the user is active with a client of this session in front.
 async fn in_front(runtime: &Runtime, a: &runtime::AgentInfo) -> bool {
-    if Owner::of(&a.terminal_id) != Owner::Herdr {
+    if !crate::desk::herdr_saw(a) {
         return false;
     }
     let (active, front) = crate::desk::desktop(&runtime.herdr_client_socket());

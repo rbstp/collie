@@ -82,7 +82,8 @@ pub struct AgentInfo {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionSnapshot {
-    /// herdr's, shared by every client and kept with none attached.
+    /// herdr's server-side focus, which follows the foreground client and stays set with no
+    /// client attached.
     #[serde(default)]
     pub focused_pane_id: Option<String>,
     pub workspaces: Vec<WorkspaceInfo>,

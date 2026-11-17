@@ -1,8 +1,11 @@
 use std::path::Path;
 use std::time::Duration;
 
-/// Input more recent than this means the user is at the computer.
-pub const ACTIVE_WITHIN: Duration = Duration::from_secs(60);
+use crate::runtime::{AgentInfo, Owner};
+
+/// Equal to the shortest turn that alerts (`turns::MIN_TURN_MS`), so input this recent came
+/// after the turn began.
+pub const ACTIVE_WITHIN: Duration = Duration::from_secs(30);
 
 /// The desktop session as macOS reports it.
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +22,13 @@ impl Session {
     }
 }
 
+/// herdr counts a finished turn as seen, and reports it `idle` rather than `done`, only when
+/// its tab is active and the client's terminal has not reported losing focus. Herdr Core and
+/// Rex report no such thing.
+pub fn herdr_saw(a: &AgentInfo) -> bool {
+    Owner::of(&a.terminal_id) == Owner::Herdr && a.agent_status == "idle"
+}
+
 /// A done alert only repeats what the user sees when all three are known and true; any
 /// unknown signal sends it.
 pub fn in_front(
@@ -29,9 +39,7 @@ pub fn in_front(
     pane_focused == Some(true) && window_in_front == Some(true) && user_active == Some(true)
 }
 
-/// Whether the user is active, and whether the frontmost window's application, or a process
-/// under it, holds a client connected to `client_socket`. The second is read only when the
-/// first is true.
+/// The window is read only when the user is active.
 #[cfg(target_os = "macos")]
 pub fn desktop(client_socket: &Path) -> (Option<bool>, Option<bool>) {
     let active = mac::session().map(|s| s.active());
@@ -123,17 +131,37 @@ mod mac {
         number(&front, &owner)
     }
 
-    /// Whether `root` or a process under it has a Unix socket connected to `socket`.
+    /// Past this many processes, or at pid 0 or 1 (pid 0 lists itself as its own child), a
+    /// walk answers unknown, so it always ends.
+    const MAX_PIDS: usize = 4096;
+
     pub fn hosts_client(root: i32, socket: &Path) -> Option<bool> {
+        walk(root, socket, MAX_PIDS)
+    }
+
+    // Sockets are read only of processes named herdr, as its clients are: every other process
+    // under the application is left alone.
+    pub(super) fn walk(root: i32, socket: &Path, limit: usize) -> Option<bool> {
         let want = socket.as_os_str().as_bytes();
         let mut stack = vec![root];
+        let mut visited = 0;
         while let Some(pid) = stack.pop() {
-            if connected_to(pid, want) {
+            visited += 1;
+            if pid <= 1 || visited > limit {
+                return None;
+            }
+            if is_herdr(pid) && connected_to(pid, want) {
                 return Some(true);
             }
             stack.extend(children(pid));
         }
         Some(false)
+    }
+
+    fn is_herdr(pid: i32) -> bool {
+        let mut name = [0u8; 64];
+        let n = unsafe { libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) };
+        n > 0 && name.get(..n as usize) == Some(b"herdr".as_slice())
     }
 
     fn children(pid: i32) -> Vec<i32> {
@@ -262,9 +290,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn only_a_herdr_turn_herdr_saw_can_be_skipped() {
+        let agent = |id: &str, status: &str| -> AgentInfo {
+            serde_json::from_value(serde_json::json!({
+                "terminal_id": id, "workspace_id": "w1", "pane_id": "w1:p1", "agent_status": status,
+            }))
+            .unwrap()
+        };
+        assert!(herdr_saw(&agent("term_1", "idle")));
+        for (id, status) in [
+            ("term_1", "done"),
+            ("hc:core:t1", "idle"),
+            ("rex:block:1", "idle"),
+        ] {
+            assert!(!herdr_saw(&agent(id, status)), "{id} {status}");
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
-    fn finds_a_client_socket_held_by_a_process_or_a_child() {
+    fn finds_a_herdr_client_under_the_application_and_ends_unknown_at_its_bounds() {
         use std::os::unix::net::{UnixListener, UnixStream};
         use std::process::{Command, Stdio};
 
@@ -273,21 +319,31 @@ mod tests {
         let other = dir.path().join("herdr.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         let _other = UnixListener::bind(&other).unwrap();
+        let herdr = dir.path().join("herdr");
+        std::fs::copy("/bin/sleep", &herdr).unwrap();
         let me = std::process::id() as i32;
-        assert_eq!(mac::hosts_client(me, &path), Some(false));
 
         let stream = UnixStream::connect(&path).unwrap();
-        assert_eq!(mac::hosts_client(me, &path), Some(true));
-        assert_eq!(mac::hosts_client(me, &other), Some(false));
-
-        let mut child = Command::new("/bin/sleep")
+        assert_eq!(
+            mac::hosts_client(me, &path),
+            Some(false),
+            "a process not named herdr is not a client"
+        );
+        let mut child = Command::new(&herdr)
             .arg("30")
             .stdin(Stdio::from(std::os::fd::OwnedFd::from(stream)))
             .spawn()
             .unwrap();
         let found = mac::hosts_client(me, &path);
+        let another = mac::hosts_client(me, &other);
+        let capped = mac::walk(me, &path, 1);
         child.kill().unwrap();
         child.wait().unwrap();
-        assert_eq!(found, Some(true), "held only by a child");
+        assert_eq!(found, Some(true), "a herdr child holds it");
+        assert_eq!(another, Some(false));
+        assert_eq!(capped, None, "past the limit");
+        for root in [0, 1] {
+            assert_eq!(mac::hosts_client(root, &path), None, "pid {root}");
+        }
     }
 }
