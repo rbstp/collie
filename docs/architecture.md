@@ -15,7 +15,7 @@ iPhone (Collie.app)                                   Mac (or Linux)
                                                       └──────────────────────────────────────┘
 ```
 
-On Linux, collied is a systemd user unit ([Linux](#linux)).
+On Linux, collied is a systemd user unit ([Linux](#linux)). The service logs warnings and errors to its stderr (`collied.err.log` in the data folder on macOS, the journal on Linux); `RUST_LOG` overrides that level.
 
 ## Decisions (2026-10-03)
 

@@ -645,7 +645,8 @@ async fn again(end: End, id: &str, stop: &mut oneshot::Receiver<()>, delay: &mut
             false
         }
         End::Restart(e) | End::Dropped(e) => {
-            tracing::debug!(id, error = %e, "Rex stream ended, starting a new one");
+            // At most once per delay, which doubles to 30 s while streams keep failing.
+            tracing::warn!(id, error = %e, "Rex stream ended, starting a new one in {delay:?}");
             tokio::select! {
                 _ = &mut *stop => return false,
                 () = tokio::time::sleep(*delay) => {}
