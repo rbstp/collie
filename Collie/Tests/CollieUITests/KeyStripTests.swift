@@ -35,12 +35,10 @@ final class KeyStripTests: XCTestCase {
         XCTAssertTrue(app.buttons["Backspace"].isEnabled, app.debugDescription)
 
         // The terminal view has no prompt field: the keyboard types straight into the terminal.
-        // Queries stay in the main window where they can (see type(_:into:)): around the keyboard, accessibility queries stalled
-        // for 10 to 40 s on the hosted runner.
-        XCTAssertFalse(app.element(Match(.textField, NSPredicate(value: true))).exists, app.debugDescription)
+        XCTAssertFalse(app.textFields.firstMatch.exists, app.debugDescription)
         app.withInteractionOptions(2) { app.buttons["Keyboard"].tap() }
-        // No timed wait for the keyboard here: the tap on Control waits for the app to idle, and typing fails unless the terminal
-        // input has the focus.
+        // No timed wait for the keyboard: accessibility queries around it stalled for 3 to 40 s on the hosted runner. The tap on
+        // Control waits for the app to idle, and typing fails unless the terminal input has the focus.
         let keyboard = app.keyboards.firstMatch
         let control = app.buttons["Control"]
         control.tap()

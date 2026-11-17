@@ -33,8 +33,8 @@ final class AgentsTabTests: XCTestCase {
         XCTAssertNotNil(filter.settledFrame(), app.debugDescription)
         let filterRow = filter.frame
         app.buttons["Search"].tap()
-        // The main window only, as in type(_:into:). No timed wait for the keyboard or the field (see KeyStripTests): the tap
-        // waited for the app to idle, and the keyboard's frame below fails if it never came up.
+        // The main window only, as in type(_:into:). No timed wait for the keyboard or the field, whose queries stalled for 3 to
+        // 40 s on the hosted runner: the tap waited for the app to idle, and the keyboard's frame below fails if it never came up.
         let search = app.element(Match(.textField, "Search agents"))
         let keyboard = app.keyboards.firstMatch
         let before = search.frame
