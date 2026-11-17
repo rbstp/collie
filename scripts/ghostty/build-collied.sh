@@ -37,8 +37,9 @@ src="$build/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
 # Ghostty's build from taking this repository's git tags for its version. A baseline CPU, not the
 # build host's, since the release runners build for every machine. ReleaseSafe, unlike the app's
 # ReleaseFast: collied will parse untrusted program output in the process that holds its keys, so a
-# safety-checked fault in the Zig code aborts it (launchd or systemd restarts it) instead of
-# corrupting memory. The C++ parts (simdutf, Highway) get no such checks.
+# slice-bounds, overflow or assertion fault in the Zig code aborts it (launchd or systemd restarts
+# it) instead of corrupting memory. Pointer arithmetic, use after free and the C++ parts (simdutf,
+# Highway) stay unchecked.
 (
     cd "$src"
     GIT_CEILING_DIRECTORIES="$work" ZIG_GLOBAL_CACHE_DIR="$build/zig-global-cache" "$zig" build \

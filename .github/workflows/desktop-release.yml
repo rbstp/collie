@@ -97,7 +97,7 @@ jobs:
       - name: install rust
         run: rustup toolchain install
 
-      # The pinned Zig on PATH, or downloaded and checked against pins.env; cargo build links the result.
+      # The pinned Zig, downloaded and checked against pins.env; cargo build links the result.
       - name: build libghostty-vt
         run: scripts/ghostty/build-collied.sh x86_64-unknown-linux-gnu
 

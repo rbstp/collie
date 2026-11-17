@@ -35,11 +35,16 @@ find_zig() {
     [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
     mkdir -p "$work"
     tmp="$(mktemp -d "$work/.zig-$ZIG_VERSION.XXXXXX")"
+    # The sourcing scripts set no EXIT trap of their own; one that does must chain this one.
+    trap 'rm -rf "$tmp"' EXIT
     curl -fsSL --retry 3 -o "$tmp/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-$host-$ZIG_VERSION.tar.xz"
     sha256_check "$sha" "$tmp/zig.tar.xz"
     mkdir "$tmp/zig"
     tar -xJf "$tmp/zig.tar.xz" --strip-components=1 -C "$tmp/zig"
     echo "$sha" >"$tmp/zig/.collie-sha256"
+    # A concurrent build (another build script, another CARGO_TARGET_DIR) may have installed it
+    # meanwhile and be running it.
+    [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
     rm -rf "$zigdir"
     mv "$tmp/zig" "$zigdir"
     rm -rf "$tmp"

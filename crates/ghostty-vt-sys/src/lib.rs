@@ -183,7 +183,11 @@ mod tests {
             ghostty_formatter_free as *const (),
             ghostty_free as *const (),
         ];
-        assert!(functions.iter().all(|f| !f.is_null()));
+        assert!(
+            std::hint::black_box(&functions)
+                .iter()
+                .all(|f| !f.is_null())
+        );
     }
 
     #[test]
