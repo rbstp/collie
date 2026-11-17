@@ -3,7 +3,7 @@ use std::ffi::{CStr, c_char, c_int};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -21,6 +21,8 @@ const KNOBS: [(&str, &str); 2] = [
 const PORT: u16 = 7000;
 const REUSE_PORT: u16 = 7001;
 const CONCURRENT_PORT: u16 = 7002;
+const CHILD_PORT: u16 = 7003;
+const LIST_FDS: &str = "TAILNET_IT_LIST_FDS";
 const ACCEPTORS: usize = 8;
 const DIALERS: [&str; 2] = ["it-dialer-a", "it-dialer-b"];
 const TAGGED: &str = "it-tagged";
@@ -40,6 +42,12 @@ type Owners = HashMap<String, (String, Vec<IpAddr>)>;
 
 #[test]
 fn end_to_end() {
+    if std::env::var_os(LIST_FDS).is_some() {
+        for (dev, ino) in open_fd_ids() {
+            println!("held {dev} {ino}");
+        }
+        return;
+    }
     // libtailscale's Go runtime reads TS_* knobs once when the library loads, so
     // they must be set before this process starts. Without TS_DISABLE_PORTMAPPER
     // every node probes the LAN gateway with UPnP/NAT-PMP/PCP.
@@ -179,6 +187,9 @@ fn end_to_end() {
         .enable_all()
         .build()
         .unwrap();
+    let listed = child_holds_no_tailnet_fd(&rt, &listener, &dialers[0], listener_ips[0]);
+    println!("child process: {listed} open descriptors, none of them the listener or a connection");
+
     let reuse_target = SocketAddr::new(listener_ips[0], REUSE_PORT);
     let (reused, max_dial, failures) =
         rt.block_on(tuple_reuse(&listener, dialers[0].clone(), reuse_target));
@@ -332,6 +343,84 @@ async fn tuple_reuse(
             }
         }
     }
+}
+
+// collied starts children (git and its hooks, gh, codex app-server) that can outlive the
+// call: one holding the listener or a connection would keep a close from delivering EOF.
+// The control socketpair is not close-on-exec, so the child must list it.
+fn child_holds_no_tailnet_fd(
+    rt: &tokio::runtime::Runtime,
+    node: &Node,
+    dialer: &Node,
+    ip: IpAddr,
+) -> usize {
+    let _rt = rt.enter();
+    let listener = node.listen("tcp", &format!(":{CHILD_PORT}")).unwrap();
+    let dialed = dialer
+        .dial_timeout(
+            "tcp",
+            &SocketAddr::new(ip, CHILD_PORT).to_string(),
+            DIAL_TIMEOUT,
+        )
+        .unwrap();
+    let accepted = rt.block_on(listener.accept()).unwrap().stream;
+    let mut control: [c_int; 2] = [-1; 2];
+    assert_eq!(
+        unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, control.as_mut_ptr()) },
+        0
+    );
+    let control = control.map(|fd| unsafe { OwnedFd::from_raw_fd(fd) });
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args(["end_to_end", "--exact", "--nocapture"])
+        .env(LIST_FDS, "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "descriptor listing child failed: {}",
+        out.status
+    );
+    let held: Vec<(libc::dev_t, libc::ino_t)> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut id = line.strip_prefix("held ")?.split(' ');
+            Some((id.next()?.parse().ok()?, id.next()?.parse().ok()?))
+        })
+        .collect();
+    assert!(
+        held.contains(&fd_id(control[0].as_raw_fd()).unwrap()),
+        "the child did not list an inherited descriptor"
+    );
+    for (what, fd) in [
+        ("listener", listener.as_raw_fd()),
+        ("dialed connection", dialed.as_raw_fd()),
+        ("accepted connection", accepted.as_raw_fd()),
+    ] {
+        assert!(
+            !held.contains(&fd_id(fd).unwrap()),
+            "a child process holds the tailnet {what}"
+        );
+    }
+    held.len()
+}
+
+// A Unix socket's st_ino names it in every process that holds it, whatever the fd number.
+fn fd_id(fd: RawFd) -> Option<(libc::dev_t, libc::ino_t)> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd, st.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let st = unsafe { st.assume_init() };
+    Some((st.st_dev, st.st_ino))
+}
+
+// The directory's own fd is closed once listed, so fstat skips it.
+fn open_fd_ids() -> Vec<(libc::dev_t, libc::ino_t)> {
+    let fds: Vec<RawFd> = std::fs::read_dir("/dev/fd")
+        .unwrap()
+        .filter_map(|e| e.unwrap().file_name().to_str()?.parse().ok())
+        .collect();
+    fds.into_iter().filter_map(fd_id).collect()
 }
 
 // Holds node and machine keys for the throwaway tailnet; removed on panic too.

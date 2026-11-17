@@ -29,7 +29,7 @@ diff --git a/tailscale.go b/tailscale.go
  
  	// TODO: cancel Up
  	// TODO: close related listeners / conns.
-@@ -644,7 +651,7 @@
+@@ -648,7 +655,7 @@
  	if s == nil {
  		return C.EBADF
  	}

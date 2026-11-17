@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 7ec8789..6be5aa7 100644
+index 565f03d..dc05f7c 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -70,6 +70,16 @@ type listener struct {
@@ -19,7 +19,7 @@ index 7ec8789..6be5aa7 100644
  }
  
  // listenAddrLen is the size of the fixed-size, NUL-padded record that
-@@ -277,6 +287,14 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -279,6 +289,14 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  		listeners.mu.Unlock()
  
  		ln.Close()
@@ -34,7 +34,7 @@ index 7ec8789..6be5aa7 100644
  	}
  	go func() {
  		// fdC is never written to, so trying to read from sp blocks
-@@ -315,8 +333,29 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -317,8 +335,29 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  			var addrRec [listenAddrLen]byte
  			copy(addrRec[:], remote)
  
@@ -66,7 +66,7 @@ index 7ec8789..6be5aa7 100644
  			if err != nil {
  				// a failed sendmsg delivered nothing (sp being closed is
  				// handled by the read goroutine above)
-@@ -324,9 +363,15 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -326,9 +365,15 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  					s.s.Logf("libtailscale.accept: sendmsg failed: %v", err)
  				}
  				netConn.Close()
@@ -84,7 +84,7 @@ index 7ec8789..6be5aa7 100644
  		}
  	}()
  
-@@ -414,6 +459,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
+@@ -417,6 +462,12 @@ func tsnetAccept(listenerFd C.int, connOut *C.int, remoteOut *string) C.int {
  			// the cmsg rode with the record's first byte; only the tail remains
  			oobn = on
  			cbuf = nil
