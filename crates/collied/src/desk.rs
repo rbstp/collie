@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(
             mac::hosts_client(me, &path),
             Some(false),
-            "a process not named herdr is not a client"
+            "a process named neither herdr nor sheprd is not a client"
         );
         for name in ["herdr", "sheprd"] {
             let client = dir.path().join(name);
@@ -339,11 +339,13 @@ mod tests {
             let found = mac::hosts_client(me, &path);
             let another = mac::hosts_client(me, &other);
             let capped = mac::walk(me, &path, 1);
+            let root = mac::hosts_client(child.id() as i32, &path);
             child.kill().unwrap();
             child.wait().unwrap();
             assert_eq!(found, Some(true), "a {name} child holds it");
             assert_eq!(another, Some(false));
             assert_eq!(capped, None, "past the limit");
+            assert_eq!(root, Some(true), "the root itself can be the {name} client");
         }
         for root in [0, 1] {
             assert_eq!(mac::hosts_client(root, &path), None, "pid {root}");
