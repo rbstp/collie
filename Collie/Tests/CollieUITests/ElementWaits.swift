@@ -4,9 +4,11 @@ import XCTest
 /// query or one `Screen`: XCTest's own waits (waitForExistence, wait(for:toEqual:)) snapshot the whole app for a debug
 /// description after every miss, and on a loaded runner those snapshots took seconds each and ended in "Timed out while
 /// evaluating UI query".
-/// The hosted runner took 13 to 94 s to answer a single query, which failed waits after one look whatever the app did, and
-/// settledFrame needs two looks to compare. Where three looks fit in `timeout` the deadline ends the wait as before; a hung
-/// app costs three of XCTest's query timeouts (about 95 s each, its three tries) before the wait fails.
+/// The hosted runner took 11 to 94 s to answer a single query, which failed waits after one look whatever the app did, and
+/// settledFrame needs two looks to compare. Where two looks fit in `timeout` the deadline ends the wait as before. On a hung
+/// app, a condition that swallows a failed query (`try? snapshot()`) costs three of XCTest's query timeouts (about 95 s
+/// each, its three tries); `exists` ends the test at the first. A wait that holds past its deadline says so in the log,
+/// since the retry no longer names it.
 @MainActor
 func eventually(within timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
     let deadline = Date.now.addingTimeInterval(timeout)
@@ -15,6 +17,10 @@ func eventually(within timeout: TimeInterval = 10, _ condition: () -> Bool) -> B
         failures += 1
         if failures >= 3 && Date.now >= deadline { return false }
         usleep(250_000)
+    }
+    let late = Date.now.timeIntervalSince(deadline)
+    if late > 0 {
+        print(String(format: "eventually held on look %d, %.1f s past its %.0f s timeout", failures + 1, late, timeout))
     }
     return true
 }
