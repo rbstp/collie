@@ -11,7 +11,7 @@ use super::{Kind, Transcripts, open};
 use crate::draft::cells;
 use crate::drive::sanitize_ansi;
 use crate::runtime::AgentInfo;
-use crate::runtime::herdr_core;
+use crate::runtime::{herdr_core, rex};
 
 const SCAN_BYTES: u64 = 2 * 1024 * 1024;
 const PAGE_BYTES: usize = 40 * 1024;
@@ -37,6 +37,12 @@ impl Transcripts {
                     Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, Herdr Core was started inside Claude Code: start the core from a plain terminal.",
                     Some("codex") => "Codex has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Codex SessionStart hook, run Codex with --no-daemon, then resume the session.",
                     _ => "Chat is not available for this Herdr Core agent.",
+                }
+            } else if rex::owns(&agent.terminal_id) {
+                match agent.agent.as_deref() {
+                    Some("claude") => "Claude Code in Rex has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Rex server was started inside Claude Code: restart the server outside Claude Code.",
+                    Some("codex") => "Codex in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Codex reports it with its first prompt through collied’s SessionStart hook: check the hook with collied doctor, run Codex with --no-daemon, then resume the session.",
+                    _ => "Chat is not available for this Rex agent.",
                 }
             } else if agent.agent.as_deref() == Some("copilot") {
                 "Chat cannot yet confirm which Copilot CLI conversation this pane shows, so it does not guess. It retries once the pane’s title shows the session’s name. Terminal remains available."
@@ -1449,26 +1455,44 @@ mod tests {
         ] {
             let (_dir, reader, mut agent, _path) = setup(kind, &fixture);
             let identity = agent.agent_session.take();
+            let claude = kind == "claude";
+            for (terminal_id, want) in [
+                ("t1", "herdr SessionStart integration"),
+                (
+                    "hc:abc:t1",
+                    if claude {
+                        "Herdr Core was started inside Claude Code"
+                    } else {
+                        "Add collied’s Codex SessionStart hook"
+                    },
+                ),
+                (
+                    "rex:b1",
+                    if claude {
+                        "the Rex server was started inside Claude Code"
+                    } else {
+                        "check the hook with collied doctor"
+                    },
+                ),
+            ] {
+                let mut a = agent.clone();
+                a.terminal_id = terminal_id.into();
+                let page = reader.history(&a, &params(None, None, None));
+                assert!(!page.available && page.messages.is_empty());
+                let reason = page.unavailable_reason.unwrap();
+                assert!(reason.contains(want), "{terminal_id}: {reason}");
+                a.agent_session = identity.clone();
+                let page = reader.history(&a, &params(None, None, None));
+                assert!(page.available && !page.messages.is_empty());
+                assert!(page.unavailable_reason.is_none());
+            }
+            agent.terminal_id = "rex:b1".into();
+            agent.agent = Some("copilot".into());
             let page = reader.history(&agent, &params(None, None, None));
-            assert!(!page.available && page.messages.is_empty());
-            assert!(page.unavailable_reason.unwrap().contains("session ID"));
-            let mut core = agent.clone();
-            core.terminal_id = "hc:abc:t1".into();
-            let page = reader.history(&core, &params(None, None, None));
-            assert!(!page.available && page.messages.is_empty());
-            let want = if kind == "claude" {
-                "session file"
-            } else {
-                "SessionStart hook"
-            };
-            assert!(page.unavailable_reason.unwrap().contains(want));
-            agent.agent_session = identity;
-            let page = reader.history(&agent, &params(None, None, None));
-            assert!(page.available && !page.messages.is_empty());
-            assert!(page.unavailable_reason.is_none());
-            core.agent_session = agent.agent_session.clone();
-            let page = reader.history(&core, &params(None, None, None));
-            assert!(page.available && !page.messages.is_empty());
+            assert_eq!(
+                page.unavailable_reason.as_deref(),
+                Some("Chat is not available for this Rex agent.")
+            );
         }
     }
 

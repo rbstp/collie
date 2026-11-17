@@ -32,6 +32,9 @@ The app and `collied` share no protocol revision. Update the side the message na
 ## Chat unavailable
 
 - **No session ID**: Chat retries when one arrives. For Codex, install herdr's hook with `herdr integration install codex`, and in Herdr Core or Rex [`collied`'s own](agents/codex.md#herdr-core-and-rex).
+- **Codex in Herdr Core or Rex**: Codex reports its session with its first prompt. Check the second `codex hook` line of `collied doctor`, and run Codex with `--no-daemon`.
+- **Claude Code in Herdr Core or Rex says transcript saving is off**: the core or the Rex server was started inside Claude Code, as the `herdr-core` or `rex` lines of `collied doctor` warn. Restart it outside Claude Code.
+- **Copilot CLI in Herdr Core or Rex**: Chat is not available there. Use Terminal.
 - **A Codex session started before the hook**: finish the turn, then relaunch it in the same pane with `codex resume <session-id> --no-daemon`.
 - **`collied` is older than the app**: update `collied`.
 
