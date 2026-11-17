@@ -685,6 +685,18 @@ fn a_shell_keeping_an_agent_under_it_is_no_terminal() {
     // A record whose owner is gone is a program that left.
     report(&mut model, 6, "working", gone);
     assert_eq!(listed(&model), (1, 0, true));
+
+    // A report credited to the shell in front: a login shell, as Rex.app starts one, stays
+    // listed at idle or done; a shell that is not one is hidden.
+    front(&mut model, 7, me, "-zsh", "zsh");
+    for (seq, state) in [(8, "idle"), (9, "done")] {
+        let r = fake::record(state, me, "zsh", &format!("2026-11-12T16:48:0{seq}Z"));
+        let e = fake::status_changed(S1, wrapper, r);
+        model.event(seq, serde_json::from_value(e).unwrap());
+        assert_eq!(listed(&model), (1, 0, true), "{state}");
+    }
+    front(&mut model, 10, me, "sh", "zsh");
+    assert_eq!(listed(&model), (0, 1, false));
 }
 
 #[tokio::test]

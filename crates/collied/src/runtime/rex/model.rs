@@ -454,17 +454,23 @@ impl Block {
     /// here, and Rex names that shell as its record's owner (checked live: an agent run from
     /// an interactive shell owns its own record, and no shell back at its prompt owned one).
     /// Shell input would reach such an agent past every check its own input takes, so the
-    /// block is no terminal while the shell in front owns the record, whatever it says, or
-    /// while a live owner's record says working or blocked. A wrapper suspended at idle or done
-    /// keeps the shell listed for `fg`; a reused pid only hides a terminal.
+    /// block is no terminal while a shell in front that is not a login shell owns the record,
+    /// whatever it says, or while a live owner's record says working or blocked. A login shell
+    /// (`-zsh`, as Rex.app starts one; `sh -c` never is) is left out of the first half, so a
+    /// report ever credited to it cannot hide the user's own shell for as long as it lives. A
+    /// wrapper suspended at idle or done keeps the shell listed for `fg`; a reused pid only
+    /// hides a terminal.
     fn busy(&self) -> bool {
         let Some((r, owner)) =
             (self.status.value.as_ref()).and_then(|r| Some((r, r.owner.as_ref()?)))
         else {
             return false;
         };
-        let front = (self.foreground.value.as_ref())
-            .is_some_and(|f| f.pid == owner.pid && f.name == owner.name);
+        let front = (self.foreground.value.as_ref()).is_some_and(|f| {
+            f.pid == owner.pid
+                && f.name == owner.name
+                && !f.argv0.as_deref().is_some_and(|a| a.starts_with('-'))
+        });
         front
             || (matches!(r.state.as_str(), "working" | "blocked")
                 && i32::try_from(owner.pid).is_ok_and(crate::transcript::alive))
