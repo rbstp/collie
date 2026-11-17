@@ -33,10 +33,10 @@ final class AgentsTabTests: XCTestCase {
         XCTAssertNotNil(filter.settledFrame(), app.debugDescription)
         let filterRow = filter.frame
         app.buttons["Search"].tap()
-        let search = app.textFields.matching(NSPredicate(format: "placeholderValue == %@", "Search agents")).firstMatch
+        // The main window only, as in type(_:into:). No timed wait for the keyboard or the field, whose queries stalled for 3 to
+        // 40 s on the hosted runner: the tap waited for the app to idle, and the keyboard's frame below fails if it never came up.
+        let search = app.element(Match(.textField, "Search agents"))
         let keyboard = app.keyboards.firstMatch
-        XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
-        XCTAssertNotNil(search.settledFrame(), app.debugDescription)
         let before = search.frame
         XCTAssertLessThan(abs(before.midY - filterRow.midY), 4, app.debugDescription)
         XCTAssertFalse(filter.exists, app.debugDescription)
