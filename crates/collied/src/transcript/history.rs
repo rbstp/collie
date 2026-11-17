@@ -1469,9 +1469,9 @@ mod tests {
                 (
                     "rex:b1",
                     if claude {
-                        "the Rex server was started inside Claude Code"
+                        "Claude Code in Rex has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Rex server was started inside Claude Code: restart the server outside Claude Code."
                     } else {
-                        "check the hook with collied doctor"
+                        "Codex in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Codex reports it with its first prompt through collied’s SessionStart hook: check the hook with collied doctor, run Codex with --no-daemon, then resume the session."
                     },
                 ),
             ] {
@@ -1480,7 +1480,11 @@ mod tests {
                 let page = reader.history(&a, &params(None, None, None));
                 assert!(!page.available && page.messages.is_empty());
                 let reason = page.unavailable_reason.unwrap();
-                assert!(reason.contains(want), "{terminal_id}: {reason}");
+                if rex::owns(terminal_id) {
+                    assert_eq!(reason, want);
+                } else {
+                    assert!(reason.contains(want), "{terminal_id}: {reason}");
+                }
                 a.agent_session = identity.clone();
                 let page = reader.history(&a, &params(None, None, None));
                 assert!(page.available && !page.messages.is_empty());
