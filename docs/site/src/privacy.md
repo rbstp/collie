@@ -24,7 +24,7 @@ This policy covers the Collie app for iPhone and Apple Watch, its notification e
 
 Your agents' transcripts and your files stay where the agents keep them; `collied` reads them only to answer the phone.
 
-On a Mac, when a herdr agent finishes a long turn that herdr counts as seen, `collied` checks whether you sit in front of it, to skip the done alert: how long since you last typed or moved the pointer, whether the screen is locked or asleep, which app owns the window in front (its process, never window titles or contents), and whether that app runs a herdr client: it lists the processes under that app, and for those named herdr, the addresses their open Unix sockets connect to, nothing else of them. It reads these only then, keeps none of them and sends none of them anywhere; it asks for no macOS permission.
+On a Mac, when a herdr agent finishes a long turn that herdr counts as seen, `collied` checks whether you sit in front of it, to skip the done alert: how long since you last typed or moved the pointer, whether the screen is locked or asleep, which app owns the window in front (its process, never window titles or contents), and whether that app runs a herdr client: it lists the processes under that app, and for those named herdr or sheprd (Herdr.app), it looks at their open sockets and compares only the address each Unix one connects to, discarding the rest. It reads these only then, keeps none of them and sends none of them anywhere; it asks for no macOS permission.
 
 **On your iPhone**, the app keeps:
 
