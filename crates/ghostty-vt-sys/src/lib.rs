@@ -12,6 +12,7 @@ pub type GhosttyFormatter = *mut c_void;
 
 pub const GHOSTTY_SUCCESS: GhosttyResult = 0;
 pub const GHOSTTY_NO_VALUE: GhosttyResult = -4;
+pub const GHOSTTY_IO_ERROR: GhosttyResult = -5;
 
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: c_int = 28;
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES: c_int = 29;
@@ -76,6 +77,15 @@ pub struct GhosttyReader {
     pub userdata: *mut c_void,
 }
 
+/// Returns whether all `len` bytes were accepted; false fails the call that wrote them.
+pub type GhosttyWriterFn = unsafe extern "C" fn(*mut c_void, *const u8, usize) -> bool;
+
+#[repr(C)]
+pub struct GhosttyWriter {
+    pub write: GhosttyWriterFn,
+    pub userdata: *mut c_void,
+}
+
 // The headers' sizes and offsets on every 64-bit target collied builds for.
 const _: () = {
     assert!(size_of::<GhosttyGridRef>() == 16);
@@ -92,6 +102,8 @@ const _: () = {
     assert!(size_of::<GhosttyReader>() == 16);
     assert!(offset_of!(GhosttyReader, userdata) == 8);
     assert!(size_of::<GhosttyFormatterExtras>() == 4);
+    assert!(size_of::<GhosttyWriter>() == 16);
+    assert!(offset_of!(GhosttyWriter, userdata) == 8);
 };
 
 unsafe extern "C" {
@@ -152,6 +164,10 @@ unsafe extern "C" {
         option: c_int,
         value: *const c_void,
     ) -> GhosttyResult;
+    pub fn ghostty_formatter_format(
+        formatter: GhosttyFormatter,
+        writer: GhosttyWriter,
+    ) -> GhosttyResult;
     pub fn ghostty_formatter_format_alloc(
         formatter: GhosttyFormatter,
         allocator: *const c_void,
@@ -184,6 +200,7 @@ mod tests {
             ghostty_snapshot_decoder_free as *const (),
             ghostty_formatter_terminal_new as *const (),
             ghostty_formatter_set as *const (),
+            ghostty_formatter_format as *const (),
             ghostty_formatter_format_alloc as *const (),
             ghostty_formatter_free as *const (),
             ghostty_free as *const (),

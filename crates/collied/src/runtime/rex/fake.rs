@@ -104,8 +104,15 @@ pub(super) struct Data {
     pub reject: Option<u8>,
     /// Each HELLO (1) and RESUME (2), with the count a RESUME named.
     pub handshakes: Vec<(u8, u64)>,
+    /// When each handshake arrived.
+    pub at: Vec<tokio::time::Instant>,
+    /// Told of each handshake, with no timer: a client that loops keeps a paused clock still.
+    pub shaken: Arc<tokio::sync::Notify>,
     /// How each data connection ended: the close code collied sent, `None` for none.
     pub closed: Vec<Option<u16>>,
+    /// A RESUME is refused, or welcomed and then dropped before any byte.
+    pub refuse_resume: bool,
+    pub drop_resumed: bool,
     /// The bytes of `stream` sent, across its connections.
     sent: usize,
     /// The latest WELCOME's reconnect token.
@@ -154,6 +161,8 @@ enum Push {
 enum DataPush {
     /// What `stream` gained since the last send.
     More,
+    /// A close frame with this code, as Rex ends a stream.
+    Close(u16),
     Drop,
 }
 
@@ -272,6 +281,13 @@ impl Fake {
         }
     }
 
+    /// Closes the latest data connection with `code`.
+    pub(super) fn data_close(&self, code: u16) {
+        if let Some(tx) = crate::lock(&self.data_push).take() {
+            let _ = tx.send(DataPush::Close(code));
+        }
+    }
+
     /// Ends the latest data connection without a close frame, keeping its stream to resume.
     pub(super) fn data_drop(&self) {
         if let Some(tx) = crate::lock(&self.data_push).take() {
@@ -321,12 +337,14 @@ fn welcome(d: &mut Data, first: &[u8]) -> Result<usize, u8> {
         .and_then(|b| b.try_into().ok())
         .map_or(0, u64::from_le_bytes);
     d.handshakes.push((first[0], count));
+    d.at.push(tokio::time::Instant::now());
+    d.shaken.notify_one();
     let from = match first[0] {
         1 => match d.reject {
             Some(reason) => return Err(reason),
             None => 0,
         },
-        2 if first[1..17] == d.token && count == d.sent as u64 => d.sent,
+        2 if !d.refuse_resume && first[1..17] == d.token && count == d.sent as u64 => d.sent,
         _ => return Err(0x01),
     };
     d.token = [d.handshakes.len() as u8; 16];
@@ -362,6 +380,10 @@ async fn serve_data(
         let _ = sink.close().await;
         return;
     };
+    if first[0] == 2 && crate::lock(&state).data.drop_resumed {
+        crate::lock(&state).data.closed.push(None);
+        return;
+    }
     let ended = loop {
         let more = {
             let mut s = crate::lock(&state);
@@ -384,6 +406,11 @@ async fn serve_data(
             },
             pushed = pushed.recv() => match pushed {
                 Some(DataPush::More) => {}
+                Some(DataPush::Close(code)) => {
+                    let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
+                    let _ = sink.send(Message::Close(Some(frame))).await;
+                    break None;
+                }
                 Some(DataPush::Drop) | None => break None,
             },
         }

@@ -167,46 +167,57 @@ impl Terminal {
         }
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) {
-        unsafe { sys::ghostty_terminal_resize(self.0.as_ptr(), cols.max(1), rows.max(1), 1, 1) };
+    pub fn resize(&mut self, cols: u16, rows: u16) -> bool {
+        let resized = unsafe {
+            sys::ghostty_terminal_resize(self.0.as_ptr(), cols.max(1), rows.max(1), 1, 1)
+        };
+        resized == sys::GHOSTTY_SUCCESS
     }
 
     /// History limited to about `lines` rows: pruned by whole pages, so it can keep fewer
     /// (measured in #739). A restored terminal keeps the byte limit of the one that wrote the
     /// snapshot (64 MiB in Rex).
-    pub fn keep_lines(&mut self, lines: usize) {
-        unsafe {
+    pub fn keep_lines(&mut self, lines: usize) -> bool {
+        let set = unsafe {
             sys::ghostty_terminal_set(
                 self.0.as_ptr(),
                 sys::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
                 ptr::from_ref(&lines).cast(),
-            );
-        }
+            )
+        };
+        set == sys::GHOSTTY_SUCCESS
     }
 
-    fn get<T: Default>(&self, data: i32) -> T {
+    fn get<T: Default>(&self, data: i32) -> Option<T> {
         let mut v = T::default();
-        unsafe { sys::ghostty_terminal_get(self.0.as_ptr(), data, ptr::from_mut(&mut v).cast()) };
-        v
+        let got = unsafe {
+            sys::ghostty_terminal_get(self.0.as_ptr(), data, ptr::from_mut(&mut v).cast())
+        };
+        (got == sys::GHOSTTY_SUCCESS).then_some(v)
     }
 
-    pub fn size(&self) -> (u16, u16) {
-        (
-            self.get(sys::GHOSTTY_TERMINAL_DATA_COLS),
-            self.get(sys::GHOSTTY_TERMINAL_DATA_ROWS),
-        )
+    pub fn size(&self) -> Option<(u16, u16)> {
+        Some((
+            self.get(sys::GHOSTTY_TERMINAL_DATA_COLS)?,
+            self.get(sys::GHOSTTY_TERMINAL_DATA_ROWS)?,
+        ))
     }
 
     /// History and screen rows.
-    pub fn total_rows(&self) -> usize {
+    pub fn total_rows(&self) -> Option<usize> {
         self.get(sys::GHOSTTY_TERMINAL_DATA_TOTAL_ROWS)
     }
 
-    /// Rows `first` to the last as VT, text and styles only, soft-wrapped rows joined when
-    /// `unwrap` is set.
-    pub fn vt(&self, first: usize, unwrap: bool) -> Vec<u8> {
-        let (cols, _) = self.size();
-        let total = self.total_rows();
+    /// Rows `first` to the last as VT, text, styles and links, soft-wrapped rows joined when
+    /// `unwrap` is set; `None` when it fails or would pass `max` bytes. The formatter writes
+    /// each cell's whole OSC 8 link again whenever the link changes, so a few rows of short
+    /// text can format to megabytes: nothing past `max` is ever held.
+    pub fn vt(&self, first: usize, unwrap: bool, max: usize) -> Option<Vec<u8>> {
+        let (cols, _) = self.size()?;
+        let total = self.total_rows()?;
+        if first >= total {
+            return None;
+        }
         let point = |x: u16, y: usize| sys::GhosttyPoint {
             tag: sys::GHOSTTY_POINT_TAG_SCREEN,
             value: sys::GhosttyPointValue {
@@ -227,10 +238,10 @@ impl Terminal {
             rectangle: false,
         };
         let terminal = self.0.as_ptr();
-        let mut out = Vec::new();
-        if first >= total {
-            return out;
-        }
+        let mut sink = Sink {
+            out: Vec::new(),
+            max,
+        };
         unsafe {
             if sys::ghostty_terminal_grid_ref(terminal, point(0, first), &mut selection.start)
                 != sys::GHOSTTY_SUCCESS
@@ -240,21 +251,24 @@ impl Terminal {
                     &mut selection.end,
                 ) != sys::GHOSTTY_SUCCESS
             {
-                return out;
+                return None;
             }
             let mut formatter = ptr::null_mut();
             if sys::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, terminal)
                 != sys::GHOSTTY_SUCCESS
             {
-                return out;
+                return None;
             }
             let emit = sys::GHOSTTY_FORMATTER_FORMAT_VT;
             let extras = sys::GHOSTTY_FORMATTER_EXTRAS_NONE;
             let set = |option, value: *const c_void| {
                 sys::ghostty_formatter_set(formatter, option, value) == sys::GHOSTTY_SUCCESS
             };
-            let (mut text, mut len) = (ptr::null_mut(), 0usize);
-            if set(sys::GHOSTTY_FORMATTER_OPT_EMIT, ptr::from_ref(&emit).cast())
+            let writer = sys::GhosttyWriter {
+                write: append,
+                userdata: ptr::from_mut(&mut sink).cast(),
+            };
+            let formatted = set(sys::GHOSTTY_FORMATTER_OPT_EMIT, ptr::from_ref(&emit).cast())
                 && set(
                     sys::GHOSTTY_FORMATTER_OPT_UNWRAP,
                     ptr::from_ref(&unwrap).cast(),
@@ -267,19 +281,28 @@ impl Terminal {
                     sys::GHOSTTY_FORMATTER_OPT_SELECTION,
                     ptr::from_ref(&selection).cast(),
                 )
-                && sys::ghostty_formatter_format_alloc(formatter, ptr::null(), &mut text, &mut len)
-                    == sys::GHOSTTY_SUCCESS
-            {
-                // Empty output is a null pointer with length 0, which no slice may be made from.
-                if !text.is_null() {
-                    out.extend_from_slice(std::slice::from_raw_parts(text, len));
-                }
-                sys::ghostty_free(ptr::null(), text, len);
-            }
+                && sys::ghostty_formatter_format(formatter, writer) == sys::GHOSTTY_SUCCESS;
             sys::ghostty_formatter_free(formatter);
+            formatted.then_some(sink.out)
         }
-        out
     }
+}
+
+/// Where a format writes, up to `max` bytes.
+struct Sink {
+    out: Vec<u8>,
+    max: usize,
+}
+
+/// Refuses a write past the sink's `max`, which fails the format with `GHOSTTY_IO_ERROR`.
+unsafe extern "C" fn append(userdata: *mut c_void, data: *const u8, len: usize) -> bool {
+    let sink = unsafe { &mut *userdata.cast::<Sink>() };
+    if len > sink.max - sink.out.len() {
+        return false;
+    }
+    sink.out
+        .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
+    true
 }
 
 #[cfg(test)]
@@ -314,7 +337,26 @@ mod tests {
     #[test]
     fn empty_output_formats_as_nothing() {
         let terminal = Terminal::new(10, 2);
-        assert_eq!(terminal.vt(0, true), b"");
-        assert_eq!(terminal.vt(5, true), b"");
+        assert_eq!(terminal.vt(0, true, 1), Some(Vec::new()));
+        assert_eq!(terminal.vt(5, true, 1), None);
+    }
+
+    /// Each cell linked to a 2,000-byte target, the next cell to another: the formatter
+    /// writes every link again, so 80x24 such cells format to about 3.4 MB.
+    #[test]
+    fn a_format_past_its_ceiling_fails_and_holds_no_more() {
+        let mut terminal = Terminal::new(80, 24);
+        let links: String = (0..80 * 24)
+            .map(|i| {
+                let target = format!("https://example.com/{}", "x".repeat(2000));
+                format!("\x1b]8;id={i};{target}{}\x1b\\{}", i % 2, i % 10)
+            })
+            .collect();
+        terminal.write(links.as_bytes());
+        let whole = terminal.vt(0, true, usize::MAX).unwrap();
+        assert!(whole.len() > 3_000_000, "{}", whole.len());
+        assert_eq!(terminal.vt(0, true, 983_040), None);
+        let fitting = terminal.vt(0, true, whole.len()).unwrap();
+        assert_eq!(fitting, whole);
     }
 }

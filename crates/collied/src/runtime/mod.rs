@@ -577,7 +577,7 @@ impl Runtime {
         match Owner::of(pane_id) {
             Owner::Herdr => Ok(None),
             Owner::Core => Ok(Some(Watch::Core(self.followed()?.watch(pane_id)?))),
-            Owner::Rex => Ok(Some(Watch::Rex(self.followed_rex()?.watch(pane_id)?))),
+            Owner::Rex => Ok(self.followed_rex()?.watch(pane_id)?.map(Watch::Rex)),
         }
     }
 

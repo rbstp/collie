@@ -12,7 +12,7 @@ use crate::runtime::screen::Screen;
 /// The tail read first; doubled while it holds fewer lines than the read needs.
 const FIRST_TAIL: u64 = 64 << 10;
 /// The most one `blob_read` answers, measured as a JSON string, its quotes included.
-const MAX_TAIL: u64 = 983_040;
+pub(super) const MAX_TAIL: u64 = 983_040;
 /// The longest tail one answer can hold, when nothing in it needs escaping.
 const MAX_WANT: u64 = MAX_TAIL - 2;
 const HISTORY: u32 = protocol::limits::MAX_READ_LINES as u32;

@@ -319,10 +319,17 @@ impl Rex {
         Ok(Some(self.target(id)?.3.0))
     }
 
-    /// Follows the terminal as a stream until the last watch of it is dropped.
-    pub fn watch(self: &Arc<Self>, id: &str) -> Result<Watch, Error> {
+    /// Follows the terminal as a stream until the last watch of it is dropped, unless
+    /// streaming is off for this run.
+    pub fn watch(self: &Arc<Self>, id: &str) -> Result<Option<Watch>, Error> {
         self.target(id)?;
         Ok(self.streams.watch(self, id))
+    }
+
+    /// Where a stream in progress is marked, in collied's data folder.
+    pub fn with_stream_marker(mut self, marker: PathBuf) -> Self {
+        self.streams = stream::Streams::marked(marker);
+        self
     }
 
     /// From the stream while a watch holds it live, else polled, as herdr's reads are.
@@ -405,7 +412,7 @@ impl Rex {
         loop {
             let (ended, followed) = tokio::select! {
                 ended = self.attempt() => ended,
-                _ = shutdown.changed() => return,
+                _ = shutdown.changed() => return self.streams.unmark(),
             };
             match ended {
                 e if followed => {
@@ -421,7 +428,7 @@ impl Rex {
             }
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
-                _ = shutdown.changed() => return,
+                _ = shutdown.changed() => return self.streams.unmark(),
             }
             delay = (delay * 2).min(RETRY_MAX);
         }

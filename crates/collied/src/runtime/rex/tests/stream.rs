@@ -18,6 +18,13 @@ fn running() -> Vec<u8> {
 /// A followed fake whose agent in `B1` streams `stream`, and whose `format` answers what the
 /// fixture's Rex answered, so a polled read reads as a streamed one.
 async fn streaming(stream: Vec<u8>) -> (Fake, Arc<Rex>, Runtime, tempfile::TempDir) {
+    streaming_marked(stream, None).await
+}
+
+async fn streaming_marked(
+    stream: Vec<u8>,
+    marker: Option<std::path::PathBuf>,
+) -> (Fake, Arc<Rex>, Runtime, tempfile::TempDir) {
     let fake = Fake::start().await;
     claude(&fake, S1, B1, 10, "idle", T0);
     {
@@ -28,7 +35,11 @@ async fn streaming(stream: Vec<u8>) -> (Fake, Arc<Rex>, Runtime, tempfile::TempD
         b.size = (100, 30);
         s.data.stream = stream;
     }
-    let rex = Arc::new(Rex::new(fake.socket.clone()));
+    let mut rex = Rex::new(fake.socket.clone());
+    if let Some(marker) = marker {
+        rex = rex.with_stream_marker(marker);
+    }
+    let rex = Arc::new(rex);
     let _task = follow(&rex).await;
     let dir = tempfile::tempdir().unwrap();
     let rt = Runtime::new(dir.path().join("no-herdr.sock")).with_rex(Some(rex.clone()));
@@ -169,4 +180,111 @@ async fn a_stream_whose_program_exited_is_not_resumed() {
     eventually("the stream over", || logged(&logs, "Rex stream over")).await;
     assert!(!live(&rex));
     assert_eq!(fake.state().data.handshakes, [(1, 0)]);
+}
+
+/// The first `n` handshakes, waited for on the paused clock, which runs ahead while nothing
+/// else can; the fake's notice, not a timer, ends the wait, so a client that loops fails here.
+async fn handshakes(fake: &Fake, n: usize) -> Vec<(u8, u64)> {
+    let shaken = fake.state().data.shaken.clone();
+    loop {
+        let handshakes = fake.state().data.handshakes.clone();
+        if handshakes.len() >= n {
+            return handshakes[..n].to_vec();
+        }
+        let wait = std::time::Duration::from_secs(300);
+        let notified = tokio::time::timeout(wait, shaken.notified()).await;
+        assert!(notified.is_ok(), "{handshakes:?}");
+    }
+}
+
+fn gap(fake: &Fake, i: usize) -> std::time::Duration {
+    let at = &fake.state().data.at;
+    at[i] - at[i - 1]
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_resume_starts_a_new_stream_after_the_delay() {
+    let stream = running();
+    let (fake, rex, rt, _dir) = streaming(stream.clone()).await;
+    fake.state().data.refuse_resume = true;
+    let _watch = rt.watch(&id(B1)).unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    fake.data_drop();
+    let seen = handshakes(&fake, 3).await;
+    assert_eq!(seen, [(1, 0), (2, stream.len() as u64), (1, 0)]);
+    assert!(gap(&fake, 2) >= RETRY_FIRST, "{:?}", gap(&fake, 2));
+    eventually("the new stream restored", || live(&rex)).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_resumed_connection_that_ends_before_any_byte_starts_a_new_stream() {
+    let stream = running();
+    let (fake, rex, rt, _dir) = streaming(stream.clone()).await;
+    fake.state().data.drop_resumed = true;
+    let _watch = rt.watch(&id(B1)).unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    fake.data_drop();
+    let seen = handshakes(&fake, 3).await;
+    assert_eq!(seen, [(1, 0), (2, stream.len() as u64), (1, 0)]);
+    assert!(gap(&fake, 2) >= RETRY_FIRST, "{:?}", gap(&fake, 2));
+}
+
+/// Rex accepts each stream and soon ends it with 1013: each new one waits twice as long.
+#[tokio::test(start_paused = true)]
+async fn streams_ended_soon_after_they_start_are_asked_for_less_and_less() {
+    let (fake, rex, rt, _dir) = streaming(running()).await;
+    let _watch = rt.watch(&id(B1)).unwrap();
+    for n in 1..=5 {
+        handshakes(&fake, n).await;
+        eventually("the stream restored", || live(&rex)).await;
+        fake.data_close(1013);
+    }
+    handshakes(&fake, 6).await;
+    let mut wait = RETRY_FIRST;
+    for i in 1..6 {
+        assert!(gap(&fake, i) >= wait, "{i}: {:?} < {wait:?}", gap(&fake, i));
+        wait = (wait * 2).min(RETRY_MAX);
+    }
+}
+
+#[tokio::test]
+async fn a_marker_left_by_an_earlier_run_turns_streaming_off() {
+    let marked = tempfile::tempdir().unwrap();
+    let marker = marked.path().join("rex-streaming");
+    std::fs::write(&marker, "").unwrap();
+    let (fake, _rex, rt, _dir) = streaming_marked(running(), Some(marker)).await;
+    assert!(rt.watch(&id(B1)).unwrap().is_none());
+    let from = fake.calls().len();
+    recent(&rt).await;
+    assert_eq!(formats(&fake, from), 1);
+    assert!(!fake.calls().iter().any(|m| m == "data.connect"));
+}
+
+#[tokio::test]
+async fn the_marker_lasts_while_a_stream_does() {
+    let marked = tempfile::tempdir().unwrap();
+    let marker = marked.path().join("rex-streaming");
+    let (_fake, rex, rt, _dir) = streaming_marked(running(), Some(marker.clone())).await;
+    let watch = rt.watch(&id(B1)).unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    assert!(marker.exists());
+    drop(watch);
+    eventually("the marker removed", || !marker.exists()).await;
+}
+
+/// A screen of alternating 1,500-byte links formats past what one `format` answer holds.
+#[tokio::test]
+async fn a_screen_that_formats_too_large_is_polled() {
+    let (fake, rex, rt, _dir) = streaming(running()).await;
+    let _watch = rt.watch(&id(B1)).unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    let target = format!("https://example.com/{}", "x".repeat(1500));
+    let links: String = (0..100 * 30)
+        .map(|i| format!("\x1b]8;;{target}{}\x1b\\{}", i % 2, i % 10))
+        .collect();
+    fake.data_send(links.as_bytes());
+    eventually("the stream to stop answering", || !live(&rex)).await;
+    let from = fake.calls().len();
+    recent(&rt).await;
+    assert_eq!(formats(&fake, from), 1);
 }
