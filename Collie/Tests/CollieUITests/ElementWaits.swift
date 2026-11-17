@@ -1,13 +1,19 @@
 import XCTest
 
-/// Polls `condition` until it holds or `timeout` passes. Each try should read one query or one `Screen`: XCTest's own
-/// waits (waitForExistence, wait(for:toEqual:)) snapshot the whole app for a debug description after every miss, and on a
-/// loaded runner those snapshots took seconds each and ended in "Timed out while evaluating UI query".
+/// Polls `condition` until it holds, or until `timeout` has passed and it has failed three times. Each try should read one
+/// query or one `Screen`: XCTest's own waits (waitForExistence, wait(for:toEqual:)) snapshot the whole app for a debug
+/// description after every miss, and on a loaded runner those snapshots took seconds each and ended in "Timed out while
+/// evaluating UI query".
+/// The hosted runner took 13 to 94 s to answer a single query, which failed waits after one look whatever the app did, and
+/// settledFrame needs two looks to compare. Where three looks fit in `timeout` the deadline ends the wait as before; a hung
+/// app costs three of XCTest's query timeouts (about 95 s each, its three tries) before the wait fails.
 @MainActor
 func eventually(within timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
     let deadline = Date.now.addingTimeInterval(timeout)
+    var failures = 0
     while !condition() {
-        if Date.now >= deadline { return false }
+        failures += 1
+        if failures >= 3 && Date.now >= deadline { return false }
         usleep(250_000)
     }
     return true
