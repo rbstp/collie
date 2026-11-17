@@ -1,39 +1,28 @@
 # iOS release notes
 
-Text for the next combined release. Confirm its final version and build in App Store Connect once the upload is processed.
+Text for 0.2.0. Confirm its final build in App Store Connect once the upload is processed.
 
 ## App Store release notes
 
-- Rex: follow your agents in Rex beside herdr's. See their status, read the terminal or Chat, send prompts, keys and approval decisions, and start, resume and archive tasks. The main gain for Rex users: Collie Herd runs Tailscale inside the app, so your phone reaches your Mac with no Tailscale app and no VPN to switch on.
-- Choose where new tasks start: herdr, Herdr Core or Rex, in Settings > Sessions > Start tasks in. New task offers only the agents that runtime can start.
-- Each agent shows the mark of what it runs in: herdr, Herdr Core or Rex. Hide the marks in Settings > Sessions > Runtime icons.
-- Choose how opaque the app's glass is: Clear, Regular or Opaque, in Settings > Appearance > Glass.
-- See Claude Code's suggested next prompt in the prompt field, and accept it with the Tab key.
-- An approval no longer shows Claude Code's tip line as part of its context.
-- The New task prompt stays below the navigation bar when you rotate with the keyboard open.
-- Herdr 2 is now named Herdr Core.
-- In Herdr Core and Rex, only Claude Code and Codex take prompts and keys from the phone. Other agents show their status and screen, read-only.
-- Tailscale inside the app and collied is updated to 1.104.7. It fixes a rare problem with connections that sat idle, and connections to Tailscale that some network equipment broke.
+- Watching a Rex agent no longer loads your Mac: on a terminal with a long history, Rex used about 30% of a CPU core while you watched; it now uses under 1%.
+- Use your Rex shells from the phone. With terminals turned on, they appear under Terminals, and you can type commands and keys into them as into herdr's.
+- On a Mac, you no longer get a done alert for a herdr agent you are looking at: its pane focused in herdr, the terminal that shows herdr or Herdr.app in front, and you typing or moving the pointer in the last 30 seconds. Herdr Core and Rex agents, and agents on Linux, alert as before.
+- When Chat cannot show a Rex agent's conversation, it now says what to check in Rex rather than giving herdr's advice. Copilot CLI has Chat in herdr only.
+- Terminal now uses libghostty-vt 1.0.1, up from 1.0.0.
 
-Update collied on each machine: Rex agents, the choice of where tasks start, the runtime marks, the Herdr Core name and the approval fix all need it. You can update the app and collied in either order.
+Update collied to 0.2.0 on each machine: every change above except libghostty-vt 1.0.1 needs it. Rex shells also need `[terminals] enabled = true` in `collied.toml` and a restart of collied. collied's service log now records warnings, and logs a lasting problem once when it starts, not on every retry. You can update the app and collied in either order.
 
-Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI; herdr's other agent integrations have not been validated. Rex support was tested with Rex 0.1.0-preview.19, a closed preview, on a Mac, with Claude Code and Codex. On Linux, only Arch Linux with Omarchy has been tested.
+Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI; herdr's other agent integrations have not been validated. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on an Apple silicon Mac, with Claude Code and Codex. On Linux, only Arch Linux with Omarchy has been tested.
 
 ## What to Test
 
-- On a Mac running Rex, open a Claude Code or Codex agent in a Rex session. Check that it appears in a group named after its session, that its status follows the agent, and that Terminal and Chat show it. Send it a prompt and a few keys, then approve one Claude Code approval and deny another from the phone.
-- Set Settings > Sessions > Start tasks in to Rex. Check that New task offers only Claude Code and Codex. Start a worktree task and check that it runs in a Rex session named after the task, then archive it and check that its checkout and its Rex session go away. Separately, choose Resume and a folder with an earlier Claude Code or Codex session, such as the repository's folder, and resume it.
-- Set Start tasks in to Herdr Core and repeat: start a worktree task and archive it, then resume an earlier session from a folder that has one. Check that the agents appear in the Herdr Core group.
-- Choose a runtime that is not running on the machine. Check that a red line under the location says so, and that Start explains why and starts nothing elsewhere. Set Start tasks in back to Automatic.
-- Check that cards, rows and the session header show herdr's mark for herdr and Herdr Core agents and Rex's mark for Rex agents, and that a Herdr Core card or row reads "Core" beside the mark. Turn off Settings > Sessions > Runtime icons and check that the marks go away and a Herdr Core card or row reads "Herdr Core" again.
-- Set Settings > Appearance > Glass to Clear, Regular and Opaque in turn, over Terminal and over Chat. Check that the session header's title and status stay readable under Clear, and that under Clear the Agents and Usage pages scroll under the top bar with only the picker and its buttons on glass.
-- After a Claude Code turn that leaves a suggestion grayed out in its input box, check that Terminal shows a ⇥ key before return and that Chat's empty prompt field shows the suggestion in gray. Tap ⇥ in each and check that it takes the suggestion.
-- Run Copilot CLI 1.0.106 or later in Herdr Core or Rex. Check that it shows its status and screen, and that the machine refuses a prompt or a key sent to it.
-- With collied updated, open an approval for a Claude Code Bash command whose dialog shows a tip that wraps onto a second line, as it does in a terminal about 80 columns wide. Check that the approval's context leaves the tip out.
-- Open New task, show the keyboard and rotate the phone. Check that the prompt row stays below the navigation bar.
-- With collied updated, check that the app says Herdr Core, never Herdr 2.
-- Connect to a machine still running collied 0.1.18. Check that the app connects without a version message, that no runtime marks and no Rex agents appear, that the Herdr Core group still reads "Herdr 2", and that New task with Start tasks in set to Rex says collied is too old and keeps Start dimmed.
-- Leave the app in the background with the phone idle for about 15 minutes, then open it. Check that the agents load without a manual retry. On a fresh install, if you have one, check that pairing and signing in to Tailscale still work.
-- Check session visibility, question answers, approvals, notifications, Live Activities and reconnection with your paired machines.
+- On the Mac that runs Rex, with collied updated, open a Claude Code or Codex agent in Rex while it works. In Terminal, check that the screen keeps up with the agent as before: colors, wide characters such as emoji, wrapped lines, scrolling back, and rotating the phone. Switch to Chat and check that it loads.
+- Keep a Claude Code agent in Rex open while it asks for an approval. Check that the approval card appears, approve it and check that the agent goes on, then deny the next one.
+- Go back to the Agents tab while the agent works, wait a few seconds, then open it again. Check that its screen shows what it printed meanwhile, with no lines missing or repeated.
+- In Activity Monitor on the Mac, find Rex Server (its process is `rex`). Open a working Rex agent with a long history, tens of thousands of lines, on the phone, and check that Rex Server's % CPU stays near what it shows with no agent open, rather than climbing toward 30% as it did with collied 0.1.22.
+- Turn on terminals in `collied.toml` on the Mac that runs Rex and restart collied. Check that a Rex.app terminal appears under Terminals, labelled with its Rex session's name, and that a session started with `rex new demo -- top` does not. Open the terminal, unlock it, run `ls`, then `sleep 30`, and check that the terminal stays listed while `sleep` runs and that ⌃C from the key strip stops it. Start `claude` in it and check that it leaves Terminals and shows as an agent.
+- On a Mac with herdr, give an agent a task of 40 seconds or more, keep its pane focused and the terminal app or Herdr.app in front, and move the mouse now and then. Keep Collie in the background or away from that agent, since the app hides the alert of the agent it shows. Check that no done alert arrives and that the app shows the agent idle. Repeat with another app in front, then with a Rex agent: each time the alert arrives. With another tab of the terminal showing, the alert arrives too if the terminal tells herdr when a tab loses focus.
+- Run Copilot CLI in Rex and open its Chat. Check that it says "Chat is not available for this Rex agent."
+- Open a herdr shell under Terminals, unlock it and run a command. Then, with your paired machines, check approvals, notifications, Live Activities, and that the agents load without a manual retry after the app sits in the background for about 15 minutes.
 
-Use Claude Code CLI, Codex CLI or GitHub Copilot CLI for these checks. Other herdr integrations and other Linux distributions have not been validated with Collie.
+Use Claude Code CLI, Codex CLI or GitHub Copilot CLI for these checks; other agents have not been validated with Collie.
