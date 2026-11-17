@@ -2922,10 +2922,18 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
         }
         state.approvals.observe(&kept, &workspaces).await;
-        for a in lock(&state.turns).observe(&kept, crate::now_ms()) {
+        let finished: Vec<_> = (lock(&state.turns).observe(&kept, crate::now_ms()))
+            .into_iter()
+            .cloned()
+            .collect();
+        for a in &finished {
             let Ok(terminal_id) = TerminalId::new(a.terminal_id.clone()) else {
                 continue;
             };
+            if in_front(&state.runtime, a).await {
+                tracing::info!(terminal = %a.terminal_id, "done alert skipped: the agent is in front of the user");
+                continue;
+            }
             state.push.notify_done(push::done_alert(
                 &terminal_id,
                 &approvals::alert_title(a),
@@ -2947,6 +2955,22 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         tracker.retain(kept.iter().map(|a| a.terminal_id.as_str()));
         tracker.save();
     }
+}
+
+/// The desktop is read only for a turn herdr saw, and herdr asked only when the desktop says
+/// the user is active with a client of this session in front.
+async fn in_front(runtime: &Runtime, a: &runtime::AgentInfo) -> bool {
+    if !crate::desk::herdr_saw(a) {
+        return false;
+    }
+    let (active, front) = crate::desk::desktop(&runtime.herdr_client_socket());
+    let focused = if active == Some(true) && front == Some(true) {
+        (runtime.herdr_snapshot().await.ok())
+            .map(|s| s.focused_pane_id.as_deref() == Some(a.pane_id.as_str()))
+    } else {
+        None
+    };
+    crate::desk::in_front(focused, front, active)
 }
 
 /// What reconcile knows of herdr's agents: while a followed core answers in herdr's place,

@@ -842,6 +842,7 @@ mod tests {
                 .unwrap();
         let SnapshotResult::SessionSnapshot { snapshot } = snap.result.unwrap();
         assert_eq!(snapshot.agents.len(), 2);
+        assert_eq!(snapshot.focused_pane_id.as_deref(), Some("w6:p1"));
         assert_eq!(snapshot.agents[0].state_change_seq, 5);
         let list: Response<AgentListResult> = serde_json::from_str(
             r#"{"id":"x","result":{"type":"agent_list","agents":[{"terminal_id":"t","workspace_id":"w1","agent_status":"idle","pane_id":"w1:p1","future":true}]}}"#,
