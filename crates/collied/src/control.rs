@@ -16,6 +16,7 @@ use crate::server::State;
 
 pub(crate) const MAX_LINE: u64 = 64 * 1024;
 pub const CONFIRM_TIMEOUT: Duration = Duration::from_secs(60);
+const ACCEPT_WARN_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case", deny_unknown_fields)]
@@ -273,6 +274,7 @@ fn uid_allowed(peer: u32, euid: u32) -> bool {
 }
 
 pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let mut warned = None;
     loop {
         tokio::select! {
             res = listener.accept() => match res {
@@ -284,13 +286,21 @@ pub async fn serve(listener: UnixListener, state: Arc<State>, mut shutdown: watc
                     tokio::spawn(handle(stream, state.clone(), shutdown.clone()));
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "control accept failed");
+                    let now = Instant::now();
+                    if warn_due(warned, now) {
+                        tracing::warn!(error = %e, "control accept failed");
+                        warned = Some(now);
+                    }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             },
             _ = shutdown.changed() => return,
         }
     }
+}
+
+fn warn_due(warned: Option<Instant>, now: Instant) -> bool {
+    warned.is_none_or(|t| now.duration_since(t) >= ACCEPT_WARN_EVERY)
 }
 
 async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver<bool>) {
@@ -543,6 +553,18 @@ mod tests {
         assert!(!daemon_running(&path).await);
         let again = bind(&path).await;
         assert!(again.is_ok(), "stale socket is replaced");
+    }
+
+    #[test]
+    fn a_failing_accept_warns_at_most_once_a_minute() {
+        let t = Instant::now();
+        assert!(warn_due(None, t));
+        assert!(!warn_due(Some(t), t + Duration::from_millis(100)));
+        assert!(!warn_due(
+            Some(t),
+            t + ACCEPT_WARN_EVERY - Duration::from_millis(1)
+        ));
+        assert!(warn_due(Some(t), t + ACCEPT_WARN_EVERY));
     }
 
     #[tokio::test]
