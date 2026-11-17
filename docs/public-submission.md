@@ -66,7 +66,7 @@ PRIVACY
 Your agents, transcripts and files stay on your machine, and there is no Collie account. The phone reaches the machine over your own tailnet, inside mutual TLS. Your machine encrypts notification content so that only your phone can read it; the push service sees generic alerts and delivery metadata, as the privacy policy describes.
 
 TESTED WITH
-Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. Rex support was tested with Rex 0.1.0-preview.19, a closed preview, on a Mac. On Linux, only Arch Linux with Omarchy has been tested. In Herdr Core and Rex, some actions are limited; collie.rbstp.dev lists them.
+Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on a Mac. On Linux, only Arch Linux with Omarchy has been tested. In Herdr Core and Rex, some actions are limited; collie.rbstp.dev lists them.
 ```
 
 Recheck these against App Store Connect and the submitted build; use the description only once relay notifications pass the release gates. Answer Apple's [age-rating questionnaire](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/) from actual capabilities: agent-generated and user-controlled content, external links, terminal behavior.
