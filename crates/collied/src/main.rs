@@ -12,11 +12,6 @@ use zeroize::Zeroizing;
 
 const AUTHKEY_ENV: &str = "COLLIE_TS_AUTHKEY";
 
-// Keeps libghostty-vt linked into collied until a screen calls it, so a broken link fails the build.
-#[used]
-static GHOSTTY_VT: unsafe extern "C" fn(ghostty_vt_sys::GhosttyTerminal) =
-    ghostty_vt_sys::ghostty_terminal_free;
-
 #[derive(Parser)]
 #[command(version, about = "collie daemon")]
 struct Cli {
@@ -112,8 +107,10 @@ fn main() -> anyhow::Result<ExitCode> {
     // child processes and later Rust reads are guaranteed not to see it.
     unsafe { std::env::remove_var(AUTHKEY_ENV) };
 
+    // Neither the launchd agent nor the systemd unit sets RUST_LOG: without it, warnings too.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();

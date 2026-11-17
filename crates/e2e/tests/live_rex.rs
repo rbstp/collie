@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use collie_core::{AgentState, CollieCore, MachineFlock};
+use collie_core::{AgentState, CollieCore, CoreError, MachineFlock};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::config::TasksConfig;
@@ -223,6 +223,335 @@ async fn scenario(server: &RexServer) {
     task.await.unwrap();
 }
 
+/// A changing agent: 3,000 colored lines, more than one `format` answer keeps whole, then
+/// forty more each time the test creates `more1`, `more2`, `more3` in its folder.
+const STREAMED: &str = r#"$| = 1;
+sub wait_for { select(undef, undef, undef, 0.05) until -e $_[0] }
+printf "\e[3%dmline %d\e[0m plain \e[1mbold\e[0m\r\n", $_ % 8, $_ for 1 .. 3000;
+print "\e]7501;state=idle:app=claude-code\e\\";
+for my $round (1 .. 3) {
+    wait_for("more$round");
+    print "round $round line $_\r\n" for 1 .. 40;
+}
+select(undef, undef, undef, 600);
+"#;
+
+#[test]
+fn live_rex_stream() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "s");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(stream_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+/// Relays collied's connections to the scratch server from a socket of its own, to see each
+/// data connection's first handshake message (1 HELLO, 2 RESUME) and to cut them as a
+/// network would, with no hook in collied.
+struct Relay {
+    socket: std::path::PathBuf,
+    /// Each data connection: its handshake, whether it is open, and how to cut it.
+    data: Relayed,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Relay {
+    /// collied follows only a personal server's socket: `0600` in a `0700` folder.
+    fn start(server: &RexServer) -> Self {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let folder = server.root.join("relay");
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&folder)
+            .unwrap();
+        let socket = folder.join("rex.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let data = Arc::default();
+        let task = tokio::spawn({
+            let (upstream, data) = (server.socket.clone(), Arc::clone(&data));
+            async move {
+                while let Ok((client, _)) = listener.accept().await {
+                    let server = tokio::net::UnixStream::connect(&upstream).await.unwrap();
+                    tokio::spawn(relay(client, server, Arc::clone(&data)));
+                }
+            }
+        });
+        Self { socket, data, task }
+    }
+
+    fn data(&self) -> Vec<(u8, bool)> {
+        (self.data.lock().unwrap().iter())
+            .map(|(kind, open, _)| (*kind, *open))
+            .collect()
+    }
+
+    /// Ends every open data connection without a close frame.
+    fn cut(&self) {
+        for (_, open, cut) in self.data.lock().unwrap().iter_mut().filter(|c| c.1) {
+            cut.abort();
+            *open = false;
+        }
+    }
+}
+
+type Relayed = Arc<std::sync::Mutex<Vec<(u8, bool, tokio::task::AbortHandle)>>>;
+
+async fn relay(client: tokio::net::UnixStream, server: tokio::net::UnixStream, data: Relayed) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (mut client_in, mut client_out) = client.into_split();
+    let (mut server_in, mut server_out) = server.into_split();
+    // The request, then the client's first frame (masked, under 126 bytes): its payload's
+    // first byte unmasked is the handshake message's kind.
+    let mut head = Vec::new();
+    let end = loop {
+        let mut buf = [0u8; 4096];
+        let n = client_in.read(&mut buf).await.unwrap_or(0);
+        if n == 0 {
+            return;
+        }
+        head.extend_from_slice(&buf[..n]);
+        if let Some(at) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+            break at + 4;
+        }
+    };
+    let down = tokio::spawn(async move {
+        let _ = tokio::io::copy(&mut server_in, &mut client_out).await;
+    });
+    let cut = down.abort_handle();
+    let index = if head.starts_with(b"GET /api/data ") {
+        let mut frame = head.split_off(end);
+        server_out.write_all(&head).await.unwrap();
+        while frame.len() < 7 {
+            let mut buf = [0u8; 64];
+            match client_in.read(&mut buf).await {
+                Ok(n) if n > 0 => frame.extend_from_slice(&buf[..n]),
+                _ => return,
+            }
+        }
+        server_out.write_all(&frame).await.unwrap();
+        let mut data = data.lock().unwrap();
+        data.push((frame[6] ^ frame[2], true, cut.clone()));
+        Some(data.len() - 1)
+    } else {
+        server_out.write_all(&head).await.unwrap();
+        None
+    };
+    let up = tokio::io::copy(&mut client_in, &mut server_out);
+    tokio::select! {
+        _ = up => cut.abort(),
+        _ = down => {}
+    }
+    if let Some(i) = index {
+        data.lock().unwrap()[i].1 = false;
+    }
+}
+
+/// A control connection of the test's own to the scratch server, attached to `session`.
+struct Control(tokio::sync::Mutex<tokio_tungstenite::WebSocketStream<tokio::net::UnixStream>>);
+
+impl Control {
+    async fn open(socket: &Path, session: &str) -> Self {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let stream = tokio::net::UnixStream::connect(socket).await.unwrap();
+        let mut request = "ws://localhost/api/control".into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("Sec-WebSocket-Protocol", "rex.control.v1".parse().unwrap());
+        let (mut ws, _) = tokio_tungstenite::client_async(request, stream)
+            .await
+            .unwrap();
+        let hello = serde_json::json!({
+            "type": "hello", "api_revision": 13, "api_min_revision": 13,
+            "client": {"kind": "other", "name": "e2e", "version": "0"},
+        });
+        ws.send(Message::text(hello.to_string())).await.unwrap();
+        let control = Self(tokio::sync::Mutex::new(ws));
+        control
+            .call(
+                "session.attach",
+                serde_json::json!({ "session_id": session }),
+            )
+            .await;
+        control
+    }
+
+    async fn call(&self, method: &str, payload: serde_json::Value) -> serde_json::Value {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let mut ws = self.0.lock().await;
+        let request = serde_json::json!({ "type": "request", "id": method, "method": method, "payload": payload });
+        ws.send(Message::text(request.to_string())).await.unwrap();
+        loop {
+            let Some(Ok(Message::Text(text))) = ws.next().await else {
+                continue;
+            };
+            let reply: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if reply["type"] == "response" && reply["id"] == method {
+                assert!(reply["error"].is_null(), "{method}: {reply}");
+                return reply["payload"].clone();
+            }
+        }
+    }
+
+    /// The id Rex gives a `format` result it keeps, counted per block: a `format` of this
+    /// terminal keeps one, so ids one apart mean nobody else formatted it in between.
+    async fn last_format(&self, session: &str, block: &str) -> u64 {
+        let args = serde_json::json!({ "format": "text", "max_bytes": 1 });
+        let payload = serde_json::json!({ "session_id": session, "block_id": block, "args": args });
+        let f = self.call("com.superlogical.terminal.format", payload).await;
+        f["id"].as_u64().unwrap()
+    }
+}
+
+type Reads = (String, String, String);
+
+async fn reads(rt: &Runtime, agent: &str) -> Reads {
+    (
+        rt.agent_read(agent, "recent_unwrapped", Some(200))
+            .await
+            .unwrap()
+            .text,
+        rt.agent_read(agent, "visible", None).await.unwrap().text,
+        rt.detection_text(agent).await.unwrap(),
+    )
+}
+
+/// Reads ending with `last`, made by no `format`: from the stream.
+async fn streamed(
+    rt: &Runtime,
+    control: &Control,
+    session: &str,
+    block: &str,
+    last: &str,
+) -> Reads {
+    let agent = format!("rex:{block}");
+    until(last, async || {
+        let before = control.last_format(session, block).await;
+        let read = reads(rt, &agent).await;
+        let after = control.last_format(session, block).await;
+        (after == before + 1 && read.0.ends_with(last)).then_some(read)
+    })
+    .await
+}
+
+async fn polled(rt: &Runtime, agent: &str, last: &str) -> Reads {
+    until(last, async || {
+        let read = reads(rt, agent).await;
+        read.0.ends_with(last).then_some(read)
+    })
+    .await
+}
+
+/// A watched terminal is read from one stream shared by its watches, without `format`, and
+/// reads as polling reads it: after output, after a resize by the block's owner, and after a
+/// dropped connection, which resumes. The stream closes with the last watch.
+async fn stream_scenario(server: &RexServer) {
+    let relay = Relay::start(server);
+    let (session, block) = new_session(server, "collie-stream", &["/usr/bin/perl", "-e", STREAMED]);
+    let agent = format!("rex:{block}");
+    let rex = Arc::new(Rex::new(relay.socket.clone()));
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+    until("the agent's idle report", async || {
+        (rt.agent_get(&agent).await.ok()).filter(|a| a.agent_status == "idle")
+    })
+    .await;
+    let control = Control::open(&server.socket, &session).await;
+    let open = async |want: &[(u8, bool)]| {
+        until("the data connections", async || {
+            (relay.data() == want).then_some(())
+        })
+        .await;
+    };
+
+    let held = rt.watch(&agent).unwrap();
+    let again = rt.watch(&agent).unwrap();
+    let first = streamed(
+        &rt,
+        &control,
+        &session,
+        &block,
+        "line 3000\u{1b}[0m plain \u{1b}[0m\u{1b}[1mbold\u{1b}[0m",
+    )
+    .await;
+    assert!(first.0.contains("line 2801"), "{:?}", first.0);
+    assert_eq!(relay.data(), [(1, true)], "one stream for both watches");
+    drop(again);
+    std::fs::write(server.work.join("more1"), "").unwrap();
+    let round1 = streamed(&rt, &control, &session, &block, "round 1 line 40").await;
+    drop(held);
+    open(&[(1, false)]).await;
+    assert_eq!(
+        polled(&rt, &agent, "round 1 line 40").await,
+        round1,
+        "after output"
+    );
+
+    let held = rt.watch(&agent).unwrap();
+    streamed(&rt, &control, &session, &block, "round 1 line 40").await;
+    // A block takes its owner's size, so the test owns it to resize it.
+    let at = serde_json::json!({ "session_id": session, "block_ids": [block], "mode": "take" });
+    control.call("session.own_block", at).await;
+    let size = serde_json::json!({ "session_id": session, "block_id": block, "args": { "columns": 100, "rows": 30 } });
+    control.call("com.superlogical.terminal.resize", size).await;
+    until("the new size", async || {
+        (rt.pane_columns(&agent).await.ok()? == Some(100)).then_some(())
+    })
+    .await;
+    std::fs::write(server.work.join("more2"), "").unwrap();
+    let round2 = streamed(&rt, &control, &session, &block, "round 2 line 40").await;
+    // Thirty rows: lines 12 to 40 and the cursor's empty row.
+    assert!(
+        round2.1.starts_with("round 2 line 12\r\n"),
+        "{:?}",
+        round2.1
+    );
+    drop(held);
+    open(&[(1, false), (1, false)]).await;
+    assert_eq!(
+        polled(&rt, &agent, "round 2 line 40").await,
+        round2,
+        "after a resize"
+    );
+
+    let held = rt.watch(&agent).unwrap();
+    streamed(&rt, &control, &session, &block, "round 2 line 40").await;
+    relay.cut();
+    std::fs::write(server.work.join("more3"), "").unwrap();
+    let round3 = streamed(&rt, &control, &session, &block, "round 3 line 40").await;
+    assert_eq!(
+        relay.data(),
+        [(1, false), (1, false), (1, false), (2, true)],
+        "resumed"
+    );
+    drop(held);
+    open(&[(1, false), (1, false), (1, false), (2, false)]).await;
+    assert_eq!(
+        polled(&rt, &agent, "round 3 line 40").await,
+        round3,
+        "after a drop"
+    );
+
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
 /// The session in the Claude Code transcript fixture.
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
@@ -418,10 +747,17 @@ async fn phone_scenario(
     std::fs::write(work.join("report"), "").unwrap();
     let mut codex_chat = None;
     for _ in 0..50 {
-        let page = phone
+        // The session can bind between history's two lookups, which asks for a retry.
+        let page = match phone
             .agent_history(m.clone(), codex_id.clone(), None, None, None)
             .await
-            .unwrap();
+        {
+            Err(CoreError::AgentNotReady) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            page => page.unwrap(),
+        };
         if page.available {
             codex_chat = Some(page);
             break;

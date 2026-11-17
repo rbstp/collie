@@ -12,7 +12,7 @@ use crate::runtime::screen::Screen;
 /// The tail read first; doubled while it holds fewer lines than the read needs.
 const FIRST_TAIL: u64 = 64 << 10;
 /// The most one `blob_read` answers, measured as a JSON string, its quotes included.
-const MAX_TAIL: u64 = 983_040;
+pub(super) const MAX_TAIL: u64 = 983_040;
 /// The longest tail one answer can hold, when nothing in it needs escaping.
 const MAX_WANT: u64 = MAX_TAIL - 2;
 const HISTORY: u32 = protocol::limits::MAX_READ_LINES as u32;
@@ -81,16 +81,13 @@ impl Screens {
         source: &str,
         lines: Option<u32>,
     ) -> Result<String, Error> {
-        let screen_only = matches!(source, "visible" | DETECTION);
+        let screen_only = screen_only(source);
         let key = (
             block.to_owned(),
             source.to_owned(),
             lines.filter(|_| !screen_only),
         );
-        let history = match screen_only {
-            true => 0,
-            false => lines.unwrap_or(HISTORY).min(HISTORY),
-        };
+        let history = history(source, lines);
         let rows = u64::from(size.1);
         let ask = Ask {
             unwrap: !screen_only,
@@ -109,12 +106,7 @@ impl Screens {
         #[cfg(test)]
         self.emulated
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut screen = Screen::new(size.0, size.1, history as usize);
-        screen.feed(&tail);
-        let text = match source {
-            DETECTION => screen.text(),
-            _ => screen.read(source, lines),
-        };
+        let text = emulate(&tail, size, source, lines);
         let fed = Fed {
             size,
             window,
@@ -198,6 +190,29 @@ impl Screens {
         tokio::time::timeout(TIMEOUT, shared)
             .await
             .map_err(|_| Error::Timeout)?
+    }
+}
+
+pub(super) fn screen_only(source: &str) -> bool {
+    matches!(source, "visible" | DETECTION)
+}
+
+/// The history rows a read keeps above the screen.
+pub(super) fn history(source: &str, lines: Option<u32>) -> u32 {
+    match screen_only(source) {
+        true => 0,
+        false => lines.unwrap_or(HISTORY).min(HISTORY),
+    }
+}
+
+/// A read of `vt`, Rex's VT rendering of a terminal or its end, through collied's emulator:
+/// polled and streamed reads alike, so both read the same.
+pub(super) fn emulate(vt: &[u8], size: (u16, u16), source: &str, lines: Option<u32>) -> String {
+    let mut screen = Screen::new(size.0, size.1, history(source, lines) as usize);
+    screen.feed(vt);
+    match source {
+        DETECTION => screen.text(),
+        _ => screen.read(source, lines),
     }
 }
 

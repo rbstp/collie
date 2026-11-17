@@ -22,6 +22,7 @@ mod input;
 mod model;
 mod screen;
 mod sessions;
+mod stream;
 mod tasks;
 mod wire;
 
@@ -35,6 +36,7 @@ mod tests;
 pub use discovery::socket_path;
 pub use input::{STATUS_CHANGED, Seen};
 pub use model::{Listing, PREFIX};
+pub use stream::Watch;
 
 pub const NAME: &str = "Rex";
 pub const NOT_YET: &str = "not available for Rex agents yet";
@@ -225,6 +227,7 @@ pub struct Rex {
     screens: Screens,
     /// One call's input at a time, so another call's key never lands among its keys.
     input: tokio::sync::Mutex<()>,
+    streams: stream::Streams,
 }
 
 /// The connection, session, block and size of a listed agent.
@@ -253,6 +256,7 @@ impl Rex {
             herdr: Arc::default(),
             screens: Screens::default(),
             input: tokio::sync::Mutex::default(),
+            streams: stream::Streams::default(),
         }
     }
 
@@ -315,7 +319,20 @@ impl Rex {
         Ok(Some(self.target(id)?.3.0))
     }
 
-    /// Polled, as herdr's reads are: nothing is held between reads.
+    /// Follows the terminal as a stream until the last watch of it is dropped, unless
+    /// streaming is off for this run.
+    pub fn watch(self: &Arc<Self>, id: &str) -> Result<Option<Watch>, Error> {
+        self.target(id)?;
+        Ok(self.streams.watch(self, id))
+    }
+
+    /// Where a stream in progress is marked, in collied's data folder.
+    pub fn with_stream_marker(mut self, marker: PathBuf) -> Self {
+        self.streams = stream::Streams::marked(marker);
+        self
+    }
+
+    /// From the stream while a watch holds it live, else polled, as herdr's reads are.
     pub async fn read(
         &self,
         id: &str,
@@ -323,6 +340,12 @@ impl Rex {
         lines: Option<u32>,
     ) -> Result<PaneRead, Error> {
         let (client, session, block, size) = self.target(id)?;
+        if let Some(text) = self.streams.read(id, source, lines) {
+            return Ok(PaneRead {
+                text,
+                truncated: false,
+            });
+        }
         let text = (self.screens)
             .read(&client, &session, &block, size, source, lines)
             .await?;
@@ -389,7 +412,7 @@ impl Rex {
         loop {
             let (ended, followed) = tokio::select! {
                 ended = self.attempt() => ended,
-                _ = shutdown.changed() => return,
+                _ = shutdown.changed() => return self.streams.unmark(),
             };
             match ended {
                 e if followed => {
@@ -405,7 +428,7 @@ impl Rex {
             }
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
-                _ = shutdown.changed() => return,
+                _ = shutdown.changed() => return self.streams.unmark(),
             }
             delay = (delay * 2).min(RETRY_MAX);
         }

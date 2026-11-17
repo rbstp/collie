@@ -344,3 +344,8 @@ pub(super) struct Piece {
     pub data: String,
     pub eof: bool,
 }
+
+#[derive(Deserialize)]
+pub(super) struct Ticket {
+    pub ticket: String,
+}

@@ -545,6 +545,7 @@ pub async fn start_with(
             Rex::new(s)
                 .with_claude_sessions(sessions)
                 .with_tasks(cfg.data_dir.join(config::REX_TASKS_FILE))
+                .with_stream_marker(cfg.data_dir.join(config::REX_STREAM_MARKER))
                 .with_herdr_seen(herdr_seen.clone()),
         )
     });
