@@ -3,6 +3,7 @@ use std::hash::Hash;
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -208,6 +209,7 @@ pub struct State {
     chunk_buckets: Mutex<HashMap<String, TokenBucket>>,
     reject_buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
     tracker: Mutex<StatusTracker>,
+    flock_outage: AtomicBool,
     stars: Mutex<Stars>,
     transcripts: Mutex<Transcripts>,
     costs: Arc<Costs>,
@@ -658,6 +660,7 @@ pub async fn start_with(
         chunk_buckets: Mutex::new(HashMap::new()),
         reject_buckets: Mutex::new(HashMap::new()),
         tracker: Mutex::new(tracker),
+        flock_outage: AtomicBool::new(false),
         stars: Mutex::new(stars),
         transcripts: Mutex::new(transcripts),
         costs,
@@ -1031,7 +1034,9 @@ async fn accept_loop(
                         let _ = dead.send(true);
                         return;
                     }
-                    tracing::warn!(error = %e, "tailnet accept failed");
+                    if failures == 1 {
+                        tracing::warn!(error = %e, "tailnet accept failed");
+                    }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             },
@@ -2236,7 +2241,10 @@ impl Session<'_> {
     }
 
     async fn flock(&self) -> Reply {
-        let snap = herdr_result(self.state.runtime.session_snapshot().await)?;
+        let snap = herdr_result(
+            &self.state.flock_outage,
+            self.state.runtime.session_snapshot().await,
+        )?;
         let mut tracker = lock(&self.state.tracker);
         let mut flock = flock::map_flock(
             &snap,
@@ -2764,11 +2772,21 @@ fn code_name(code: ErrorCode) -> String {
         .unwrap_or_default()
 }
 
-fn herdr_result<T>(res: Result<T, runtime::Error>) -> Result<T, (ErrorCode, String)> {
+fn herdr_result<T>(
+    outage: &AtomicBool,
+    res: Result<T, runtime::Error>,
+) -> Result<T, (ErrorCode, String)> {
+    let starts = outage_starts(outage, res.is_err());
     res.map_err(|e| {
-        tracing::warn!(error = %e, "herdr call failed");
+        if starts {
+            tracing::warn!(error = %e, "herdr call failed");
+        }
         (ErrorCode::HerdrUnavailable, "herdr unavailable".to_owned())
     })
+}
+
+fn outage_starts(outage: &AtomicBool, failed: bool) -> bool {
+    !outage.swap(failed, Ordering::Relaxed) && failed
 }
 
 fn observe_agent(
@@ -2989,6 +3007,16 @@ mod tests {
             "agent": "claude",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_herdr_outage_is_reported_by_its_first_failure_only() {
+        let outage = AtomicBool::new(false);
+        let seen: Vec<bool> = [true, true, false, false, true, true]
+            .into_iter()
+            .map(|failed| outage_starts(&outage, failed))
+            .collect();
+        assert_eq!(seen, [true, false, false, false, true, false]);
     }
 
     #[test]

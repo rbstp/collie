@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ pub struct StatusTracker {
     seen: HashMap<String, (AgentStatus, u64, u64)>,
     path: Option<PathBuf>,
     dirty: bool,
+    skipped: HashSet<String>,
 }
 
 impl StatusTracker {
@@ -28,6 +29,7 @@ impl StatusTracker {
             seen,
             path: Some(path),
             dirty: false,
+            skipped: HashSet::new(),
         }
     }
 
@@ -55,12 +57,18 @@ impl StatusTracker {
 
     /// A runtime that lists no agent, or does not answer, keeps its agents' times.
     pub fn retain<'a>(&mut self, live: impl Iterator<Item = &'a str>) {
-        let live: std::collections::HashSet<&str> = live.collect();
+        let live: HashSet<&str> = live.collect();
         let listed = |owner: Owner| live.iter().any(|id| Owner::of(id) == owner);
         let before = self.seen.len();
         self.seen
             .retain(|id, _| live.contains(id.as_str()) || !listed(Owner::of(id)));
         self.dirty |= self.seen.len() != before;
+        self.skipped
+            .retain(|id| live.contains(id.as_str()) || !listed(Owner::of(id)));
+    }
+
+    fn first_skip(&mut self, terminal_id: &str) -> bool {
+        self.skipped.insert(terminal_id.to_owned())
     }
 }
 
@@ -184,7 +192,12 @@ pub fn map_agent(
         TerminalId::new(a.terminal_id.clone()),
         WorkspaceId::new(a.workspace_id.clone()),
     ) else {
-        tracing::warn!(terminal_id = %a.terminal_id, "skipping agent with an invalid id");
+        if tracker.first_skip(&a.terminal_id) {
+            tracing::warn!(
+                terminal_id = %crate::printable(&a.terminal_id),
+                "skipping agent with an invalid id"
+            );
+        }
         return None;
     };
     let status = status(&a.agent_status);
@@ -424,6 +437,22 @@ mod tests {
             node_id: "nMAC".into(),
             herdr_session: "default".into(),
         }
+    }
+
+    #[test]
+    fn an_agent_with_an_invalid_id_is_reported_once_while_it_is_listed() {
+        let bad = "term\n1";
+        let agent: AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": bad, "workspace_id": "w1", "pane_id": "p1", "agent_status": "idle",
+        }))
+        .unwrap();
+        let mut tracker = StatusTracker::default();
+        assert!(map_agent(&agent, &mut tracker, 1_000, None).is_none());
+        assert!(!tracker.first_skip(bad));
+        tracker.retain([bad, "term_2"].into_iter());
+        assert!(!tracker.first_skip(bad));
+        tracker.retain(["term_2"].into_iter());
+        assert!(tracker.first_skip(bad));
     }
 
     #[test]

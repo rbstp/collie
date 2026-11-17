@@ -15,7 +15,7 @@ iPhone (Collie.app)                                   Mac (or Linux)
                                                       └──────────────────────────────────────┘
 ```
 
-On Linux, collied is a systemd user unit ([Linux](#linux)). The service logs warnings and errors to its stderr (`collied.err.log` in the data folder on macOS, the journal on Linux); `RUST_LOG` overrides that level.
+On Linux, collied is a systemd user unit ([Linux](#linux)). The service logs warnings and errors to its stderr (`collied.err.log` in the data folder on macOS, the journal on Linux); `RUST_LOG` overrides that level. A warning whose cause lasts is logged when it starts, not on every retry: a failing accept on the control socket at most once a minute and on the tailnet once until an accept succeeds, a herdr outage seen by the phone's list request once until herdr answers it, and an agent with an invalid id (shown escaped) once while it is listed.
 
 ## Decisions (2026-10-03)
 
