@@ -284,7 +284,7 @@ impl Model {
             for (block_id, b) in &s.blocks {
                 match b.agent(session_id, block_id) {
                     Some(a) => agents.push(a),
-                    None if b.shell() => terminals.push(b.terminal(session_id, block_id)),
+                    None if b.runs_shell() => terminals.push(b.terminal(session_id, block_id)),
                     None => {}
                 }
             }
@@ -443,23 +443,31 @@ impl Block {
     /// program in front (`vim` started from zsh), so it stays listed while a command runs. A
     /// program Rex started with no shell is neither.
     fn shell(&self) -> bool {
+        self.runs_shell() && !self.busy()
+    }
+
+    fn runs_shell(&self) -> bool {
         (self.foreground.value.as_ref()).is_some_and(|fg| shell(fg) || self.under_shell.value)
-            && !self.busy()
     }
 
     /// An agent under a shell that keeps the terminal (`sh -c 'cd x && claude'`) is no agent
-    /// here, and Rex names the shell as its record's owner: while that owner lives and the
-    /// record says working or blocked, shell input would reach the agent past every check its
-    /// own input takes, so the block is no terminal either. Idle and done stay listed, so a
-    /// suspended agent never keeps the user from typing `fg`; a reused pid only hides a
-    /// terminal.
+    /// here, and Rex names that shell as its record's owner (checked live: an agent run from
+    /// an interactive shell owns its own record, and no shell back at its prompt owned one).
+    /// Shell input would reach such an agent past every check its own input takes, so the
+    /// block is no terminal while the shell in front owns the record, whatever it says, or
+    /// while a live owner's record says working or blocked. A wrapper suspended at idle or done
+    /// keeps the shell listed for `fg`; a reused pid only hides a terminal.
     fn busy(&self) -> bool {
-        (self.status.value.as_ref()).is_some_and(|r| {
-            matches!(r.state.as_str(), "working" | "blocked")
-                && (r.owner.as_ref())
-                    .and_then(|o| i32::try_from(o.pid).ok())
-                    .is_some_and(crate::transcript::alive)
-        })
+        let Some((r, owner)) =
+            (self.status.value.as_ref()).and_then(|r| Some((r, r.owner.as_ref()?)))
+        else {
+            return false;
+        };
+        let front = (self.foreground.value.as_ref())
+            .is_some_and(|f| f.pid == owner.pid && f.name == owner.name);
+        front
+            || (matches!(r.state.as_str(), "working" | "blocked")
+                && i32::try_from(owner.pid).is_ok_and(crate::transcript::alive))
     }
 
     /// A block is an agent once its foreground process reports OSC 7501 or runs an agent
@@ -513,7 +521,9 @@ impl Block {
         })
     }
 
-    /// A program's title never leaves the machine, as for herdr's shells.
+    /// A program's title never leaves the machine, as for herdr's shells. A busy block is a
+    /// pane hosting an agent, so the phone's terminal calls drop their grants on it, as on a
+    /// herdr pane where an agent starts, and Terminals leaves it out.
     fn terminal(&self, session_id: &str, block_id: &str) -> PaneInfo {
         let id = format!("{PREFIX}{block_id}");
         let workspace_id = format!("{PREFIX}{session_id}");
@@ -526,7 +536,10 @@ impl Block {
             cwd: (self.child.as_ref().and_then(|c| c.cwd.clone()))
                 .or_else(|| self.foreground.value.as_ref().and_then(|f| f.cwd.clone())),
             foreground_cwd: (self.foreground.value.as_ref()).and_then(|f| f.cwd.clone()),
-            agent: None,
+            agent: self.busy().then(|| {
+                let app = self.status.value.as_ref().and_then(|r| r.app.as_deref());
+                agents::kind(app, None).unwrap_or_else(|| "unknown".to_owned())
+            }),
             label: None,
         }
     }
@@ -558,8 +571,8 @@ fn change_seq(updated_at: &str) -> u64 {
     u64::from_be_bytes(seq)
 }
 
-/// What a followed Rex lists: its agents, its terminals, and one group per session that
-/// holds either.
+/// What a followed Rex lists: its agents, its terminals (a busy one as a pane hosting an
+/// agent), and one group per session that holds either.
 #[derive(Default)]
 pub struct Listing {
     pub(crate) agents: Vec<AgentInfo>,

@@ -9,7 +9,7 @@ use collie_core::{AgentState, CollieCore, CoreError, MachineFlock};
 use collied::approvals::Approvals;
 use collied::audit::Audit;
 use collied::config::TasksConfig;
-use collied::drive::{Authorized, Driver};
+use collied::drive::{Authorized, Driver, HOSTS_AGENT};
 use collied::runtime::rex::{GROUP_CLOSE, Rex};
 use collied::runtime::{AgentInfo, Error, Runtime};
 use collied::server::{self, ServerConfig};
@@ -1452,21 +1452,14 @@ print "\e]7501;state=working:app=claude-code\e\\";
 wait_for("quit");
 "#;
 
-/// A login shell, as Rex.app opens one, is a terminal in its session's group, stays one while
-/// it runs a command, takes the phone's lines, keys and text, and is streamed while watched;
-/// a program Rex runs with no shell is not listed, and neither is a shell while an agent under
-/// it works (#755).
+/// An interactive shell is a terminal in its session's group, stays one while it runs a
+/// command, takes the phone's lines, keys and text, and is streamed while watched; a program
+/// Rex runs with no shell is not listed, and neither is a shell whose `sh -c` keeps an agent
+/// in front (#755). The shell is `/bin/sh -i` started directly, with the scratch home: Rex's
+/// default login shell takes the account's home from `login`, and with it the user's own
+/// startup files and history.
 async fn terminals_scenario(server: &RexServer) {
-    std::fs::write(server.root.join("home/.zshrc"), "").unwrap();
-    let work = server.work.to_str().unwrap();
-    let created = server.rex(&["new", "collie-term", "-c", work, "--json"]);
-    let (Some(session), Some(block)) = (
-        created["session_id"].as_str(),
-        created["initial_windows"][0]["block_ids"][0].as_str(),
-    ) else {
-        panic!("rex new: {created}");
-    };
-    let (session, block) = (session.to_owned(), block.to_owned());
+    let (session, block) = new_session(server, "collie-term", &["/bin/sh", "-i"]);
     let (_, alone) = new_session(server, "collie-alone", &["/bin/sleep", "600"]);
     let terminal = format!("rex:{block}");
 
@@ -1493,7 +1486,7 @@ async fn terminals_scenario(server: &RexServer) {
                 .collect(),
         )
     };
-    let shown = until("the login shell listed", async || {
+    let shown = until("the shell listed", async || {
         listed().await.filter(|l| !l.is_empty())
     })
     .await;
@@ -1517,91 +1510,75 @@ async fn terminals_scenario(server: &RexServer) {
         terminal_id: id.clone(),
         text: PromptText::new(text.to_owned()).unwrap(),
     };
-    let foreground = || process_of(server, &session, &block)["foreground"].clone();
-    // The login shell itself, `-zsh`, not a program its profile runs (`path_helper`).
-    let login_shell = until("the login shell in front", async || {
-        let fg = foreground();
-        (fg["argv0"].as_str()?.starts_with('-')).then(|| fg["name"].clone())
+    let keys = |key: Key| AgentSendKeysParams {
+        op_id: op(),
+        terminal_id: id.clone(),
+        keys: vec![key],
+    };
+    let ctrl_c = || keys(Key::Combo(KeyCombo::new("ctrl+c").unwrap()));
+    let in_front = |what: &str| {
+        let p = process_of(server, &session, &block);
+        let fg = &p["foreground"];
+        match what {
+            "shell" => fg["pid"] == p["child"]["pid"],
+            name => fg["argv0"] == name,
+        }
+    };
+    until("the shell in front", async || {
+        in_front("shell").then_some(())
     })
     .await;
-    // Rex.app's terminals run the account's login shell; the lines below are POSIX.
-    if !["sh", "bash", "zsh", "dash", "ksh"]
-        .iter()
-        .any(|s| login_shell == *s)
-    {
-        println!("skipped: the login shell is {login_shell}, not a POSIX shell");
-        stop.send_replace(true);
-        task.await.unwrap();
-        return;
-    }
     drive
         .terminal_run(line("echo collie-$((6*7)); sleep 600"), &yes)
         .await
         .unwrap();
     streamed(&rt, &control, &session, &block, "collie-42").await;
-    until("sleep in front", async || {
-        (foreground()["name"] == "sleep").then_some(())
-    })
-    .await;
+    until("sleep in front", async || in_front("sleep").then_some(())).await;
     assert_eq!(
         listed().await.unwrap(),
         shown,
         "a command ended the terminal"
     );
-
-    let ctrl_c = AgentSendKeysParams {
-        op_id: op(),
-        terminal_id: id.clone(),
-        keys: vec![Key::Combo(KeyCombo::new("ctrl+c").unwrap())],
-    };
-    drive.terminal_send_keys(ctrl_c, &yes).await.unwrap();
+    drive.terminal_send_keys(ctrl_c(), &yes).await.unwrap();
     until("the shell in front again", async || {
-        (foreground()["name"] == login_shell).then_some(())
+        in_front("shell").then_some(())
     })
     .await;
+
     let typed = SendTextParams {
         op_id: op(),
         terminal_id: id.clone(),
         text: TypedText::new("echo typed-$((1+1)); sleep 600".to_owned()).unwrap(),
     };
     drive.terminal_send_text(typed, &yes).await.unwrap();
-    let enter = AgentSendKeysParams {
-        op_id: op(),
-        terminal_id: id.clone(),
-        keys: vec![Key::Enter],
-    };
-    drive.terminal_send_keys(enter, &yes).await.unwrap();
+    drive
+        .terminal_send_keys(keys(Key::Enter), &yes)
+        .await
+        .unwrap();
     streamed(&rt, &control, &session, &block, "typed-2").await;
-
-    // An agent under `sh -c` that keeps the terminal: while it works, the block is no terminal
-    // and a line for the shell is refused; once it exits, the shell is listed again.
-    let ctrl_c = AgentSendKeysParams {
-        op_id: op(),
-        terminal_id: id.clone(),
-        keys: vec![Key::Combo(KeyCombo::new("ctrl+c").unwrap())],
-    };
-    drive.terminal_send_keys(ctrl_c, &yes).await.unwrap();
+    until("sleep in front", async || in_front("sleep").then_some(())).await;
+    drive.terminal_send_keys(ctrl_c(), &yes).await.unwrap();
     until("the shell in front again", async || {
-        (foreground()["name"] == login_shell).then_some(())
+        in_front("shell").then_some(())
     })
     .await;
+
+    // An agent under `sh -c` that keeps the terminal owns its reports through that `sh`: the
+    // block is no terminal from its first report, idle included, and a line is refused as on
+    // a pane hosting an agent; once it exits, the shell is listed again.
     std::fs::write(server.work.join("wrapped.pl"), WRAPPED).unwrap();
     drive
         .terminal_run(line("sh -c '/usr/bin/perl wrapped.pl; true'"), &yes)
         .await
         .unwrap();
-    until("the wrapper in front", async || {
-        (foreground()["argv0"] == "sh").then_some(())
-    })
-    .await;
-    std::fs::write(server.work.join("go"), "").unwrap();
-    until("the working agent's shell unlisted", async || {
+    until("the idle agent's shell unlisted", async || {
         listed().await.filter(|l| l.is_empty())
     })
     .await;
     assert!(rt.agent_list().await.unwrap().is_empty());
     let refused = drive.terminal_run(line("yes"), &yes).await.unwrap_err();
-    assert_eq!(refused.0, ErrorCode::NotFound, "{refused:?}");
+    assert_eq!(refused, (ErrorCode::NotFound, HOSTS_AGENT.to_owned()));
+    std::fs::write(server.work.join("go"), "").unwrap();
     std::fs::write(server.work.join("quit"), "").unwrap();
     let back = until("the shell listed again", async || {
         listed().await.filter(|l| !l.is_empty())

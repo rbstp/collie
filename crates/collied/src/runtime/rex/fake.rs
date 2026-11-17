@@ -173,7 +173,7 @@ type Pushes<T> = Arc<Mutex<Option<mpsc::UnboundedSender<T>>>>;
 pub(super) struct Fake {
     _dir: tempfile::TempDir,
     pub socket: PathBuf,
-    state: Arc<Mutex<State>>,
+    pub state: Arc<Mutex<State>>,
     push: Pushes<Push>,
     data_push: Pushes<DataPush>,
     task: tokio::task::JoinHandle<()>,

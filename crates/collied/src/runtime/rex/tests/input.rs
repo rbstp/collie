@@ -446,14 +446,14 @@ async fn an_agent_started_in_a_terminal_during_a_run_never_gets_its_enter() {
 }
 
 #[tokio::test]
-async fn a_shell_keeping_a_working_agent_under_it_takes_no_terminal_input() {
+async fn a_shell_keeping_an_agent_under_it_takes_no_terminal_input_and_drops_its_grant() {
     let fake = Fake::start().await;
     let me = std::process::id();
     {
         let mut s = fake.state();
         s.sessions.push((S1.to_owned(), "work".to_owned()));
         let sh = fake::under_shell(me, "sh", "bash");
-        s.add(S1, B2, sh, vec![fake::record("working", me, "bash", T0)]);
+        s.add(S1, B2, sh, vec![fake::record("idle", me, "bash", T0)]);
     }
     let (rex, rt, dir) = followed(&fake).await;
     let shell = id(B2);
@@ -470,19 +470,22 @@ async fn a_shell_keeping_a_working_agent_under_it_takes_no_terminal_input() {
         terminal_id: TerminalId::new(&shell).unwrap(),
         text: PromptText::new("yes".to_owned()).unwrap(),
     };
+    // The answer that makes the server drop the terminal's grants, as for a herdr pane.
     assert_eq!(
-        drive.terminal_run(run.clone(), &yes).await.unwrap_err().0,
-        ErrorCode::NotFound
+        drive.terminal_run(run.clone(), &yes).await.unwrap_err(),
+        (ErrorCode::NotFound, HOSTS_AGENT.to_owned())
     );
     assert!(events(&fake, B2).is_empty());
 
-    fake.emit(move |s| {
-        let idle = fake::record("idle", me, "bash", "2026-11-12T16:48:00.000001Z");
-        s.block(B2).records = vec![idle.clone()];
-        vec![fake::status_changed(S1, B2, idle)]
+    // The agent and its `sh` exit: the user's shell leads again.
+    fake.emit(|s| {
+        let zsh = fake::process(30, "-zsh", "zsh");
+        s.block(B2).process = zsh.clone();
+        vec![fake::block_event(S1, B2, "process_changed", zsh)]
     });
     super::eventually("the terminal listed", || {
-        rex.listing().is_some_and(|l| !l.terminals.is_empty())
+        rex.listing()
+            .is_some_and(|l| l.terminals.iter().any(|p| p.agent.is_none()))
     })
     .await;
     drive.terminal_run(run, &yes).await.unwrap();

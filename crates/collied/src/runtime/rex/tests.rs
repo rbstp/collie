@@ -549,8 +549,8 @@ fn a_shell_or_what_it_runs_is_a_terminal_and_a_program_rex_started_alone_is_not(
         "block:0000000000000000000000000000000000c5",
     ];
     let none = json!([]);
-    // A shell in front, whatever it reported, is no agent.
-    let reported = json!([fake::record("idle", 10, "zsh", T0)]);
+    // A shell in front is no agent, whatever a program that left reported.
+    let reported = json!([fake::record("idle", 9, "claude", T0)]);
     read(
         &mut model,
         zsh,
@@ -620,7 +620,7 @@ fn a_shell_or_what_it_runs_is_a_terminal_and_a_program_rex_started_alone_is_not(
 /// `sh -c 'cd x && claude'` keeps `sh` in front, and Rex names it as the owner of the agent's
 /// reports: shell input there would reach the agent past every agent check.
 #[test]
-fn a_shell_keeping_a_working_agent_under_it_is_no_terminal() {
+fn a_shell_keeping_an_agent_under_it_is_no_terminal() {
     let mut model = Model::new(Some(fake::HOST.to_owned()));
     let session = SessionRef {
         session_id: S1.to_owned(),
@@ -634,7 +634,7 @@ fn a_shell_keeping_a_working_agent_under_it_is_no_terminal() {
         child.id()
     };
     let wrapper = "block:0000000000000000000000000000000000d1";
-    let working = json!([fake::record("working", me, "bash", T0)]);
+    let idle = json!([fake::record("idle", me, "bash", T0)]);
     let sh = fake::under_shell(me, "sh", "bash");
     read(
         &mut model,
@@ -642,30 +642,48 @@ fn a_shell_keeping_a_working_agent_under_it_is_no_terminal() {
         fake::HOST,
         super::client::TERMINAL,
         sh,
-        working,
+        idle,
     );
+    // Terminals, a pane hosting an agent, and whether input can reach it.
     let listed = |model: &Model| {
-        let l = model.listing();
-        (
-            l.terminals.len(),
-            l.agents.len(),
-            model.target(&id(wrapper)).is_some(),
-        )
+        let panes = model.listing().terminals;
+        let terminals = panes.iter().filter(|p| p.agent.is_none()).count();
+        let hosting = panes.iter().filter(|p| p.agent.is_some()).count();
+        assert!(model.listing().agents.is_empty());
+        (terminals, hosting, model.target(&id(wrapper)).is_some())
     };
-    assert_eq!(listed(&model), (0, 0, false));
+    // The shell in front owns the record: whatever it says, an agent may be at a dialog.
+    assert_eq!(listed(&model), (0, 1, false));
+    assert_eq!(
+        model.listing().terminals[0].agent.as_deref(),
+        Some("claude")
+    );
 
     let report = |model: &mut Model, seq, state: &str, pid| {
         let r = fake::record(state, pid, "bash", &format!("2026-11-12T16:48:0{seq}Z"));
         let e = fake::status_changed(S1, wrapper, r);
         model.event(seq, serde_json::from_value(e).unwrap());
     };
+    let front = |model: &mut Model, seq, pid, argv0: &str, name: &str| {
+        let e = fake::block_event(
+            S1,
+            wrapper,
+            "process_changed",
+            fake::process(pid, argv0, name),
+        );
+        model.event(seq, serde_json::from_value(e).unwrap());
+    };
     report(&mut model, 2, "blocked", me);
-    assert_eq!(listed(&model), (0, 0, false));
-    // Idle or done, as a suspended agent's report is: the user can type `fg`.
-    report(&mut model, 3, "idle", me);
+    assert_eq!(listed(&model), (0, 1, false));
+    // Suspended with Ctrl+Z, the login shell leads: idle or done, it is listed for `fg`;
+    // working or blocked under a live owner, it is not.
+    front(&mut model, 3, 2, "-zsh", "zsh");
+    report(&mut model, 4, "idle", me);
     assert_eq!(listed(&model), (1, 0, true));
+    report(&mut model, 5, "working", me);
+    assert_eq!(listed(&model), (0, 1, false));
     // A record whose owner is gone is a program that left.
-    report(&mut model, 4, "working", gone);
+    report(&mut model, 6, "working", gone);
     assert_eq!(listed(&model), (1, 0, true));
 }
 
