@@ -11,6 +11,7 @@ pub mod costs;
 #[cfg(target_os = "linux")]
 pub mod creds;
 pub mod daemon;
+pub mod desk;
 pub mod doctor;
 pub mod draft;
 pub mod drive;

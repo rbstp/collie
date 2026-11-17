@@ -27,6 +27,8 @@ You can also answer any agent's prompt with the terminal buttons or the composer
 
 When an agent finishes a turn of 30 seconds or more, you get one alert with its name and workspace, unless the agent is on screen. **Settings > Notifications > Notify when an agent finishes** turns these off, and [pull request](../app/pull-requests.md) alerts too.
 
+On a Mac, collied also skips the alert when you sit in front of that agent: its herdr pane is the focused one, the window in front belongs to the app that runs herdr, and you typed or moved the pointer in the last minute, with the screen unlocked and awake. Away from the desk, behind a locked screen or with another app in front, you get the alert as before. collied sees the app, not its tab: with herdr's terminal app in front but another of its tabs showing, the alert is skipped too. Herdr Core and Rex agents, and agents on Linux, always alert, since collied cannot tell what their windows show. collied reads this on the Mac only when a turn ends, keeps nothing and sends nothing of it, and asks for no permission. The app still shows the agent as done when you open it.
+
 ## What Apple can see
 
 Only your phone can read alert text, names, pull request details and commands; Apple sees generic text and the metadata the [threat model](../reference/threat-model.md#apple-sees-push-payload-metadata) lists. If the phone cannot decrypt an alert in time, it shows generic text without approval controls.

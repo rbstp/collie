@@ -424,6 +424,16 @@ Subagent fields, Chat content and search queries go only to the paired phone and
 | Residual | The request goes to GitHub as the user, which GitHub already sees from Copilot itself. A same-UID process can replace `gh` or its config and show false usage, which is display only. `gh` reads the user's GitHub host config; `--hostname github.com` keeps the request on github.com whatever `GH_HOST` or the first configured host is. |
 | Phase | Built |
 
+### Desktop state for done alerts
+
+| | |
+|---|---|
+| Assets | What the user does at the Mac: when they last typed, whether the screen is locked, which application is in front, what runs under it |
+| Attack | Skipping the done alert leaks desktop activity to the phone, the relay, Apple or the logs; reading it trips a privacy prompt or looks like monitoring to endpoint security; a same-UID process fakes "in front" to suppress the alert. |
+| Mitigations | Read on macOS only, for a herdr agent whose turn just ended, never on a timer: the session dictionary, the idle seconds and the display state from CoreGraphics, the owner pid and layer of the frontmost window (no title, no pixels: no Screen Recording, Accessibility or Input Monitoring permission, no event tap, no AppleScript, no helper process), and the Unix socket peers of that process and its descendants through libproc, which reads only the user's own processes. Each later step runs only when the one before allows a skip. Nothing is stored, sent or logged but the decision (an info-level line with the terminal id when the alert is skipped, off at the default level). Any unknown signal sends the alert. |
+| Residual | The only effect is a missing done alert; the phone still shows the agent as done. A same-UID process that holds a connection to `herdr-client.sock` under the frontmost application, or that focuses the pane, can suppress the alert; same-UID malware already controls herdr and collied's files and is out of scope ([Same-UID malware on the Mac](#same-uid-malware-on-the-mac)). With herdr's terminal application in front but another of its tabs showing, the alert is skipped. Whether the lock screen key keeps its undocumented name is not guaranteed; if it went away a locked screen would rely on the idle bound. |
+| Phase | Built (#774) |
+
 ### Apple sees push payload metadata
 
 | | |

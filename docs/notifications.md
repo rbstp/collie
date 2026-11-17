@@ -33,6 +33,18 @@ Attention previews prefer the pending question or action:
 
 iPhone and Apple Watch show the authenticated preview, as does an iPhone notification mirrored to macOS; CollieBar and CollieTray send no desktop notifications.
 
+## Done alert at the desk
+
+collied skips a done alert (#774) only when three signals, read when the turn ends, are all known and true; any missing, stale or failed signal sends it. Approval alerts, pull request watch and archive alerts, Live Activities and Usage are unchanged. Design and calls: [architecture](architecture.md#apns).
+
+- The pane is focused: the agent is herdr's, and herdr's `session.snapshot` names its pane as `focused_pane_id`.
+- Its window is in front: the frontmost normal window's application, or a process under it, holds a client attached to the session collied follows.
+- The user is active: keyboard or pointer input in the last 60 s, the screen unlocked, the display awake and the session on the console.
+
+It applies on macOS with herdr only. Herdr Core and Rex report no client's view, and on Linux idle and lock states would need a Wayland client and D-Bus, so those send as before. collied sees the application, not its tab or window: with herdr's terminal in front showing another tab, the alert is skipped.
+
+To try it on a Mac: run an agent in herdr in a terminal, give it a task of more than 30 s, and keep its pane focused and the terminal in front while moving the mouse now and then. No alert arrives (with `RUST_LOG=info`, collied logs "done alert skipped"). Repeat with another app in front, with the screen locked, or after a minute without input: the alert arrives.
+
 ## Observations from device testing
 
 - The generic test reached the iPhone and opened the app, but no session, because its payload had no session target.

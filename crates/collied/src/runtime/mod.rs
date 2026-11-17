@@ -82,6 +82,9 @@ pub struct AgentInfo {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionSnapshot {
+    /// herdr's, shared by every client and kept with none attached.
+    #[serde(default)]
+    pub focused_pane_id: Option<String>,
     pub workspaces: Vec<WorkspaceInfo>,
     pub panes: Vec<PaneInfo>,
     pub agents: Vec<AgentInfo>,
@@ -303,6 +306,11 @@ impl Runtime {
             core: None,
             rex: None,
         }
+    }
+
+    /// Where herdr's clients attach: herdr 0.9.5 puts it beside the API socket.
+    pub fn herdr_client_socket(&self) -> PathBuf {
+        self.herdr.with_file_name("herdr-client.sock")
     }
 
     pub fn with_core(mut self, core: Option<Arc<Core>>) -> Self {
