@@ -306,7 +306,7 @@ jobs:
         timeout-minutes: 10
         continue-on-error: true
         run: |
-          kill -0 "$(cat "$RUNNER_TEMP/simulator-boot.pid")" 2> /dev/null && xcrun simctl bootstatus 'iPhone 18 Pro'
+          kill -0 "$(cat "$RUNNER_TEMP/simulator-boot.pid")" 2> /dev/null && { xcrun simctl bootstatus 'iPhone 18 Pro' || true; }
           xcrun simctl list devices booted | grep -q 'iPhone 18 Pro (' && exit 0
           echo "::warning::The simulator booted earlier in the job is not booted; booting it again before the tests."
           xcrun simctl bootstatus 'iPhone 18 Pro' -b
