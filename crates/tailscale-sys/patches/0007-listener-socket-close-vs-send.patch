@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 2df8916..66787ec 100644
+index 7d2c773..7d846d6 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -80,6 +80,10 @@ type listener struct {
@@ -13,7 +13,7 @@ index 2df8916..66787ec 100644
  }
  
  // listenAddrLen is the size of the fixed-size, NUL-padded record that
-@@ -264,15 +268,21 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -266,15 +270,21 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  	listeners.mu.Unlock()
  
  	cleanup := func() {
@@ -35,7 +35,7 @@ index 2df8916..66787ec 100644
  
  		ln.Close()
  
-@@ -338,9 +348,18 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -340,9 +350,18 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  			listener.inflight = append(listener.inflight, f)
  			listener.mu.Unlock()
  			var sendErr error

@@ -1,5 +1,5 @@
 diff --git a/tailscale.go b/tailscale.go
-index 82c727e..6118047 100644
+index 03b588e..4c3d5a6 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -88,18 +88,6 @@ type listener struct {
@@ -21,7 +21,7 @@ index 82c727e..6118047 100644
  func (s *server) recErr(err error) C.int {
  	s.mu.Lock()
  	defer s.mu.Unlock()
-@@ -520,61 +508,55 @@ func newConn(s *server, netConn net.Conn, connOut *C.int) error {
+@@ -524,61 +512,55 @@ func newConn(s *server, netConn net.Conn, connOut *C.int) error {
  	if err != nil {
  		return err
  	}

@@ -27,7 +27,7 @@ index 420d67e..11fa7d8 100644
  	return TsnetGetRemoteAddr(l, conn, buf, buflen);
  }
 diff --git a/tailscale.go b/tailscale.go
-index ce7cb74..7ec8789 100644
+index 0f693bc..565f03d 100644
 --- a/tailscale.go
 +++ b/tailscale.go
 @@ -24,6 +24,7 @@ import (
@@ -91,7 +91,7 @@ index ce7cb74..7ec8789 100644
  	if n >= len(out) {
  		out[len(out)-1] = '\x00' // always NUL-terminate
  		return C.ERANGE
-@@ -293,17 +303,17 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -295,17 +305,17 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  				netConn.Close()
  				continue
  			}
@@ -113,7 +113,7 @@ index ce7cb74..7ec8789 100644
  
  			rights := syscall.UnixRights(int(connFd))
  			err = syscall.Sendmsg(sp, addrRec[:], rights, nil, 0)
-@@ -326,6 +336,31 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
+@@ -328,6 +338,31 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
  
  //export TsnetAccept
  func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
@@ -145,14 +145,16 @@ index ce7cb74..7ec8789 100644
  	listeners.mu.Lock()
  	ln := listeners.m[listenerFd]
  	listeners.mu.Unlock()
-@@ -335,30 +370,38 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -337,31 +372,39 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  	}
  
  	// One record per connection: the fd via SCM_RIGHTS plus its remote
 -	// IP. The fd parsed below is the number the kernel installed, i.e.
--	// the number C will hold.
+-	// the number C will hold, and it is close-on-exec (via recvFlags on
+-	// Linux, or the closeOnExec call below elsewhere).
 +	// ip:port. The fd parsed below is the number the kernel installed,
-+	// i.e. the number C will hold.
++	// i.e. the number C will hold, and it is close-on-exec (via recvFlags
++	// on Linux, or the closeOnExec call below elsewhere).
  	//
  	// The socketpair is a stream socket, so records are framed here:
  	// each read asks for the remaining bytes of the head record, with
@@ -188,20 +190,20 @@ index ce7cb74..7ec8789 100644
 -			// the cmsg rode with the record's first byte; only the tail remains
 -			cbuf = nil
 -		}
--		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), buf, cbuf, syscall.MSG_WAITALL)
+-		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), buf, cbuf, recvFlags)
 -		n += nn
 -		if nn > 0 {
 -			oobn = on
 -		}
 +		// nn is -1 on error
-+		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), data[n:], cbuf, syscall.MSG_WAITALL)
++		nn, on, _, _, err := syscall.Recvmsg(int(listenerFd), data[n:], cbuf, recvFlags)
  		if err == syscall.EINTR {
 -			continue // partial bytes stay record-aligned, keep draining
 +			continue
  		}
  		if err != nil {
  			return ln.s.recErr(err)
-@@ -367,9 +410,15 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -370,9 +413,15 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  			// EOF mid-record: the listener was closed on the C side.
  			return ln.s.recErr(fmt.Errorf("libtailscale: listener closed mid-record: got %d of %d bytes", n, len(data)))
  		}
@@ -218,7 +220,7 @@ index ce7cb74..7ec8789 100644
  	if err != nil {
  		return ln.s.recErr(err)
  	}
-@@ -390,15 +439,31 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
+@@ -394,15 +443,31 @@ func TsnetAccept(listenerFd C.int, connOut *C.int) C.int {
  	if addrLen < 0 {
  		addrLen = listenAddrLen
  	}
@@ -249,9 +251,9 @@ index ce7cb74..7ec8789 100644
 +}
 +
  func newConn(s *server, netConn net.Conn, connOut *C.int) error {
- 	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
+ 	fds, err := socketpair()
  	if err != nil {
-@@ -484,7 +549,9 @@ func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t
+@@ -488,7 +553,9 @@ func TsnetGetRemoteAddr(listener C.int, conn C.int, buf *C.char, buflen C.size_t
  	ip, ok := l.m[conn]
  	if !ok {
  		// set errmsg too: EBADF with an empty message is not debuggable
@@ -261,7 +263,7 @@ index ce7cb74..7ec8789 100644
  		out[0] = '\x00'
  		return C.EBADF
  	}
-@@ -679,6 +746,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
+@@ -683,6 +750,34 @@ func TsnetStatusJSON(sd C.int, jsonOut **C.char) C.int {
  	return 0
  }
  

@@ -13,6 +13,8 @@ fn main() {
     println!("cargo:rerun-if-changed={}", patches.display());
     for file in [
         "tailscale.go",
+        "fd_linux.go",
+        "fd_other.go",
         "tailscale.c",
         "tailscale.h",
         "go.mod",
