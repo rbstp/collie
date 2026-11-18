@@ -14,10 +14,10 @@ enum Prev {
 
 /// The rows of a Claude Code read (split on `\n`) that continue a paragraph it wrapped at the
 /// pane's `cols`, as `(wraps, splits)` of a `TerminalRead`. Only prose under an indent-0 `⏺`
-/// or `※` row counts; a row that only might continue the one above never does. A numbered item
-/// continues past its number or, as Claude Code 2.1.303 drew items with blank rows between
-/// them, under it. A shaded sent prompt, wrapped at `cols - 3`, joins only after a row Claude
-/// Code ended with a space in the text's style. The input box's unsent text joins as
+/// (`●` off macOS) or `※` row counts; a row that only might continue the one above never does.
+/// A numbered item continues past its number or, as Claude Code 2.1.303 drew items with blank
+/// rows between them, under it. A shaded sent prompt, wrapped at `cols - 3`, joins only after a
+/// row Claude Code ended with a space in the text's style. The input box's unsent text joins as
 /// [`draft::parse`] reads it.
 pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
@@ -52,7 +52,7 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 continue;
             }
             prompt = None;
-            let body = s.strip_prefix(['⏺', '※']);
+            let body = s.strip_prefix(['⏺', '●', '※']);
             prose = body.is_some();
             let lead = body.map(|b| b.strip_prefix([' ', '\u{a0}']).unwrap_or(b));
             prev = match lead.map(|l| (l.trim_start_matches([' ', '\u{a0}']), l)) {
@@ -1169,6 +1169,12 @@ mod tests {
             "  2.",
         ];
         assert_eq!(wraps(&rows, 40), [1, 2, 5, 7, 9, 11, 14]);
+    }
+
+    #[test]
+    fn prose_under_the_reply_dot_claude_draws_off_macos_joins() {
+        let rows = ["● The quick brown fox jumps over the", "  lazy dog."];
+        assert_eq!(wraps(&rows, 40), [1]);
     }
 
     #[test]
