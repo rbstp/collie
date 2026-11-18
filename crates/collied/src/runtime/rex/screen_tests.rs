@@ -304,24 +304,28 @@ async fn a_block_whose_reads_failed_is_read_again_on_its_next_report() {
                 json!({ "foreground": fg }),
             )]
         });
+        // The block is listed once its process is read, and left out again when its status
+        // read fails: the next report must come after that.
         eventually("the report read", || {
             fake.calls()
                 .iter()
-                .filter(|m| m.ends_with(".process"))
+                .filter(|m| m.ends_with(".program_status"))
                 .count()
                 == reads
+                && rex.get(&id(B2)).is_err()
         })
         .await;
     }
-    assert!(rex.get(&id(B2)).is_err());
 
     let record = fake::record("working", 20, "2.1.322", T0);
     fake.emit(move |s| {
         s.block(B2).records = vec![record.clone()];
         vec![fake::status_changed(S1, B2, record)]
     });
-    eventually("the block read again", || rex.get(&id(B2)).is_ok()).await;
-    assert_eq!(rex.get(&id(B2)).unwrap().agent_status, "working");
+    eventually("the block read again with its status", || {
+        rex.get(&id(B2)).is_ok_and(|a| a.agent_status == "working")
+    })
+    .await;
     assert_eq!(skipped(), 1);
 }
 

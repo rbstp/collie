@@ -6,6 +6,7 @@ use protocol::{
     TaskWorktreesParams, TerminalId,
 };
 use serde_json::{Value, json};
+use tokio::io::AsyncBufReadExt;
 
 use super::{B1, S1, T0, claude, eventually, follow, id};
 use crate::drive::{Authorized, Driver, ELSEWHERE, STARTUP_PROMPT};
@@ -340,8 +341,10 @@ async fn a_chosen_runtime_is_the_only_place_a_task_starts() {
     let closing = root.join("closing.sock");
     let listener = tokio::net::UnixListener::bind(&closing).unwrap();
     let closer = tokio::spawn(async move {
+        // Read first: Linux resets a socket closed with data unread.
         while let Ok((stream, _)) = listener.accept().await {
-            drop(stream);
+            let mut stream = tokio::io::BufReader::new(stream);
+            let _ = stream.read_until(b'\n', &mut Vec::new()).await;
         }
     });
     assert!(matches!(

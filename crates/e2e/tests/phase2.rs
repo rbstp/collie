@@ -602,11 +602,16 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     // Simulates iOS killing the socket: the core drops the connection and reconnects.
     // Released once the session is dropped, as collied gives up on herdr after 5 s and
     // the redial can take longer under load; the retry then replays the stored outcome.
+    // Looked at without a pause: the local redial can end the drop within 11 ms.
     core.resume(60);
-    wait_for("the phone to drop its session", || {
-        !core.cached_flock(m.clone()).is_some_and(|f| connected(&f))
-    })
-    .await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while core.cached_flock(m.clone()).is_some_and(|f| connected(&f)) {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the phone to drop its session"
+        );
+        tokio::task::yield_now().await;
+    }
     herdr.release.send_replace(true);
     pending.await.unwrap().unwrap();
     assert_eq!(
