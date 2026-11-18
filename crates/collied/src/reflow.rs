@@ -52,7 +52,11 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 continue;
             }
             prompt = None;
-            let body = s.strip_prefix(['⏺', '●', '※']);
+            // Claude Code draws its feedback surveys behind `●` on every platform, with their
+            // options in a box of their own below.
+            let body = s.strip_prefix(['⏺', '●', '※']).filter(|b| {
+                !(s.starts_with('●') && SURVEYS.iter().any(|q| b.trim_start().starts_with(q)))
+            });
             prose = body.is_some();
             let lead = body.map(|b| b.strip_prefix([' ', '\u{a0}']).unwrap_or(b));
             prev = match lead.map(|l| (l.trim_start_matches([' ', '\u{a0}']), l)) {
@@ -162,6 +166,11 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     splits.extend(typed_splits);
     (wraps, splits)
 }
+
+const SURVEYS: [&str; 2] = [
+    "How is Claude doing this session?",
+    "How was Claude's recollection?",
+];
 
 pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     match kind {
@@ -1175,6 +1184,14 @@ mod tests {
     fn prose_under_the_reply_dot_claude_draws_off_macos_joins() {
         let rows = ["● The quick brown fox jumps over the", "  lazy dog."];
         assert_eq!(wraps(&rows, 40), [1]);
+    }
+
+    #[test]
+    fn survey_options_never_join_the_question() {
+        let survey = include_str!("../tests/fixtures/claude-2.1.293/survey.ansi.txt");
+        for cols in 46..=48 {
+            assert_eq!(soft_wraps(survey, cols), (vec![], vec![]), "{cols}");
+        }
     }
 
     #[test]
