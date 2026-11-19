@@ -25,6 +25,8 @@ Open a worktree to see its folder, the agents working in it (tap one to open its
 
 Each file shows its status letter, path and lines added and removed. Open a file to see its diff, a compact unified view like GitHub's: a one-line header with the path and its added and removed line counts, then each line with its old and new line numbers, added lines tinted green and removed lines red. **Wrap lines** turns phone-width wrapping on or off. Mark a file **Viewed** in its diff header to collapse it and move it last; this phone keeps the mark until the diff changes. Listings show up to 200 entries, and long diffs only a preview.
 
+A hidden file Git does not track yet, such as a new `.env` or a file in a folder whose name starts with a dot, shows by its path only: `collied` sends neither its line counts nor its content, as it opens no hidden file from [Chat](chat-terminal.md). Once Git tracks a hidden file, staged ones included, you see its changes like any other file's.
+
 ## Send feedback
 
 1. Select text in a diff, in any scope, choose **Feedback**, then write a comment. To comment on the whole file, tap the feedback button in its header.

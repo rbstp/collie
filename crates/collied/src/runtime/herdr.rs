@@ -690,6 +690,17 @@ async fn call_with_timeout<R: DeserializeOwned>(
     params: Value,
     timeout: Duration,
 ) -> Result<R, Error> {
+    let uid = rustix::process::geteuid().as_raw();
+    call_as(socket, method, params, timeout, uid).await
+}
+
+async fn call_as<R: DeserializeOwned>(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+    uid: u32,
+) -> Result<R, Error> {
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = format!("collied-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let mut line = serde_json::to_vec(&json!({
@@ -702,6 +713,13 @@ async fn call_with_timeout<R: DeserializeOwned>(
 
     let raw = tokio::time::timeout(timeout, async {
         let mut stream = UnixStream::connect(socket).await?;
+        // With neither XDG_CONFIG_HOME nor HOME set the socket is looked for under the temp
+        // dir, where another user can bind it first: such a herdr is sent nothing.
+        if stream.peer_cred()?.uid() != uid {
+            return Err(Error::Unsupported(
+                "herdr is served by another user".to_owned(),
+            ));
+        }
         stream.write_all(&line).await?;
         let mut buf = Vec::new();
         BufReader::new(stream)
@@ -739,6 +757,23 @@ async fn call_with_timeout<R: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn nothing_is_sent_to_a_socket_another_user_serves() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("herdr.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let received = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut sent = Vec::new();
+            stream.read_to_end(&mut sent).await.unwrap();
+            sent
+        });
+        let other = rustix::process::geteuid().as_raw() + 1;
+        let refused = call_as::<PingResult>(&socket, "ping", json!({}), TIMEOUT, other).await;
+        assert!(matches!(refused, Err(Error::Unsupported(_))));
+        assert!(received.await.unwrap().is_empty());
+    }
 
     fn env(socket: Option<&str>, session: Option<&str>, xdg: Option<&str>) -> SocketEnv {
         SocketEnv {

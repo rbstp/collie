@@ -8,6 +8,8 @@ use protocol::{
     AgentDiffParams, Cwd, ErrorCode, GitChanges, GitDiff, GitFile, GitPullRequest, GitScope,
     GitSection, GitWorktree, PullState, hex,
 };
+#[cfg(target_os = "macos")]
+use rustix::fs::AtFlags;
 use rustix::fs::{Mode, OFlags};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -24,6 +26,7 @@ const MAX_FILES: usize = 200;
 const MAX_WORKTREES: usize = 20;
 const MAX_SUBMODULES: usize = 100;
 const PULL_PAGE: usize = 100;
+const HIDDEN: &str = "Hidden files are not shown";
 
 fn error(message: &str) -> Fail {
     (ErrorCode::InvalidParams, message.into())
@@ -577,16 +580,32 @@ fn tracked(out: &[u8], section: GitSection) -> Result<Vec<GitFile>, Fail> {
     Ok(files)
 }
 
-fn untracked_content(root: &Cwd, name: &str) -> Result<Vec<u8>, Fail> {
+/// A failed stat counts as hidden.
+#[cfg(target_os = "macos")]
+fn flagged(st: rustix::io::Result<rustix::fs::Stat>) -> bool {
+    !st.is_ok_and(|st| st.st_flags & crate::drive::UF_HIDDEN == 0)
+}
+
+/// Without `hidden`, a `name` with a hidden component below `root` (a leading dot or, on
+/// macOS, `UF_HIDDEN`) is refused, as `file.open` refuses one: an untracked `.env` is not
+/// read for the phone.
+fn untracked_content(root: &Cwd, name: &str, hidden: bool) -> Result<Vec<u8>, Fail> {
     path(name.as_bytes())?;
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut dir = rustix::fs::open(root.as_str(), flags, Mode::empty())
         .map_err(|_| error("Checkout changed; refresh"))?;
     let mut parts = Path::new(name).components().peekable();
     while let Some(Component::Normal(part)) = parts.next() {
+        if !hidden && part.as_encoded_bytes().starts_with(b".") {
+            return Err(error(HIDDEN));
+        }
         if parts.peek().is_some() {
             dir = rustix::fs::openat(&dir, part, flags, Mode::empty())
                 .map_err(|_| error("File directory changed; refresh"))?;
+            #[cfg(target_os = "macos")]
+            if !hidden && flagged(rustix::fs::fstat(&dir)) {
+                return Err(error(HIDDEN));
+            }
         } else {
             let fd = match rustix::fs::openat(
                 &dir,
@@ -596,12 +615,21 @@ fn untracked_content(root: &Cwd, name: &str) -> Result<Vec<u8>, Fail> {
             ) {
                 Ok(fd) => fd,
                 Err(rustix::io::Errno::LOOP) => {
+                    #[cfg(target_os = "macos")]
+                    if !hidden && flagged(rustix::fs::statat(&dir, part, AtFlags::SYMLINK_NOFOLLOW))
+                    {
+                        return Err(error(HIDDEN));
+                    }
                     return rustix::fs::readlinkat(&dir, part, Vec::new())
                         .map(|s| s.as_bytes().to_vec())
                         .map_err(|_| error("Could not read symlink"));
                 }
                 Err(_) => return Err(error("File changed or cannot be read; refresh")),
             };
+            #[cfg(target_os = "macos")]
+            if !hidden && flagged(rustix::fs::fstat(&fd)) {
+                return Err(error(HIDDEN));
+            }
             let file = std::fs::File::from(fd);
             if !file
                 .metadata()
@@ -772,7 +800,7 @@ pub async fn changes(
                 break;
             }
             let name = path(name)?;
-            let contents = untracked_content(&root, &name).ok();
+            let contents = untracked_content(&root, &name, false).ok();
             let additions = contents
                 .as_deref()
                 .and_then(text_content)
@@ -799,7 +827,7 @@ pub async fn changes(
         .iter_mut()
         .filter(|f| f.section == GitSection::Unstaged && !f.status.starts_with('D'))
     {
-        file.hash = match (&file.hash, untracked_content(&root, &file.path)) {
+        file.hash = match (&file.hash, untracked_content(&root, &file.path, true)) {
             (Some(hash), Ok(contents)) => Some(digest(&[hash.as_bytes(), &contents])),
             _ => None,
         };
@@ -1241,7 +1269,7 @@ pub async fn diff(cwd: &Cwd, roots: &[PathBuf], p: &AgentDiffParams) -> Result<G
         if !ok || truncated || !out.split(|b| *b == 0).any(|s| s == p.path.as_bytes()) {
             return Err(error("File is no longer untracked; refresh"));
         }
-        let bytes = untracked_content(&root, &p.path)?;
+        let bytes = untracked_content(&root, &p.path, false)?;
         let patch = match text_content(&bytes) {
             None => "Binary file. No text diff available.\n".into(),
             Some("") => "New empty file.\n".into(),
@@ -2023,9 +2051,9 @@ mod tests {
         std::fs::write(outside.path().join("secret"), "secret content").unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("escape")).unwrap();
         std::os::unix::fs::symlink(outside.path().join("secret"), root.join("link")).unwrap();
-        assert!(untracked_content(&cwd, "escape/secret").is_err());
-        assert!(untracked_content(&cwd, "../secret").is_err());
-        assert!(untracked_content(&cwd, "/etc/passwd").is_err());
+        assert!(untracked_content(&cwd, "escape/secret", false).is_err());
+        assert!(untracked_content(&cwd, "../secret", false).is_err());
+        assert!(untracked_content(&cwd, "/etc/passwd", false).is_err());
         let symlink = patch(&cwd, &roots, "link", GitSection::Untracked).await;
         assert!(!symlink.patch.contains("secret content"));
         assert!(
@@ -2051,8 +2079,65 @@ mod tests {
         assert!(diff.truncated);
         assert!(serde_json::to_vec(&diff).unwrap().len() <= RESPONSE_LIMIT);
         std::fs::write(root.join("huge"), vec![b'a'; FILE_LIMIT as usize + 1]).unwrap();
-        assert!(untracked_content(&cwd, "huge").is_err());
+        assert!(untracked_content(&cwd, "huge", false).is_err());
     }
+    #[tokio::test]
+    async fn a_hidden_untracked_file_is_listed_by_name_only() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        std::fs::write(root.join(".tracked"), "one\n").unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "base"]);
+        std::fs::write(root.join(".tracked"), "two\n").unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/plain"), "shown\n").unwrap();
+        let by_flag: &[&str] = if cfg!(target_os = "macos") {
+            &["Flagged/in", "flag", "link"]
+        } else {
+            &[]
+        };
+        let hidden = [&[".token", ".keys/id"], by_flag].concat();
+        std::fs::create_dir(root.join(".keys")).unwrap();
+        std::fs::create_dir(root.join("Flagged")).unwrap();
+        std::os::unix::fs::symlink("hidden content", root.join("link")).unwrap();
+        for name in hidden.iter().filter(|n| **n != "link") {
+            std::fs::write(root.join(name), "hidden content\n").unwrap();
+        }
+        if cfg!(target_os = "macos") {
+            let status = std::process::Command::new("chflags")
+                .args(["-h", "hidden", "Flagged", "flag", "link"])
+                .current_dir(root)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let list = changes(&cwd, &roots, None, GitScope::Uncommitted)
+            .await
+            .unwrap();
+        let listed = |name: &str| list.files.iter().find(|f| f.path == name).unwrap();
+        for name in &hidden {
+            let file = listed(name);
+            assert_eq!(
+                (&file.hash, file.additions, file.deletions),
+                (&None, None, None)
+            );
+            let params = AgentDiffParams {
+                terminal_id: protocol::TerminalId::new("term_test").unwrap(),
+                root: cwd.clone(),
+                path: (*name).into(),
+                section: GitSection::Untracked,
+                pull_request: None,
+            };
+            let refused = diff(&cwd, &roots, &params).await.unwrap_err();
+            assert_eq!(refused.1, "Hidden files are not shown");
+        }
+        assert!(listed("sub/plain").hash.is_some());
+        assert_eq!(listed("sub/plain").additions, Some(1));
+        assert!(listed(".tracked").hash.is_some());
+        let tracked = patch(&cwd, &roots, ".tracked", GitSection::Unstaged).await;
+        assert!(tracked.patch.contains("-one\n+two\n"));
+    }
+
     #[tokio::test]
     async fn rename_with_recreated_source_keeps_only_selected_file_patch() {
         let (_dir, cwd, roots) = repo();

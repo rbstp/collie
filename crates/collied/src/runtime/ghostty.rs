@@ -300,6 +300,10 @@ unsafe extern "C" fn append(userdata: *mut c_void, data: *const u8, len: usize) 
     if len > sink.max - sink.out.len() {
         return false;
     }
+    // An empty write may come with a null pointer, which no slice may be made of.
+    if len == 0 {
+        return true;
+    }
     sink.out
         .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
     true
@@ -313,6 +317,16 @@ mod tests {
         let mut chunks: Vec<Vec<u8>> = bytes.chunks(size).map(<[u8]>::to_vec).collect();
         chunks.reverse();
         move || chunks.pop()
+    }
+
+    #[test]
+    fn an_empty_write_makes_no_slice_of_a_null_pointer() {
+        let mut sink = Sink {
+            out: Vec::new(),
+            max: 4,
+        };
+        assert!(unsafe { append(ptr::from_mut(&mut sink).cast(), ptr::null(), 0) });
+        assert!(sink.out.is_empty());
     }
 
     #[test]

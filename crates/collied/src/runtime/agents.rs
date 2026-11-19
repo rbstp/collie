@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use protocol::limits::MAX_LABEL_CHARS;
+
 use super::{AgentInfo, PaneInfo};
 
 const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
@@ -22,12 +24,18 @@ pub(super) fn shell(argv0: &str) -> bool {
     file_name(argv0).is_some_and(|n| SHELLS.contains(&n.trim_start_matches('-')))
 }
 
-/// The kind an OSC 7501 report's `app` names, else the agent CLI the terminal runs.
+/// The kind an OSC 7501 report's `app` names, else the agent CLI the terminal runs. `app` is
+/// the program's own text, and the phone draws a kind it has no logo for as text: it loses
+/// controls, bidi and format characters and is cut, as an approval's labels are.
 pub(super) fn kind(app: Option<&str>, cli: Option<&str>) -> Option<String> {
-    match app {
-        Some("claude-code") => Some("claude".to_owned()),
-        Some(app) if !app.is_empty() => Some(app.to_owned()),
-        _ => cli.map(str::to_owned),
+    let app: String = crate::prompt::clean(app.unwrap_or_default())
+        .chars()
+        .take(MAX_LABEL_CHARS)
+        .collect();
+    match app.as_str() {
+        "claude-code" => Some("claude".to_owned()),
+        "" => cli.map(str::to_owned),
+        _ => Some(app),
     }
 }
 
@@ -205,6 +213,26 @@ pub(super) fn task_argv(cli: &str, args: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reported_kind_loses_what_would_disguise_it_and_is_cut() {
+        let kind = |app: &str, cli| kind(Some(app), cli);
+        assert_eq!(kind("claude-code", None).as_deref(), Some("claude"));
+        assert_eq!(kind("pi", Some("codex")).as_deref(), Some("pi"));
+        assert_eq!(
+            kind("\u{202E}ev\u{7}il\u{200B}\n", None).as_deref(),
+            Some("evil")
+        );
+        assert_eq!(
+            kind(&"k".repeat(1000), None).map(|k| k.chars().count()),
+            Some(MAX_LABEL_CHARS)
+        );
+        assert_eq!(
+            kind("\u{200B}\u{7}", Some("codex")).as_deref(),
+            Some("codex")
+        );
+        assert_eq!(kind("\u{200B}", None), None);
+    }
 
     #[test]
     fn a_session_report_holds_only_from_the_codex_that_leads_the_terminal() {
