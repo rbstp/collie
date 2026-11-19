@@ -25,6 +25,9 @@ want="$LIBGHOSTTY_VT_VERSION $ZIG_VERSION $VT_FEATURES $zig_target $(inputs_sum 
 if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$out/lib/libghostty-vt.a" ] && [ -d "$out/licenses" ]; then
     exit 0
 fi
+if restore_build "$out" "$want"; then
+    exit 0
+fi
 
 find_zig
 echo "zig: $zig ($("$zig" version)), libghostty-vt $LIBGHOSTTY_VT_VERSION for $zig_target"
@@ -57,3 +60,4 @@ cp "$build/out/lib/libghostty-vt.a" "$out/lib/"
 write_licenses "$src" "$src-deps" "$out/licenses"
 rm -rf "$build"
 echo "$want" >"$stamp"
+save_build "$out" "$want"

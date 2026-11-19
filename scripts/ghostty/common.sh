@@ -6,6 +6,20 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 work="$root/target/ghostty"
 
+# The pinned Zig and finished builds, shared by every checkout and worktree of this user. What it
+# holds is linked into collied and the app, so it is trusted as target/ is: the user's own folder
+# only. Without one, nothing is shared.
+user_cache="$work"
+if [ -n "${HOME:-}" ]; then
+    case "$(uname -s)" in
+    Darwin) shared="$HOME/Library/Caches/dev.rbstp.collie-build/ghostty" ;;
+    *) shared="${XDG_CACHE_HOME:-$HOME/.cache}/collie-build/ghostty" ;;
+    esac
+    if mkdir -p "$shared" 2>/dev/null && [ -O "$shared" ] && chmod 700 "$shared"; then
+        user_cache="$shared"
+    fi
+fi
+
 sha256_check() {
     if command -v sha256sum >/dev/null; then
         echo "$1  $2" | sha256sum -c - >&2
@@ -30,11 +44,11 @@ find_zig() {
         exit 1
         ;;
     esac
-    zigdir="$work/zig-$ZIG_VERSION"
+    zigdir="$user_cache/zig-$ZIG_VERSION"
     zig="$zigdir/zig"
     [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
-    mkdir -p "$work"
-    tmp="$(mktemp -d "$work/.zig-$ZIG_VERSION.XXXXXX")"
+    mkdir -p "$user_cache"
+    tmp="$(mktemp -d "$user_cache/.zig-$ZIG_VERSION.XXXXXX")"
     # The sourcing scripts set no EXIT trap of their own; one that does must chain this one.
     trap 'rm -rf "$tmp"' EXIT
     curl -fsSL --retry 3 -o "$tmp/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-$host-$ZIG_VERSION.tar.xz"
@@ -54,6 +68,29 @@ find_zig() {
 # build script).
 inputs_sum() {
     cat "$here/pins.env" "$here/common.sh" "$1" | cksum
+}
+
+# Copies the finished build stamped $2 from the cache to $1; fails when the cache has none.
+restore_build() {
+    local from tmp
+    from="$user_cache/built-$(printf '%s' "$2" | cksum | tr ' ' -)"
+    [ "$(cat "$from/.collie-build" 2>/dev/null)" = "$2" ] || return 1
+    mkdir -p "$work" "$(dirname "$1")"
+    tmp="$(mktemp -d "$work/.restore.XXXXXX")"
+    cp -R "$from/." "$tmp/"
+    rm -rf "$1"
+    mv "$tmp" "$1"
+}
+
+# Keeps the finished build $1, stamped $2, for other checkouts. Copied whole before it gets its
+# name, so a reader never sees half of one; a concurrent build may have stored it first.
+save_build() {
+    local to tmp
+    to="$user_cache/built-$(printf '%s' "$2" | cksum | tr ' ' -)"
+    [ ! -e "$to" ] || return 0
+    tmp="$(mktemp -d "$user_cache/.store.XXXXXX")"
+    cp -R "$1/." "$tmp/"
+    if [ -e "$to" ]; then rm -rf "$tmp"; else mv "$tmp" "$to"; fi
 }
 
 # Unpacks the source and dependency tarballs into $1, as $1/libghostty-vt-<version>[-deps].
