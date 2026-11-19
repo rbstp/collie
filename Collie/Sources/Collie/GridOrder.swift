@@ -24,7 +24,7 @@ struct GridOrder: StateFile, Equatable {
 
     func agents(in entry: MachineFlockEntry) -> [AgentSummary] {
         let agents = entry.agents
-        let byId = Dictionary(uniqueKeysWithValues: agents.map { ($0.terminalId, $0) })
+        let byId = Dictionary(agents.map { ($0.terminalId, $0) }, uniquingKeysWith: { first, _ in first })
         let saved = routes.filter { $0.machineId == entry.id }
         let known = Set(saved.map(\.terminalId))
         return saved.compactMap { byId[$0.terminalId] } + agents.filter { !known.contains($0.terminalId) }

@@ -60,8 +60,8 @@ struct GitDiffRow: Identifiable, Equatable {
 
     private static func range(_ part: Substring, sign: Character) -> (start: Int, count: Int)? {
         let numbers = part.dropFirst().split(separator: ",")
-        guard part.first == sign, let start = numbers.first.flatMap({ Int($0) }) else { return nil }
-        return (start, numbers.dropFirst().first.flatMap { Int($0) } ?? 1)
+        guard part.first == sign, let start = numbers.first.flatMap({ UInt32($0) }) else { return nil }
+        return (Int(start), numbers.dropFirst().first.flatMap { UInt32($0) }.map(Int.init) ?? 1)
     }
 
     /// An empty line is a context line whose spaces were stripped, but only while the hunk expects more lines.

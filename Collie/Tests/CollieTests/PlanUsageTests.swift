@@ -87,6 +87,8 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     #expect(plan.readingsStale(now: now))
     plan.recordedMs = nowMs - 4 * 60_000
     #expect(!plan.readingsStale(now: now))
+    plan.codex?.recordedMs = .max
+    #expect(plan.codex?.isStale(now: now) == false)
 }
 
 @Test func codexPaceUsesTheElapsedCalendarMonth() throws {

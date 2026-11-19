@@ -29,6 +29,11 @@ import UIKit
     #expect(GitDiffRow.parse("@@ - + @@\n").isEmpty)
 }
 
+@Test func gitDiffTakesHunkNumbersNoFileHas() {
+    #expect(GitDiffRow.parse("@@ -9223372036854775807 +9223372036854775807 @@\n a\n").isEmpty)
+    #expect(GitDiffRow.parse("@@ -1,-9223372036854775808 +1 @@\n-a\n").map(\.oldLine) == [nil, 1])
+}
+
 @Test func gitDiffKeepsAnEmptyContextLineWithoutAddingTheTrailingNewline() {
     let rows = GitDiffRow.parse("@@ -1,3 +1,3 @@\n a\n\n-b\n+c\n")
     #expect(rows.map(\.kind) == [.hunk, .context, .context, .removed, .added])
