@@ -121,6 +121,7 @@ struct Herdr {
     tab_amends: bool,
     text_lands: bool,
     tab_moves_on: bool,
+    tab_rewords: Option<(&'static str, &'static str)>,
 }
 
 struct Mock {
@@ -147,6 +148,7 @@ impl Mock {
             tab_amends: true,
             text_lands: true,
             tab_moves_on: false,
+            tab_rewords: None,
         }));
         let listener = UnixListener::bind(&socket).unwrap();
         let shared = state.clone();
@@ -236,6 +238,9 @@ fn answer(h: &mut Herdr, req: &Value) -> Value {
                             }
                         })
                         .replace(" · Tab to amend", "");
+                        if let Some((from, to)) = h.tab_rewords {
+                            h.text = h.text.replace(from, to);
+                        }
                     }
                     _ => {}
                 }
@@ -995,6 +1000,19 @@ async fn claude_says_why_it_asks_on_the_approval_and_in_the_sealed_alert() {
     assert_eq!(
         open_context(&rig.notification_key, &rig.alerts(1).await[0].1.payload),
         json!({"v": 1, "body": format!("Bash: {command}\nRemove the build directory\n{why}")})
+    );
+
+    let mut rig = Rig::start(TTL).await;
+    let wordy = format!("{why} {}", "and more ".repeat(20));
+    rig.herdr.with(|h| h.text = RM_REASON.replace(why, &wordy));
+    let a = rig.needed().await;
+    assert_eq!(a.reason, None, "too long to show whole: it stays a row");
+    assert_eq!(
+        a.tool.clone().map(|t| t.summary),
+        Some(format!(
+            "{command}\nRemove the build directory\n{}",
+            wordy.trim_end()
+        ))
     );
 
     let mut rig = Rig::start(TTL).await;
@@ -2381,6 +2399,41 @@ async fn a_note_that_does_not_land_is_never_confirmed() {
     assert_eq!(
         rig.herdr.with(|h| h.agent["agent_status"].clone()),
         "blocked"
+    );
+}
+
+#[tokio::test]
+async fn a_note_stops_when_the_reason_changes_under_it() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.text = RM_REASON.into();
+        h.tab_rewords = Some(("Dangerous rm operation", "Routine cleanup"));
+    });
+    let a = rig.needed().await;
+    assert!(a.supports_note);
+    assert!(
+        a.reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("Dangerous rm operation"))
+    );
+    assert_eq!(
+        resolved(
+            rig.decide_with_note(&a, Decision::Approve, "use a .tmp extension", yes())
+                .await
+        ),
+        ApprovalOutcome::Superseded
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["tab"]})],
+        "no text, no Enter, no Esc"
+    );
+    assert!(rig.herdr.params("pane.send_text").is_empty());
+    let b = rig.needed().await;
+    assert!(
+        b.reason
+            .as_deref()
+            .is_some_and(|r| r.starts_with("Routine cleanup"))
     );
 }
 

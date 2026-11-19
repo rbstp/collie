@@ -922,16 +922,8 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
         return (String::new(), None);
     };
     let question = lines.iter().rposition(|l| l.ends_with('?'));
-    // A long file name wraps the question over up to three rows. Its first row is the nearest
-    // one that starts it, so no row above it is left out of the summary, and never a command
-    // row or one above a blank row, which the agent can write.
     let asks = question
-        .and_then(|q| {
-            (q.saturating_sub(2)..=q)
-                .rev()
-                .take_while(|&i| !lines[i].is_empty() && !command[i])
-                .find(|&i| lines[i].starts_with("Do you want to"))
-        })
+        .and_then(|q| question_start(q, |i| (!command[i]).then(|| lines[i].as_str())))
         .filter(|&q| q > head && !(whole && kind == "claude"));
     let kept = |i: &usize| command[*i] || !lines[*i].is_empty();
     let action = asks.and_then(|q| {
@@ -994,6 +986,20 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
     let mut cut: String = out.chars().take(MAX_CONTEXT_CHARS - 1).collect();
     cut.push('…');
     (cut, tool)
+}
+
+/// The first row of the permission question whose last row is `last`. A long file name wraps
+/// the question over up to three rows: its first row is the nearest one starting "Do you want
+/// to" among `last` and the two rows above it, so no row above it is left out of what is
+/// read. `row` gives a row's text, or none for a row no question holds (a command row, a
+/// rule); the walk stops there and at a blank row, so a row the agent writes in a command or
+/// above a blank row never passes for the question.
+fn question_start<'a>(last: usize, row: impl Fn(usize) -> Option<&'a str>) -> Option<usize> {
+    (last.saturating_sub(2)..=last)
+        .rev()
+        .map_while(|i| row(i).filter(|t| !t.is_empty()).map(|t| (i, t)))
+        .find(|(_, t)| t.starts_with("Do you want to"))
+        .map(|(i, _)| i)
 }
 
 fn cut(s: String, max: usize) -> String {
@@ -1093,7 +1099,8 @@ const DENY_COUNTDOWN: (&str, &str) = (
 /// fingerprint it would supersede the approval on every tick. Only for a Claude Code dialog
 /// whose last option block parses as a menu, and only where Claude Code draws it: under the
 /// last of that dialog's [`dashed_rules`] when it has any (none when they are unpaired, as the
-/// command block could still be open), else under its top rule, then a blank line, the question, and option 1 of that block, in its exact
+/// command block could still be open), else under its top rule, then a blank line, the
+/// question from its first row ([`question_start`]), and option 1 of that block, in its exact
 /// wording at the dialog's margin (command lines are indented further), on one line or
 /// wrapped over up to three, with nothing else on them. Anything else is left alone; the
 /// time is never read.
@@ -1118,8 +1125,10 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
     }
     let floor = dashed.last().map_or(dialog, |i| dialog + i + 1);
     let filled = |i: &usize| !lines[*i].trim().is_empty();
+    let asked = |i: usize| (!is_border(lines[i])).then(|| lines[i].trim());
     let Some(end) = first
         .checked_sub(1)
+        .map(|q| question_start(q, asked).unwrap_or(q))
         .filter(|q| *q >= floor && filled(q))
         .and_then(|q| (floor..q).rfind(filled).filter(|&e| e + 1 < q))
     else {
@@ -1145,12 +1154,12 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
 /// `text` without Claude Code's reason for asking, and the reason. Claude Code prints it
 /// (its hook input has no such field) under the last of a dialog's [`dashed_rules`], which
 /// must be paired, at the question's margin, then a blank line (or the deny countdown,
-/// taken out before), the question, and
+/// taken out before), the question from its first row ([`question_start`]), and
 /// option 1 of the dialog's menu: every row starting `│ ` as it wraps (2.1.308), or plain
 /// rows (2.1.295 in an unattended session). The rows are joined, terminal escape
 /// sequences dropped and whitespace collapsed; a reason with any other control, bidi or
-/// invisible format character, or one that only repeats lines of the dialog, leaves the
-/// screen whole and gives none. Cut at [`MAX_SNIPPET_CHARS`] with `…`.
+/// invisible format character, one longer than [`MAX_SNIPPET_CHARS`], or one that only
+/// repeats lines of the dialog, leaves the screen whole and gives none.
 pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>) {
     let unchanged = || (text.to_owned(), None);
     if kind != "claude" || Menu::parse_numbered(text).is_none() {
@@ -1164,7 +1173,7 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
             (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
         })
         .and_then(|first| first.checked_sub(1))
-        .filter(|&q| lines[q].trim_start().starts_with("Do you want to"))
+        .and_then(|q| question_start(q, |i| (!is_border(lines[i])).then(|| lines[i].trim())))
     else {
         return unchanged();
     };
@@ -1201,21 +1210,21 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         return unchanged();
     }
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Cut to fit, a reason's end would be neither shown nor hashed: left in the dialog, every
+    // row of it is in the region.
+    if reason.is_empty() || reason.chars().count() > MAX_SNIPPET_CHARS {
+        return unchanged();
+    }
     let rest = lines[..start]
         .iter()
         .chain(&lines[end..])
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
-    if reason.is_empty() || shows_whole(&squashed_lines(&rest), &reason) {
+    if shows_whole(&squashed_lines(&rest), &reason) {
         return unchanged();
     }
-    if reason.chars().count() <= MAX_SNIPPET_CHARS {
-        return (rest, Some(reason));
-    }
-    let mut cut: String = reason.chars().take(MAX_SNIPPET_CHARS - 1).collect();
-    cut.push('…');
-    (rest, Some(cut))
+    (rest, Some(reason))
 }
 
 fn without_escapes(s: &str) -> String {
@@ -2071,6 +2080,17 @@ mod tests {
                 without_deny_countdown("claude", &dialog("rm x", &dropped)),
                 plain,
                 "{dropped}"
+            );
+        }
+        for question in [
+            " Do you want to make this edit to\n a-long-name.txt?",
+            " Do you want to make this\n edit to\n a-long-name.txt?",
+        ] {
+            let wrap = |screen: &str| screen.replace(" Do you want to proceed?", question);
+            assert_eq!(
+                without_deny_countdown("claude", &wrap(&dialog("rm x", line))),
+                wrap(&plain),
+                "{question}"
             );
         }
         assert_eq!(
@@ -2937,8 +2957,7 @@ mod tests {
             rows("│ ")
         );
         let started = std::time::Instant::now();
-        let (rest, reason) = without_reason("claude", &screen);
-        assert!(reason.is_some_and(|r| r.starts_with("aaa")) && rest.len() < screen.len());
+        assert_eq!(without_reason("claude", &screen), (screen.clone(), None));
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
@@ -3143,6 +3162,20 @@ mod tests {
                 [(Approve, 0), (Deny, 2)]
             );
         }
+        let asked = |time: &str| {
+            let rows = format!(
+                " This edit requires approval\n \u{26a0} Claude Code will automatically deny this request in {time},\n to avoid blocking progress on an unattended session\n\n Do you want to make this edit to\n"
+            );
+            let screen = EDIT_WRAPPED.replace(" Do you want to make this edit to\n", &rows);
+            let (text, reason) =
+                without_reason("claude", &without_deny_countdown("claude", &screen));
+            let region = Menu::parse(&text).unwrap().region();
+            (context_and_tool("claude", &text), reason, region)
+        };
+        let (now, later) = (asked("1:09"), asked("0:58"));
+        assert_eq!(now, later, "a tick changes nothing an approval reads");
+        assert_eq!(now.0, (format!("Edit: {name}"), edit.clone()));
+        assert_eq!(now.1.as_deref(), Some("This edit requires approval"));
         let four = three.replace(" edit to\n", " edit\n to\n");
         assert_eq!(
             context_and_tool("claude", &four),
@@ -3820,6 +3853,17 @@ me@mac app % codex
         );
         assert_eq!(why(" │ a\n │   b  c"), Some("a b c".into()));
         assert_eq!(why(" plain\n wrapped"), Some("plain wrapped".into()));
+        for question in [
+            " Do you want to make this edit to\n a-long-name.txt?",
+            " Do you want to make this\n edit to\n a-long-name.txt?",
+        ] {
+            let wrapped = dialog(" │ a\n │   b  c").replace(" Do you want to proceed?", question);
+            assert_eq!(
+                without_reason("claude", &wrapped).1,
+                Some("a b c".into()),
+                "{question}"
+            );
+        }
         let described = dialog(" │ a\n │   b  c").replace(" Remove it\n", " Remove it\n ╌╌╌\n");
         assert_eq!(
             without_reason("claude", &described).1,
@@ -3835,12 +3879,29 @@ me@mac app % codex
             let screen = dialog(unsafe_row);
             assert_eq!(without_reason("claude", &screen), (screen.clone(), None));
         }
-        let long: Vec<String> = (0..8)
-            .map(|i| format!(" │ {i} {}", "x".repeat(40)))
-            .collect();
-        let cut = why(&long.join("\n")).unwrap();
-        assert_eq!(cut.chars().count(), MAX_SNIPPET_CHARS);
-        assert!(cut.starts_with("0 xxx") && cut.ends_with('…'));
+        let whole = "x".repeat(MAX_SNIPPET_CHARS);
+        assert_eq!(why(&format!(" │ {whole}")), Some(whole));
+        let long = |end: &str| {
+            let rows: String = (0..7)
+                .map(|i| format!(" │ {i} {}\n", "x".repeat(40)))
+                .collect();
+            dialog(&format!("{rows} │ {end}"))
+        };
+        let read = |screen: &str| {
+            let (rest, reason) = without_reason("claude", screen);
+            (Menu::parse(&rest).unwrap().region(), reason)
+        };
+        assert_ne!(
+            read(&long("and no more")),
+            read(&long("and rm -rf ~")),
+            "what a reason says past the 200 characters shown is bound too"
+        );
+        let screen = long("and no more");
+        assert_eq!(
+            without_reason("claude", &screen),
+            (screen.clone(), None),
+            "a reason too long to show whole stays in the dialog"
+        );
         for repeat in [
             " │ rm -rf \"$(printf build)\"",
             " │ Remove it",
