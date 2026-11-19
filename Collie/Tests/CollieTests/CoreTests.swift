@@ -96,6 +96,34 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
     #expect(bare.displayTitle == "t9")
 }
 
+@Test func agentsSharingAWorkspaceShowTheirFolderAndOthersTheWorkspace() {
+    func agent(_ id: String, _ workspace: String, _ cwd: String?) -> AgentSummary {
+        AgentSummary(
+            terminalId: id, workspaceId: workspace, kind: "claude", name: nil, title: nil,
+            status: .idle, statusSinceMs: 0, cwd: cwd, lastLine: nil
+        )
+    }
+    let machine = Machine(id: "m", label: "m", host: "m.ts.net", port: 8457, nodeId: "nm", kind: .mac, key: "")
+    let agents = [
+        agent("a", "shared", "/Users/me/git/collie"), agent("slash", "shared", "/Users/me/git/api/"),
+        agent("none", "shared", nil), agent("empty", "shared", ""), agent("root", "shared", "/"),
+        agent("lines", "shared", "/tmp/one\ntwo\u{2028}three\u{202E}"), agent("blank", "shared", "/tmp/ \n"),
+        agent("alone", "own", "/Users/me/git/site"),
+    ]
+    let workspaces = [
+        WorkspaceSummary(workspaceId: "shared", label: "claude", number: 1, status: .idle, cwd: nil),
+        WorkspaceSummary(workspaceId: "own", label: "site work", number: 2, status: .idle, cwd: nil),
+    ]
+    let flock = MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: workspaces, agents: agents, approvalsCount: 0)
+    let entry = MachineFlockEntry(machine: machine, flock: flock)
+    func label(_ id: String) -> String? { agents.first { $0.terminalId == id }.flatMap { entry.workspaceLabel(for: $0) } }
+    #expect(label("a") == "collie")
+    #expect(label("slash") == "api", "a trailing slash names the same folder")
+    #expect(["none", "empty", "root", "blank"].map(label) == Array(repeating: "claude", count: 4), "no folder name keeps the workspace")
+    #expect(label("lines") == "onetwothree", "the name stays one line, with no bidi override")
+    #expect(label("alone") == "site work", "an agent alone in its workspace keeps the workspace")
+}
+
 private func node(_ state: TailnetState, authUrl: String? = nil) -> NodeState {
     NodeState(backendState: state, authUrl: authUrl, selfDnsName: nil, loginName: nil)
 }
