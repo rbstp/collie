@@ -57,6 +57,9 @@ use crate::{config, git, lock};
 
 const MAX_CONNECTIONS: usize = 64;
 const MAX_SESSIONS_PER_NODE: usize = 4;
+// Room for a phone's MAX_SESSIONS_PER_NODE sessions all dialing again while collied still
+// holds one abandoned attempt of each until its deadline.
+const MAX_PENDING_PER_ADDR: usize = 8;
 const WHOIS_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -206,6 +209,37 @@ fn take_token<K: Hash + Eq>(
         b.limited = true;
         Rate::FirstLimited
     }
+}
+
+/// One connection that has not started its session, counted against its source address.
+struct Pending {
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    ip: IpAddr,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let mut counts = lock(&self.counts);
+        if let Some(n) = counts.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+fn take_pending(counts: &Arc<Mutex<HashMap<IpAddr, usize>>>, ip: IpAddr) -> Option<Pending> {
+    let mut held = lock(counts);
+    let n = held.entry(ip).or_default();
+    if *n >= MAX_PENDING_PER_ADDR {
+        return None;
+    }
+    *n += 1;
+    Some(Pending {
+        counts: counts.clone(),
+        ip,
+    })
 }
 
 pub struct State {
@@ -1038,13 +1072,27 @@ async fn accept_loop(
     dead: watch::Sender<bool>,
 ) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    // Without this, one address that opens connections and never finishes a handshake holds
+    // every slot until the deadlines, and no phone can connect (#795). Dropped, never
+    // answered with the 403, which a phone takes as final.
+    let pending = Arc::new(Mutex::new(HashMap::new()));
     let mut failures = 0u32;
     loop {
         tokio::select! {
             res = listener.accept() => match res {
-                Ok(Accepted { stream, peer }) => { failures = 0; match slots.clone().try_acquire_owned() {
+                Ok(Accepted { stream, peer }) => { failures = 0;
+                    let Some(held) = take_pending(&pending, peer.ip()) else {
+                        drop(stream);
+                        state.audit_reject(
+                            peer,
+                            &peer.to_string(),
+                            "too many connections from this address",
+                        );
+                        continue;
+                    };
+                    match slots.clone().try_acquire_owned() {
                     Ok(permit) => {
-                        tokio::spawn(connection(state.clone(), stream, peer, permit));
+                        tokio::spawn(connection(state.clone(), stream, peer, permit, held));
                     }
                     Err(_) => {
                         drop(stream);
@@ -1101,15 +1149,17 @@ async fn connection(
     stream: UnixStream,
     addr: SocketAddr,
     permit: OwnedSemaphorePermit,
+    pending: Pending,
 ) {
     let addr_text = addr.to_string();
     // The blocking whois keeps the slot until it really returns, so timed-out lookups
-    // still count against MAX_CONNECTIONS.
+    // still count against MAX_CONNECTIONS and MAX_PENDING_PER_ADDR.
     let permit = Arc::new(permit);
+    let pending = Arc::new(pending);
     let who = {
         let state = state.clone();
         let addr = addr_text.clone();
-        let held = permit.clone();
+        let held = (permit.clone(), pending.clone());
         let lookup = tokio::task::spawn_blocking(move || {
             let _held = held;
             state.peer_identity(&addr)
@@ -1165,7 +1215,7 @@ async fn connection(
     let refreshed = {
         let state = state.clone();
         let addr = addr_text.clone();
-        let held = permit.clone();
+        let held = (permit.clone(), pending.clone());
         tokio::time::timeout(
             WHOIS_TIMEOUT,
             tokio::task::spawn_blocking(move || {
@@ -1267,6 +1317,9 @@ async fn connection(
             return;
         }
     };
+    // Held through the WebSocket handshake, which never polls `kill`: an evicted session
+    // still in it stays counted here. From `run` on, MAX_SESSIONS_PER_NODE bounds the node.
+    drop(pending);
     let peer = Remote {
         who,
         name,
@@ -3079,6 +3132,23 @@ mod tests {
             .map(|failed| outage_starts(&outage, failed))
             .collect();
         assert_eq!(seen, [true, false, false, false, true, false]);
+    }
+
+    #[test]
+    fn an_address_at_its_pending_cap_is_refused_until_a_connection_ends() {
+        let counts = Arc::new(Mutex::new(HashMap::new()));
+        let flood: IpAddr = "100.64.0.1".parse().unwrap();
+        let phone: IpAddr = "100.64.0.2".parse().unwrap();
+        let mut held: Vec<Pending> = (0..MAX_PENDING_PER_ADDR)
+            .map(|_| take_pending(&counts, flood).unwrap())
+            .collect();
+        assert!(take_pending(&counts, flood).is_none());
+        let other = take_pending(&counts, phone);
+        assert!(other.is_some());
+        held.pop();
+        assert!(take_pending(&counts, flood).is_some());
+        drop((held, other));
+        assert!(lock(&counts).is_empty());
     }
 
     #[test]
