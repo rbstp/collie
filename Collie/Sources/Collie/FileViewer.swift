@@ -139,6 +139,13 @@ final class FileViewerModel {
         return width * height
     }
 
+    static let copies = FileManager.default.temporaryDirectory.appending(path: "viewer", directoryHint: .isDirectory)
+
+    /// At launch: a copy outlives its viewer when the app is killed while the viewer is open.
+    static func purgeCopies() {
+        try? FileManager.default.removeItem(at: copies)
+    }
+
     func load(_ open: Open) async {
         guard !loading else { return }
         loading = true
@@ -160,7 +167,7 @@ final class FileViewerModel {
             self.image = image
             self.oversized = oversized
             pdf = file.kind == .pdf ? PDFDocument(data: file.data) : nil
-            let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+            let folder = Self.copies.appending(path: UUID().uuidString, directoryHint: .isDirectory)
             self.folder = folder
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appending(path: file.name)

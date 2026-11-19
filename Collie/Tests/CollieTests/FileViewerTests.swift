@@ -64,6 +64,15 @@ private func found(_ text: String) -> [String] {
     #expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path))
 }
 
+@MainActor @Test func launchRemovesACopyLeftByAKilledViewer() async throws {
+    let model = FileViewerModel(path: "notes.txt")
+    await model.load { _ in OpenedFile(name: "notes.txt", size: 2, kind: .text, data: Data("hi".utf8)) }
+    let url = try #require(model.shareURL)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    FileViewerModel.purgeCopies()
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
 @MainActor @Test func viewerShowsImagesAndRefusals() async throws {
     let png = try #require(UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { _ in }.pngData())
     let model = FileViewerModel(path: "shot.png")

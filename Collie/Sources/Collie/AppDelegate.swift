@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             guard let window = note.object as? UIWindow else { return }
             MainActor.assumeIsolated { KeyboardSwipe.shared.install(on: window) }
         }
+        WindowCover.observe()
+        FileViewerModel.purgeCopies()
         return true
     }
 
@@ -103,6 +105,36 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         case .ignore:
             break
+        }
+    }
+}
+
+/// Keeps a terminal, a chat or an open file out of the app switcher snapshot, which iOS stores on disk.
+final class WindowCover: UIView {
+    // iOS takes the snapshot once these observers have run, so the cover goes into the window here, synchronously:
+    // an overlay SwiftUI draws on a scenePhase change can come too late. Not on deactivation: the Face ID sheet
+    // makes the app inactive.
+    @MainActor static func observe(_ center: NotificationCenter = .default) {
+        center.addObserver(forName: UIScene.didEnterBackgroundNotification, object: nil, queue: nil) { note in
+            guard let scene = note.object as? UIWindowScene else { return }
+            MainActor.assumeIsolated {
+                for window in scene.windows where !window.subviews.contains(where: { $0 is WindowCover }) {
+                    let cover = WindowCover(frame: window.bounds)
+                    cover.backgroundColor = .systemBackground
+                    cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                    // Above a view the window gets later, as UIKit adds one for a sheet or an alert presented in the background.
+                    cover.layer.zPosition = .greatestFiniteMagnitude
+                    window.addSubview(cover)
+                }
+            }
+        }
+        center.addObserver(forName: UIScene.willEnterForegroundNotification, object: nil, queue: nil) { note in
+            guard let scene = note.object as? UIWindowScene else { return }
+            MainActor.assumeIsolated {
+                for window in scene.windows {
+                    window.subviews.filter { $0 is WindowCover }.forEach { $0.removeFromSuperview() }
+                }
+            }
         }
     }
 }
