@@ -70,7 +70,8 @@ extension WatchApproval {
     /// nothing after it is sent, and the approval is marked `cut`: a silent prefix once stood above Approve and Deny.
     init(item: ApprovalItem) {
         let approval = item.approval
-        var room = Self.maxTextBytes
+        // The one ellipsis a cut adds is kept back, so a cut prompt still fits the bound.
+        var room = Self.maxTextBytes - "…".utf8.count
         var cut = false
         func fit(_ text: String?) -> String? {
             guard let text, !cut else { return nil }
@@ -79,13 +80,13 @@ extension WatchApproval {
                 return text
             }
             cut = true
-            var kept = String.UnicodeScalarView()
-            for scalar in text.unicodeScalars {
-                room -= UTF8.width(scalar)
-                if room < 3 { break }
-                kept.append(scalar)
+            var kept = ""
+            for character in text {
+                room -= String(character).utf8.count
+                if room < 0 { break }
+                kept.append(character)
             }
-            return String(kept) + "…"
+            return kept + "…"
         }
         let agent = fit(approval.agentLabel)
         let place = fit([approval.workspaceLabel, item.machine.label].filter { !$0.isEmpty }.joined(separator: " · "))

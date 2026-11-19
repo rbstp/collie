@@ -103,6 +103,20 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(!cut.offers(.approve) && !cut.offers(.deny))
     #expect(!cut.canDecide(.approve, allowed: true, answered: [], now: now))
 
+    // Wherever the bound falls, a cut keeps whole characters, and its mark fits even after texts that filled the bound.
+    for pad in 0..<3 {
+        let accents = approval("ap_accents", toolSummary: String(repeating: "e\u{301}", count: 2000), workspace: String(repeating: "w", count: pad))
+        let command = WatchApproval(item: item(accents)).command ?? ""
+        #expect(command.dropLast().hasSuffix("e\u{301}"))
+    }
+    let probe = WatchApproval(item: item(approval("ap_probe", toolSummary: "")))
+    let used = [probe.agent, probe.place, probe.command ?? ""].map(\.utf8.count).reduce(0, +)
+    var full = approval("ap_full", toolSummary: String(repeating: "x", count: WatchApproval.maxTextBytes - used - 2))
+    full.reason = "Command is not read-only"
+    let edge = WatchApproval(item: item(full))
+    #expect(edge.cut)
+    #expect([edge.agent, edge.place, edge.command ?? "", edge.reason ?? ""].map(\.utf8.count).reduce(0, +) <= WatchApproval.maxTextBytes)
+
     let wide = (0..<9).map { ApprovalChoice(index: UInt8($0), label: rule.label, current: false, detail: rule.detail) }
     let question = WatchApproval(item: item(approval("ap_question", options: [], choices: wide, acceptsInput: true)))
     let last = try #require(question.choices.last)

@@ -425,7 +425,7 @@ Relay delivery has its own bounded worker: a 64-job ingress and at most 64 each 
 - Category `APPROVAL` has two actions, Approve and Deny (no Always allow, no note), both `authenticationRequired`: iOS makes the user unlock first, then launches the app in the background without UI.
 - The app holds a background task assertion and calls collie-core's `decide_from_notification` with a 20 s budget (the cap; 0 is refused). This one-shot session runs outside the connection supervisor: node up from cached state (never a login), the pinned Mac in the netmap, dial, `hello`, the nonce from the cached snapshot or `approval.list`, then `approval.decide`, never retrying past the budget.
 - It fails at once with `Unauthorized` when Tailscale is not set up on the phone, the node reports `NeedsLogin` or `NeedsMachineAuth`, the netmap violates the pin, or `hello` reports the phone unpaired.
-- An action decides only from a notification that shows the authenticated display's text and category ([APNs](#apns)); from any other it opens the approval, as a tap on the alert does. The follow-up names the agent from the authenticated display, never from the notification's title.
+- An action decides only from a notification that shows the authenticated display's text and category ([APNs](#apns)); from any other it sends nothing and leaves the app on the approval for when it next comes forward (the action runs in the background, so nothing shows at once). The follow-up names the agent from the authenticated display, never from the notification's title.
 - A follow-up local notification in the same thread claims success only for `applied`:
 
 | Background outcome | Follow-up | Opens the approval |
