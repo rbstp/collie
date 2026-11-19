@@ -401,7 +401,10 @@ extension CodexUsage {
 
     var resetsLine: String { "resets \(Date(unixMs: resetsAtMs).formatted(date: .abbreviated, time: .omitted))" }
 
-    func isStale(now: Date) -> Bool { now.unixMs > recordedMs + Self.staleAfterMs }
+    func isStale(now: Date) -> Bool {
+        let nowMs = now.unixMs
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
+    }
 
     func elapsed(now: Date) -> Double { monthElapsed(resetsAtMs: resetsAtMs, now: now) }
 }

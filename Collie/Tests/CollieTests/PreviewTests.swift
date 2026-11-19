@@ -608,6 +608,14 @@ private func capture(_ name: String) throws -> [String] {
     #expect(grouped.rest.map(\.terminalId) == ["t2", "t4"])
 }
 
+@Test func gridOrderTakesARepeatedTerminalId() {
+    let repeated = entry("m1", loaded: true, [("t1", .working), ("t2", .idle), ("t1", .done)])
+    var order = GridOrder()
+    #expect(Set(order.agents(in: repeated).map(\.terminalId)) == ["t1", "t2"])
+    order.update([repeated])
+    #expect(order.agents(in: repeated).map(\.status) == [.working, .idle])
+}
+
 @Test(arguments: [false, true])
 func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     let flock = entry("m1", loaded: true, [("t1", .idle), ("t2", .idle), ("t3", .idle), ("t4", .idle)])

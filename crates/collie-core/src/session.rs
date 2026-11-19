@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -568,6 +568,11 @@ impl FlockState {
     /// A snapshot answered after newer events were applied must not erase them, so
     /// events past `snapshot.seq` are replayed onto it.
     pub fn apply_snapshot(&mut self, mut snapshot: Flock) {
+        // The app keys its lists on the terminal id, and events update the first match.
+        let mut seen = HashSet::new();
+        snapshot
+            .agents
+            .retain(|a| seen.insert(a.terminal_id.clone()));
         self.since_snapshot.retain(|(seq, _)| *seq > snapshot.seq);
         for (_, event) in &self.since_snapshot {
             apply(&mut snapshot, event);
@@ -755,6 +760,24 @@ mod tests {
             s.apply_event(3, Event::FlockChanged {}),
             EventOutcome::NeedsSnapshot
         );
+    }
+
+    #[test]
+    fn a_snapshot_lists_a_terminal_id_once() {
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(
+            1,
+            vec![
+                agent("t1", AgentStatus::Idle),
+                agent("t2", AgentStatus::Idle),
+                agent("t1", AgentStatus::Blocked),
+            ],
+        ));
+        let ids: Vec<_> = (s.flock.iter().flat_map(|f| &f.agents))
+            .map(|a| a.terminal_id.as_str())
+            .collect();
+        assert_eq!(ids, ["t1", "t2"]);
+        assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Idle));
     }
 
     #[test]

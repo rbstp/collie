@@ -368,7 +368,7 @@ private struct GitWorktreeCounts: View {
             if let uncommitted = worktree.uncommitted, uncommitted > 0 {
                 Label("\(uncommitted)", systemImage: "pencil").accessibilityLabel("\(uncommitted) uncommitted files")
             }
-            if let additions = worktree.additions, let deletions = worktree.deletions, additions + deletions > 0 {
+            if let additions = worktree.additions, let deletions = worktree.deletions, additions > 0 || deletions > 0 {
                 Text("+\(additions)").foregroundStyle(.green)
                 Text("−\(deletions)").foregroundStyle(.red)
             }

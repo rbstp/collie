@@ -454,6 +454,16 @@ Subagent fields, Chat content and search queries go only to the paired phone and
 | Residual | Public destinations and opaque node/thread/approval/event/activity IDs reveal relationships. Generic attention/finished wording, categories, urgency, timing, frequency, ciphertext length and activity update/end lifecycle stay visible; there is no padding. A replay within its original scope can show stale authenticated content; the live nonce, expiry and fingerprint checks keep it from deciding a changed or consumed approval. The publisher relay sees this metadata plus source IPs, but no notification keys. Decryption happens on the phone: after first unlock, the operating system and anyone who sees an allowed lock-screen display can see rendered private text; before it, missing keys produce neutral text without controls. Locked and pre-first-unlock display and APNs action behavior still need checking on a real iPhone. |
 | Phase | Codec and fixtures built; Live Activity relay delivery confirmed on a physical iPhone; locked display validation pending. |
 
+### Compromised paired machine
+
+| | |
+|---|---|
+| Assets | The app on the phone: that it starts, and stays usable for the other paired machines |
+| Attack | A paired machine that was taken over answers the phone with what no collied sends. The phone dials every paired machine at each launch, so an answer that stops the app stops it at every launch, for every machine: the same terminal id twice in `flock.snapshot`, or usage times, change counts and diff hunk numbers at the edge of their types. |
+| Mitigations | collie-core keeps the first agent of each terminal id when it takes a snapshot, so the app's lists hold an id once, and the grid's saved order takes a repeated id anyway. The age of a Codex usage reading is compared, never added to; a worktree's added and deleted lines are compared, not summed; a diff hunk header whose numbers do not fit 32 bits is not read as a header, so no line number overflows. |
+| Residual | The phone shows a paired machine's titles, screens, approvals and Git text as that machine sends them. The values a machine sends were not all checked against the app's arithmetic and lists: if another one stops the app, the machine can be removed while the tailnet is off, when no list arrives. |
+| Phase | Built (#814) |
+
 ## libghostty-vt in collied
 
 collied now links libghostty-vt, a C-ABI library built with Zig from Ghostty's release tarballs, through `crates/ghostty-vt-sys`: hand-written `unsafe` declarations that the compiler cannot check against the library, so a wrong signature is undefined behavior rather than a build error. They were checked against the pinned release's headers when written, compile-time asserts hold every struct's size and offsets to the headers', and the crate's tests link every declared function and call through them on macOS and Linux.
