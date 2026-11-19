@@ -440,6 +440,14 @@ impl Menu {
                         _ => None,
                     }
                 })
+                // The app shows this option's wording as what Always allow grants: cut by
+                // [`Menu::choices`], it would hide the rule's scope.
+                .filter(|&(d, i)| {
+                    let whole = |s: &str| clean(s).chars().count() <= MAX_CHOICE_LABEL_CHARS;
+                    d != Decision::ApproveAlways
+                        || whole(&self.heads[i])
+                            && whole(self.options[i][self.heads[i].len()..].trim())
+                })
                 .collect();
         if offered.iter().any(|(d, _)| *d != Decision::Deny) {
             offered
@@ -756,7 +764,7 @@ fn command_row<'a>(line: &'a str, prefix: &str) -> &'a str {
 /// input is excluded; an ambiguous Codex screen has no preview. Other prompts fall back
 /// to the first line (with the line after it when it ends in `:`). The approver acts on
 /// this text, so
-/// nothing inside the command block is ever dropped: it is cut only at the length cap,
+/// no non-blank row inside the command block is ever dropped: it is cut only at the length cap,
 /// with `…`.
 pub fn context(kind: &str, text: &str) -> String {
     context_and_tool(kind, text).0
@@ -2371,7 +2379,10 @@ mod tests {
         );
         let hostile = QUESTION.replace(
             "2. Redis",
-            &format!("2. Re\u{202e}dis\u{1b}]52;c;eA==\u{7}{}", "x".repeat(200)),
+            &format!(
+                "2. Re\u{202e}dis\u{1b}]52;c;eA==\u{7}{}",
+                "x".repeat(2 * MAX_CHOICE_LABEL_CHARS)
+            ),
         );
         let m = Menu::parse(&hostile).unwrap();
         let label = &m.choices()[1].label;
@@ -2379,7 +2390,10 @@ mod tests {
         assert!(label.starts_with("Redis]52;c;eA==xxx"), "{label}");
         let hostile = QUESTION.replace(
             "Shared across processes",
-            &format!("Sha\u{202e}red\u{1b}]52;c;eA==\u{7}{}", "y".repeat(200)),
+            &format!(
+                "Sha\u{202e}red\u{1b}]52;c;eA==\u{7}{}",
+                "y".repeat(2 * MAX_CHOICE_LABEL_CHARS)
+            ),
         );
         let detail = Menu::parse(&hostile).unwrap().choices()[1]
             .detail
@@ -2919,11 +2933,39 @@ mod tests {
     #[test]
     fn a_dialog_taller_than_the_screen_names_no_call() {
         assert!(!Menu::parse(BASH_TALL_328).unwrap().topped);
+        for rule in [" │ ────", " ────"] {
+            let ruled = BASH_TALL_328.replace(" │ touch t35.txt", rule);
+            assert!(!Menu::parse(&ruled).unwrap().topped, "{rule}");
+        }
         assert_eq!(
             context_and_tool("claude", BASH_TALL_328),
             ("Do you want to proceed?".to_owned(), None)
         );
         assert!(Menu::parse(BASH_327[3]).unwrap().topped);
+    }
+
+    #[test]
+    fn always_allow_is_not_offered_under_a_cut_rule() {
+        let offered = |screen: &str| {
+            let decisions = Menu::parse(screen).unwrap().decisions();
+            decisions.into_iter().map(|(d, _)| d).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            offered(BASH_327[3]),
+            [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+        );
+        let dir = format!("/private/tmp/{}", "d".repeat(MAX_CHOICE_LABEL_CHARS));
+        for rule in [
+            format!("commands in {dir}"),
+            format!("commands in\n      {dir}"),
+        ] {
+            let screen = BASH_327[3].replace("commands in /private/tmp/planlab", &rule);
+            assert_eq!(
+                offered(&screen),
+                [Decision::Approve, Decision::Deny],
+                "{rule}"
+            );
+        }
     }
 
     #[test]
