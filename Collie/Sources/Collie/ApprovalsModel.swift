@@ -345,7 +345,27 @@ extension PendingApproval {
         if case .choose(let choice) = decision {
             return options.isEmpty && choices.contains { $0.index == choice }
         }
+        if decision == .approveAlways { return alwaysRule != nil }
         return options.contains(decision)
+    }
+
+    /// The decisions the card offers: Always allow is offered apart, in the review sheet, under the rule it saves.
+    var plainDecisions: [ApprovalDecision] { options.filter { $0 != .approveAlways } }
+
+    /// The rule Always allow saves, as the machine's option words it. Nil unless exactly one option is that decision's, so a
+    /// standing permission is never offered without its scope on screen. collied offers `approve_always` only when that
+    /// option's label and detail arrive whole.
+    var alwaysRule: String? {
+        let rules = choices.filter(\.grantsAlways)
+        guard options.contains(.approveAlways), rules.count == 1 else { return nil }
+        return rules[0].text
+    }
+
+    /// The snippet without the lines the command panel shows: collied reads both from the same dialog.
+    var output: String {
+        guard toolName != nil, let command = toolSummary else { return snippet }
+        let shown = Set(command.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) })
+        return snippet.split(separator: "\n").filter { !shown.contains($0.trimmingCharacters(in: .whitespaces)) }.joined(separator: "\n")
     }
 
     /// collied takes a note only with Approve or Deny, on a prompt that showed "Tab to amend".
@@ -356,6 +376,19 @@ extension PendingApproval {
     var takesFeedback: Bool { hasTextField && !acceptsInput }
 
     var answeredInTerminal: Bool { options.isEmpty && choices.isEmpty && !acceptsInput && !hasTextField }
+}
+
+extension ApprovalChoice {
+    /// On a permission prompt `detail` is the rest of a label that wrapped.
+    var text: String { [label, detail].compactMap { $0 }.joined(separator: " ") }
+
+    /// Whether Always allow presses this option: the prefixes of collied's `classify` (crates/collied/src/prompt.rs) for
+    /// `approve_always`, which this list must follow. classify also drops a trailing " (…)", which changes no prefix match.
+    var grantsAlways: Bool {
+        let text = text.lowercased().replacingOccurrences(of: "\u{2019}", with: "'")
+        return ["yes, and don't ask again", "yes, don't ask again", "yes, allow all edits", "yes, and always allow"]
+            .contains { text.hasPrefix($0) }
+    }
 }
 
 extension DecisionOutcome {

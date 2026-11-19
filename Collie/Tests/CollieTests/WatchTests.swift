@@ -71,15 +71,67 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(!state.approvals[1].answeredInTerminal)
     #expect(state.approvals[2].answeredInTerminal)
 
-    let long = String(repeating: "x", count: 1000)
-    let many = (0..<12).map { item(approval("ap_\($0)", toolSummary: long, snippet: long, agent: long, workspace: long)) }
-    let capped = WatchState(items: many, entries: [], allowed: true, live: true, now: now)
-    #expect(capped.approvals.count == WatchState.maxApprovals)
-    let clipped = try #require(capped.approvals.first)
-    #expect(clipped.command?.count == 200)
-    #expect(clipped.snippet.count == 400)
-    #expect(clipped.agent.count == 60)
-    #expect(clipped.place.count == 60)
+    let many = (0..<12).map { item(approval("ap_\($0)")) }
+    #expect(WatchState(items: many, entries: [], allowed: true, live: true, now: now).approvals.count == WatchState.maxApprovals)
+}
+
+@Test func watchGetsAPromptWholeOrCannotDecideIt() throws {
+    // collied's longest summary, cut there with its own ellipsis, and an option at its caps.
+    let summary = String(repeating: "x", count: 533) + "…"
+    let rule = ApprovalChoice(index: 1, label: String(repeating: "l", count: 300), current: false, detail: String(repeating: "d", count: 300))
+    var prompt = approval(
+        "ap_whole", choices: [menu[0], rule], toolSummary: summary, snippet: String(repeating: "s", count: 200),
+        agent: String(repeating: "a", count: 64), workspace: String(repeating: "w", count: 64)
+    )
+    prompt.reason = String(repeating: "r", count: 200)
+    let whole = WatchApproval(item: item(prompt))
+    #expect(whole.agent == prompt.agentLabel && whole.place == prompt.workspaceLabel + " · Mac")
+    #expect(whole.command == "Bash: " + summary)
+    #expect(whole.reason == prompt.reason)
+    #expect(whole.snippet == prompt.snippet)
+    #expect(whole.choices == [WatchChoice(index: 0, label: "Yes"), WatchChoice(index: 1, label: rule.label, detail: rule.detail)])
+    #expect(!whole.cut && whole.offers(.approve) && whole.offers(.deny))
+
+    // Over the bound: cut at a mark, on a whole character, with nothing after it, and never decidable.
+    var long = approval("ap_long", toolSummary: String(repeating: "é", count: 3000))
+    long.reason = "Command is not read-only"
+    let cut = WatchApproval(item: item(long))
+    #expect(cut.cut)
+    #expect(cut.command?.hasPrefix("Bash: éé") == true && cut.command?.hasSuffix("é…") == true)
+    #expect([cut.agent, cut.place, cut.command ?? ""].map(\.utf8.count).reduce(0, +) <= WatchApproval.maxTextBytes)
+    #expect(cut.reason == nil && cut.snippet.isEmpty)
+    #expect(!cut.offers(.approve) && !cut.offers(.deny))
+    #expect(!cut.canDecide(.approve, allowed: true, answered: [], now: now))
+
+    // Wherever the bound falls, a cut keeps whole characters, and its mark fits even after texts that filled the bound.
+    for pad in 0..<3 {
+        let accents = approval("ap_accents", toolSummary: String(repeating: "e\u{301}", count: 2000), workspace: String(repeating: "w", count: pad))
+        let command = WatchApproval(item: item(accents)).command ?? ""
+        #expect(command.dropLast().hasSuffix("e\u{301}"))
+    }
+    let probe = WatchApproval(item: item(approval("ap_probe", toolSummary: "")))
+    let used = [probe.agent, probe.place, probe.command ?? ""].map(\.utf8.count).reduce(0, +)
+    var full = approval("ap_full", toolSummary: String(repeating: "x", count: WatchApproval.maxTextBytes - used - 2))
+    full.reason = "Command is not read-only"
+    let edge = WatchApproval(item: item(full))
+    #expect(edge.cut)
+    #expect([edge.agent, edge.place, edge.command ?? "", edge.reason ?? ""].map(\.utf8.count).reduce(0, +) <= WatchApproval.maxTextBytes)
+
+    let wide = (0..<9).map { ApprovalChoice(index: UInt8($0), label: rule.label, current: false, detail: rule.detail) }
+    let question = WatchApproval(item: item(approval("ap_question", options: [], choices: wide, acceptsInput: true)))
+    let last = try #require(question.choices.last)
+    #expect(question.cut && question.choices.count < 9 && (last.detail ?? last.label).hasSuffix("…"))
+    #expect(!question.offers(.choose(0)))
+    let ten = (0..<10).map { ApprovalChoice(index: UInt8($0), label: "Option", current: false) }
+    let dropped = WatchApproval(item: item(approval("ap_ten", options: [], choices: ten, acceptsInput: true)))
+    #expect(dropped.cut && dropped.choices.count == 9 && !dropped.offers(.choose(0)))
+
+    let state = shown([whole, cut, question])
+    func refused(_ id: String, _ decision: WatchDecision) -> Bool {
+        WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: id, decision: decision), allowed: true, shown: state, now: now) != nil
+    }
+    #expect(!refused("ap_whole", .approve))
+    #expect(refused("ap_long", .approve) && refused("ap_long", .deny) && refused("ap_question", .choose(0)))
 }
 
 @Test func watchStateGroupsAgentsLikeTheInbox() {
@@ -403,8 +455,10 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(!all.contains { $0.core == .approveAlways })
 }
 
-@Test func watchStateFitsInAnApplicationContext() throws {
-    let wide = String(repeating: "𝄞", count: 2000)
+/// 𝄞 is four bytes in UTF-8; JSON writes / as two.
+@Test(arguments: ["𝄞", "/"])
+func watchStateFitsInAnApplicationContext(_ character: String) throws {
+    let wide = String(repeating: character, count: 2000)
     let choices = (0..<20).map { ApprovalChoice(index: UInt8($0), label: wide, current: false) }
     let items = (0..<20).map {
         item(approval("ap_\($0)", options: [], choices: choices, toolSummary: wide, snippet: wide, agent: wide, workspace: wide))
@@ -418,7 +472,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     )
     #expect(state.approvals.count == WatchState.maxApprovals)
     #expect(state.agents.count == WatchState.maxAgents)
-    #expect(state.approvals[0].choices.count == 9)
+    #expect(state.approvals.allSatisfy { $0.cut })
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     #expect(try encoder.encode(state).count < 65_536)

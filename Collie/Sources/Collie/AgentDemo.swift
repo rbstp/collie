@@ -281,7 +281,13 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
                 toolName: "Bash",
                 toolSummary: ProcessInfo.processInfo.environment["COLLIE_DEMO_APPROVAL_COMMAND"] ?? "cargo test -p collied --test approvals -- --nocapture",
                 reason: "Command is not read-only, requires further permission checks",
-                options: [.approve, .approveAlways, .deny], choices: [], acceptsInput: true, hasTextField: false,
+                options: [.approve, .approveAlways, .deny],
+                choices: [
+                    ApprovalChoice(index: 0, label: "Yes", current: true),
+                    ApprovalChoice(index: 1, label: "Yes, and don't ask again for cargo test commands in /Users/demo/collie", current: false),
+                    ApprovalChoice(index: 2, label: "No", current: false),
+                ],
+                acceptsInput: true, hasTextField: false,
                 supportsNote: true, createdAtMs: now, expiresAtMs: now + 600_000
             ),
         ])

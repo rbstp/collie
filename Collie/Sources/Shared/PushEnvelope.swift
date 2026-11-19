@@ -87,6 +87,12 @@ struct PushDisplay: Codable {
         return display
     }
 
+    /// What ColliePush shows for this display. The app holds a notification's own title, body and category against
+    /// these before an action decides, as iOS shows the sender's when the extension does not run.
+    var shownTitle: String { Self.clean(title, maxLength: 64) }
+    var shownBody: String { Self.clean(body, maxLength: 600) }
+    var category: String { offersApproval && approvalId != nil ? "APPROVAL" : "" }
+
     static func clean(_ text: String, maxLength: Int) -> String {
         var output = String.UnicodeScalarView()
         for scalar in text.unicodeScalars.prefix(maxLength)

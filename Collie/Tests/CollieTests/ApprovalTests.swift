@@ -1,4 +1,5 @@
 import CollieCore
+import CryptoKit
 import Foundation
 import SwiftUI
 import Synchronization
@@ -29,6 +30,49 @@ import UserNotifications
     )
     #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: done) == .ignore)
     #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: ["node_id": "n/x", "terminal_id": "t"]) == .ignore)
+}
+
+/// An alert as iOS hands it to the app: collied's public fields around `display`, sealed for nMAC.
+private func alert(_ display: PushDisplay) throws -> [AnyHashable: Any] {
+    let enc = try #require(PushEnvelope.seal(display, kind: 1, nodeId: "nMAC", scope: "thread", key: vectorKey))
+    var info: [AnyHashable: Any] = ["node_id": "nMAC", "event_id": try #require(PushEnvelope.header(enc)).eventId, "aps": ["thread-id": "thread"], "enc": enc]
+    info["approval_id"] = display.approvalId
+    return info
+}
+
+@Test func aNotificationActionDecidesOnlyUnderTheAuthenticatedTextAndCategory() throws {
+    let body = "Bash: rm -rf build"
+    let info = try alert(PushDisplay(v: 1, title: "api-fixer\u{202E}", body: body, terminalId: "term_1", approvalId: "ap_1", offersApproval: true))
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    func response(
+        _ action: String = "APPROVE", _ info: [AnyHashable: Any] = info, title: String = "api-fixer", subtitle: String = "",
+        body: String = body, category: String = "APPROVAL", key: SymmetricKey = vectorKey
+    ) -> NotificationResponse {
+        NotificationResponse(actionIdentifier: action, userInfo: info, title: title, subtitle: subtitle, body: body, category: category) { _ in key }
+    }
+    #expect(response() == .decide(link, .approve))
+    #expect(response("DENY") == .decide(link, .deny))
+    #expect(response(body: PushBody.rewrite(body, nodeId: "nMAC", reachability: Data(#"{"nMAC":{"last_fail_ms":2}}"#.utf8))) == .decide(link, .approve))
+
+    // What iOS shows when ColliePush did not run is the sender's: the app opens, and decides nothing.
+    #expect(response(title: "Collie") == .open(link))
+    #expect(response(title: "api-fixer\u{202E}") == .open(link))
+    #expect(response(subtitle: "Approve to run the tests") == .open(link))
+    #expect(response(body: "An agent needs attention") == .open(link))
+    #expect(response(body: "Bash: ls") == .open(link))
+    #expect(response(body: body + PushBody.unreachableSuffix + PushBody.unreachableSuffix) == .open(link))
+    #expect(response("DENY", category: "") == .open(link))
+    #expect(response(category: "OTHER") == .open(link))
+    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: info, key: { _ in vectorKey }) == .open(link))
+    let silent = try alert(PushDisplay(v: 1, title: "api-fixer", body: body, terminalId: "term_1", approvalId: "ap_1", offersApproval: false))
+    #expect(response("APPROVE", silent) == .open(link))
+
+    #expect(response(UNNotificationDefaultActionIdentifier, title: "Collie", body: "An agent needs attention", category: "") == .open(link))
+    #expect(response(key: SymmetricKey(size: .bits256)) == .ignore)
+    #expect(response(UNNotificationDefaultActionIdentifier, key: SymmetricKey(size: .bits256)) == .ignore)
+    var other = info
+    other["approval_id"] = "ap_2"
+    #expect(response("APPROVE", other) == .ignore)
 }
 
 @Test func approvalCategoryNeedsAuthenticationForBothActions() throws {
@@ -304,6 +348,12 @@ private func approval(
     )
 }
 
+private let permissionChoices = [
+    ApprovalChoice(index: 0, label: "Yes", current: true),
+    ApprovalChoice(index: 1, label: "Yes, and don't ask again for rm commands in /Users/me/src/app", current: false),
+    ApprovalChoice(index: 2, label: "No", current: false),
+]
+
 private let planChoices = [
     ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
     ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
@@ -411,6 +461,76 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.decide(item, .approveAlways)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
+}
+
+@Test func alwaysAllowIsFoundByColliedsLabels() {
+    func grants(_ label: String, detail: String? = nil) -> Bool {
+        ApprovalChoice(index: 1, label: label, current: false, detail: detail).grantsAlways
+    }
+    // Labels from crates/collied/tests/fixtures and prompt.rs's tests.
+    #expect(grants("Yes, and don't ask again for touch f.txt and touch g.txt commands in /private/tmp/planlab"))
+    #expect(grants("Yes, and always allow access to /private/tmp/planlab from this project"))
+    #expect(grants("Yes, and don\u{2019}t ask again for: cksum *"))
+    #expect(grants("Yes, and don't ask again for commands that start with `cargo test` (p)"))
+    #expect(grants("Yes, don't ask again"))
+    #expect(grants("Yes, allow all edits during this session (shift+tab)"))
+    #expect(grants("Yes, and don't ask", detail: "again for rm commands in /Users/me/src/app"))
+    #expect(!grants("Yes, and switch to auto mode · auto mode handles these prompts for you"))
+    #expect(!grants("Yes, and tell Claude what to do next"))
+    #expect(!grants("Yes"))
+    #expect(!grants("No, and don't ask again"))
+}
+
+@MainActor
+@Test func alwaysAllowIsOfferedAndSentOnlyWithItsOneRule() async throws {
+    let rule = "Yes, and don't ask again for rm commands in /Users/me/src/app"
+    #expect(approval("ap_1", choices: permissionChoices).alwaysRule == rule)
+    let wrapped = [ApprovalChoice(index: 0, label: "Yes, and don't ask again for rm commands in", current: false, detail: "/Users/me/src/app")]
+    #expect(approval("ap_1", choices: wrapped).alwaysRule == rule)
+    #expect(approval("ap_1", options: [.approve, .deny], choices: permissionChoices).alwaysRule == nil)
+    let two = permissionChoices + [ApprovalChoice(index: 3, label: "Yes, allow all edits during this session", current: false)]
+
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock {
+        $0.pending["m1"] = [approval("ap_bare"), approval("ap_two", choices: two), approval("ap_rule", choices: permissionChoices)]
+    }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    for item in model.items where item.id != "ap_rule" {
+        #expect(item.approval.alwaysRule == nil && !item.approval.offers(.approveAlways))
+        #expect(item.approval.plainDecisions == [.approve, .deny])
+        await model.decide(item, .approveAlways)
+    }
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    await model.decide(try #require(model.items.first { $0.id == "ap_rule" }), .approveAlways)
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_rule approveAlways"])
+}
+
+@MainActor
+@Test func aLongToolNameStaysInsideTheCard() {
+    var fetch = approval("ap_1")
+    fetch.toolName = "Fetch · from the web-fetch agent, with a name wider than the card"
+    fetch.reason = reason
+    for maxHeight in [CGFloat.infinity, 150] {
+        let size = UIHostingController(rootView: card(fetch, maxHeight: maxHeight)).sizeThatFits(in: CGSize(width: 402, height: 874))
+        #expect(size.width <= 402)
+    }
+}
+
+@Test func theReviewSheetShowsTheCommandOnce() {
+    var bash = approval("ap_1")
+    bash.toolSummary = "rm -rf build\nRemove the build directory"
+    bash.snippet = "Bash command\n  rm -rf build\nRemove the build directory\nDo you want to proceed?"
+    #expect(bash.output == "Bash command\nDo you want to proceed?")
+    // A line the command panel does not show whole stays.
+    bash.snippet = "…rf build\nRemove the build directory"
+    #expect(bash.output == "…rf build")
+    // Without a command panel the snippet is the only place the command shows.
+    bash.snippet = "rm -rf build"
+    bash.toolName = nil
+    #expect(bash.output == "rm -rf build")
 }
 
 @MainActor
@@ -727,7 +847,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 @Test func noteGoesWithApproveOrDenyOnlyAfterAuthentication() async throws {
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
-    core.state.withLock { $0.pending["m1"] = [approval("ap_n", supportsNote: true), approval("ap_old")] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_n", choices: permissionChoices, supportsNote: true), approval("ap_old")] }
     let model = ApprovalsModel(core: core, auth: auth)
     model.poll()
     let item = try #require(model.items.first { $0.id == "ap_n" })

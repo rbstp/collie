@@ -11,7 +11,7 @@ struct ApprovalCard: View {
     private let padding: CGFloat = 10
 
     private var approval: PendingApproval { item.approval }
-    private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.options.isEmpty }
+    private var offersDecisions: Bool { !approval.answeredInTerminal && !approval.plainDecisions.isEmpty }
 
     var body: some View {
         // The whole card when it fits its share of the screen. Otherwise (landscape, larger text) a band with the tool, a
@@ -26,7 +26,7 @@ struct ApprovalCard: View {
                         reviewAndCountdown
                     }
                     ApprovalDetails(model: model, item: item, whole: false, field: $field, sendAnswer: sendAnswer)
-                    if offersDecisions { DecisionButtons(model: model, item: item) }
+                    if offersDecisions { DecisionButtons(model: model, item: item, decisions: approval.plainDecisions) }
                 }
                 .onAppear { model.setReasonLeftOut(item, false) }
                 if offersDecisions { band(decisions: true) }
@@ -61,13 +61,13 @@ struct ApprovalCard: View {
                     }
                 }
             }
-            if decisions { DecisionButtons(model: model, item: item) }
+            if decisions { DecisionButtons(model: model, item: item, decisions: approval.plainDecisions) }
         }
         .onChange(of: approval.reason != nil, initial: true) { model.setReasonLeftOut(item, $1) }
     }
 
     private var toolName: some View {
-        Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1).fixedSize()
+        Text(verbatim: approval.toolName ?? approval.agentLabel).font(.footnote.weight(.semibold)).lineLimit(1)
     }
 
     @ViewBuilder private var command: some View {
@@ -224,6 +224,17 @@ struct ApprovalReview: View {
                             .accessibilityElement(children: .combine)
                         }
                         ApprovalDetails(model: model, item: item, whole: true, showsCommand: showsCommand, showsReason: showsReason, field: $field, sendAnswer: sendAnswer)
+                        // Always allow ends the prompt, directly under the rule it saves, as the machine words it. A long rule
+                        // scrolls with the prompt: pinned with Approve and Deny, at larger text sizes it pushed the prompt out.
+                        if let rule = item.approval.alwaysRule {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(verbatim: rule)
+                                    .font(.footnote)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                DecisionButtons(model: model, item: item, decisions: [.approveAlways])
+                            }
+                        }
                     }
                     .padding(.horizontal)
                     .padding(.bottom)
@@ -255,11 +266,11 @@ struct ApprovalReview: View {
                             if note, verticalSizeClass == .compact, !typeSize.isAccessibilitySize, !model.noting.contains(item.id) {
                                 HStack(spacing: 8) {
                                     NoteField(model: model, item: item, field: $field).fixedSize()
-                                    DecisionButtons(model: model, item: item)
+                                    DecisionButtons(model: model, item: item, decisions: item.approval.plainDecisions)
                                 }
                             } else {
                                 if note { NoteField(model: model, item: item, field: $field) }
-                                DecisionButtons(model: model, item: item)
+                                DecisionButtons(model: model, item: item, decisions: item.approval.plainDecisions)
                             }
                         }
                     }
@@ -337,8 +348,8 @@ private struct ApprovalDetails: View {
             }
             if approval.options.isEmpty, !approval.choices.isEmpty {
                 QuestionText(snippet: approval.snippet)
-            } else if !approval.snippet.isEmpty, whole {
-                Text(verbatim: approval.snippet)
+            } else if whole, !approval.output.isEmpty {
+                Text(verbatim: approval.output)
                     .font(.caption2.monospaced())
                     // The metadata gray is 4.2:1 on a nested panel over the band's light tint; this is 5.3:1, and 5.5:1 in dark mode.
                     .foregroundStyle(.primary.opacity(0.6))
@@ -533,36 +544,35 @@ private struct FeedbackField: View {
 private struct DecisionButtons: View {
     let model: ApprovalsModel
     let item: ApprovalItem
+    let decisions: [ApprovalDecision]
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             GlassEffectContainer(spacing: 8) {
                 // Labels never shrink to fit: the decisions take two rows, then stack, when a row would cut a label.
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { buttons(options) }
+                    HStack(spacing: 8) { buttons(decisions) }
                     VStack(spacing: 8) {
-                        buttons(Array(options.prefix(1)))
-                        HStack(spacing: 8) { buttons(Array(options.dropFirst())) }
+                        buttons(Array(decisions.prefix(1)))
+                        HStack(spacing: 8) { buttons(Array(decisions.dropFirst())) }
                     }
-                    VStack(spacing: 8) { buttons(options) }
+                    VStack(spacing: 8) { buttons(decisions) }
                 }
             }
             .disabled(item.approval.expiresAtMs <= context.date.unixMs || item.unreachable || model.steps[item.id] != nil)
         }
     }
 
-    private var options: [ApprovalDecision] { item.approval.options }
-
     private func weight(_ decision: ApprovalDecision) -> Font.Weight { decision == .approve ? .semibold : .regular }
 
-    private func buttons(_ decisions: [ApprovalDecision]) -> some View {
-        ForEach(decisions, id: \.self) { decision in
+    private func buttons(_ row: [ApprovalDecision]) -> some View {
+        ForEach(row, id: \.self) { decision in
             Button(role: decision == .deny ? .destructive : nil) {
                 Task { await model.decide(item, decision) }
             } label: {
                 // Each label is as wide as the widest, so the row is measured at the equal widths it lays out with.
                 ZStack {
-                    ForEach(item.approval.options, id: \.self) { Text($0.title).fontWeight(weight($0)).lineLimit(1).hidden() }
+                    ForEach(decisions, id: \.self) { Text($0.title).fontWeight(weight($0)).lineLimit(1).hidden() }
                     if model.steps[item.id] == .sending(decision) {
                         ProgressView()
                     } else {

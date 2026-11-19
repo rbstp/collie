@@ -5,7 +5,7 @@ CollieWatch installs with the iPhone app, holds no keys and never talks to `coll
 ## In the watch app
 
 - **Plan usage**: each window's percentage and reset countdown.
-- **Approvals**: pending approvals with countdowns; open one for its command.
+- **Approvals**: pending approvals with countdowns; open one for its command, why the agent asks, the output and the options.
 - **Working** and **Done**: your agents as the iPhone last saw them.
 
 ## Deciding from the watch
@@ -17,6 +17,8 @@ Approvals are read-only until you turn on **Settings > Apple Watch > Decide from
 - you can approve, deny or pick a menu option, never Always allow.
 
 The iPhone rechecks the setting for each decision and sends only an answer it showed the watch.
+
+The watch shows a prompt whole or not as one you can answer: when a prompt is too long for the watch, its text ends in an ellipsis, the watch says so, shows no buttons under it, and you answer it on the iPhone.
 
 ## Complication and widget
 

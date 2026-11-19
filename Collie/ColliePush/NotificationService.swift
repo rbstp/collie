@@ -12,15 +12,17 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         let nodeId = content.userInfo["node_id"] as? String
         content.title = "Collie"
+        // The sender's subtitle would show between the authenticated title and body.
+        content.subtitle = ""
         content.body = content.body == "An agent finished" ? "An agent finished" : "An agent needs attention"
         content.categoryIdentifier = ""
         if let nodeId, let key = NotificationKey.load(nodeId: nodeId),
             let display = PushDisplay.open(userInfo: content.userInfo, key: key) {
-            content.title = PushDisplay.clean(display.title, maxLength: 64)
-            content.body = PushDisplay.clean(display.body, maxLength: 600)
+            content.title = display.shownTitle
+            content.body = display.shownBody
             content.userInfo["terminal_id"] = display.terminalId
             content.threadIdentifier = display.terminalId
-            if display.offersApproval, display.approvalId != nil { content.categoryIdentifier = "APPROVAL" }
+            content.categoryIdentifier = display.category
         }
         let hint = AppGroup.container.flatMap { try? Data(contentsOf: $0.appending(path: MacReachability.fileName)) }
         content.body = PushBody.rewrite(content.body, nodeId: nodeId, reachability: hint)
