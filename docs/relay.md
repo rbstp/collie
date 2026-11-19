@@ -86,7 +86,7 @@ The body has exactly these fields:
 
 | Push type | Payload fields | `aps` fields and values |
 |---|---|---|
-| `alert` | `aps`, `node_id`, `event_id`, optional `approval_id`, `enc` | Required `alert`, `mutable-content: 1`, `sound: "default"`, `thread-id`; optional `category: "APPROVAL"` |
+| `alert` | `aps`, `node_id`, `event_id`, optional `approval_id`, `enc` | Exactly `alert`, `mutable-content: 1`, `sound: "default"`, `thread-id`; a `category` is rejected, since the phone sets it from the authenticated display |
 | `background` | `aps`, `node_id`, `approval_id` | Exactly `content-available: 1`; requires priority 5, expiration 0, no collapse ID |
 | `liveactivity` | `aps`, `node_id`, `event_id` | Required `timestamp`, `event: "update"` or `"end"`, `content-state`; optional `stale-date`, `dismissal-date` for end only, `alert`; no collapse ID |
 

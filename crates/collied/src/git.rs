@@ -201,7 +201,7 @@ fn git_process(cwd: &Cwd, args: &[&str], overrides: &[String]) -> Command {
         "--no-pager",
         "--literal-pathspecs",
         "-c",
-        "core.fsmonitor=false",
+        "core.fsmonitor=",
         "-c",
         "fetch.bundleURI=",
         "-c",
@@ -270,18 +270,30 @@ pub(crate) async fn line(cwd: &Cwd, args: &[&str]) -> Result<Option<String>, Fai
 
 /// `safe.bareRepository=explicit` refuses a bare repository found from its own folder. A
 /// worktree task's folder can be one kept for worktrees: it is named with `--git-dir`, but
-/// only with no `.git` at or above it, as inside a checkout it can be the checkout's content.
+/// only with no `.git` at or above it, as inside a checkout it can be the checkout's content,
+/// or when the nearest one is a file naming this folder (`repo/.git` holding
+/// `gitdir: ./.bare`), which no checkout supplies: git tracks no path named `.git`.
 async fn folder_git(cwd: &Cwd, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool, bool), Fail> {
     let (out, ok, truncated) = git_command(cwd, args, limit, &[]).await?;
-    if ok
-        || Path::new(cwd.as_str())
-            .ancestors()
-            .any(|dir| dir.join(".git").symlink_metadata().is_ok())
-    {
+    let folder = Path::new(cwd.as_str());
+    let above = (folder.ancestors()).find(|dir| dir.join(".git").symlink_metadata().is_ok());
+    if ok || above.is_some_and(|dir| !gitfile_names(dir, folder)) {
         return Ok((out, ok, truncated));
     }
     let git_dir = format!("--git-dir={}", cwd.as_str());
     git_command(cwd, &[&[git_dir.as_str()][..], args].concat(), limit, &[]).await
+}
+
+fn gitfile_names(dir: &Path, folder: &Path) -> bool {
+    let file = dir.join(".git");
+    // A regular file only: reading a FIFO left under that name would never return.
+    if !(file.symlink_metadata()).is_ok_and(|meta| meta.is_file() && meta.len() <= 4096) {
+        return false;
+    }
+    (std::fs::read_to_string(&file).ok())
+        .and_then(|text| Some(dir.join(text.strip_prefix("gitdir: ")?.trim_end())))
+        .and_then(|path| path.canonicalize().ok())
+        .is_some_and(|path| path == folder)
 }
 
 async fn root(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<Cwd>, Fail> {
@@ -1476,6 +1488,25 @@ mod tests {
         assert!(line(&alone, &main).await.unwrap().is_some());
         assert_eq!(line(&inside, &main).await.unwrap(), None);
 
+        // `repo/.git` naming `repo/.bare` is no checkout's content: git tracks no `.git`. A
+        // bare folder beside it, which the file does not name, stays refused.
+        let kept = tempfile::tempdir().unwrap();
+        let kept = kept.path().canonicalize().unwrap();
+        let (hidden, other) = (kept.join(".bare"), kept.join("other.git"));
+        for bare in [&hidden, &other] {
+            run(
+                root,
+                &["clone", "-q", "--bare", ".", bare.to_str().unwrap()],
+            );
+        }
+        std::fs::write(kept.join(".git"), "gitdir: ./.bare\n").unwrap();
+        let hidden = Cwd::new(hidden.to_str().unwrap()).unwrap();
+        let list = worktree_list(&hidden).await.unwrap();
+        assert_eq!(list.source.source_checkout_path, hidden.as_str());
+        assert!(line(&hidden, &main).await.unwrap().is_some());
+        let other = Cwd::new(other.to_str().unwrap()).unwrap();
+        assert!(worktree_list(&other).await.is_err());
+
         let plain = tempfile::tempdir().unwrap();
         let plain = Cwd::new(plain.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
         assert!(worktree_list(&plain).await.is_err());
@@ -2412,6 +2443,17 @@ mod tests {
             &["rev-parse", "--verify", "--quiet", "refs/heads/read"],
         );
         assert!(!marker.exists());
+    }
+
+    #[test]
+    fn the_read_builder_blanks_fsmonitor_with_an_empty_value() {
+        // Git before 2.36 runs any other value as the fsmonitor hook, `false` included.
+        let cwd = Cwd::new("/").unwrap();
+        let command = git_process(&cwd, &[], &[]);
+        assert!(
+            (command.as_std().get_args()).any(|arg| arg == "core.fsmonitor="),
+            "{command:?}"
+        );
     }
 
     #[tokio::test]

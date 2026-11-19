@@ -71,7 +71,7 @@ test('strict public allowlists reject plaintext, arbitrary headers, malformed en
     (x: any) => { x.topic = 'other'; }, (x: any) => { x.payload.title = 'private'; },
     (x: any) => { x.payload.aps.alert.body = 'private'; }, (x: any) => { x.payload.enc = 'a'.repeat(4000); },
     (x: any) => { x.payload.aps.badge = 3; }, (x: any) => { x.collapse_id = '\r\ninjected'; },
-    (x: any) => { x.payload.enc = 'invalid='; }
+    (x: any) => { x.payload.enc = 'invalid='; }, (x: any) => { x.payload.aps.category = 'APPROVAL'; }
   ]) { const body = structuredClone(alert); mutate(body); assert.equal(validSend(body), false); }
 });
 test('stream body limit rejects absent length, misleading lengths, compression and invalid UTF8', async () => {
