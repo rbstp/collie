@@ -297,16 +297,16 @@ pub async fn run(data_dir: &Path, config: &Config) -> anyhow::Result<()> {
     .await?;
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("install SIGTERM handler")?;
-    let listener_failed = tokio::select! {
+    let failed = tokio::select! {
         _ = tokio::signal::ctrl_c() => false,
         _ = term.recv() => false,
-        _ = handle.listener_failed() => true,
+        _ = handle.failed() => true,
     };
     tracing::info!("shutting down");
     handle.shutdown().await;
     anyhow::ensure!(
-        !listener_failed,
-        "tailnet listener failed; exiting so the service manager restarts collied"
+        !failed,
+        "a background loop ended; exiting so the service manager restarts collied"
     );
     Ok(())
 }
