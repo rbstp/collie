@@ -751,32 +751,18 @@ pub async fn start_with(
             control::serve(control, state.clone(), rx.clone()),
             life,
         ),
-        essential(
-            "upkeep",
-            upkeep(
-                state.attachments.clone(),
-                state.downloads.clone(),
-                rx.clone(),
-            ),
-            life,
-        ),
-        essential("codex usage", codex_usage(state.clone(), rx.clone()), life),
-        essential(
-            "copilot usage",
-            copilot_usage(state.clone(), rx.clone()),
-            life,
-        ),
-        essential(
-            "pull requests",
-            pull_requests(state.clone(), rx.clone()),
-            life,
-        ),
-        essential(
-            "pull request watches",
-            pr_watches(state.clone(), rx.clone()),
-            life,
-        ),
         essential("reconcile", reconcile(state.clone(), rx.clone()), life),
+        // Not essential: without one of these the phone still sees agents, decides and is
+        // alerted, and a restart would drop its sessions for a usage figure or a clean-up.
+        tokio::spawn(upkeep(
+            state.attachments.clone(),
+            state.downloads.clone(),
+            rx.clone(),
+        )),
+        tokio::spawn(codex_usage(state.clone(), rx.clone())),
+        tokio::spawn(copilot_usage(state.clone(), rx.clone())),
+        tokio::spawn(pull_requests(state.clone(), rx.clone())),
+        tokio::spawn(pr_watches(state.clone(), rx.clone())),
     ];
     if let Some(core) = core {
         tasks.push(essential("herdr-core", core.run(rx.clone()), life));
