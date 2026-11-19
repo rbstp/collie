@@ -804,6 +804,9 @@ async fn check_herdr(r: &mut Report, config: &Config, answers: Option<&str>) {
                 pong.version, pong.protocol
             ),
         ),
+        Err(runtime::Error::Unsupported(why)) => {
+            r.line(Status::Fail, "herdr", format!("{shown}: {why}"));
+        }
         Err(e) => down(r, format!("{shown}: ping: {e}")),
     }
 }
