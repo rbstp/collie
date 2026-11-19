@@ -917,9 +917,17 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
         return (String::new(), None);
     };
     let question = lines.iter().rposition(|l| l.ends_with('?'));
-    let asks = question.filter(|&q| {
-        q > head && lines[q].starts_with("Do you want to") && !(whole && kind == "claude")
-    });
+    // A long file name wraps the question over up to three rows. Its first row is the nearest
+    // one that starts it, so no row above it is left out of the summary, and never a command
+    // row or one above a blank row, which the agent can write.
+    let asks = question
+        .and_then(|q| {
+            (q.saturating_sub(2)..=q)
+                .rev()
+                .take_while(|&i| !lines[i].is_empty() && !command[i])
+                .find(|&i| lines[i].starts_with("Do you want to"))
+        })
+        .filter(|&q| q > head && !(whole && kind == "claude"));
     let kept = |i: &usize| command[*i] || !lines[*i].is_empty();
     let action = asks.and_then(|q| {
         let header = &lines[head];
@@ -1520,6 +1528,32 @@ pub mod fixtures {
         include_str!("../tests/fixtures/claude-2.1.328/write.tmux.txt"),
         include_str!("../tests/fixtures/claude-2.1.328/fetch.tmux.txt"),
     ];
+    // Hand-built from the 2.1.328 Edit capture, not captured: 60 columns and a file name long
+    // enough that the question and the second option wrap, the question onto a row at the
+    // dialog's margin, as the 2.1.322 capture wraps its tip, and the option as the 2.1.328
+    // tall capture wraps its own.
+    pub const EDIT_WRAPPED: &str = "\
+⏺ Update(a-file-with-a-long-name-that-wraps.txt)
+
+────────────────────────────────────────────────────────────
+ Edit file
+ a-file-with-a-long-name-that-wraps.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1  alpha
+ 2 -beta
+ 2 +delta
+ 3  gamma
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to
+ a-file-with-a-long-name-that-wraps.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file
+      edits and common file commands) for this session
+      (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend
+";
     // Captured from Claude Code 2.1.328 (tmux capture-pane, 120 columns, 24 rows): a command
     // of 42 lines, whose dialog is taller than the screen, so its top rule, its head and its
     // first 28 lines have scrolled off.
@@ -3046,6 +3080,51 @@ mod tests {
                 })
             );
             assert!(!Menu::parse(screen).unwrap().decisions().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_wrapped_question_still_names_the_tool() {
+        let name = "a-file-with-a-long-name-that-wraps.txt";
+        let edit = Some(PendingTool {
+            name: "Edit file".into(),
+            summary: format!("{name}\n1  alpha\n2 -beta\n2 +delta\n3  gamma"),
+        });
+        let three = EDIT_WRAPPED.replace(
+            " Do you want to make this edit to\n",
+            " Do you want to make this\n edit to\n",
+        );
+        for screen in [EDIT_WRAPPED, &three] {
+            assert_eq!(
+                context_and_tool("claude", screen),
+                (format!("Edit: {name}"), edit.clone())
+            );
+            assert_eq!(
+                Menu::parse(screen).unwrap().decisions(),
+                [(Approve, 0), (Deny, 2)]
+            );
+        }
+        let four = three.replace(" edit to\n", " edit\n to\n");
+        assert_eq!(
+            context_and_tool("claude", &four),
+            (format!("{name}?"), None),
+            "a question starts no more than two rows above its last"
+        );
+        let in_command = BASH_LIVE
+            .replace(" Do you want to proceed?\n", " Proceed?\n")
+            .replace(
+                " touch probe2.txt\n",
+                " ls\n Do you want to see\n rm -rf ~\n",
+            );
+        let above_a_blank = BASH
+            .replace(" Do you want to proceed?\n", " Proceed?\n")
+            .replace("   Remove the build directory\n", "   Do you want to see\n");
+        for screen in [in_command, above_a_blank] {
+            assert_eq!(
+                context_and_tool("claude", &screen),
+                ("Proceed?".to_owned(), None),
+                "a command row or a row above a blank one starts no question"
+            );
         }
     }
 
