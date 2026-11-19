@@ -257,7 +257,7 @@ final class WatchModel: NSObject, WCSessionDelegate {
         notice = nil
         // A fresh context per decision, so one check never covers a later approval.
         let passed = (try? await LAContext().evaluatePolicy(
-            .deviceOwnerAuthenticationWithWristDetection, localizedReason: "\(decision.title) \(approval.agent)"
+            .deviceOwnerAuthenticationWithWristDetection, localizedReason: approval.checkReason(for: decision)
         )) ?? false
         guard passed else {
             notice = (approval.agent, "Needs this watch unlocked, on your wrist, with a passcode and Wrist Detection on. Nothing was sent.")
@@ -313,16 +313,6 @@ private struct RefreshReply: Sendable {
 struct WatchApprovalKey: Hashable {
     let nodeId: String
     let approvalId: String
-}
-
-extension WatchDecision {
-    fileprivate var title: String {
-        switch self {
-        case .approve: "Approve"
-        case .deny: "Deny"
-        case .choose(let index): "Choose option \(Int(index) + 1)"
-        }
-    }
 }
 
 extension WatchAgent.Status {

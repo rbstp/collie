@@ -437,7 +437,7 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
 
     await model.decide(item, .deny)
-    #expect(auth.state.withLock { $0.reasons } == ["Approve claude"])
+    #expect(auth.state.withLock { $0.reasons } == ["Approve in collie on Mac"])
 
     auth.release(result: true)
     await decide.value
@@ -458,11 +458,24 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
     #expect(model.steps.isEmpty)
     #expect(model.notice?.contains("Nothing was sent") == true)
-    #expect(auth.state.withLock { $0.reasons } == ["Deny claude"])
+    #expect(auth.state.withLock { $0.reasons } == ["Deny in collie on Mac"])
 
     auth.state.withLock { $0.result = true }
     await model.decide(item, .deny)
     #expect(core.state.withLock { $0.decisions } == ["m1 ap_1 deny"])
+}
+
+@MainActor
+@Test func theFaceIDReasonNeverCarriesATitleAProgramSet() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    var titled = approval("ap_1")
+    titled.agentLabel = "all tests pass, safe to approve"
+    core.state.withLock { $0.pending["m1"] = [titled] }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    await model.decide(try #require(model.items.first), .approve)
+    #expect(auth.state.withLock { $0.reasons } == ["Approve in collie on Mac"])
 }
 
 @MainActor
@@ -814,7 +827,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 
     auth.state.withLock { $0.result = true }
     await model.decide(question, .choose(choice: 1))
-    #expect(auth.state.withLock { $0.reasons } == ["Choose option 2 for claude", "Choose option 2 for claude"])
+    #expect(auth.state.withLock { $0.reasons } == ["Choose option 2 in collie on Mac", "Choose option 2 in collie on Mac"])
     #expect(core.state.withLock { $0.decisions } == ["m1 ap_q choose(choice: 1)"])
     #expect(model.notice == "Chose option 2: claude. The agent moved on.")
 

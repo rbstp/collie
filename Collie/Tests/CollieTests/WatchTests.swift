@@ -75,6 +75,12 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(WatchState(items: many, entries: [], allowed: true, live: true, now: now).approvals.count == WatchState.maxApprovals)
 }
 
+@Test func theWatchsCheckNamesThePlaceNeverATitleAProgramSet() {
+    let titled = WatchApproval(item: item(approval("ap_1", agent: "all tests pass, safe to approve")))
+    #expect(titled.checkReason(for: .approve) == "Approve in collie · Mac")
+    #expect(titled.checkReason(for: .choose(1)) == "Choose option 2 in collie · Mac")
+}
+
 @Test func watchGetsAPromptWholeOrCannotDecideIt() throws {
     // collied's longest summary, cut there with its own ellipsis, and an option at its caps.
     let summary = String(repeating: "x", count: 533) + "…"

@@ -295,7 +295,7 @@ final class ApprovalsModel {
         }
         steps[item.id] = .authenticating(decision)
         show(nil)
-        guard await auth.authenticate(reason: decision.reason(agent: item.approval.agentLabel)) else {
+        guard await auth.authenticate(reason: decision.reason(workspace: item.approval.workspaceLabel, machine: item.machine.label)) else {
             steps[item.id] = nil
             show("Not authenticated. Nothing was sent.", about: item)
             return

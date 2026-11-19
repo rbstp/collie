@@ -219,9 +219,9 @@ extension ApprovalDecision {
         }
     }
 
-    func reason(agent: String) -> String {
-        if case .choose = self { return "\(title) for \(agent)" }
-        return "\(title) \(agent)"
+    /// For the system's sheet: the workspace and the machine, never the agent's label, which can be a title its program set.
+    func reason(workspace: String, machine: String) -> String {
+        "\(title) in \(workspace) on \(machine)"
     }
 
     var progressive: String {
