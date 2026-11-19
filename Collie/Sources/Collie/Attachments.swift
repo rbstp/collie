@@ -211,12 +211,12 @@ enum Attachment {
     }
 
     /// ImageIO decodes straight to the thumbnail size, so a huge image never needs a full-size buffer.
-    static func thumbnail(from data: Data) async -> UIImage? {
+    static func thumbnail(from data: Data, maxSide: CGFloat = thumbnailMaxSide) async -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxSide,
+            kCGImageSourceThumbnailMaxPixelSize: maxSide,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
     }

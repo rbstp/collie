@@ -26,6 +26,7 @@ struct AgentScreen: View {
     @State private var obscuredTop: CGFloat = 0
     @State private var obscuredBottom: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -341,6 +342,13 @@ struct AgentScreen: View {
         }
         .sheet(item: $model.fileLink) { link in
             FileViewer(agent: model, link: link)
+        }
+        .confirmationDialog("Open this link?", isPresented: Binding { model.pendingLink != nil } set: { if !$0 { model.pendingLink = nil } },
+                            titleVisibility: .visible, presenting: model.pendingLink) { url in
+            Button("Open") { openURL(url) }
+            Button("Cancel", role: .cancel) {}
+        } message: { url in
+            Text(url.host ?? "")
         }
         // Presented here, not from the card: the band takes the dark scheme over the terminal, and the sheet follows the appearance.
         .sheet(item: reviewing) { item in

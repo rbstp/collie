@@ -127,9 +127,38 @@ private func page(_ messages: [HistoryMessage], session: String = "s1", reset: B
     for value in ["https://example.com/path", "http://localhost:8080", "HTTPS://example.com"] {
         #expect(ConversationMarkdown.allowsLink(URL(string: value)!))
     }
-    for value in ["file:///etc/passwd", "collie://approve", "javascript:alert(1)", "data:text/html,hello", "https:relative", "relative/path"] {
+    for value in [
+        "file:///etc/passwd", "collie://approve", "javascript:alert(1)", "data:text/html,hello", "https:relative", "relative/path",
+        "https://github.com@evil.example/", "https://user:secret@example.com/", "https://@example.com/",
+    ] {
         #expect(!ConversationMarkdown.allowsLink(URL(string: value)!))
     }
+}
+
+@MainActor
+@Test func conversationAsksBeforeOpeningALinkThatHidesItsAddress() throws {
+    let agent = agentModel(FakeCore())
+    func tap(_ markdown: String) throws -> URL {
+        let text = ConversationMarkdown.guarded(try AttributedString(markdown: markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        let link = try #require(text.runs.compactMap(\.link).first)
+        _ = ConversationMarkdown.open(link, agent: agent)
+        return link
+    }
+    for shown in ["see https://example.com/a?b=1#c now", "<https://example.com/a?b=1#c>", "[https://example.com/**a**](https://example.com/a)"] {
+        #expect(ConversationMarkdown.allowsLink(try tap(shown)))
+        #expect(agent.pendingLink == nil)
+    }
+    _ = try tap("[github.com/login/device](https://github.com.evil.example/login?next=%2F#top)")
+    #expect(agent.pendingLink?.absoluteString == "https://github.com.evil.example/login?next=%2F#top")
+    #expect(agent.pendingLink?.host == "github.com.evil.example")
+    _ = try tap("[github.com](https://gíthub.com/login)")
+    #expect(agent.pendingLink?.host == "xn--gthub-zsa.com")
+    agent.pendingLink = nil
+    _ = try tap("[x](https://github.com@evil.example/)")
+    for forged in ["collie-ask:tel:5551234", "collie-ask:https://github.com@evil.example/", "collie-ask:"] {
+        _ = ConversationMarkdown.open(try #require(URL(string: forged)), agent: agent)
+    }
+    #expect(agent.pendingLink == nil)
 }
 
 @MainActor

@@ -1,4 +1,5 @@
 import CollieCore
+import ImageIO
 import PDFKit
 import SwiftUI
 import UIKit
@@ -107,6 +108,7 @@ final class FileViewerModel {
     private(set) var file: OpenedFile?
     private(set) var lines: [String] = []
     private(set) var image: UIImage?
+    private(set) var oversized = false
     private(set) var pdf: PDFDocument?
     private(set) var shareURL: URL?
     private(set) var error: String?
@@ -119,6 +121,31 @@ final class FileViewerModel {
 
     var name: String { file?.name ?? URL(fileURLWithPath: path).lastPathComponent }
 
+    /// The screen's longer side, in pixels.
+    static var screenSide: CGFloat? {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene).map { max($0.screen.nativeBounds.width, $0.screen.nativeBounds.height) }
+    }
+
+    /// ImageIO decodes an interlaced PNG whole even for a thumbnail, about 4 bytes a pixel (measured: 1.6 GB for
+    /// 20000 x 20000, 434 MB for 10000 x 10000), so an image over 100 megapixels is not decoded at all.
+    static let maxPixels = 100_000_000
+
+    /// Read from the file's header; nothing is decoded.
+    static func pixels(in data: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return width * height
+    }
+
+    static let copies = FileManager.default.temporaryDirectory.appending(path: "viewer", directoryHint: .isDirectory)
+
+    /// At launch: a copy outlives its viewer when the app is killed while the viewer is open.
+    static func purgeCopies() {
+        try? FileManager.default.removeItem(at: copies)
+    }
+
     func load(_ open: Open) async {
         guard !loading else { return }
         loading = true
@@ -126,12 +153,21 @@ final class FileViewerModel {
         defer { loading = false }
         do {
             let file = try await open(path)
+            // At the screen's size: a PNG of tens of thousands of pixels a side fits under the byte cap and needs
+            // gigabytes decoded whole.
+            var image: UIImage?
+            var oversized = false
+            if file.kind == .image, let side = Self.screenSide, let pixels = Self.pixels(in: file.data) {
+                oversized = pixels > Self.maxPixels
+                if !oversized { image = await Attachment.thumbnail(from: file.data, maxSide: side) }
+            }
             guard !Task.isCancelled else { return }
             close()
             lines = file.kind == .text ? String(decoding: file.data, as: UTF8.self).components(separatedBy: "\n") : []
-            image = file.kind == .image ? UIImage(data: file.data) : nil
+            self.image = image
+            self.oversized = oversized
             pdf = file.kind == .pdf ? PDFDocument(data: file.data) : nil
-            let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+            let folder = Self.copies.appending(path: UUID().uuidString, directoryHint: .isDirectory)
             self.folder = folder
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appending(path: file.name)
@@ -243,7 +279,7 @@ struct FileViewer: View {
                 ContentUnavailableView {
                     Label(file.name, systemImage: "doc")
                 } description: {
-                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file)) · No preview")
+                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file)) · \(model.oversized ? "Too large to preview" : "No preview")")
                 }
             }
         } else if let error = model.error {
@@ -260,12 +296,21 @@ struct FileViewer: View {
     }
 }
 
-private struct PDFPreview: UIViewRepresentable {
+struct PDFPreview: UIViewRepresentable {
     let document: PDFDocument?
+
+    // PDFKit opens a tapped link annotation's URL through the system, whatever its scheme, unless the view's
+    // delegate takes the click. An annotation can be invisible and cover the page, so the viewer opens none.
+    final class Links: NSObject, PDFViewDelegate {
+        func pdfViewWillClick(onLink sender: PDFView, with url: URL) {}
+    }
+
+    func makeCoordinator() -> Links { Links() }
 
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
+        view.delegate = context.coordinator
         return view
     }
 

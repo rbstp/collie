@@ -1,8 +1,10 @@
 import CollieCore
 import Foundation
+import PDFKit
 import SwiftUI
 import Testing
 import UIKit
+import zlib
 
 @testable import Collie
 
@@ -62,6 +64,15 @@ private func found(_ text: String) -> [String] {
     #expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path))
 }
 
+@MainActor @Test func launchRemovesACopyLeftByAKilledViewer() async throws {
+    let model = FileViewerModel(path: "notes.txt")
+    await model.load { _ in OpenedFile(name: "notes.txt", size: 2, kind: .text, data: Data("hi".utf8)) }
+    let url = try #require(model.shareURL)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+    FileViewerModel.purgeCopies()
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+}
+
 @MainActor @Test func viewerShowsImagesAndRefusals() async throws {
     let png = try #require(UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { _ in }.pngData())
     let model = FileViewerModel(path: "shot.png")
@@ -77,4 +88,50 @@ private func found(_ text: String) -> [String] {
     let big = FileViewerModel(path: "big.log")
     await big.load { _ in throw CoreError.TooLarge(message: "big.log is 3.2 MB; text files open up to 1 MB.") }
     #expect(big.error == "big.log is 3.2 MB; text files open up to 1 MB.")
+}
+
+@MainActor @Test func viewerDecodesAnImageNoLargerThanTheScreen() async throws {
+    let side = try #require(FileViewerModel.screenSide)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let png = try #require(UIGraphicsImageRenderer(size: CGSize(width: side * 2, height: 4), format: format).image { _ in }.pngData())
+    let model = FileViewerModel(path: "wide.png")
+    await model.load { _ in OpenedFile(name: "wide.png", size: UInt64(png.count), kind: .image, data: png) }
+    let image = try #require(model.image?.cgImage)
+    #expect(image.width == Int(side))
+    #expect(image.height == 2)
+    model.close()
+}
+
+@MainActor @Test func viewerDoesNotDecodeAnImageOverThePixelLimit() async throws {
+    func bigEndian(_ value: Int) -> [UInt8] { withUnsafeBytes(of: UInt32(value).bigEndian) { Array($0) } }
+    func chunk(_ kind: String, _ body: [UInt8]) -> [UInt8] {
+        let checked = Array(kind.utf8) + body
+        return bigEndian(body.count) + checked + bigEndian(Int(crc32(0, checked, uInt(checked.count))))
+    }
+    // A one-bit PNG just over the limit, all zeros: each row is a filter byte and 1563 bytes of pixels.
+    let (width, height) = (12500, 8001)
+    let rows = [UInt8](repeating: 0, count: height * (1 + (width + 7) / 8))
+    var packed = [UInt8](repeating: 0, count: Int(compressBound(uLong(rows.count))))
+    var length = uLong(packed.count)
+    #expect(compress(&packed, &length, rows, uLong(rows.count)) == Z_OK)
+    let png = Data(
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + chunk("IHDR", bigEndian(width) + bigEndian(height) + [1, 0, 0, 0, 0])
+            + chunk("IDAT", Array(packed[..<Int(length)])) + chunk("IEND", [])
+    )
+    #expect(FileViewerModel.pixels(in: png) == width * height)
+    let model = FileViewerModel(path: "huge.png")
+    await model.load { _ in OpenedFile(name: "huge.png", size: UInt64(png.count), kind: .image, data: png) }
+    #expect(model.oversized)
+    #expect(model.image == nil)
+    #expect(model.shareURL != nil)
+    model.close()
+}
+
+@MainActor @Test func pdfPreviewTakesLinkClicksItself() async throws {
+    let host = UIHostingController(rootView: PDFPreview(document: PDFDocument()))
+    try await hosting(host) { _ in
+        let view = try await waitFor("the PDF view") { descendants(host.view).compactMap { $0 as? PDFView }.first }
+        #expect(view.delegate?.responds(to: #selector(PDFViewDelegate.pdfViewWillClick(onLink:with:))) == true)
+    }
 }

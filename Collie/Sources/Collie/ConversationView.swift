@@ -513,12 +513,36 @@ struct ConversationMarkdown: View {
     @Environment(AgentModel.self) private var agent: AgentModel?
     @State private var copied: Int?
 
+    /// Chat's own scheme around a web link whose visible text is not its address: tapping it asks first.
+    static let askScheme = "collie-ask"
+
     static func allowsLink(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return false }
-        return url.host?.isEmpty == false
+        // User info reads as the site: https://github.com@evil.example/ opens evil.example.
+        return url.host?.isEmpty == false && url.user == nil && url.password == nil
+    }
+
+    /// A label says nothing about where its link goes, so only a link that shows its own address opens on one tap.
+    static func guarded(_ text: AttributedString) -> AttributedString {
+        var result = text
+        for (link, range) in text.runs[\.link] {
+            guard let link, allowsLink(link), String(text[range].characters) != link.absoluteString else { continue }
+            var components = URLComponents()
+            components.scheme = askScheme
+            components.path = link.absoluteString
+            result[range].link = components.url
+        }
+        return result
     }
 
     static func open(_ url: URL, agent: AgentModel?) -> OpenURLAction.Result {
+        if url.scheme == askScheme {
+            // Checked again here: a message can write this scheme itself, around any address.
+            guard let agent, let target = URLComponents(url: url, resolvingAgainstBaseURL: false).flatMap({ URL(string: $0.path) }),
+                  allowsLink(target) else { return .discarded }
+            agent.pendingLink = target
+            return .handled
+        }
         if allowsLink(url) { return .systemAction }
         guard let agent, let path = FileLinks.path(from: url) else { return .discarded }
         agent.fileLink = FileLink(path: path)
@@ -574,7 +598,7 @@ struct ConversationMarkdown: View {
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
         var rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
         if !heading { rendered = Self.inlineCode(rendered) }
-        return Text(Self.highlighted(FileLinks.linked(rendered), query: query))
+        return Text(Self.highlighted(FileLinks.linked(Self.guarded(rendered)), query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)
             .padding(.leading, quote ? 10 : 0)

@@ -20,6 +20,7 @@ With the largest text sizes (**Settings > Accessibility > Display & Text Size > 
 - A [PR watch](pull-requests.md#watch-a-pull-request) wake shows as one row with an eye; tap it to read the full prompt.
 - Tap **Load older messages** for more history, or the search button to find text in it.
 - Tap a file path the agent mentions to [open the file](#open-a-file).
+- Tap a web link to open it. When the link's text is not its address, Chat first asks and shows you the site it leads to. Chat never opens a link whose address holds a user name or password.
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]
@@ -35,7 +36,7 @@ Tap a file link in Chat, or select a path in Terminal and choose **Open**, to pr
 | Text and source | 1 MB | Monospaced, with a wrap button |
 | Anything else | 20 MB | Name and size only |
 
-**Copy** puts the file on the clipboard; **Share** saves or sends it.
+An image over 100 megapixels shows its name and size only. **Copy** puts the file on the clipboard, a picture larger than the screen at the size shown; **Share** saves or sends the file itself. Links inside a PDF do not open.
 
 `collied` opens only regular files inside the task roots (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses symlinks, paths with `..`, and hidden files and folders such as `.env`, except that an agent working inside a hidden folder, such as a worktree in `.worktree`, can open its own files.
 

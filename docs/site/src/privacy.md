@@ -32,6 +32,8 @@ On a Mac, when a herdr agent finishes a long turn that herdr counts as seen, `co
 - its signing keys and per-machine notification keys, in the iPhone's Keychain, on this device only and never synced; its TLS signing key is generated in the Secure Enclave and cannot be exported;
 - your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours), in the same state folder, which backups leave out.
 
+iOS keeps a picture of each app for the app switcher. The app covers its screen when it goes to the background, so that picture shows none of your content.
+
 Deleting the app removes its files, but iOS can keep its Keychain items, which the app uses again if you reinstall it.
 
 **On your Apple Watch**, the watch app keeps the last approvals, agent list and plan usage the iPhone sent it.
@@ -42,7 +44,7 @@ The phone and `collied` talk only over your tailnet, inside mutual TLS. This tra
 
 `collied` never logs conversation history or the Inbox's summary lines, and notifications leave them out, except that a blocked Codex agent's alert can quote the agent's latest response from its screen.
 
-For a file you open, `collied` writes only its path to the audit log and never logs, caches or pushes its content. The phone keeps the file in memory, plus a temporary copy for Share that it deletes when you close the preview.
+For a file you open, `collied` writes only its path to the audit log and never logs, caches or pushes its content. The phone keeps the file in memory, plus a temporary copy for Share that it deletes when you close the preview, or the next time the app starts if it was closed first.
 
 ## Tailscale
 
