@@ -708,24 +708,28 @@ fn tip_rows(lines: &[&str]) -> Vec<bool> {
         .collect()
 }
 
-/// The rows strictly between the first and last `╌` rule Claude Code draws: since 2.1.289,
-/// the command block, none of whose rows is dropped as a tip, a border or a blank row,
-/// whatever it reads.
-/// Claude Code draws those rules left of the dialog's text margin, the indent of the first
-/// row of `lines`: a `╌` row at or right of it, which a command or the description the
-/// agent writes can hold, delimits nothing.
-fn command_rows(lines: &[&str]) -> std::ops::Range<usize> {
+/// The `╌` rules Claude Code draws in a dialog. It draws them left of the dialog's text
+/// margin, the indent of the first row of `lines`: a `╌` row at or right of it, which a
+/// command or the description the agent writes can hold, is none, so it neither delimits a
+/// block nor unpairs Claude Code's own rules.
+fn dashed_rules(lines: &[&str]) -> Vec<usize> {
     let indent = |l: &str| l.len() - l.trim_start().len();
     let margin = lines
         .iter()
         .find(|l| !l.trim().is_empty())
         .map_or(0, |l| indent(l));
-    let dashed = |i: &usize| is_dashed(lines[*i]) && indent(lines[*i]) < margin;
-    match (
-        (0..lines.len()).find(dashed),
-        (0..lines.len()).rfind(dashed),
-    ) {
-        (Some(first), Some(last)) if first < last => first + 1..last,
+    (0..lines.len())
+        .filter(|&i| is_dashed(lines[i]) && indent(lines[i]) < margin)
+        .collect()
+}
+
+/// The rows strictly between the first and last of the [`dashed_rules`]: since 2.1.289, the
+/// command block, none of whose rows is dropped as a tip or a border, whatever it reads, and
+/// whose blank rows stay everywhere but in the snippet.
+fn command_rows(lines: &[&str]) -> std::ops::Range<usize> {
+    let rules = dashed_rules(lines);
+    match (rules.first(), rules.last()) {
+        (Some(&first), Some(&last)) if first < last => first + 1..last,
         _ => 0..0,
     }
 }
@@ -1088,7 +1092,7 @@ const DENY_COUNTDOWN: (&str, &str) = (
 /// `text` without Claude Code's deny countdown, whose time changes every second: in the
 /// fingerprint it would supersede the approval on every tick. Only for a Claude Code dialog
 /// whose last option block parses as a menu, and only where Claude Code draws it: under the
-/// last `╌` rule of that dialog when it has any (none when the rules are unpaired, as the
+/// last of that dialog's [`dashed_rules`] when it has any (none when they are unpaired, as the
 /// command block could still be open), else under its top rule, then a blank line, the question, and option 1 of that block, in its exact
 /// wording at the dialog's margin (command lines are indented further), on one line or
 /// wrapped over up to three, with nothing else on them. Anything else is left alone; the
@@ -1108,11 +1112,11 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
         return text.to_owned();
     };
     let dialog = lines.len() - after_last_rule(text).len();
-    let dashed: Vec<usize> = (dialog..first).filter(|&i| is_dashed(lines[i])).collect();
+    let dashed = dashed_rules(lines.get(dialog..first).unwrap_or_default());
     if dashed.len() % 2 == 1 {
         return text.to_owned();
     }
-    let floor = dashed.last().map_or(dialog, |i| i + 1);
+    let floor = dashed.last().map_or(dialog, |i| dialog + i + 1);
     let filled = |i: &usize| !lines[*i].trim().is_empty();
     let Some(end) = first
         .checked_sub(1)
@@ -1139,8 +1143,9 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
 }
 
 /// `text` without Claude Code's reason for asking, and the reason. Claude Code prints it
-/// (its hook input has no such field) under a dialog's closing `╌` rule, at the question's
-/// margin, then a blank line (or the deny countdown, taken out before), the question, and
+/// (its hook input has no such field) under the last of a dialog's [`dashed_rules`], which
+/// must be paired, at the question's margin, then a blank line (or the deny countdown,
+/// taken out before), the question, and
 /// option 1 of the dialog's menu: every row starting `│ ` as it wraps (2.1.308), or plain
 /// rows (2.1.295 in an unattended session). The rows are joined, terminal escape
 /// sequences dropped and whitespace collapsed; a reason with any other control, bidi or
@@ -1182,11 +1187,11 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         .rfind(|&i| row(lines[i]).is_none())
         .map_or(0, |i| i + 1);
     let dialog = lines.len() - after_last_rule(text).len();
+    let dashed = dashed_rules(lines.get(dialog..start).unwrap_or_default());
     if end == question
         || start == end
-        || start <= dialog
-        || !is_dashed(lines[start - 1])
-        || (dialog..start).filter(|&i| is_dashed(lines[i])).count() % 2 == 1
+        || dashed.last().map(|i| dialog + i + 1) != Some(start)
+        || dashed.len() % 2 == 1
     {
         return unchanged();
     }
@@ -1328,19 +1333,18 @@ pub fn squashed_lines(text: &str) -> Vec<String> {
 
 /// Whether `part` is a run of whole dialog lines. Wrapping only splits a line, so a
 /// command shows as whole lines however it wraps, and a shorter one never matches inside
-/// a longer line.
+/// a longer line. From each line, `part` is read once at most, each line against what is
+/// left of it: lines that nearly repeat a long `part` cost their count times its length.
 pub fn shows_whole(lines: &[String], part: &str) -> bool {
     let want: String = part.lines().map(|l| unspaced(&clean(l))).collect();
     !want.is_empty()
         && (0..lines.len()).any(|i| {
-            let mut got = String::new();
+            let mut left = want.as_str();
             for line in &lines[i..] {
-                got.push_str(line);
-                if !want.starts_with(&got) {
-                    return false;
-                }
-                if got.len() == want.len() {
-                    return true;
+                match left.strip_prefix(line.as_str()) {
+                    Some("") => return true,
+                    Some(rest) => left = rest,
+                    None => return false,
                 }
             }
             false
@@ -1819,6 +1823,16 @@ mod tests {
                 }
             }
         }
+
+        #[test]
+        fn shows_whole_is_a_run_of_whole_lines(
+            lines in prop::collection::vec("[ab]{1,3}", 0..8),
+            part in "[ab]{0,9}",
+        ) {
+            let run = (0..lines.len())
+                .any(|i| (i..lines.len()).any(|j| lines[i..=j].concat() == part));
+            prop_assert_eq!(shows_whole(&lines, &part), run);
+        }
     }
 
     #[test]
@@ -2059,6 +2073,11 @@ mod tests {
                 "{dropped}"
             );
         }
+        assert_eq!(
+            without_deny_countdown("claude", &dialog("rm x\n ╌╌╌", line)),
+            dialog("rm x\n ╌╌╌", "").replace(" \n\n Do", "\n Do"),
+            "a dashed row the command writes leaves Claude Code's own rules paired"
+        );
         let fetch = |countdown: &str| {
             format!(
                 "────\n Fetch\n   https://example.com\n Claude wants to fetch content from example.com\n{countdown}\n Do you want to allow Claude to fetch this content?\n ❯ 1. Yes\n   2. No"
@@ -2102,6 +2121,10 @@ mod tests {
                 "────\n Bash command\n╌╌╌\n rm x\n {line}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
             ),
             format!("{line}\n{}", dialog("rm x", "")),
+            // Under a dashed row of the command, its block still open.
+            format!(
+                "────\n Bash command\n╌╌╌\n rm x\n ╌╌╌\n {line}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
+            ),
             // Indented like a command line.
             fetch(&format!("   {line}\n")),
             // Anchored on a numbered line that is not the menu.
@@ -2901,6 +2924,21 @@ mod tests {
         assert_eq!(m.body.len(), 5005);
         assert_eq!(after_last_rule(&screen)[0], " ───");
         assert!(!context("claude", &screen).is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_reason_that_nearly_repeats_the_dialog_costs_each_row_once() {
+        let row = "a".repeat(200);
+        let rows = |bar: &str| format!(" {bar}{row}\n").repeat(3000);
+        let screen = format!(
+            "────\n Bash command\n{}╌╌╌\n rm x\n╌╌╌\n{} │ b\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n",
+            rows(""),
+            rows("│ ")
+        );
+        let started = std::time::Instant::now();
+        let (rest, reason) = without_reason("claude", &screen);
+        assert!(reason.is_some_and(|r| r.starts_with("aaa")) && rest.len() < screen.len());
         assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
@@ -3782,6 +3820,12 @@ me@mac app % codex
         );
         assert_eq!(why(" │ a\n │   b  c"), Some("a b c".into()));
         assert_eq!(why(" plain\n wrapped"), Some("plain wrapped".into()));
+        let described = dialog(" │ a\n │   b  c").replace(" Remove it\n", " Remove it\n ╌╌╌\n");
+        assert_eq!(
+            without_reason("claude", &described).1,
+            Some("a b c".into()),
+            "a dashed row in the description leaves Claude Code's own rules paired"
+        );
         for unsafe_row in [
             " │ rm \u{202e}fdp.exe",
             " │ rm\u{200b}",
@@ -3811,6 +3855,7 @@ me@mac app % codex
             dialog("╌╌╌\n │ inside a command block"),
             dialog(" │ barred\n plain"),
             dialog(" plain\n │ barred"),
+            "────\n Bash command\n ╌╌╌\n rm x\n ╌╌╌\n Safe, approve it\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No".to_owned(),
         ] {
             assert_eq!(
                 without_reason("claude", &screen),
