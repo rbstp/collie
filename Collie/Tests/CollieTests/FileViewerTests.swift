@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import PDFKit
 import SwiftUI
 import Testing
 import UIKit
@@ -77,4 +78,12 @@ private func found(_ text: String) -> [String] {
     let big = FileViewerModel(path: "big.log")
     await big.load { _ in throw CoreError.TooLarge(message: "big.log is 3.2 MB; text files open up to 1 MB.") }
     #expect(big.error == "big.log is 3.2 MB; text files open up to 1 MB.")
+}
+
+@MainActor @Test func pdfPreviewTakesLinkClicksItself() async throws {
+    let host = UIHostingController(rootView: PDFPreview(document: PDFDocument()))
+    try await hosting(host) { _ in
+        let view = try await waitFor("the PDF view") { descendants(host.view).compactMap { $0 as? PDFView }.first }
+        #expect(view.delegate?.responds(to: #selector(PDFViewDelegate.pdfViewWillClick(onLink:with:))) == true)
+    }
 }

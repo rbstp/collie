@@ -260,12 +260,21 @@ struct FileViewer: View {
     }
 }
 
-private struct PDFPreview: UIViewRepresentable {
+struct PDFPreview: UIViewRepresentable {
     let document: PDFDocument?
+
+    // PDFKit opens a tapped link annotation's URL through the system, whatever its scheme, unless the view's
+    // delegate takes the click. An annotation can be invisible and cover the page, so the viewer opens none.
+    final class Links: NSObject, PDFViewDelegate {
+        func pdfViewWillClick(onLink sender: PDFView, with url: URL) {}
+    }
+
+    func makeCoordinator() -> Links { Links() }
 
     func makeUIView(context: Context) -> PDFView {
         let view = PDFView()
         view.autoScales = true
+        view.delegate = context.coordinator
         return view
     }
 

@@ -35,7 +35,7 @@ Tap a file link in Chat, or select a path in Terminal and choose **Open**, to pr
 | Text and source | 1 MB | Monospaced, with a wrap button |
 | Anything else | 20 MB | Name and size only |
 
-**Copy** puts the file on the clipboard; **Share** saves or sends it.
+**Copy** puts the file on the clipboard; **Share** saves or sends it. Links inside a PDF do not open.
 
 `collied` opens only regular files inside the task roots (`roots` in [collied.toml](../operate/configuration.md#colliedtoml), your home folder by default). It refuses symlinks, paths with `..`, and hidden files and folders such as `.env`, except that an agent working inside a hidden folder, such as a worktree in `.worktree`, can open its own files.
 
