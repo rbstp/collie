@@ -103,7 +103,7 @@ pub struct ServerHandle {
     state: Arc<State>,
     shutdown: watch::Sender<bool>,
     tasks: Vec<JoinHandle<()>>,
-    listener_dead: watch::Receiver<bool>,
+    dead: watch::Receiver<bool>,
     _peers_lock: OwnedFd,
 }
 
@@ -112,10 +112,11 @@ impl ServerHandle {
         self.state.cfg.data_dir.join(config::CONTROL_SOCKET)
     }
 
-    /// Resolves if the tailnet listener fails for good; the daemon must then exit
-    /// so the service manager restarts it instead of serving nothing.
-    pub async fn listener_failed(&mut self) {
-        let _ = self.listener_dead.wait_for(|dead| *dead).await;
+    /// Resolves if a background loop ends before shutdown, as the accept loop does when
+    /// the tailnet listener fails for good; the daemon must then exit so the service
+    /// manager restarts it instead of serving without that loop.
+    pub async fn failed(&mut self) {
+        let _ = self.dead.wait_for(|dead| *dead).await;
     }
 
     pub async fn shutdown(self) {
@@ -737,34 +738,88 @@ pub async fn start_with(
         terminals: Mutex::new(Grants::default()),
     });
     let (shutdown, rx) = watch::channel(false);
-    let (dead_tx, listener_dead) = watch::channel(false);
+    let (dead_tx, dead) = watch::channel(false);
+    let life = (&rx, &dead_tx);
     let mut tasks = vec![
-        tokio::spawn(accept_loop(listener, state.clone(), rx.clone(), dead_tx)),
-        tokio::spawn(control::serve(control, state.clone(), rx.clone())),
-        tokio::spawn(upkeep(
-            state.attachments.clone(),
-            state.downloads.clone(),
-            rx.clone(),
-        )),
-        tokio::spawn(codex_usage(state.clone(), rx.clone())),
-        tokio::spawn(copilot_usage(state.clone(), rx.clone())),
-        tokio::spawn(pull_requests(state.clone(), rx.clone())),
-        tokio::spawn(pr_watches(state.clone(), rx.clone())),
-        tokio::spawn(reconcile(state.clone(), rx.clone())),
+        essential(
+            "tailnet accept",
+            accept_loop(listener, state.clone(), rx.clone()),
+            life,
+        ),
+        essential(
+            "control socket",
+            control::serve(control, state.clone(), rx.clone()),
+            life,
+        ),
+        essential(
+            "upkeep",
+            upkeep(
+                state.attachments.clone(),
+                state.downloads.clone(),
+                rx.clone(),
+            ),
+            life,
+        ),
+        essential("codex usage", codex_usage(state.clone(), rx.clone()), life),
+        essential(
+            "copilot usage",
+            copilot_usage(state.clone(), rx.clone()),
+            life,
+        ),
+        essential(
+            "pull requests",
+            pull_requests(state.clone(), rx.clone()),
+            life,
+        ),
+        essential(
+            "pull request watches",
+            pr_watches(state.clone(), rx.clone()),
+            life,
+        ),
+        essential("reconcile", reconcile(state.clone(), rx.clone()), life),
     ];
     if let Some(core) = core {
-        tasks.push(tokio::spawn(core.run(rx.clone())));
+        tasks.push(essential("herdr-core", core.run(rx.clone()), life));
     }
     if let Some(rex) = rex {
-        tasks.push(tokio::spawn(rex.run(rx)));
+        tasks.push(essential("rex", rex.run(rx.clone()), life));
+    }
+    if let Some(worker) = state.push.worker() {
+        let mut stop = rx.clone();
+        // The worker ends only once the last `Push` is dropped, so shutdown must not join it.
+        let ended = async move {
+            tokio::select! {
+                _ = worker => {}
+                _ = stop.changed() => {}
+            }
+        };
+        tasks.push(essential("push delivery", ended, life));
     }
     tracing::info!(host = %state.dns_name, port = state.cfg.port, "listening on the tailnet");
     Ok(ServerHandle {
         state,
         shutdown,
         tasks,
-        listener_dead,
+        dead,
         _peers_lock: peers_lock,
+    })
+}
+
+// A loop that returned or panicked would otherwise leave collied serving without it, and
+// nothing would say so: with `reconcile` gone, no approval is raised and no alert sent (#822).
+fn essential(
+    name: &'static str,
+    task: impl Future<Output = ()> + Send + 'static,
+    (shutdown, dead): (&watch::Receiver<bool>, &watch::Sender<bool>),
+) -> JoinHandle<()> {
+    let (shutdown, dead) = (shutdown.clone(), dead.clone());
+    let task = tokio::spawn(task);
+    tokio::spawn(async move {
+        let _ = task.await;
+        if !*shutdown.borrow() {
+            tracing::error!(task = name, "background loop ended; exiting");
+            let _ = dead.send(true);
+        }
     })
 }
 
@@ -1069,7 +1124,6 @@ async fn accept_loop(
     listener: tailnet::Listener,
     state: Arc<State>,
     mut shutdown: watch::Receiver<bool>,
-    dead: watch::Sender<bool>,
 ) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     // Without this, one address that opens connections and never finishes a handshake holds
@@ -1103,7 +1157,6 @@ async fn accept_loop(
                     failures += 1;
                     if failures >= MAX_ACCEPT_FAILURES {
                         tracing::error!(error = %e, "tailnet listener keeps failing; giving up");
-                        let _ = dead.send(true);
                         return;
                     }
                     if failures == 1 {
@@ -3122,6 +3175,20 @@ mod tests {
             "agent": "claude",
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_background_loop_that_ends_before_shutdown_is_reported_dead() {
+        async fn dead_after(panics: bool, stopped: bool) -> bool {
+            let (_shutdown, rx) = watch::channel(stopped);
+            let (dead_tx, dead) = watch::channel(false);
+            let ended = async move { assert!(!panics, "a background loop panicked") };
+            essential("test", ended, (&rx, &dead_tx)).await.unwrap();
+            *dead.borrow()
+        }
+        assert!(dead_after(false, false).await);
+        assert!(dead_after(true, false).await);
+        assert!(!dead_after(false, true).await);
     }
 
     #[test]

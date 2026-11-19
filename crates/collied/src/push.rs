@@ -22,6 +22,7 @@ use protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
 use crate::config::{self, ApnsConfig, ApnsKey};
@@ -488,6 +489,7 @@ pub struct Push {
     routed: Mutex<Vec<Routed>>,
     health: Mutex<Health>,
     approval_live: Mutex<Option<ApprovalLive>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Push {
@@ -516,15 +518,22 @@ impl Push {
             routed: Mutex::new(Vec::new()),
             health: Mutex::new(Health::default()),
             approval_live: Mutex::new(None),
+            worker: Mutex::new(None),
         });
         if let Some((rx, sender)) = worker {
-            if mode == protocol::PushMode::Relay {
-                tokio::spawn(relay_delivery::deliver(Arc::downgrade(&push), rx, sender));
+            let task = if mode == protocol::PushMode::Relay {
+                tokio::spawn(relay_delivery::deliver(Arc::downgrade(&push), rx, sender))
             } else {
-                tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired));
-            }
+                tokio::spawn(deliver(Arc::downgrade(&push), rx, sender, paired))
+            };
+            *crate::lock(&push.worker) = Some(task);
         }
         Ok(push)
+    }
+
+    /// The delivery task, once: the daemon exits if it ends (#822).
+    pub fn worker(&self) -> Option<JoinHandle<()>> {
+        crate::lock(&self.worker).take()
     }
 
     pub fn mode(&self) -> protocol::PushMode {
