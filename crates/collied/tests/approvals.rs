@@ -37,6 +37,8 @@ const BASH_COUNTDOWN: &str = include_str!("fixtures/claude/bash-countdown.txt");
 const QUESTION: &str = include_str!("fixtures/claude/question.txt");
 const PLAN: &str = include_str!("fixtures/claude/plan.txt");
 const BASH_TALL: &str = include_str!("fixtures/claude-2.1.328/bash-tall.tmux.txt");
+// Claude Code 2.1.294's rate limit form, under a `▔` border and no rule.
+const RATE_LIMIT: &str = include_str!("fixtures/claude-2.1.294/rate-limit-options.detection.txt");
 
 // Claude Code 2.1.289 (tmux, 100 columns): a rule splits the options, and the trust
 // prompt is unnumbered.
@@ -1224,6 +1226,40 @@ async fn a_dialog_taller_than_the_screen_is_answered_in_the_terminal() {
         code(rig.decide(&a, Decision::Approve, &a.nonce).await),
         ErrorCode::InvalidParams
     );
+    assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_form_taller_than_the_screen_is_answered_in_the_terminal() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = RATE_LIMIT.into();
+    });
+    let a = rig.needed().await;
+    assert!(
+        a.choices.len() == 2 && a.accepts_input,
+        "whole under its border"
+    );
+    // Hand-built from the captures, not captured: each form from under its first rows, as a
+    // terminal too short for it would show it.
+    let (_, rate_limit) = RATE_LIMIT.split_once("What do you want to do?\n").unwrap();
+    let (_, question) = QUESTION_LIVE.split_once(" ☐ Cache Backend\n\n").unwrap();
+    for tall in [rate_limit, question] {
+        rig.herdr.with(|h| {
+            h.text = tall.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(
+            a.options.is_empty() && a.choices.is_empty() && !a.accepts_input && !a.has_text_field,
+            "{tall}"
+        );
+        assert_eq!(
+            code(rig.choose(&a, 0, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+    }
     assert!(rig.mutations().is_empty());
 }
 

@@ -259,6 +259,12 @@ pub struct Menu {
     /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
     /// its first rows, a command's first lines among them: no read shows or binds them.
     pub topped: bool,
+    /// Whether a `▔` border tops the form: from the last option up, the nearest row that
+    /// starts at column 0 starts with `▔`. Claude Code draws that border at column 0 and
+    /// every row of the form under it indented, its options included, so no text of the form
+    /// passes for it, and one above the form has the border under it. A question form, whose
+    /// text starts at column 0 like its cursor row, never has one.
+    bordered: bool,
 }
 
 impl Menu {
@@ -320,6 +326,10 @@ impl Menu {
             return None;
         }
         let rule = top_rule(&lines, first);
+        let bordered = lines[..=last]
+            .iter()
+            .rfind(|l| !l.is_empty() && !l.starts_with(char::is_whitespace))
+            .is_some_and(|l| l.starts_with('▔'));
         let top = rule.map_or(0, |r| r + 1);
         let block = command_rows(&lines[top..first]);
         let raw_body: Vec<String> = (lines[top..first].iter().enumerate())
@@ -347,6 +357,7 @@ impl Menu {
             cursor,
             after,
             topped: rule.is_some(),
+            bordered,
         })
     }
 
@@ -418,6 +429,7 @@ impl Menu {
             cursor: at - first,
             after: Vec::new(),
             topped: true,
+            bordered: false,
         })
     }
 
@@ -456,10 +468,21 @@ impl Menu {
             .collect()
     }
 
-    /// Whether an option grants something (any `Yes`): a permission prompt or a plan, not a
-    /// question or a form.
+    /// Whether an option reads as a decision ([`classify`], a `No` included) or starts with
+    /// `Yes`: a permission prompt or a plan, not a question or a form that only lists
+    /// choices.
     pub fn grants(&self) -> bool {
         self.options.iter().any(|l| grants(l))
+    }
+
+    /// Whether the dialog's top is on screen: its top rule, or for a menu that grants nothing
+    /// (not [`Menu::grants`]) the `▔` border of a form drawn without a rule, as the rate
+    /// limit form is. A dialog with neither has lost its first rows, which no read shows or
+    /// binds, and gets no answer by decision or by index. A granting menu needs its rule: the
+    /// plan prompt is drawn under such a border behind a rule of its own, and could lose the
+    /// rule and keep the border.
+    pub fn on_screen(&self) -> bool {
+        self.topped || self.bordered && !self.grants()
     }
 
     pub fn choices(&self) -> Vec<ApprovalChoice> {
@@ -467,12 +490,7 @@ impl Menu {
             .iter()
             .enumerate()
             .map(|(i, label)| {
-                let cap = |s: &str| {
-                    clean(s)
-                        .chars()
-                        .take(MAX_CHOICE_LABEL_CHARS)
-                        .collect::<String>()
-                };
+                let cap = |s: &str| cut(clean(s), MAX_CHOICE_LABEL_CHARS);
                 let detail = label[self.heads[i].len()..].trim();
                 ApprovalChoice {
                     index: i as u8,
@@ -2476,7 +2494,13 @@ mod tests {
         let m = Menu::parse(&hostile).unwrap();
         let label = &m.choices()[1].label;
         assert_eq!(label.chars().count(), MAX_CHOICE_LABEL_CHARS);
-        assert!(label.starts_with("Redis]52;c;eA==xxx"), "{label}");
+        assert!(
+            label.starts_with("Redis]52;c;eA==xxx") && label.ends_with("x…"),
+            "{label}"
+        );
+        let fits = "z".repeat(MAX_CHOICE_LABEL_CHARS);
+        let m = Menu::parse(&QUESTION.replace("2. Redis", &format!("2. {fits}"))).unwrap();
+        assert_eq!(m.choices()[1].label, fits);
         let hostile = QUESTION.replace(
             "Shared across processes",
             &format!(
@@ -2489,7 +2513,10 @@ mod tests {
             .clone()
             .unwrap();
         assert_eq!(detail.chars().count(), MAX_CHOICE_LABEL_CHARS);
-        assert!(detail.starts_with("Shared]52;c;eA==yyy"), "{detail}");
+        assert!(
+            detail.starts_with("Shared]52;c;eA==yyy") && detail.ends_with("y…"),
+            "{detail}"
+        );
         let moved = QUESTION
             .replace(" ❯ 1. SQLite", "   1. SQLite")
             .replace("   3. Type", " ❯ 3. Type");
@@ -3050,6 +3077,42 @@ mod tests {
             include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
         let form = Menu::parse(form).unwrap();
         assert!(!form.topped && !form.grants(), "a ▔ border tops this form");
+    }
+
+    #[test]
+    fn a_form_is_chosen_from_only_with_its_top_on_screen() {
+        let on_screen = |screen: &str| Menu::parse(screen).unwrap().on_screen();
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        for screen in [form, QUESTION, QUESTION_LIVE, PLAN_LIVE, BASH_LIVE] {
+            assert!(on_screen(screen), "{screen}");
+        }
+        // Hand-built from the captures, not captured: each form from under its first rows, as
+        // a terminal too short for it would show it, drawn from its bottom like the 2.1.328
+        // Bash capture.
+        let (_, tall) = form.split_once("What do you want to do?\n").unwrap();
+        let (_, question) = QUESTION_LIVE.split_once(" ☐ Cache Backend\n\n").unwrap();
+        for screen in [tall, question] {
+            let m = Menu::parse(screen).unwrap();
+            assert!(!m.grants() && !m.on_screen(), "{screen}");
+        }
+        // A `▔` row a program prints: above the form, where a transcript row at column 0
+        // sits under it, in the form, where every row is indented, and in a question's text,
+        // which starts at column 0 like the cursor row under it.
+        let border = form.lines().find(|l| l.starts_with('▔')).unwrap();
+        let above = format!("{border}\n{}", form.replacen(border, "", 1));
+        let inside = format!("   {border}\n   What do you want to do?\n{tall}");
+        let asked = format!("{border}\n\n{}", question.split_once("\n\n").unwrap().1);
+        for screen in [above, inside, asked] {
+            assert!(!on_screen(&screen), "{screen}");
+        }
+        let advisor = include_str!("../tests/fixtures/claude-2.1.294/advisor.detection.txt");
+        let advisor = Menu::parse(advisor).unwrap();
+        assert!(
+            advisor.grants() && !advisor.on_screen(),
+            "a granting menu needs its top rule"
+        );
+        assert!(!on_screen(BASH_TALL_328));
     }
 
     #[test]
