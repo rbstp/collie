@@ -1602,7 +1602,11 @@ impl Session<'_> {
             .as_ref()
             .is_none_or(|protocol| !protocol.allows_request(&frame.request))
         {
-            self.audit(method, "not_implemented");
+            // A method the log leaves out stays out when refused, so chunks never log at the
+            // chunk bucket's rate.
+            if !unaudited(method) {
+                self.audit(method, "not_implemented");
+            }
             self.send_error(
                 Some(id),
                 ErrorCode::NotImplemented,
@@ -2021,17 +2025,7 @@ impl Session<'_> {
 
     /// A mutation that ran in this call was already audited by the detached operation.
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
-        let quiet = matches!(
-            method,
-            "hello"
-                | "flock.snapshot"
-                | "approval.list"
-                | "usage.costs"
-                | "file.chunk"
-                | "file.close"
-                | "attachment.chunk"
-                | "attachment.abort"
-        ) || (method == "terminal.challenge" && done.reply.is_ok());
+        let quiet = unaudited(method) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
             if done.origin == Some(Origin::Replayed) {
@@ -2563,6 +2557,20 @@ async fn next_watch(watch: &mut Option<Watcher>) -> Option<Watched> {
         Some(w) => w.recv().await,
         None => std::future::pending().await,
     }
+}
+
+fn unaudited(method: &str) -> bool {
+    matches!(
+        method,
+        "hello"
+            | "flock.snapshot"
+            | "approval.list"
+            | "usage.costs"
+            | "file.chunk"
+            | "file.close"
+            | "attachment.chunk"
+            | "attachment.abort"
+    )
 }
 
 fn audit_target(request: &Request) -> Option<String> {

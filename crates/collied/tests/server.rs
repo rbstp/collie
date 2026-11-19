@@ -1479,15 +1479,26 @@ async fn terminal_phase(
     );
     drop(second);
 
-    println!("a session that offered no capabilities is refused terminal methods, audited");
+    println!(
+        "unnegotiated terminal and file methods are refused; only the terminal one is audited"
+    );
     let mut bare = open(phone, target).await;
-    send(&mut bare, json!({"id": 1, "method": "hello", "params": {"protocol_version": protocol::PROTOCOL_VERSION, "protocol_min_version": protocol::PROTOCOL_VERSION, "capabilities": [], "app_version": "it"}})).await;
+    send(&mut bare, json!({"id": 1, "method": "hello", "params": {"protocol_version": 28, "protocol_min_version": 28, "capabilities": [], "app_version": "it"}})).await;
     result(recv(&mut bare).await);
     assert_error(
         &call(
             &mut bare,
             "terminal.challenge",
             json!({"terminal_id": SHELL}),
+        )
+        .await,
+        ErrorCode::NotImplemented,
+    );
+    assert_error(
+        &call(
+            &mut bare,
+            "file.chunk",
+            json!({"download_id": "ab".repeat(16), "offset": 0}),
         )
         .await,
         ErrorCode::NotImplemented,
@@ -1561,6 +1572,10 @@ async fn terminal_phase(
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
+    assert!(
+        !audit.contains("\"method\":\"file.chunk\""),
+        "a refused chunk reached the audit log"
+    );
     let challenges = audit
         .lines()
         .filter(|l| l.contains("\"terminal.challenge\"") && l.contains("\"result\":\"ok\""))
