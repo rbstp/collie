@@ -391,7 +391,10 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
     };
     let (tx, mut rx) = mpsc::channel::<PairAttempt>(1);
     let now = Instant::now();
-    let Ok(window) = state.lock_pairing().open(code.clone(), now, tx) else {
+    let Ok(window) = state
+        .lock_pairing()
+        .open(code.clone(), now, crate::now_ms(), tx)
+    else {
         let _ = write_msg(
             w,
             &Reply::Error {
@@ -434,11 +437,15 @@ async fn pair(state: &State, r: &mut BufReader<OwnedReadHalf>, w: &mut OwnedWrit
         let _ = write_msg(w, &done(false, &format!("wrong code from {}", c.node_name))).await;
         return;
     }
+    // The timeout stops while the machine sleeps, so an answer past the wall-clock
+    // deadline is refused too.
+    let confirm_by = crate::now_ms() + CONFIRM_TIMEOUT.as_millis() as u64;
     let accept = write_msg(w, &Reply::Confirm(c.clone())).await.is_ok()
         && matches!(
             tokio::time::timeout(CONFIRM_TIMEOUT, read_msg::<Request>(r)).await,
             Ok(Ok(Some(Request::Confirm { accept: true })))
-        );
+        )
+        && crate::now_ms() < confirm_by;
     let outcome = if accept {
         state.add_peer(Peer {
             stable_id: c.stable_id.clone(),

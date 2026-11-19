@@ -155,10 +155,17 @@ impl TokenBucket {
     }
 
     pub(crate) fn take(&mut self, per_sec: f64, burst: f64) -> bool {
-        let now = Instant::now();
+        self.refill(Instant::now(), per_sec, burst);
+        self.consume()
+    }
+
+    fn refill(&mut self, now: Instant, per_sec: f64, burst: f64) {
         self.tokens =
             (self.tokens + now.duration_since(self.at).as_secs_f64() * per_sec).min(burst);
         self.at = now;
+    }
+
+    fn consume(&mut self) -> bool {
         let ok = self.tokens >= 1.0;
         if ok {
             self.tokens -= 1.0;
@@ -179,12 +186,18 @@ fn take_token<K: Hash + Eq>(
     key: K,
     per_sec: f64,
     burst: f64,
+    sticky: bool,
+    now: Instant,
 ) -> Rate {
     let mut buckets = lock(buckets);
     let b = buckets
         .entry(key)
         .or_insert_with(|| TokenBucket::new(burst));
-    if b.take(per_sec, burst) {
+    b.refill(now, per_sec, burst);
+    // Sticky: a limited bucket stays limited until a pause refills it to `burst`. Every
+    // attempt still takes a token, so a source that never pauses stays limited.
+    let held = sticky && b.limited && b.tokens < burst;
+    if b.consume() && !held {
         b.limited = false;
         Rate::Ok
     } else if b.limited {
@@ -474,15 +487,24 @@ impl State {
                 key.to_owned(),
                 CHUNK_RATE_PER_SEC,
                 CHUNK_RATE_BURST,
+                false,
+                Instant::now(),
             )
         } else {
-            take_token(&self.buckets, key.to_owned(), RATE_PER_SEC, RATE_BURST)
+            take_token(
+                &self.buckets,
+                key.to_owned(),
+                RATE_PER_SEC,
+                RATE_BURST,
+                false,
+                Instant::now(),
+            )
         }
     }
 
     /// Rejections happen before any rate limit tied to an identity, so their audit lines
-    /// are limited per source address to keep a flooding peer from growing the log
-    /// without bound.
+    /// are limited per source address, and stay suppressed until it pauses, to keep a
+    /// flooding peer from growing the log without bound.
     fn audit_reject(&self, addr: SocketAddr, peer: &str, reason: &str) {
         let addr_text = addr.to_string();
         let result = format!("rejected: {reason}");
@@ -491,6 +513,8 @@ impl State {
             addr.ip(),
             REJECT_AUDIT_PER_SEC,
             REJECT_AUDIT_BURST,
+            true,
+            Instant::now(),
         ) {
             Rate::Ok => self.audit.log(peer, "connect", Some(&addr_text), &result),
             Rate::FirstLimited => self.audit.log(
@@ -1107,7 +1131,9 @@ async fn connection(
     };
     let decision = {
         let store = lock(&state.peers);
-        let window = state.lock_pairing().current(Instant::now());
+        let window = state
+            .lock_pairing()
+            .current(Instant::now(), crate::now_ms());
         gate::decide(&who.node, state.cfg.owner_user_id, &store, window)
     };
     let (name, expect) = match &decision {
@@ -1168,7 +1194,7 @@ async fn connection(
         let store = lock(&state.peers);
         let pairing = state.lock_pairing();
         let mut sessions = state.lock_sessions();
-        let window = pairing.current(Instant::now());
+        let window = pairing.current(Instant::now(), crate::now_ms());
         if gate::decide(&who.node, state.cfg.owner_user_id, &store, window) != decision {
             drop(sessions);
             drop(pairing);
@@ -1576,6 +1602,11 @@ impl Session<'_> {
             .as_ref()
             .is_none_or(|protocol| !protocol.allows_request(&frame.request))
         {
+            // A method the log leaves out stays out when refused, so chunks never log at the
+            // chunk bucket's rate.
+            if !unaudited(method) {
+                self.audit(method, "not_implemented");
+            }
             self.send_error(
                 Some(id),
                 ErrorCode::NotImplemented,
@@ -1626,7 +1657,10 @@ impl Session<'_> {
             // A paired phone pairs again through an open window, with the code and the local
             // confirmation like a new one; the store replaces its record.
             Request::PairComplete(p) => {
-                let window = self.state.lock_pairing().current(Instant::now());
+                let window = self
+                    .state
+                    .lock_pairing()
+                    .current(Instant::now(), crate::now_ms());
                 match window {
                     Some(window) => (self.pair_complete(window, p).await, None),
                     None => (err(ErrorCode::PairingFailed, "already paired"), None),
@@ -1991,17 +2025,7 @@ impl Session<'_> {
 
     /// A mutation that ran in this call was already audited by the detached operation.
     async fn finish(&mut self, method: &str, done: Finished) -> Flow {
-        let quiet = matches!(
-            method,
-            "hello"
-                | "flock.snapshot"
-                | "approval.list"
-                | "usage.costs"
-                | "file.chunk"
-                | "file.close"
-                | "attachment.chunk"
-                | "attachment.abort"
-        ) || (method == "terminal.challenge" && done.reply.is_ok());
+        let quiet = unaudited(method) || (method == "terminal.challenge" && done.reply.is_ok());
         if !quiet && done.origin != Some(Origin::Ran) {
             let mut result = outcome(&done.reply);
             if done.origin == Some(Origin::Replayed) {
@@ -2365,7 +2389,7 @@ impl Session<'_> {
         let previous = self.state.peers().get(&who.node.stable_id).cloned();
         let attempt = {
             let mut pairing = self.state.lock_pairing();
-            let attempt = pairing.attempt(window, &p.pairing_code, Instant::now());
+            let attempt = pairing.attempt(window, &p.pairing_code, Instant::now(), crate::now_ms());
             // The attempt spends the window; detaching this session from it lets the
             // outcome reach the phone after the control side calls end_window.
             if !matches!(attempt, Attempt::NoWindow)
@@ -2533,6 +2557,20 @@ async fn next_watch(watch: &mut Option<Watcher>) -> Option<Watched> {
         Some(w) => w.recv().await,
         None => std::future::pending().await,
     }
+}
+
+fn unaudited(method: &str) -> bool {
+    matches!(
+        method,
+        "hello"
+            | "flock.snapshot"
+            | "approval.list"
+            | "usage.costs"
+            | "file.chunk"
+            | "file.close"
+            | "attachment.chunk"
+            | "attachment.abort"
+    )
 }
 
 fn audit_target(request: &Request) -> Option<String> {
@@ -3041,6 +3079,44 @@ mod tests {
             .map(|failed| outage_starts(&outage, failed))
             .collect();
         assert_eq!(seen, [true, false, false, false, true, false]);
+    }
+
+    #[test]
+    fn a_rejection_flood_stays_suppressed_until_it_pauses() {
+        // Ahead of the buckets' creation, so the fake clock never runs behind them.
+        let t0 = Instant::now() + Duration::from_secs(60);
+        let at = |secs: f64| t0 + Duration::from_secs_f64(secs);
+        let rejects = Mutex::new(HashMap::new());
+        let reject = |secs| {
+            take_token(
+                &rejects,
+                (),
+                REJECT_AUDIT_PER_SEC,
+                REJECT_AUDIT_BURST,
+                true,
+                at(secs),
+            )
+        };
+        for _ in 0..REJECT_AUDIT_BURST as usize {
+            assert!(reject(0.0) == Rate::Ok);
+        }
+        assert!(reject(0.0) == Rate::FirstLimited);
+        for second in 1..=60 {
+            assert!(
+                reject(f64::from(second)) == Rate::Limited,
+                "second {second}"
+            );
+        }
+        assert!(reject(60.0 + REJECT_AUDIT_BURST / REJECT_AUDIT_PER_SEC) == Rate::Ok);
+
+        let frames = Mutex::new(HashMap::new());
+        let frame = |secs| take_token(&frames, (), RATE_PER_SEC, RATE_BURST, false, at(secs));
+        for _ in 0..RATE_BURST as usize {
+            assert!(frame(0.0) == Rate::Ok);
+        }
+        assert!(frame(0.0) == Rate::FirstLimited);
+        assert!(frame(0.0) == Rate::Limited);
+        assert!(frame(1.0) == Rate::Ok);
     }
 
     #[test]

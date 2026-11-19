@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
@@ -1108,27 +1107,8 @@ pub fn credential_item(key_id: &str) -> String {
     }
 }
 
-/// Opened without following symlinks and checked on the open descriptor: a regular file
-/// owned by the current user with no group or world bits.
 pub fn read_key(path: &Path) -> anyhow::Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat)> {
-    use rustix::fs::{FileType, Mode, OFlags};
-    let fd = rustix::fs::open(
-        path,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .with_context(|| format!("open {}", path.display()))?;
-    let st = rustix::fs::fstat(&fd)?;
-    anyhow::ensure!(
-        FileType::from_raw_mode(st.st_mode) == FileType::RegularFile
-            && st.st_uid == rustix::process::geteuid().as_raw()
-            && st.st_mode & 0o077 == 0,
-        "{}: must be a regular file with mode 0600 owned by the current user",
-        path.display()
-    );
-    let mut key = Zeroizing::new(Vec::new());
-    std::fs::File::from(fd).read_to_end(&mut key)?;
-    Ok((key, st))
+    Ok(peers::read_private(path)?)
 }
 
 /// The `[apns]` ids, and the key read from `path` with the `key_path` checks and checked
@@ -2576,7 +2556,7 @@ BDSKTTpvY6ZTNJ2aRaGwPfVBlnky7dc62au34JD4PDc7wpwLOJUSinI=
         let link = dir.path().join("link.p8");
         std::os::unix::fs::symlink(&key_path, &link).unwrap();
         let err = import(&config_path, true, &link).unwrap_err();
-        assert!(format!("{err:#}").contains("open"), "{err:#}");
+        assert!(format!("{err:#}").contains("regular file"), "{err:#}");
 
         // Owned by root: refused before anything reaches the Keychain.
         let err = import(&config_path, true, Path::new("/etc/hosts")).unwrap_err();

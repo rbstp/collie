@@ -17,6 +17,8 @@ struct Window<T> {
     id: u64,
     code: PairingCode,
     expires_at: Instant,
+    // Instant stops while the machine sleeps; the wall clock does not.
+    expires_at_ms: u64,
     owner: T,
 }
 
@@ -45,8 +47,14 @@ impl<T> Default for Pairing<T> {
 }
 
 impl<T> Pairing<T> {
-    pub fn open(&mut self, code: PairingCode, now: Instant, owner: T) -> Result<u64, Busy> {
-        if self.current(now).is_some() {
+    pub fn open(
+        &mut self,
+        code: PairingCode,
+        now: Instant,
+        now_ms: u64,
+        owner: T,
+    ) -> Result<u64, Busy> {
+        if self.current(now, now_ms).is_some() {
             return Err(Busy);
         }
         let id = self.next_id;
@@ -55,15 +63,16 @@ impl<T> Pairing<T> {
             id,
             code,
             expires_at: now + WINDOW_TTL,
+            expires_at_ms: now_ms + WINDOW_TTL.as_millis() as u64,
             owner,
         });
         Ok(id)
     }
 
-    pub fn current(&self, now: Instant) -> Option<u64> {
+    pub fn current(&self, now: Instant, now_ms: u64) -> Option<u64> {
         self.window
             .as_ref()
-            .filter(|w| now < w.expires_at)
+            .filter(|w| now < w.expires_at && now_ms < w.expires_at_ms)
             .map(|w| w.id)
     }
 
@@ -75,14 +84,20 @@ impl<T> Pairing<T> {
 
     /// Every attempt burns its window, whatever the outcome. An attempt bound to another
     /// window leaves the current one intact.
-    pub fn attempt(&mut self, window: u64, code: &PairingCode, now: Instant) -> Attempt<T> {
+    pub fn attempt(
+        &mut self,
+        window: u64,
+        code: &PairingCode,
+        now: Instant,
+        now_ms: u64,
+    ) -> Attempt<T> {
         if self.window.as_ref().is_none_or(|w| w.id != window) {
             return Attempt::NoWindow;
         }
         let Some(w) = self.window.take() else {
             return Attempt::NoWindow;
         };
-        if now >= w.expires_at {
+        if now >= w.expires_at || now_ms >= w.expires_at_ms {
             return Attempt::NoWindow;
         }
         if bool::from(w.code.as_str().as_bytes().ct_eq(code.as_str().as_bytes())) {
@@ -96,6 +111,8 @@ impl<T> Pairing<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MS: u64 = 1_000_000;
 
     fn code(c: char) -> PairingCode {
         PairingCode::new(c.to_string().repeat(22)).unwrap()
@@ -113,54 +130,65 @@ mod tests {
     fn right_code_once() {
         let t0 = Instant::now();
         let mut p = Pairing::default();
-        let w = p.open(code('A'), t0, "cli").unwrap();
-        assert_eq!(p.current(t0), Some(w));
-        assert_eq!(p.attempt(w, &code('A'), t0), Attempt::Accepted("cli"));
-        assert_eq!(p.current(t0), None);
-        assert_eq!(p.attempt(w, &code('A'), t0), Attempt::NoWindow);
+        let w = p.open(code('A'), t0, MS, "cli").unwrap();
+        assert_eq!(p.current(t0, MS), Some(w));
+        assert_eq!(p.attempt(w, &code('A'), t0, MS), Attempt::Accepted("cli"));
+        assert_eq!(p.current(t0, MS), None);
+        assert_eq!(p.attempt(w, &code('A'), t0, MS), Attempt::NoWindow);
     }
 
     #[test]
     fn wrong_code_burns_window() {
         let t0 = Instant::now();
         let mut p = Pairing::default();
-        let w = p.open(code('A'), t0, 1).unwrap();
-        assert_eq!(p.attempt(w, &code('B'), t0), Attempt::WrongCode(1));
-        assert_eq!(p.attempt(w, &code('A'), t0), Attempt::NoWindow);
+        let w = p.open(code('A'), t0, MS, 1).unwrap();
+        assert_eq!(p.attempt(w, &code('B'), t0, MS), Attempt::WrongCode(1));
+        assert_eq!(p.attempt(w, &code('A'), t0, MS), Attempt::NoWindow);
     }
 
     #[test]
     fn expiry() {
         let t0 = Instant::now();
         let mut p = Pairing::default();
-        let w = p.open(code('A'), t0, ()).unwrap();
+        let w = p.open(code('A'), t0, MS, ()).unwrap();
         let late = t0 + WINDOW_TTL;
-        assert_eq!(p.current(late), None);
-        assert_eq!(p.attempt(w, &code('A'), late), Attempt::NoWindow);
+        assert_eq!(p.current(late, MS), None);
+        assert_eq!(p.attempt(w, &code('A'), late, MS), Attempt::NoWindow);
     }
 
     #[test]
     fn one_window_at_a_time() {
         let t0 = Instant::now();
         let mut p = Pairing::default();
-        let first = p.open(code('A'), t0, 1).unwrap();
-        assert_eq!(p.open(code('B'), t0, 2), Err(Busy));
-        let second = p.open(code('B'), t0 + WINDOW_TTL, 2).unwrap();
+        let first = p.open(code('A'), t0, MS, 1).unwrap();
+        assert_eq!(p.open(code('B'), t0, MS, 2), Err(Busy));
+        let second = p.open(code('B'), t0 + WINDOW_TTL, MS, 2).unwrap();
         p.close(first);
-        assert_eq!(p.current(t0 + WINDOW_TTL), Some(second));
+        assert_eq!(p.current(t0 + WINDOW_TTL, MS), Some(second));
         p.close(second);
-        assert_eq!(p.current(t0 + WINDOW_TTL), None);
+        assert_eq!(p.current(t0 + WINDOW_TTL, MS), None);
     }
 
     #[test]
     fn attempt_from_an_older_window_does_not_burn_the_current_one() {
         let t0 = Instant::now();
         let mut p = Pairing::default();
-        let first = p.open(code('A'), t0, 1).unwrap();
+        let first = p.open(code('A'), t0, MS, 1).unwrap();
         p.close(first);
-        let second = p.open(code('B'), t0, 2).unwrap();
-        assert_eq!(p.attempt(first, &code('B'), t0), Attempt::NoWindow);
-        assert_eq!(p.current(t0), Some(second));
-        assert_eq!(p.attempt(second, &code('B'), t0), Attempt::Accepted(2));
+        let second = p.open(code('B'), t0, MS, 2).unwrap();
+        assert_eq!(p.attempt(first, &code('B'), t0, MS), Attempt::NoWindow);
+        assert_eq!(p.current(t0, MS), Some(second));
+        assert_eq!(p.attempt(second, &code('B'), t0, MS), Attempt::Accepted(2));
+    }
+
+    #[test]
+    fn the_wall_clock_closes_a_window_the_monotonic_clock_still_holds_open() {
+        let t0 = Instant::now();
+        let mut p = Pairing::default();
+        let w = p.open(code('A'), t0, MS, ()).unwrap();
+        let woke = MS + WINDOW_TTL.as_millis() as u64;
+        assert_eq!(p.current(t0, woke - 1), Some(w));
+        assert_eq!(p.current(t0, woke), None);
+        assert_eq!(p.attempt(w, &code('A'), t0, woke), Attempt::NoWindow);
     }
 }
