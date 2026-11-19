@@ -20,6 +20,7 @@ With the largest text sizes (**Settings > Accessibility > Display & Text Size > 
 - A [PR watch](pull-requests.md#watch-a-pull-request) wake shows as one row with an eye; tap it to read the full prompt.
 - Tap **Load older messages** for more history, or the search button to find text in it.
 - Tap a file path the agent mentions to [open the file](#open-a-file).
+- Tap a web link to open it. When the link's text is not its address, Chat first asks and shows you the site it leads to. Chat never opens a link whose address holds a user name or password.
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]

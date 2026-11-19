@@ -49,6 +49,8 @@ final class AgentModel {
     let gitReview: GitReview
     let conversation = ConversationModel()
     var fileLink: FileLink?
+    /// A Chat link whose text is not its address, until the user confirms or cancels it.
+    var pendingLink: URL?
     var draft = ""
     /// What the phone last saw in the Mac's input box: nil when unknown. A send replaces exactly this text.
     private(set) var macDraft: String?
