@@ -59,9 +59,8 @@ export function validSend(v: unknown): v is Send {
     && exact(aps, ['content-available']) && aps['content-available'] === 1;
   if (v.push_type === 'alert') return exact(p, ['aps', 'node_id', 'event_id', 'approval_id', 'enc'])
     && opaque(p.event_id) && (p.approval_id === undefined || opaque(p.approval_id)) && encrypted(p.enc)
-    && exact(aps, ['alert', 'mutable-content', 'sound', 'category', 'thread-id'])
+    && exact(aps, ['alert', 'mutable-content', 'sound', 'thread-id'])
     && fallback(aps.alert) && aps['mutable-content'] === 1 && aps.sound === 'default'
-    && (aps.category === undefined || aps.category === 'APPROVAL')
     && opaque(aps['thread-id']);
   return v.collapse_id === undefined && exact(p, ['aps', 'node_id', 'event_id']) && opaque(p.event_id)
     && exact(aps, ['timestamp', 'event', 'content-state', 'stale-date', 'dismissal-date', 'alert'])

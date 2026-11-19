@@ -56,7 +56,7 @@ export async function fixture() {
 }
 export const alert: Send = { v: 1, push_type: 'alert', priority: 10, expiration: 0, collapse_id: 'terminal',
   payload: { aps: { alert: { title: 'Collie', body: 'An agent needs attention' }, 'mutable-content': 1,
-    sound: 'default', category: 'APPROVAL', 'thread-id': 'terminal' },
+    sound: 'default', 'thread-id': 'terminal' },
   node_id: 'node', event_id: 'event', approval_id: 'approval', enc: base64url(new Uint8Array(40).fill(1)) } };
 export async function request(grant: Grant, body: unknown = alert, extra: Record<string, string> = {}) {
   return new Request('https://relay.example/v1/send', { method: 'POST', headers: { 'content-type': 'application/json',
