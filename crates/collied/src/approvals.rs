@@ -473,11 +473,7 @@ impl Approvals {
             .then(|| Menu::parse(&text))
             .flatten();
         let (region, snippet, offered) = match &menu {
-            Some(m) => (
-                m.region(),
-                prompt::snippet(m.tail().iter().map(String::as_str)),
-                m.decisions(),
-            ),
+            Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
                 text.clone(),
                 prompt::snippet(prompt::after_last_rule(&text).into_iter()),
