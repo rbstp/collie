@@ -144,7 +144,8 @@ final class FakeCore: AgentCore {
                 )
             }
             return AgentView(
-                link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0,
+                link: .connected, lastError: nil, agent: agent, output: s.outputRevision > afterRevision ? s.output : nil,
+                outputRevision: s.outputRevision,
                 terminal: agent == nil ? s.shell : nil, terminalLocked: s.shellLocked, terminalsEnabled: s.terminalsEnabled
             )
         }
@@ -2441,6 +2442,25 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     await model.sendPrompt()
     #expect(model.terminalLocked)
     #expect(model.promptError == "The terminal locked. Unlock it again to continue.")
+}
+
+@MainActor
+@Test func aShellScreenLeavesWithItsGrant() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    #expect(await model.unlock())
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "$ cat .env\r\nTOKEN=1", truncated: false, reflowed: "$ cat .env TOKEN=1")
+    }
+    model.poll()
+    #expect(model.ansi == "$ cat .env\r\nTOKEN=1" && model.reflowed == "$ cat .env TOKEN=1")
+
+    core.state.withLock { $0.shellLocked = true }
+    model.poll()
+    #expect(model.terminalLocked)
+    #expect(model.ansi.isEmpty && model.reflowed == nil && model.screen.isEmpty, "shell output is what the grant puts behind Face ID")
 }
 
 @MainActor

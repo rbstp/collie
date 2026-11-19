@@ -773,6 +773,7 @@ enabled = true   # false, the default, when the section or the key is absent
 
 - The app passes the terminal public key to collie-core at start and on every foreground, since the Keychain item is readable only while unlocked. A new connection starts locked and never resumes a shell watch by itself: grants are per session.
 - On `.background` (not inactive, which the Face ID sheet causes), `lock_terminals` locks every terminal on the phone, then sends `terminal.lock` to each connected machine; any answer but `ok` closes that machine's session, ending its grants.
+- A shell's screen leaves with its grant (#818). When the session screen's poll, 10 times a second on a shell, sees its terminal locked again (that lock, the grant's 5 minutes, a new session or a `terminal_locked` answer), it drops the shell's text and blanks the terminal view under the Unlock card, at once even during a scroll; an agent's last screen in a pane that became a shell stays, since `agent.read` needs no grant. collie-core drops the watched shell's output in `lock_terminals` and on a new connection, and applies an `agent.output` or a patch for a watched shell only under a live grant, so one collied sent before the lock does not bring the screen back.
 - When its agent exits, the agent screen becomes the pane's terminal, typed into directly ([Typing into the terminal](#typing-into-the-terminal)). Face ID runs only from the unlock button or an input, each time with a fresh `LAContext` (no reuse duration); a cancelled prompt sends nothing.
 ### Typing into the terminal
 

@@ -525,6 +525,9 @@ final class AgentModel {
             watchShell()
         } else if terminalLocked, watchingShell {
             watchingShell = false
+            // Shell output is what the grant puts behind Face ID, so the last screen leaves with it.
+            ansi = ""
+            reflowed = nil
         }
     }
 
