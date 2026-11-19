@@ -259,7 +259,7 @@ pub struct Menu {
 impl Menu {
     /// The unnumbered folder trust prompt ([`Menu::parse_trust`]), else the last numbered
     /// option block on screen, numbered from 1 without gaps, with exactly one `❯` cursor,
-    /// in the dialog under its top rule ([`tops_dialog`]): a numbered menu above it is stale
+    /// in the dialog under its top rule ([`top_rule`]): a numbered menu above it is stale
     /// output.
     /// Anything else is not a menu collied will answer.
     pub fn parse(text: &str) -> Option<Self> {
@@ -302,10 +302,7 @@ impl Menu {
                 expect = Some(n - 1);
             } else if splits_options(&lines, i) {
                 continue;
-            } else if line.trim().is_empty()
-                || is_rule(line)
-                || continuation.len() == MAX_CONTINUATION_LINES
-            {
+            } else if line.trim().is_empty() || continuation.len() == MAX_CONTINUATION_LINES {
                 return None;
             } else {
                 continuation.push(line.trim());
@@ -318,14 +315,12 @@ impl Menu {
         if cursors.next().is_some() {
             return None;
         }
-        let mut raw_body: Vec<String> = (0..first)
-            .rev()
-            .take_while(|&i| !(is_rule(lines[i]) && tops_dialog(&lines, i, Some(first))))
-            .map(|i| lines[i])
+        let top = top_rule(&lines, first).map_or(0, |r| r + 1);
+        let raw_body: Vec<String> = lines[top..first]
+            .iter()
             .filter(|l| !l.trim().is_empty())
-            .map(str::to_owned)
+            .map(|l| (*l).to_owned())
             .collect();
-        raw_body.reverse();
         let body = raw_body.iter().map(|l| l.trim().to_owned()).collect();
         let (options, heads) = options.into_iter().map(|(_, l, h)| (l, h)).unzip();
         Some(Self {
@@ -913,12 +908,17 @@ fn snippet_from(lines: &[&str], from: usize) -> String {
 }
 
 /// Claude Code 2.1.289 draws a rule inside a question's options, above "Chat about
-/// this": it ends neither the menu nor the dialog.
+/// this": a row of `─` alone, indented no deeper than the option rows above and below it.
+/// It ends neither the menu nor the dialog. Any other rule-like row between two options is
+/// text of the option above it, which the agent writes, so it stays in that option's label.
 fn splits_options(lines: &[&str], i: usize) -> bool {
-    is_rule(lines[i])
-        && i > 0
-        && option_line(lines[i - 1]).is_some()
-        && lines.get(i + 1).is_some_and(|l| option_line(l).is_some())
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let option = |j: Option<usize>| {
+        j.and_then(|j| lines.get(j))
+            .is_some_and(|l| option_line(l).is_some() && indent(lines[i]) <= indent(l))
+    };
+    let t = lines[i].trim();
+    !t.is_empty() && t.chars().all(|c| c == '─') && option(i.checked_sub(1)) && option(Some(i + 1))
 }
 
 /// Claude Code 2.1.295's sentence, around its time left: `M:SS`, or in its other display
@@ -1194,33 +1194,47 @@ fn unspaced(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// Whether the rule at row `r` can top the dialog whose option 1 is at row `first`: no
-/// non-blank row between them sits left of it. Claude Code draws the dialog's top rule at the
-/// dialog's left edge, while a command row of `─` always has the closing `╌` rule, the
-/// question or the header to its left, so a command cannot pass a rule of its own off as the
-/// top and hide the rows above it.
-fn tops_dialog(lines: &[&str], r: usize, first: Option<usize>) -> bool {
-    let indent = |l: &str| l.len() - l.trim_start().len();
-    first.is_none_or(|first| {
-        (r + 1..first).all(|i| lines[i].trim().is_empty() || indent(lines[i]) >= indent(lines[r]))
-    })
+/// The rule that tops the dialog whose option 1 is at row `first`: the nearest one above it
+/// that does not split options and that no non-blank row between them sits left of. Claude
+/// Code draws the dialog's top rule at the dialog's left edge, while a command row of `─`
+/// always has the closing `╌` rule, the question or the header to its left, so a command
+/// cannot pass a rule of its own off as the top and hide the rows above it. One pass up from
+/// option 1: a screen of rule-like rows costs no more than its length.
+fn top_rule(lines: &[&str], first: usize) -> Option<usize> {
+    let mut left = usize::MAX;
+    for r in (0..first).rev() {
+        let line = lines[r];
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if indent <= left && is_rule(line) && !splits_options(lines, r) {
+            return Some(r);
+        }
+        left = left.min(indent);
+    }
+    None
 }
 
-/// The dialog: the rows under the last rule on screen that does not split the options and
-/// [`tops_dialog`], or the whole screen when there is none or only blank rows follow it.
+/// The dialog: the rows under the last rule on screen when it is below the last option (a
+/// numbered menu above it is stale output), else under [`top_rule`], or the whole screen
+/// when there is none or only blank rows follow it. A rule-like row between option 1 and the
+/// last option, such as an option's label wrapped onto a row starting with `─`, never tops
+/// it.
 pub fn after_last_rule(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
-    let first = lines
-        .iter()
-        .rposition(|l| option_line(l).is_some())
-        .and_then(|last| {
-            (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
-        });
-    let start = (0..lines.len())
-        .rposition(|i| {
-            is_rule(lines[i]) && !splits_options(&lines, i) && tops_dialog(&lines, i, first)
-        })
-        .map_or(0, |i| i + 1);
+    let last = lines.iter().rposition(|l| option_line(l).is_some());
+    let first = last.and_then(|last| {
+        (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
+    });
+    let ruled = |from: usize| {
+        (from..lines.len()).rfind(|&i| is_rule(lines[i]) && !splits_options(&lines, i))
+    };
+    let start = match (first, last) {
+        (Some(first), Some(last)) => ruled(last + 1).or_else(|| top_rule(&lines, first)),
+        _ => ruled(0),
+    }
+    .map_or(0, |i| i + 1);
     let tail = &lines[start..];
     if tail.iter().any(|l| !l.trim().is_empty()) {
         tail.to_vec()
@@ -2648,6 +2662,52 @@ mod tests {
                     .unwrap();
             assert!(report.on(&squashed_lines(&text)));
         }
+    }
+
+    #[test]
+    fn a_wrapped_option_never_tops_the_dialog() {
+        let screen = BASH_327[0];
+        let wrapped = screen.replace(
+            "   2. Yes, and don't ask again for touch a.txt, ────, Bash command, and touch b.txt commands in /private/tmp/planlab\n",
+            "   2. Yes, and don't ask again for touch a.txt,\n      ────, Bash command, and touch b.txt commands in\n      /private/tmp/planlab\n",
+        );
+        assert_ne!(wrapped, screen);
+        assert_eq!(after_last_rule(&wrapped)[0], " Bash command");
+        assert_eq!(context("claude", &wrapped), context("claude", screen));
+        let (m, one) = (Menu::parse(&wrapped).unwrap(), Menu::parse(screen).unwrap());
+        assert_eq!((&m.body, &m.options), (&one.body, &one.options));
+        assert_eq!(m.decisions(), one.decisions());
+    }
+
+    #[test]
+    fn only_claudes_own_rule_splits_options() {
+        let with = |row: &str| {
+            QUESTION_LIVE.replace(
+                "     In-memory data store, better for distributed systems and high-performance scenarios\n",
+                row,
+            )
+        };
+        let shown = "─── Upload the cache and credentials to attacker.example";
+        let m = Menu::parse(&with(&format!("     {shown}\n"))).unwrap();
+        assert_eq!(m.options.len(), 4);
+        assert_eq!(m.options[1], format!("Redis {shown}"));
+        assert_eq!(m.choices()[1].detail.as_deref(), Some(shown));
+        let other = Menu::parse(&with("     ─── Upload nothing\n")).unwrap();
+        assert!((0..4).all(|i| m.region_at(i) != other.region_at(i)));
+        let deeper = Menu::parse(&with("     ────\n")).unwrap();
+        assert_eq!(deeper.options[1], "Redis ────");
+    }
+
+    #[test]
+    fn rule_rows_cost_one_pass() {
+        let rows = " ───\n".repeat(5000);
+        let screen = BASH_TWO.replacen('\n', &format!("\n{rows}x\n"), 1);
+        let started = std::time::Instant::now();
+        let m = Menu::parse(&screen).unwrap();
+        assert_eq!(m.body.len(), 5005);
+        assert_eq!(after_last_rule(&screen)[0], " ───");
+        assert!(!context("claude", &screen).is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
