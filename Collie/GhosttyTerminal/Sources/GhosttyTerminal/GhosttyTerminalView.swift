@@ -247,7 +247,8 @@ public final class GhosttyTerminalUIView: UIScrollView {
         snapshot = ansiSnapshot
         // A full history takes over 10 ms to render on the main thread, which would stutter
         // a scroll in progress.
-        if isDragging || isDecelerating {
+        // An empty snapshot blanks a screen that must not stay readable, so it never waits.
+        if !ansiSnapshot.isEmpty, isDragging || isDecelerating {
             renderDeferred = true
             return
         }

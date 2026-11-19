@@ -98,7 +98,8 @@ struct AgentScreen: View {
                         .environment(model)
                 } else {
                     AgentTerminal(
-                        ansi: model.screen, wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
+                        ansi: model.screen, lockedShell: model.isTerminal && model.terminalLocked,
+                        wraps: model.wrapLines, fontSize: model.fontSize, gestures: model.gestures,
                         perform: perform, resized: { model.fontSize = $0 }, resizeEnded: model.saveFontSize,
                         // The quote waits in the chat draft: typed into the terminal, its newlines would submit.
                         quote: model.isTerminal ? nil : {
@@ -734,6 +735,7 @@ struct SessionTitle: UIViewRepresentable {
 /// GhosttyTerminalUIView with a refresh control; `.refreshable` does not reach a UIKit scroll view.
 private struct AgentTerminal: UIViewRepresentable {
     let ansi: String
+    let lockedShell: Bool
     let wraps: Bool
     let fontSize: Double
     let gestures: TerminalGestures
@@ -810,7 +812,9 @@ private struct AgentTerminal: UIViewRepresentable {
                 keyboard.wrappedValue = true
             }
         }
-        if !ansi.isEmpty {
+        // An empty screen keeps what the view shows until output comes, except a locked shell's:
+        // its last screen leaves with the grant.
+        if !ansi.isEmpty || lockedShell {
             view.show(ansiSnapshot: ansi)
         }
         let (typing, type, deleteBackward) = ($typing, type, deleteBackward)
@@ -1358,7 +1362,7 @@ private struct PromptBar: View {
             NavigationStack {
                 PromptShortcutsView { shortcut in
                     if typesIntoTerminal {
-                        model.type(shortcut.text)
+                        model.typeShortcut(shortcut)
                     } else {
                         model.insert(shortcut)
                         editing = true

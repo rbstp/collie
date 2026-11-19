@@ -470,8 +470,8 @@ pub enum EventOutcome {
 }
 
 /// Flock as last seen, kept current by events. `seq` is per connection, so
-/// [`FlockState::new_connection`] resets the cursor but keeps the last flock and output
-/// for display. `watched` outlives connections so a new session re-issues the watch.
+/// [`FlockState::new_connection`] resets the cursor but keeps the last flock and an agent's
+/// output for display. `watched` outlives connections so a new session re-issues the watch.
 #[derive(Default)]
 pub struct FlockState {
     pub flock: Option<Flock>,
@@ -485,7 +485,8 @@ pub struct FlockState {
     pub challenge: Option<(TerminalId, Nonce)>,
     /// Terminals this session holds a grant for, until when.
     pub unlocked: HashMap<TerminalId, StdInstant>,
-    pub output: Option<TerminalRead>,
+    /// Read through [`FlockState::screen`], which serves a shell's only under its grant.
+    output: Option<TerminalRead>,
     pub output_revision: u64,
     /// A request on this session found herdr not running, and no snapshot has worked since.
     pub herdr_down: bool,
@@ -514,7 +515,35 @@ impl FlockState {
 
     pub fn lock_terminals(&mut self) {
         self.challenge = None;
+        self.end_grants();
+    }
+
+    /// Also for a grant collied no longer holds, which leaves the challenge of an unlock in
+    /// progress alone.
+    pub fn end_grants(&mut self) {
         self.unlocked.clear();
+        self.drop_ungranted(StdInstant::now());
+    }
+
+    /// A shell's screen is read under a grant, so it is not kept past it.
+    fn drop_ungranted(&mut self, now: StdInstant) {
+        let granted = self
+            .watched
+            .as_ref()
+            .is_some_and(|t| self.unlocked(t.as_str(), now));
+        if self.watch_shell && !granted {
+            self.output = None;
+            self.watched_output = None;
+        }
+    }
+
+    /// The watched screen of `terminal_id`. A grant that ran out drops its shell's screen
+    /// here, as a lock does, so no view gets one without a live grant.
+    pub fn screen(&mut self, terminal_id: &str, now: StdInstant) -> Option<&TerminalRead> {
+        self.drop_ungranted(now);
+        self.output
+            .as_ref()
+            .filter(|o| o.terminal_id.as_str() == terminal_id)
     }
 
     pub fn unlocked(&self, terminal_id: &str, now: StdInstant) -> bool {
@@ -524,7 +553,9 @@ impl FlockState {
     }
 
     pub fn watch(&mut self, terminal_id: Option<TerminalId>) {
-        if self.watched != terminal_id {
+        // A shell's screen never becomes an agent's: a screen opened on a locked shell watches
+        // the same terminal as an agent.
+        if self.watched != terminal_id || self.watch_shell {
             self.output = None;
             self.watched_output = None;
         }
@@ -538,10 +569,12 @@ impl FlockState {
     }
 
     /// Only `recent` reads of the watched agent are kept: that is what `agent.output`
-    /// carries, so a `visible` read would flicker against the stream.
+    /// carries, so a `visible` read would flicker against the stream. A shell's are kept only
+    /// under its grant: one collied sent before a lock can arrive after it.
     fn apply_output(&mut self, read: TerminalRead) -> bool {
-        let watched =
-            read.source == ReadSource::Recent && self.watched.as_ref() == Some(&read.terminal_id);
+        let watched = read.source == ReadSource::Recent
+            && self.watched.as_ref() == Some(&read.terminal_id)
+            && (!self.watch_shell || self.unlocked(read.terminal_id.as_str(), StdInstant::now()));
         if watched {
             self.output = Some(read);
             self.output_revision += 1;
@@ -1168,6 +1201,94 @@ mod tests {
             shown(&s),
             Some(a.ansi.as_str()),
             "kept on screen while reconnecting"
+        );
+    }
+
+    #[test]
+    fn locking_drops_a_shell_screen_and_keeps_an_agent_screen() {
+        let t1 = TerminalId::new("t1").unwrap();
+        let history = "line\r\n".repeat(50);
+        let text = |end: &str| output("t1", &format!("{history}{end}"), ReadSource::Recent);
+        let (a, b) = (text("a"), text("b"));
+        let patch = Event::AgentOutputPatch(OutputPatch::between(&a, &b).unwrap());
+        let until = StdInstant::now() + Duration::from_secs(60);
+
+        let mut s = FlockState::default();
+        s.watch_terminal(t1.clone());
+        s.unlocked.insert(t1.clone(), until);
+        s.apply_event(1, Event::AgentOutput(a.clone()), 0);
+        assert_eq!(shown(&s), Some(a.ansi.as_str()));
+        s.lock_terminals();
+        assert_eq!(shown(&s), None, "a shell's screen is behind its grant");
+        s.apply_event(2, patch.clone(), 0);
+        s.apply_event(3, Event::AgentOutput(b.clone()), 0);
+        assert_eq!(
+            shown(&s),
+            None,
+            "output sent before the lock arrives after it"
+        );
+
+        s.unlocked.insert(t1.clone(), until);
+        s.apply_event(4, Event::AgentOutput(a.clone()), 0);
+        assert_eq!(shown(&s), Some(a.ansi.as_str()));
+        s.new_connection();
+        assert_eq!(shown(&s), None, "a new session starts locked");
+
+        s.watch(Some(t1));
+        s.apply_event(1, Event::AgentOutput(a.clone()), 0);
+        s.lock_terminals();
+        assert_eq!(shown(&s), Some(a.ansi.as_str()), "an agent needs no grant");
+        assert_eq!(s.apply_event(2, patch, 0), EventOutcome::Applied);
+        assert_eq!(shown(&s), Some(b.ansi.as_str()));
+    }
+
+    #[test]
+    fn a_shell_screen_is_served_only_under_a_live_grant() {
+        let t1 = TerminalId::new("t1").unwrap();
+        let now = StdInstant::now();
+        let end = now + Duration::from_secs(300);
+        let granted = || {
+            let mut s = FlockState::default();
+            s.watch_terminal(t1.clone());
+            s.unlocked.insert(t1.clone(), end);
+            let read = output("t1", "$ cat .env", ReadSource::Recent);
+            s.apply_event(1, Event::AgentOutput(read), 0);
+            s
+        };
+        let screen = |s: &mut FlockState, at| s.screen("t1", at).map(|o| o.ansi.clone());
+
+        let mut s = granted();
+        assert_eq!(screen(&mut s, now).as_deref(), Some("$ cat .env"));
+        assert_eq!(screen(&mut s, end), None, "the grant ran out");
+        assert_eq!(screen(&mut s, now), None, "dropped, not hidden");
+
+        let mut s = granted();
+        s.end_grants();
+        assert!(
+            s.output.is_none() && s.watched_output.is_none(),
+            "collied dropped the grant: not kept until the next view"
+        );
+
+        let mut s = granted();
+        s.watch(Some(t1.clone()));
+        assert_eq!(
+            screen(&mut s, now),
+            None,
+            "a screen opened on the shell watches it as an agent"
+        );
+
+        let mut s = FlockState::default();
+        s.watch(Some(t1));
+        s.apply_event(
+            1,
+            Event::AgentOutput(output("t1", "agent", ReadSource::Recent)),
+            0,
+        );
+        s.end_grants();
+        assert_eq!(
+            screen(&mut s, end).as_deref(),
+            Some("agent"),
+            "an agent needs no grant"
         );
     }
 

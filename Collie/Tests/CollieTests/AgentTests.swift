@@ -144,7 +144,8 @@ final class FakeCore: AgentCore {
                 )
             }
             return AgentView(
-                link: .connected, lastError: nil, agent: agent, output: nil, outputRevision: 0,
+                link: .connected, lastError: nil, agent: agent, output: s.outputRevision > afterRevision ? s.output : nil,
+                outputRevision: s.outputRevision,
                 terminal: agent == nil ? s.shell : nil, terminalLocked: s.shellLocked, terminalsEnabled: s.terminalsEnabled
             )
         }
@@ -2405,6 +2406,28 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func aSavedPromptPickedInTheTerminalViewIsNotTypedIntoADialog() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.typeShortcut(PromptShortcut(text: "run the tests\n"))
+    await poll { core.snapshot.input.count == 2 }
+    #expect(core.snapshot.input == [.typed("run the tests"), .keys([.enter])], "new lines go as Return")
+
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    model.draft = "kept"
+    model.typeShortcut(PromptShortcut(text: "1\n"))
+    #expect(model.draft == "kept\n\n1\n")
+    #expect(model.notice?.contains("Chat’s draft") == true)
+    await model.tap(.down)?.value
+    #expect(
+        core.snapshot.input == [.typed("run the tests"), .keys([.enter]), .keys([.down])],
+        "its list stayed open while the dialog appeared, and a digit or a Return would answer it")
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }
@@ -2441,6 +2464,25 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     await model.sendPrompt()
     #expect(model.terminalLocked)
     #expect(model.promptError == "The terminal locked. Unlock it again to continue.")
+}
+
+@MainActor
+@Test func aShellScreenLeavesWithItsGrant() async {
+    let core = FakeCore()
+    core.state.withLock { $0.shell = shellPane }
+    let model = terminalModel(core, FakeUnlocker(signs: true))
+    model.poll()
+    #expect(await model.unlock())
+    core.state.withLock {
+        $0.output = TerminalSnapshot(terminalId: "term_1", source: .recent, ansi: "$ cat .env\r\nTOKEN=1", truncated: false, reflowed: "$ cat .env TOKEN=1")
+    }
+    model.poll()
+    #expect(model.ansi == "$ cat .env\r\nTOKEN=1" && model.reflowed == "$ cat .env TOKEN=1")
+
+    core.state.withLock { $0.shellLocked = true }
+    model.poll()
+    #expect(model.terminalLocked)
+    #expect(model.ansi.isEmpty && model.reflowed == nil && model.screen.isEmpty, "shell output is what the grant puts behind Face ID")
 }
 
 @MainActor

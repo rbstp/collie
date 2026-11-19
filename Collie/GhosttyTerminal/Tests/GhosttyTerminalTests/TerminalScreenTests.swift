@@ -111,8 +111,8 @@ private struct SplitMix64: RandomNumberGenerator {
     let snapshots = fixtures + [fixtures.joined(separator: "\r\n"), samples.joined(separator: "\r\n")] + samples + random
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     for snapshot in snapshots + snapshots.reversed() {
-        // Any escape sequence but SGR makes every column of the grid read.
-        let everyColumn = try render("\u{1B}]2;\u{07}" + snapshot)
+        // Tabs paint nothing and count 8 columns each, so the row passes maxColumns and every column of the grid is read.
+        let everyColumn = try render(snapshot + String(repeating: "\t", count: 63))
         #expect(screen.render(ansiSnapshot: snapshot) == everyColumn, "\(snapshot.debugDescription)")
     }
 }
@@ -120,6 +120,48 @@ private struct SplitMix64: RandomNumberGenerator {
 @Test func queriesAndControlSequencesAreHarmless() throws {
     let frame = try render("\u{1B}[6n\u{1B}[c\u{1B}]52;c;aGVsbG8=\u{07}\u{1B}_Ga=T,t=f;L2V0Yy9wYXNzd2Q=\u{1B}\\ok")
     #expect(frame.runs.map(\.text) == ["ok"])
+}
+
+@Test func onlyTextAndSGRReachTheParser() throws {
+    // collied's strips_everything_but_sgr cases (crates/collied/src/drive.rs), which the phone no longer takes on trust.
+    let cases = [
+        ("a\u{1B}[2Jb", "ab"), ("a\u{1B}[10;5Hb", "ab"), ("a\u{1B}[?25lb", "ab"), ("a\u{1B}[?1049hb", "ab"),
+        ("a\u{1B}[>4;1mb", "ab"), ("a\u{1B}[1 mb", "ab"), ("a\u{1B}[6nb", "ab"),
+        ("a\u{1B}]52;c;cm0gLXJmIH4=\u{7}b", "ab"), ("a\u{1B}]52;c;cm0gLXJmIH4=\u{1B}\\b", "ab"),
+        ("a\u{1B}]8;;https://evil.example\u{1B}\\link\u{1B}]8;;\u{1B}\\b", "alinkb"), ("a\u{1B}]0;title\u{7}b", "ab"),
+        ("a\u{1B}P1$qm\u{1B}\\b", "ab"), ("a\u{1B}_apc\u{1B}\\b", "ab"), ("a\u{1B}^pm\u{1B}\\b", "ab"), ("a\u{1B}Xsos\u{1B}\\b", "ab"),
+        ("a\u{1B}cb", "ab"), ("a\u{1B}7\u{1B}8b", "ab"), ("a\u{1B}(0b", "ab"), ("a\u{1B}#8b", "ab"),
+        ("a\u{9B}31mb", "ab"), ("a\u{9B}2Jb", "ab"), ("a\u{9D}52;c;eA==\u{9C}b", "ab"), ("a\u{90}q\u{9C}b", "ab"),
+        ("a\u{7}\u{8}\u{B}\u{C}\u{E}\u{F}\u{7F}\u{85}b", "ab"),
+        ("a\u{1B}]52;c;unterminated", "a"), ("a\u{90}unterminated", "a"), ("a\u{1B}[31", "a"), ("a\u{1B}(", "a"), ("a\u{1B}", "a"),
+        ("a\u{1B}[31\nb", "a\nb"), ("a\u{1B}\nb", "a\nb"),
+        ("a\u{1B}[" + String(repeating: "1;", count: 32) + "1mb", "ab"),
+    ]
+    for (input, want) in cases {
+        #expect(TerminalScreen.textAndSGR(input) == want, "\(input.debugDescription)")
+    }
+    // The UTF-8 of these characters holds bytes 0x80 to 0x9F, which are C1 controls only as U+0080 to U+009F.
+    let kept = [
+        "\u{1B}[0m\u{1B}[38;2;153;153;153mWrote \u{1B}[1m4\u{1B}[0m \u{1B}[38:5:4mx\u{1B}[m\r\n\tok \u{276F}\u{A0}",
+        "\u{C0}\u{2500}\u{4E2D}\u{1F600}e\u{301}", "a\u{1B}[" + String(repeating: "1;", count: 32) + "mb",
+    ]
+    for input in kept {
+        #expect(TerminalScreen.textAndSGR(input).utf8.elementsEqual(input.utf8), "\(input.debugDescription)")
+    }
+    let screen = try #require(TerminalScreen(background: bg, foreground: fg))
+    #expect(screen.render(ansiSnapshot: "ab\u{8}c").runs.map(\.text) == ["abc"])
+    #expect(screen.render(ansiSnapshot: "ab\u{8}c", wrapColumns: 40).runs.map(\.text) == ["abc"])
+}
+
+@Test func capturedScreensPassTheFilterUnchanged() throws {
+    let fixtures = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../../crates/collied/tests/fixtures")
+    let files = try #require(FileManager.default.enumerator(at: fixtures, includingPropertiesForKeys: nil))
+        .compactMap { $0 as? URL }.filter { $0.lastPathComponent.hasSuffix(".ansi.txt") }
+    #expect(!files.isEmpty)
+    for file in files {
+        let screen = try String(contentsOf: file, encoding: .utf8)
+        #expect(TerminalScreen.textAndSGR(screen).utf8.elementsEqual(screen.utf8), "\(file.lastPathComponent)")
+    }
 }
 
 @Test func longRowsWrapAtTheGivenWidth() throws {
@@ -430,6 +472,12 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
         #expect(text.contains("\n\n      Indented line after a blank one.\n    - a list item"), "\(columns)")
         #expect(text.contains("okxxx\n    next line after a full one.\n"), "\(columns)")
     }
+}
+
+@Test func aShadedBoxRowWithAWideCharacterEndsAtTwoColumns() {
+    // After a border row, a shaded row continues one column in, where a wide character never fits two columns.
+    let prepared = TerminalScreen.preparedForWrapping("\u{2584}\u{2584}\u{2584}\r\n\u{1B}[48;5;236ma\u{4E2D}", columns: 2)
+    #expect(prepared == "\u{1B}[?7l\u{2584}\u{2584}\u{2584}\u{1B}[?7h\r\n\u{1B}[48;5;236ma\u{1B}E\u{4E2D}")
 }
 
 @Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
