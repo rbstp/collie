@@ -36,7 +36,7 @@ Set Terminal gestures in **Settings > Terminal > Gestures**:
 
 | Gesture | Action |
 |---|---|
-| Double-tap | Paste: types the clipboard into the terminal, new lines as spaces, never Return |
+| Double-tap | Paste: types the clipboard into the terminal, new lines as spaces, never Return, and nothing while the agent waits for your answer |
 | Pinch | Change the font size |
 | Swipe sideways | Switch agents (while lines wrap) |
 | Triple-tap | Send Esc (off by default) |

@@ -384,8 +384,7 @@ struct AgentScreen: View {
     private func perform(_ action: GestureAction) {
         switch action {
         case .none: break
-        // A paste never sends: its new lines are typed as spaces, not Return.
-        case .paste: if let text = UIPasteboard.general.string { model.type(text.split(whereSeparator: \.isNewline).joined(separator: " ")) }
+        case .paste: if let text = UIPasteboard.general.string { model.pasteIntoTerminal(text) }
         case .escape: model.tap(.esc)
         }
     }
@@ -1384,10 +1383,7 @@ private struct PromptBar: View {
         // Each uploaded file's path is typed into the terminal rather than held for a prompt.
         .onChange(of: model.attachments.map(\.id)) { old, _ in
             guard typesIntoTerminal else { return }
-            for file in model.attachments where !old.contains(file.id) {
-                model.type(file.path + " ")
-                model.remove(file)
-            }
+            for file in model.attachments where !old.contains(file.id) { model.typePath(of: file) }
         }
         .onDisappear { dictationExpanded = false }
     }
@@ -1461,13 +1457,10 @@ private struct PromptBar: View {
         .accessibilityLabel("Return")
     }
 
-    /// Dictation in the terminal view types what was said, then gives the chat draft back.
     private func restoreDraft() {
         guard let kept = keptDraft else { return }
         keptDraft = nil
-        let said = model.draft
-        model.draft = kept
-        model.type(said)
+        model.typeDictation(restoring: kept)
     }
 }
 
