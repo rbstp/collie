@@ -347,11 +347,25 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
 @Test func watchDecisionIsRefusedWhileTheSettingIsOff() {
     let state = WatchState(items: [item(approval("ap_1"))], entries: [], allowed: true, live: true, now: now)
     let request = WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_1", decision: .approve)
-    let off = WatchLink.refusal(request, allowed: false, shown: state, now: now)
+    let off = WatchLink.refusal(request, allowed: false, shown: state, now: now)?.body
     #expect(off == "Decisions from Apple Watch are off. Turn them on in collie Settings on the iPhone. Nothing was sent.")
     #expect(WatchLink.refusal(request, allowed: true, shown: state, now: now) == nil)
     // The flag the phone sent the watch is never what allows it.
-    #expect(WatchLink.refusal(request, allowed: false, shown: shown(state.approvals), now: now) == off)
+    #expect(WatchLink.refusal(request, allowed: false, shown: shown(state.approvals), now: now)?.body == off)
+}
+
+@Test func aRefusedWatchDecisionCarriesWhatTheWatchMayStillDecide() throws {
+    let state = shown([WatchApproval(item: item(approval("ap_1")))])
+    func refusal(_ id: String, allowed: Bool) -> (body: String, state: WatchState?)? {
+        WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: id, decision: .approve), allowed: allowed, shown: state, now: now)
+    }
+    // An approval the watch still holds and the phone no longer lists: the state carried is without it.
+    #expect(refusal("ap_gone", allowed: true)?.state == state)
+
+    // The setting went off after the last state went out: the approval stays, and the state carried makes it read-only.
+    let carried = try #require(refusal("ap_1", allowed: false)?.state)
+    #expect(carried.approvals == state.approvals && !carried.decisionsAllowed)
+    #expect(!carried.approvals[0].canDecide(.approve, allowed: carried.decisionsAllowed, answered: [], now: now))
 }
 
 @Test func watchDecisionNeedsAnApprovalAndAnswerThePhoneShowed() {
@@ -377,7 +391,7 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(refused("nMAC", "ap_terminal", .approve))
     #expect(refused("nMAC", "ap_terminal", .choose(0)))
     #expect(
-        WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_unknown", decision: .approve), allowed: true, shown: state, now: now)
+        WatchLink.refusal(WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_unknown", decision: .approve), allowed: true, shown: state, now: now)?.body
             == "This approval is no longer pending on the iPhone. Nothing was sent."
     )
 }

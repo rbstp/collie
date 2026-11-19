@@ -625,16 +625,16 @@ final class AppModel {
     /// From the paired watch: its wrist check stands in for Face ID only while this phone's
     /// setting allows it, re-read here on every request, and only for an answer this phone sent
     /// to the watch.
-    func decideFromWatch(_ request: WatchDecisionRequest) async -> (FollowUp, answered: Bool) {
+    func decideFromWatch(_ request: WatchDecisionRequest) async -> (FollowUp, answered: Bool, state: WatchState?) {
         let shown = WatchLink.shown()
         let agent = shown?.approvals.first { $0.approvalId == request.approvalId }?.agent ?? "collie"
         let allowed = DevicePrefs.load(from: DevicePrefs.file).watchDecisions
         if let refusal = WatchLink.refusal(request, allowed: allowed, shown: shown, now: .now) {
-            return (FollowUp(title: agent, body: refusal, opensApproval: false), false)
+            return (FollowUp(title: agent, body: refusal.body, opensApproval: false), false, refusal.state)
         }
-        guard let core else { return (FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true), false) }
+        guard let core else { return (FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true), false, nil) }
         guard activityDecisions.insert(request.approvalId).inserted else {
-            return (FollowUp(title: agent, body: "Already sending.", opensApproval: false), false)
+            return (FollowUp(title: agent, body: "Already sending.", opensApproval: false), false, nil)
         }
         defer { activityDecisions.remove(request.approvalId) }
         let assertion = BackgroundAssertion(name: "watch.decide")
@@ -644,7 +644,7 @@ final class AppModel {
             machineNodeId: request.nodeId, approvalId: request.approvalId, decision: decision, budgetMs: 20_000
         )
         log.notice("watch decide: outcome=\(String(describing: report.outcome), privacy: .public) total=\(report.totalMs, privacy: .public)ms")
-        return (FollowUp.after(report.outcome, decision: decision, agent: agent), report.outcome.watchAnswered)
+        return (FollowUp.after(report.outcome, decision: decision, agent: agent), report.outcome.watchAnswered, nil)
     }
 
     private func logColdStart() async {

@@ -16,7 +16,7 @@ Approvals are read-only until you turn on **Settings > Apple Watch > Decide from
 - you decide in the watch app, never from the alert;
 - you can approve, deny or pick a menu option, never Always allow.
 
-The iPhone rechecks the setting for each decision and sends only an answer it showed the watch.
+The iPhone rechecks the setting for each decision and sends only an answer it showed the watch. When it refuses a decision, the watch stops offering it at once.
 
 The watch shows a prompt whole or not as one you can answer: when a prompt is too long for the watch, its text ends in an ellipsis, the watch says so, shows no buttons under it, and you answer it on the iPhone.
 

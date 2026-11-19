@@ -189,13 +189,13 @@ extension WatchDecision {
 
 @MainActor
 final class WatchLink: NSObject, WCSessionDelegate {
-    private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool))?
+    private var decide: (@MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool, state: WatchState?))?
     private var refresh: (@MainActor () async -> (WatchState, silent: [String])?)?
     private var lastSent: (state: WatchState, at: Date)?
     static let log = Logger(subsystem: "dev.rbstp.collie", category: "watch")
 
     func activate(
-        decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool),
+        decide: @escaping @MainActor (WatchDecisionRequest) async -> (FollowUp, answered: Bool, state: WatchState?),
         refresh: @escaping @MainActor () async -> (WatchState, silent: [String])?
     ) {
         self.decide = decide
@@ -246,15 +246,20 @@ final class WatchLink: NSObject, WCSessionDelegate {
     }
 
     /// Nil only when the setting is on and the request answers an unexpired approval, with an
-    /// answer, that this phone showed the watch.
-    nonisolated static func refusal(_ request: WatchDecisionRequest, allowed: Bool, shown: WatchState?, now: Date) -> String? {
+    /// answer, that this phone showed the watch. A refusal carries the state the phone decides from, with the setting as
+    /// read now, so the watch stops offering at once what the phone will not decide.
+    nonisolated static func refusal(
+        _ request: WatchDecisionRequest, allowed: Bool, shown: WatchState?, now: Date
+    ) -> (body: String, state: WatchState?)? {
+        var state = shown
+        state?.decisionsAllowed = allowed
         guard allowed else {
-            return "Decisions from Apple Watch are off. Turn them on in collie Settings on the iPhone. Nothing was sent."
+            return ("Decisions from Apple Watch are off. Turn them on in collie Settings on the iPhone. Nothing was sent.", state)
         }
         let nowMs = now.unixMs
         guard let approval = shown?.approvals.first(where: { $0.nodeId == request.nodeId && $0.approvalId == request.approvalId }),
             approval.offers(request.decision), approval.expiresAtMs > nowMs
-        else { return "This approval is no longer pending on the iPhone. Nothing was sent." }
+        else { return ("This approval is no longer pending on the iPhone. Nothing was sent.", state) }
         return nil
     }
 
@@ -275,8 +280,10 @@ final class WatchLink: NSObject, WCSessionDelegate {
                 reply.send([WatchMessage.title: "collie", WatchMessage.body: "Nothing was sent.", WatchMessage.answered: false])
                 return
             }
-            let (followUp, answered) = await decide(request)
-            reply.send([WatchMessage.title: followUp.title, WatchMessage.body: followUp.body, WatchMessage.answered: answered])
+            let (followUp, answered, state) = await decide(request)
+            var message: [String: Any] = [WatchMessage.title: followUp.title, WatchMessage.body: followUp.body, WatchMessage.answered: answered]
+            if let state, let data = try? JSONEncoder().encode(state) { message[WatchMessage.state] = data }
+            reply.send(message)
         }
     }
 
