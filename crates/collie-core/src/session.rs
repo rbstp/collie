@@ -6,7 +6,8 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::{
     AgentWatchParams, ClientFrame, Empty, ErrorBody, ErrorCode, Event, Flock, HelloParams,
     HelloResult, Label, Nonce, PROTOCOL_VERSION, ReadSource, Request, RequestId, Response,
-    ServerFrame, TerminalId, TerminalRead, TerminalWatchParams, WS_PATH, WS_SUBPROTOCOL, limits,
+    ServerFrame, TerminalId, TerminalRead, TerminalWatchParams, WS_PATH, WS_SUBPROTOCOL, is_format,
+    limits,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
@@ -24,6 +25,7 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_BYTES: usize = 4 << 20;
 const MAX_REPLAY_EVENTS: usize = 1024;
+const MAX_ERROR_CHARS: usize = 200;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum SessionError {
@@ -118,6 +120,15 @@ impl From<ErrorBody> for SessionError {
             },
         }
     }
+}
+
+/// What the phone keeps of an error for a link's state or a background decision's outcome, both
+/// of which the app writes to the device log: the text can be a machine's own, as long as a frame.
+pub fn brief(error: &str) -> String {
+    (error.chars())
+        .filter(|c| !c.is_control() && !is_format(*c))
+        .take(MAX_ERROR_CHARS)
+        .collect()
 }
 
 pub type Reply = oneshot::Sender<Result<Response, SessionError>>;
@@ -228,8 +239,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
             self.last_frame = Instant::now();
             match message {
                 Message::Text(text) => {
-                    return serde_json::from_str(text.as_str())
-                        .map_err(|e| SessionError::Protocol(e.to_string()));
+                    // serde's own message quotes the frame, which the machine chose.
+                    return serde_json::from_str(text.as_str()).map_err(|e| {
+                        SessionError::Protocol(format!(
+                            "{:?} error at line {} column {}",
+                            e.classify(),
+                            e.line(),
+                            e.column()
+                        ))
+                    });
                 }
                 Message::Close(_) => return Err(SessionError::Closed),
                 Message::Binary(_) => {
@@ -1421,6 +1439,25 @@ mod tests {
             assert_eq!(version_mismatch(got, "Mac mini"), message);
             server.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn a_frame_that_does_not_parse_is_reported_without_its_text() {
+        let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+        let (mut session, mut ws) = (session.unwrap(), server.unwrap());
+        let server = tokio::spawn(async move {
+            read(&mut ws).await;
+            ws.send(Message::text(r#"{"kind":"text the machine chose"}"#))
+                .await
+                .unwrap();
+            ws
+        });
+        let err = session.hello().await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "unexpected reply from the machine: Data error at line 1 column 32"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

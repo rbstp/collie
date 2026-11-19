@@ -76,7 +76,7 @@ GitHub's and OpenAI's own policies cover their handling of these requests.
 
 ## Diagnostics
 
-The app writes connection diagnostics to the iPhone's own system log, where they stay unless you share them, for example in a sysdiagnose. If you opt in to sharing analytics with app developers in iOS, or use a TestFlight build, Apple may share crash reports, and any feedback you choose to send, with the developer under Apple's terms.
+The app writes connection diagnostics to the iPhone's own system log, where they stay unless you share them, for example in a sysdiagnose. They name your machines and can include the last error a machine sent, cut to 200 characters. If you opt in to sharing analytics with app developers in iOS, or use a TestFlight build, Apple may share crash reports, and any feedback you choose to send, with the developer under Apple's terms.
 
 ## Your agents
 

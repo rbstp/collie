@@ -9,7 +9,7 @@ use tailnet::{BackendState, Node};
 
 use crate::conn::{self, LinkPhase, blocking};
 use crate::pin;
-use crate::session::{FlockState, Session, SessionError, lock, unexpected};
+use crate::session::{FlockState, Session, SessionError, brief, lock, unexpected};
 use crate::store::Machine;
 use crate::{Inner, POLL_INTERVAL, PlanUsage, ms};
 
@@ -424,13 +424,13 @@ async fn open(
         Ok((session, _, _, _)) => session,
         Err(e) if e.is_auth() => {
             return Err(BackgroundOutcome::Unauthorized {
-                message: e.to_string(),
+                message: brief(&e.to_string()),
             });
         }
         Err(e) => {
             return Err(BackgroundOutcome::Unreachable {
                 stage: DecideStage::Connect,
-                message: e.to_string(),
+                message: brief(&e.to_string()),
             });
         }
     };
@@ -602,7 +602,7 @@ async fn call(
 }
 
 fn failed(e: SessionError, stage: DecideStage) -> BackgroundOutcome {
-    let message = e.to_string();
+    let message = brief(&e.to_string());
     match e {
         _ if e.is_auth() => BackgroundOutcome::Unauthorized { message },
         _ if e.is_transport() => BackgroundOutcome::Unreachable { stage, message },
@@ -670,6 +670,19 @@ mod tests {
             starred: Vec::new(),
         });
         s
+    }
+
+    #[test]
+    fn an_outcomes_message_is_cleaned_and_cut() {
+        let error = SessionError::Server {
+            code: ErrorCode::Internal,
+            message: format!("no\u{1b}[31m \u{202e}such\nagent{}", "x".repeat(1000)),
+        };
+        let BackgroundOutcome::Failed { message } = failed(error, DecideStage::Decide) else {
+            panic!("an internal error is a failure")
+        };
+        assert!(message.starts_with("no[31m suchagentxx"), "{message}");
+        assert_eq!(message.chars().count(), 200);
     }
 
     #[test]

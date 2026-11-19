@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 use crate::Inner;
 use crate::pin::{self, PinError};
 use crate::reach::{Reachability, now_ms};
-use crate::session::{FlockState, Reply, Seed, Session, SessionError, lock};
+use crate::session::{FlockState, Reply, Seed, Session, SessionError, brief, lock};
 use crate::store::{Machine, MachineKind, write_atomic};
 
 const BACKOFF: [Duration; 6] = [
@@ -485,7 +485,7 @@ impl Link {
             self.push_mode = None;
         }
         if error.is_some() || phase == LinkPhase::Connected {
-            self.last_error = error;
+            self.last_error = error.as_deref().map(brief);
         }
         self.reason = None;
     }
@@ -1405,6 +1405,19 @@ mod tests {
         let err = ConnectError::Session(SessionError::NotPaired);
         assert_eq!(backoff.failed(&shared, &err, t0), None);
         assert_eq!(link(&shared), (LinkPhase::Stopped, Some(err.to_string())));
+    }
+
+    #[test]
+    fn a_links_last_error_is_cleaned_and_cut() {
+        let shared = shared();
+        let err = ConnectError::Session(SessionError::Server {
+            code: protocol::ErrorCode::Internal,
+            message: format!("no\u{1b}[31m \u{202e}such\nagent{}", "x".repeat(1000)),
+        });
+        Backoff::default().failed(&shared, &err, Instant::now());
+        let shown = lock(&shared.link).last_error.clone().unwrap();
+        assert!(shown.starts_with("no[31m suchagentxx"), "{shown}");
+        assert_eq!(shown.chars().count(), 200);
     }
 
     #[tokio::test(start_paused = true)]
