@@ -45,6 +45,11 @@ struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
     func canDecide(_ decision: WatchDecision, allowed: Bool, answered: Set<String>, now: Date) -> Bool {
         allowed && !answered.contains(id) && offers(decision) && expiresAtMs > now.unixMs
     }
+
+    /// For the system's sheet: the workspace and the machine, never `agent`, which can be a title its program set.
+    func checkReason(for decision: WatchDecision) -> String {
+        "\(decision.title) in \(place)"
+    }
 }
 
 struct WatchChoice: Codable, Equatable, Sendable {
@@ -58,6 +63,14 @@ enum WatchDecision: Codable, Hashable, Sendable {
     case approve
     case deny
     case choose(UInt8)
+
+    var title: String {
+        switch self {
+        case .approve: "Approve"
+        case .deny: "Deny"
+        case .choose(let index): "Choose option \(Int(index) + 1)"
+        }
+    }
 }
 
 struct WatchAgent: Codable, Equatable, Identifiable, Sendable {
