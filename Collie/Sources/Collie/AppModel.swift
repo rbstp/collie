@@ -541,6 +541,11 @@ final class AppModel {
         } else {
             followUp = FollowUp(title: agent, body: FollowUp.unreachable, opensApproval: true)
         }
+        await post(followUp, for: link, thread: thread)
+        return outcome
+    }
+
+    func post(_ followUp: FollowUp, for link: ApprovalLink, thread: String) async {
         let content = UNMutableNotificationContent()
         content.title = followUp.title
         content.body = followUp.body
@@ -555,7 +560,6 @@ final class AppModel {
         } catch {
             log.error("follow-up notification: \(describe(error), privacy: .public)")
         }
-        return outcome
     }
 
     /// Approve/Deny on a followed agent's Live Activity, with the same unlock requirement

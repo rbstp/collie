@@ -103,8 +103,9 @@ enum NotificationResponse: Equatable, Sendable {
     case ignore
 
     /// `title`, `subtitle`, `body` and `category` are the notification's own, as iOS showed them. An action decides only
-    /// under the text and category ColliePush writes from the authenticated display: when the extension does not run, iOS
-    /// shows the sender's, and a sender with the APNs key could put its own text and Approve over a genuine approval's envelope.
+    /// under what ColliePush writes from the authenticated display: when the extension does not run, iOS shows the
+    /// sender's, and a sender with the APNs key could put its own text and Approve over a genuine approval's envelope.
+    /// Either proof is enough: the mark ColliePush leaves, or the text and category it writes, read back unchanged.
     init(
         actionIdentifier: String, userInfo: [AnyHashable: Any], title: String = "", subtitle: String = "", body: String = "",
         category: String = "", key load: (String) -> SymmetricKey? = NotificationKey.load
@@ -120,8 +121,11 @@ enum NotificationResponse: Equatable, Sendable {
                 let display = PushDisplay.open(userInfo: userInfo, key: key)
             else { self = .ignore; return }
             userInfo["terminal_id"] = display.terminalId
-            authenticated = category == ApprovalNotification.category && display.category == category
-                && title == display.shownTitle && subtitle.isEmpty && PushBody.shows(body, display.shownBody)
+            let marked = (userInfo["enc"] as? String).map { PushDisplay.shownMark(enc: $0, key: key) }
+                == userInfo[PushDisplay.shownKey] as? String
+            let shown = category == display.category && title == display.shownTitle && subtitle.isEmpty
+                && PushBody.shows(body, display.shownBody)
+            authenticated = display.category == ApprovalNotification.category && (marked || shown)
         }
         guard let link = ApprovalLink(userInfo: userInfo) else {
             if actionIdentifier == UNNotificationDefaultActionIdentifier,
@@ -152,6 +156,11 @@ struct FollowUp: Equatable {
     let opensApproval: Bool
 
     static let unreachable = "Couldn't reach collied, open to decide"
+
+    /// After an Approve or Deny the app did not act on: the notification was not ColliePush's.
+    static func refused(agent: String) -> FollowUp {
+        FollowUp(title: agent, body: "Couldn't verify this notification. Nothing was sent; open collie to decide.", opensApproval: true)
+    }
 
     static func after(_ outcome: BackgroundOutcome, decision: ApprovalDecision, agent: String) -> FollowUp {
         switch outcome {

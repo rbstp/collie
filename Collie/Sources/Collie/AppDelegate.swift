@@ -80,8 +80,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             .flatMap { PushDisplay.open(userInfo: content.userInfo, key: $0) }
         let agent = display?.shownTitle ?? "agent"
         let thread = display?.terminalId ?? content.threadIdentifier
+        let refused = ApprovalNotification.decision(forAction: response.actionIdentifier) != nil
         Task { @MainActor in
             await self.handle(action, agent: agent, thread: thread)
+            // Approve and Deny run in the background: without this, a refused one would show nothing at all.
+            if refused, case .open(let link) = action { await self.app.post(.refused(agent: agent), for: link, thread: thread) }
             completionHandler()
         }
     }

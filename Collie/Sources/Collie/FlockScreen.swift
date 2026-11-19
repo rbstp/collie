@@ -296,8 +296,8 @@ struct FlockScreen: View {
                             )
                             if !header.isEmpty {
                                 let label = header.font(.footnote.weight(.semibold)).textCase(nil)
-                                // Reconnecting a connected machine shows nothing: alone, the approvals pill is plain status.
-                                if model.entries.count > 1 || entry.flock?.link != .connected {
+                                // Reconnecting a connected machine shows nothing: its header is a button only with an approval to open.
+                                if model.entries.count > 1 || entry.flock?.link != .connected || approvalsCount(entry) > 0 {
                                     Button {
                                         reconnect(entry)
                                     } label: {
@@ -353,7 +353,13 @@ struct FlockScreen: View {
         approvals.map { $0.items.filter { $0.machine.id == entry.id }.count } ?? Int(entry.flock?.approvalsCount ?? 0)
     }
 
+    /// A tap on a machine's header: on a connected machine, the session of its first approval while the pill counts one;
+    /// else a reconnect, which a machine that is down needs before anything.
     private func reconnect(_ entry: MachineFlockEntry) {
+        if entry.flock?.link == .connected, let item = approvals?.items.first(where: { $0.machine.id == entry.id }) {
+            opening = AgentRoute(machineId: entry.id, terminalId: item.approval.terminalId)
+            return
+        }
         try? core?.reconnect(machineId: entry.id)
     }
 

@@ -74,8 +74,8 @@ struct AgentGrid<Menu: View>: View {
                                 )
                                 if !header.isEmpty {
                                     let label = header.font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                                    // Reconnecting a connected machine shows nothing: alone, the approvals pill is plain status.
-                                    if entries.count > 1 || entry.flock?.link != .connected {
+                                    // Reconnecting a connected machine shows nothing: its header is a button only with an approval to open.
+                                    if entries.count > 1 || entry.flock?.link != .connected || approvalsCount(entry) > 0 {
                                         Button {
                                             reconnect(entry)
                                         } label: {
