@@ -330,7 +330,7 @@ final class TerminalScreen {
             // a reset that sets the row's background again.
             if shadedRow && reshaded { uniform = true }
             let clip = boxOnly && sawBox
-            let shade = shadedBox && uniformBackground && columns > 1 ? background : nil
+            let shade = shadedBox && uniformBackground && columns > 2 ? background : nil
             let collapse = !clip && contentWidth > columns && (sawBox && padded || runs.contains { $0 >= columns })
             // The most cells every space run may keep for the row to fit, at least one.
             var keep = 1

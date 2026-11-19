@@ -432,6 +432,12 @@ private func painted(_ frame: TerminalFrame, row: Int, _ background: TerminalRGB
     }
 }
 
+@Test func aShadedBoxRowWithAWideCharacterEndsAtTwoColumns() {
+    // After a border row, a shaded row continues one column in, where a wide character never fits two columns.
+    let prepared = TerminalScreen.preparedForWrapping("\u{2584}\u{2584}\u{2584}\r\n\u{1B}[48;5;236ma\u{4E2D}", columns: 2)
+    #expect(prepared == "\u{1B}[?7l\u{2584}\u{2584}\u{2584}\u{1B}[?7h\r\n\u{1B}[48;5;236ma\u{1B}E\u{4E2D}")
+}
+
 @Test func rightAlignedTextKeepsNoPaddingOnItsOwnRow() throws {
     let screen = try #require(TerminalScreen(background: bg, foreground: fg))
     let frame = screen.render(ansiSnapshot: try capture("copilot-1.0.94-1/narrow-output", rows: 52...52), wrapColumns: 40)
