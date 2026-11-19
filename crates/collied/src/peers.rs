@@ -1,11 +1,12 @@
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -153,26 +154,49 @@ pub fn save(path: &Path, store: &Store) -> Result<(), Error> {
 /// A missing file is the default value; anything but a 0600 regular file owned by the
 /// current user is refused.
 pub fn load_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, Error> {
-    let io = |source| Error::Io {
-        path: path.to_owned(),
-        source,
+    let text = match read_private(path) {
+        Ok((text, _)) => text,
+        Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(T::default());
+        }
+        Err(e) => return Err(e),
     };
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
-        Err(e) => return Err(io(e)),
-    };
-    if !meta.is_file()
-        || meta.mode() & 0o077 != 0
-        || meta.uid() != rustix::process::geteuid().as_raw()
-    {
-        return Err(Error::Insecure(path.to_owned()));
-    }
-    let text = std::fs::read(path).map_err(io)?;
     serde_json::from_slice(&text).map_err(|source| Error::Json {
         path: path.to_owned(),
         source,
     })
+}
+
+/// Opened without following symlinks and checked on the open descriptor: a regular file
+/// owned by the current user with no group or world bits. Non-blocking, so a FIFO is
+/// refused rather than waited on.
+pub fn read_private(path: &Path) -> Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat), Error> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    let io = |source: std::io::Error| Error::Io {
+        path: path.to_owned(),
+        source,
+    };
+    let fd = match rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::LOOP) => return Err(Error::Insecure(path.to_owned())),
+        Err(e) => return Err(io(e.into())),
+    };
+    let st = rustix::fs::fstat(&fd).map_err(|e| io(e.into()))?;
+    if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile
+        || st.st_uid != rustix::process::geteuid().as_raw()
+        || st.st_mode & 0o077 != 0
+    {
+        return Err(Error::Insecure(path.to_owned()));
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::fs::File::from(fd)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    Ok((bytes, st))
 }
 
 pub fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Error> {
@@ -304,11 +328,11 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(load(&path), Err(Error::Insecure(_))));
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::write(&path, r#"{"owner_user_id":null,"peers":[],"x":1}"#).unwrap();
-        assert!(matches!(load(&path), Err(Error::Json { .. })));
         let link = dir.path().join("link.json");
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(matches!(load(&link), Err(Error::Insecure(_))));
+        std::fs::write(&path, r#"{"owner_user_id":null,"peers":[],"x":1}"#).unwrap();
+        assert!(matches!(load(&path), Err(Error::Json { .. })));
     }
 
     #[test]

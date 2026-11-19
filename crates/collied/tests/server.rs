@@ -1479,6 +1479,21 @@ async fn terminal_phase(
     );
     drop(second);
 
+    println!("a session that offered no capabilities is refused terminal methods, audited");
+    let mut bare = open(phone, target).await;
+    send(&mut bare, json!({"id": 1, "method": "hello", "params": {"protocol_version": protocol::PROTOCOL_VERSION, "protocol_min_version": protocol::PROTOCOL_VERSION, "capabilities": [], "app_version": "it"}})).await;
+    result(recv(&mut bare).await);
+    assert_error(
+        &call(
+            &mut bare,
+            "terminal.challenge",
+            json!({"terminal_id": SHELL}),
+        )
+        .await,
+        ErrorCode::NotImplemented,
+    );
+    drop(bare);
+
     println!("terminal.lock ends every grant of the session");
     assert_eq!(
         result(call(&mut ws, "terminal.lock", json!({})).await),
@@ -1542,6 +1557,7 @@ async fn terminal_phase(
         "\"result\":\"terminal_key_missing: this phone has no terminal key here; pair it again\"",
         "\"method\":\"terminal.watch\"",
         "\"target\":\"term_ffffffffffff01 keys=ctrl+c\"",
+        "\"method\":\"terminal.challenge\",\"target\":null,\"result\":\"not_implemented\"",
     ] {
         assert!(audit.contains(needle), "audit log lacks {needle}:\n{audit}");
     }
