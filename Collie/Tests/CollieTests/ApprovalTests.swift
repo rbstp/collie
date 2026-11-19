@@ -67,6 +67,19 @@ private func alert(_ display: PushDisplay) throws -> [AnyHashable: Any] {
     let silent = try alert(PushDisplay(v: 1, title: "api-fixer", body: body, terminalId: "term_1", approvalId: "ap_1", offersApproval: false))
     #expect(response("APPROVE", silent) == .open(link))
 
+    // ColliePush's mark is proof on its own: iOS may hand the text back changed. Only the notification key makes it.
+    let enc = try #require(info["enc"] as? String)
+    var marked = info
+    marked[PushDisplay.shownKey] = PushDisplay.shownMark(enc: enc, key: vectorKey)
+    #expect(response("APPROVE", marked, title: "Collie", body: "changed", category: "") == .decide(link, .approve))
+    marked[PushDisplay.shownKey] = PushDisplay.shownMark(enc: enc + "A", key: vectorKey)
+    #expect(response("APPROVE", marked, title: "Collie") == .open(link))
+    marked[PushDisplay.shownKey] = PushDisplay.shownMark(enc: enc, key: SymmetricKey(size: .bits256))
+    #expect(response("APPROVE", marked, title: "Collie") == .open(link))
+    var silentMarked = silent
+    silentMarked[PushDisplay.shownKey] = PushDisplay.shownMark(enc: try #require(silent["enc"] as? String), key: vectorKey)
+    #expect(response("APPROVE", silentMarked) == .open(link))
+
     #expect(response(UNNotificationDefaultActionIdentifier, title: "Collie", body: "An agent needs attention", category: "") == .open(link))
     #expect(response(key: SymmetricKey(size: .bits256)) == .ignore)
     #expect(response(UNNotificationDefaultActionIdentifier, key: SymmetricKey(size: .bits256)) == .ignore)

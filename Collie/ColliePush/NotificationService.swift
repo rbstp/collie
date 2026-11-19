@@ -16,6 +16,7 @@ final class NotificationService: UNNotificationServiceExtension {
         content.subtitle = ""
         content.body = content.body == "An agent finished" ? "An agent finished" : "An agent needs attention"
         content.categoryIdentifier = ""
+        content.userInfo[PushDisplay.shownKey] = nil
         if let nodeId, let key = NotificationKey.load(nodeId: nodeId),
             let display = PushDisplay.open(userInfo: content.userInfo, key: key) {
             content.title = display.shownTitle
@@ -23,6 +24,9 @@ final class NotificationService: UNNotificationServiceExtension {
             content.userInfo["terminal_id"] = display.terminalId
             content.threadIdentifier = display.terminalId
             content.categoryIdentifier = display.category
+            if let enc = content.userInfo["enc"] as? String {
+                content.userInfo[PushDisplay.shownKey] = PushDisplay.shownMark(enc: enc, key: key)
+            }
         }
         let hint = AppGroup.container.flatMap { try? Data(contentsOf: $0.appending(path: MacReachability.fileName)) }
         content.body = PushBody.rewrite(content.body, nodeId: nodeId, reachability: hint)

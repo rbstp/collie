@@ -93,6 +93,15 @@ struct PushDisplay: Codable {
     var shownBody: String { Self.clean(body, maxLength: 600) }
     var category: String { offersApproval && approvalId != nil ? "APPROVAL" : "" }
 
+    /// ColliePush leaves this in a notification it rewrote from the authenticated display, and the app looks for it before
+    /// an action decides. Only a holder of the notification key can make it, so its presence says the extension ran on this
+    /// envelope, whatever iOS does to the text on the way back to the app.
+    static let shownKey = "collie_shown"
+    static func shownMark(enc: String, key: SymmetricKey) -> String {
+        let code = HMAC<SHA256>.authenticationCode(for: Data("collie.shown.v1\0".utf8) + Data(enc.utf8), using: key)
+        return PushEnvelope.base64(Data(code))
+    }
+
     static func clean(_ text: String, maxLength: Int) -> String {
         var output = String.UnicodeScalarView()
         for scalar in text.unicodeScalars.prefix(maxLength)
