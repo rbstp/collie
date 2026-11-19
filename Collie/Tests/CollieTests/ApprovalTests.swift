@@ -307,6 +307,23 @@ final class FakeAuthenticator: Authenticator {
     }
 }
 
+/// A settle the test ends: every card waiting on it is held until `open`.
+final class SettleGate: Sendable {
+    let held = Mutex<[CheckedContinuation<Void, Never>]>([])
+
+    func wait() async {
+        await withCheckedContinuation { continuation in held.withLock { $0.append(continuation) } }
+    }
+
+    func open() {
+        held.withLock { held in
+            defer { held = [] }
+            return held
+        }
+        .forEach { $0.resume() }
+    }
+}
+
 @MainActor
 private func height(_ card: ApprovalCard) -> CGFloat {
     UIHostingController(rootView: card)
@@ -476,6 +493,49 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     model.poll()
     await model.decide(try #require(model.items.first), .approve)
     #expect(auth.state.withLock { $0.reasons } == ["Approve in collie on Mac"])
+}
+
+@MainActor
+@Test func aCardOnATerminalThatShowedAnotherTakesNoDecisionUntilItSettles() async throws {
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    let gate = SettleGate()
+    let model = ApprovalsModel(core: core, auth: auth, settle: gate.wait)
+    func show(_ approvals: [PendingApproval]) {
+        core.state.withLock { $0.pending["m1"] = approvals }
+        model.poll()
+    }
+    var elsewhere = approval("ap_elsewhere")
+    elsewhere.terminalId = "term_2"
+
+    show([approval("ap_1")])
+    #expect(model.settling.isEmpty)
+
+    // The prompt changed under the card: a tap that lands now was aimed at ap_1. Another terminal's first card is not held.
+    show([approval("ap_2"), elsewhere])
+    #expect(model.settling == ["ap_2"])
+    let second = try #require(model.items.first { $0.id == "ap_2" })
+    await model.decide(second, .approve)
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+
+    await poll { gate.held.withLock { $0.count } == 1 }
+    gate.open()
+    await poll { model.settling.isEmpty }
+    // The same approval listed again, here with another link, is not held again.
+    core.state.withLock { $0.link["m1"] = .connecting }
+    model.poll()
+    #expect(model.items.first?.link == .connecting)
+    #expect(model.settling.isEmpty)
+    await model.decide(second, .approve)
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_2 approve"])
+
+    // The card left for a poll before the next prompt came: still the place the owner was about to tap.
+    show([elsewhere])
+    show([approval("ap_3"), elsewhere])
+    #expect(model.settling == ["ap_3"])
+    await poll { gate.held.withLock { $0.count } == 1 }
+    gate.open()
 }
 
 @MainActor

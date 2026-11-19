@@ -559,7 +559,10 @@ private struct DecisionButtons: View {
                     VStack(spacing: 8) { buttons(decisions) }
                 }
             }
-            .disabled(item.approval.expiresAtMs <= context.date.unixMs || item.unreachable || model.steps[item.id] != nil)
+            .disabled(
+                item.approval.expiresAtMs <= context.date.unixMs || item.unreachable || model.steps[item.id] != nil
+                    || model.settling.contains(item.id)
+            )
         }
     }
 
@@ -617,7 +620,7 @@ private struct ChoiceButtons: View {
     let item: ApprovalItem
     let expired: Bool
 
-    private var disabled: Bool { expired || item.unreachable || model.steps[item.id] != nil }
+    private var disabled: Bool { expired || item.unreachable || model.steps[item.id] != nil || model.settling.contains(item.id) }
 
     var body: some View {
         VStack(spacing: 0) {

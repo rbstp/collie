@@ -35,6 +35,8 @@ struct ApprovalItem: Identifiable, Equatable {
 
     /// Connecting stays reachable, so a decision made during the resume grace still goes out.
     var unreachable: Bool { [.waiting, .unavailable, .offline, .stopped].contains(link) }
+
+    var route: AgentRoute { AgentRoute(machineId: machine.id, terminalId: approval.terminalId) }
 }
 
 enum BlockedInput: Equatable {
@@ -75,6 +77,13 @@ final class ApprovalsModel {
     var drafts: [String: String] = [:]
     /// Approvals whose note field is shown; a hidden note is never sent.
     private(set) var noting: Set<String> = []
+    /// Approvals whose card came up on a terminal that had shown another: none is decided until `settle` returns, so a
+    /// tap aimed at the card before never answers the new one.
+    private(set) var settling: Set<String> = []
+    /// The terminals that have shown a card. A machine chooses their ids, so the set is emptied at a bound instead of
+    /// growing with them.
+    private var carded: Set<AgentRoute> = []
+    private let settle: @Sendable () async -> Void
     /// The approval the notice reports on: it leaving the list is the expected result, not a change to clear for.
     private var noticeSubject: String?
     private var noticeTimer: Task<Void, Never>?
@@ -90,12 +99,14 @@ final class ApprovalsModel {
         core: (any ApprovalCore)?, auth: any Authenticator = DeviceOwnerAuthenticator(),
         noticeLifetime: Duration = .seconds(6),
         openingTimeout: Duration = .seconds(15),
-        dismissResolved: @escaping @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void = ApprovalsModel.removeDelivered
+        dismissResolved: @escaping @Sendable (_ nodeId: String, _ pending: Set<String>) -> Void = ApprovalsModel.removeDelivered,
+        settle: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .milliseconds(500)) }
     ) {
         self.core = core
         self.auth = auth
         self.noticeLifetime = noticeLifetime
         self.openingTimeout = openingTimeout
+        self.settle = settle
         self.dismissResolved = dismissResolved
     }
 
@@ -143,8 +154,19 @@ final class ApprovalsModel {
         } else if next.map(\.approval) != items.map(\.approval) {
             show(nil)
         }
+        let known = Set(items.map(\.id))
+        for item in next where !known.contains(item.id) && carded.contains(item.route) {
+            settling.insert(item.id)
+            Task { [weak self, settle] in
+                await settle()
+                self?.settling.remove(item.id)
+            }
+        }
+        if carded.count > 1_024 { carded.removeAll() }
+        carded.formUnion(next.map(\.route))
         items = next
         let ids = Set(next.map(\.id))
+        settling.formIntersection(ids)
         expanded.formIntersection(ids)
         commandCut.formIntersection(ids)
         reasonLeftOut.formIntersection(ids)
@@ -284,7 +306,7 @@ final class ApprovalsModel {
     /// Nothing reaches the core unless the device owner authenticates first.
     func decide(_ item: ApprovalItem, _ decision: ApprovalDecision) async {
         let note = note(for: item)
-        guard let core, steps[item.id] == nil, item.approval.offers(decision),
+        guard let core, steps[item.id] == nil, !settling.contains(item.id), item.approval.offers(decision),
             note == nil || item.approval.takesNote(with: decision)
         else { return }
         if let note {
