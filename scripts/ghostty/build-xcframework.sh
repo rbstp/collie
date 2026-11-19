@@ -18,6 +18,10 @@ if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -d "$out/licenses" ];
     echo "GhosttyVt.xcframework is up to date (libghostty-vt $LIBGHOSTTY_VT_VERSION)"
     exit 0
 fi
+if restore_build "$out" "$want"; then
+    echo "GhosttyVt.xcframework restored from $user_cache (libghostty-vt $LIBGHOSTTY_VT_VERSION)"
+    exit 0
+fi
 
 find_zig
 echo "zig: $zig ($("$zig" version))"
@@ -60,4 +64,5 @@ xcodebuild -create-xcframework \
     -output "$out"
 write_licenses "$src" "$deps" "$out/licenses"
 echo "$want" >"$stamp"
+save_build "$out" "$want"
 echo "built $out"
