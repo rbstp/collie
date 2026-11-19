@@ -348,6 +348,12 @@ private func approval(
     )
 }
 
+private let permissionChoices = [
+    ApprovalChoice(index: 0, label: "Yes", current: true),
+    ApprovalChoice(index: 1, label: "Yes, and don't ask again for rm commands in /Users/me/src/app", current: false),
+    ApprovalChoice(index: 2, label: "No", current: false),
+]
+
 private let planChoices = [
     ApprovalChoice(index: 0, label: "Yes, and use auto mode", current: true),
     ApprovalChoice(index: 1, label: "Yes, manually approve edits", current: false),
@@ -455,6 +461,76 @@ private func approvalsModel(_ core: FakeApprovalCore, _ auth: FakeAuthenticator)
     await model.decide(item, .approveAlways)
     #expect(auth.state.withLock { $0.reasons }.isEmpty)
     #expect(core.state.withLock { $0.decisions }.isEmpty)
+}
+
+@Test func alwaysAllowIsFoundByColliedsLabels() {
+    func grants(_ label: String, detail: String? = nil) -> Bool {
+        ApprovalChoice(index: 1, label: label, current: false, detail: detail).grantsAlways
+    }
+    // Labels from crates/collied/tests/fixtures and prompt.rs's tests.
+    #expect(grants("Yes, and don't ask again for touch f.txt and touch g.txt commands in /private/tmp/planlab"))
+    #expect(grants("Yes, and always allow access to /private/tmp/planlab from this project"))
+    #expect(grants("Yes, and don\u{2019}t ask again for: cksum *"))
+    #expect(grants("Yes, and don't ask again for commands that start with `cargo test` (p)"))
+    #expect(grants("Yes, don't ask again"))
+    #expect(grants("Yes, allow all edits during this session (shift+tab)"))
+    #expect(grants("Yes, and don't ask", detail: "again for rm commands in /Users/me/src/app"))
+    #expect(!grants("Yes, and switch to auto mode · auto mode handles these prompts for you"))
+    #expect(!grants("Yes, and tell Claude what to do next"))
+    #expect(!grants("Yes"))
+    #expect(!grants("No, and don't ask again"))
+}
+
+@MainActor
+@Test func alwaysAllowIsOfferedAndSentOnlyWithItsOneRule() async throws {
+    let rule = "Yes, and don't ask again for rm commands in /Users/me/src/app"
+    #expect(approval("ap_1", choices: permissionChoices).alwaysRule == rule)
+    let wrapped = [ApprovalChoice(index: 0, label: "Yes, and don't ask again for rm commands in", current: false, detail: "/Users/me/src/app")]
+    #expect(approval("ap_1", choices: wrapped).alwaysRule == rule)
+    #expect(approval("ap_1", options: [.approve, .deny], choices: permissionChoices).alwaysRule == nil)
+    let two = permissionChoices + [ApprovalChoice(index: 3, label: "Yes, allow all edits during this session", current: false)]
+
+    let core = FakeApprovalCore()
+    let auth = FakeAuthenticator()
+    core.state.withLock {
+        $0.pending["m1"] = [approval("ap_bare"), approval("ap_two", choices: two), approval("ap_rule", choices: permissionChoices)]
+    }
+    let model = ApprovalsModel(core: core, auth: auth)
+    model.poll()
+    for item in model.items where item.id != "ap_rule" {
+        #expect(item.approval.alwaysRule == nil && !item.approval.offers(.approveAlways))
+        #expect(item.approval.plainDecisions == [.approve, .deny])
+        await model.decide(item, .approveAlways)
+    }
+    #expect(auth.state.withLock { $0.reasons }.isEmpty)
+    #expect(core.state.withLock { $0.decisions }.isEmpty)
+    await model.decide(try #require(model.items.first { $0.id == "ap_rule" }), .approveAlways)
+    #expect(core.state.withLock { $0.decisions } == ["m1 ap_rule approveAlways"])
+}
+
+@MainActor
+@Test func aLongToolNameStaysInsideTheCard() {
+    var fetch = approval("ap_1")
+    fetch.toolName = "Fetch · from the web-fetch agent, with a name wider than the card"
+    fetch.reason = reason
+    for maxHeight in [CGFloat.infinity, 150] {
+        let size = UIHostingController(rootView: card(fetch, maxHeight: maxHeight)).sizeThatFits(in: CGSize(width: 402, height: 874))
+        #expect(size.width <= 402)
+    }
+}
+
+@Test func theReviewSheetShowsTheCommandOnce() {
+    var bash = approval("ap_1")
+    bash.toolSummary = "rm -rf build\nRemove the build directory"
+    bash.snippet = "Bash command\n  rm -rf build\nRemove the build directory\nDo you want to proceed?"
+    #expect(bash.output == "Bash command\nDo you want to proceed?")
+    // A line the command panel does not show whole stays.
+    bash.snippet = "…rf build\nRemove the build directory"
+    #expect(bash.output == "…rf build")
+    // Without a command panel the snippet is the only place the command shows.
+    bash.snippet = "rm -rf build"
+    bash.toolName = nil
+    #expect(bash.output == "rm -rf build")
 }
 
 @MainActor
@@ -771,7 +847,7 @@ func unavailableApprovalLookupShowsConnectionFailure(phase: LinkPhase) async thr
 @Test func noteGoesWithApproveOrDenyOnlyAfterAuthentication() async throws {
     let core = FakeApprovalCore()
     let auth = FakeAuthenticator()
-    core.state.withLock { $0.pending["m1"] = [approval("ap_n", supportsNote: true), approval("ap_old")] }
+    core.state.withLock { $0.pending["m1"] = [approval("ap_n", choices: permissionChoices, supportsNote: true), approval("ap_old")] }
     let model = ApprovalsModel(core: core, auth: auth)
     model.poll()
     let item = try #require(model.items.first { $0.id == "ap_n" })

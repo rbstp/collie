@@ -158,6 +158,8 @@ final class LandscapeTests: XCTestCase {
         let showKeyboard = Match(.button, "Keyboard")
         let reviewButton = Match(.button, "Review")
         XCTAssertTrue(shown([showKeyboard, reviewButton, Match(.staticText, command), Match(.button, "Approve"), Match(.button, "Deny")], app), app.debugDescription)
+        // Always allow is offered only in the sheet, under the rule it saves.
+        XCTAssertFalse(app.buttons["Always allow"].exists, app.debugDescription)
         app.element(showKeyboard).tap()
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.appears(within: 10), app.debugDescription)
@@ -269,14 +271,22 @@ final class LandscapeTests: XCTestCase {
         let task = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "add approval tests"))
         let reason = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Reason: "))
         let commands = app.staticTexts.matching(NSPredicate(format: "label == %@", command))
+        let rule = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Yes, and don't ask again for "))
         let decisions = ["Approve", "Always allow", "Deny"].map { ($0, app.buttons.matching(identifier: $0)) }
         let hittable = { (query: XCUIElementQuery) in query.allElementsBoundByIndex.first { $0.isHittable } }
-        for (name, query) in [("task", task), ("command", commands)] + decisions {
+        for (name, query) in [("task", task), ("command", commands), decisions[0], decisions[2]] {
             XCTAssertTrue(eventually(within: 10) { hittable(query) != nil }, "\(name)\n\(app.debugDescription)")
         }
         // In landscape at accessibility sizes the sheet shows little more than the command over the decisions.
         if hittable(reason) == nil { try XCTUnwrap(hittable(commands), app.debugDescription).swipeUp() }
         XCTAssertTrue(eventually(within: 10) { hittable(reason) != nil }, "reason\n\(app.debugDescription)")
+        // Always allow ends the prompt, right under the rule it saves.
+        if hittable(decisions[1].1) == nil {
+            let start = try XCTUnwrap(hittable(reason), app.debugDescription).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -100)))
+        }
+        XCTAssertTrue(eventually(within: 10) { hittable(rule) != nil && hittable(decisions[1].1) != nil }, app.debugDescription)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(hittable(rule)).frame.maxY, try XCTUnwrap(hittable(decisions[1].1)).frame.minY, app.debugDescription)
         close.tap()
         XCTAssertTrue(close.disappears(within: 10), app.debugDescription)
     }
