@@ -127,10 +127,8 @@ private func selection(_ a: TerminalCell, _ b: TerminalCell) -> TerminalSelectio
 }
 
 @Test func wrapRowsAreUnknownOnceTheScreenScrolls() throws {
-    // A cursor movement is counted as text, so these take two rows where one was counted.
-    // collied strips cursor movements; this only provokes the scroll.
-    let lines = Array(repeating: "x\u{1B}[1Ey", count: 1100).joined(separator: "\r\n")
-    let frame = try render(lines, wrapColumns: 12)
+    // The last line is kept whole even when it alone is taller than the screen.
+    let frame = try render(String(repeating: "x", count: 12 * 2100), wrapColumns: 12)
     #expect(frame.rows == Int(TerminalScreen.maxRows))
     #expect(frame.wrapContinuations.isEmpty)
     #expect(frame.wrapsUnknown)

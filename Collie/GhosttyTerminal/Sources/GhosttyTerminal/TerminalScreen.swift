@@ -133,6 +133,7 @@ final class TerminalScreen {
     /// `wrapColumns`, rows wrap at that width after trailing blanks are trimmed; without it they
     /// are clipped at `maxColumns`.
     func render(ansiSnapshot snapshot: String, wrapColumns: Int? = nil) -> TerminalFrame {
+        let snapshot = Self.textAndSGR(snapshot)
         let wantedColumns: UInt16
         let wantedRows: UInt16
         var bytes: [UInt8]
@@ -179,7 +180,7 @@ final class TerminalScreen {
     /// build of libghostty-vt. Once a line ends on the bottom row the screen may have scrolled, so
     /// row numbers are unknown and nil is returned. Also returns the lowest row a line ended on.
     /// Rows below it are blank because nothing written moves the cursor up or to an absolute
-    /// position: collied's sanitize_ansi keeps only CR, LF, TAB and SGR, and the NEL and CUF
+    /// position: textAndSGR keeps only CR, LF, TAB and SGR, and the NEL and CUF
     /// that preparedForWrapping adds only move down or right, and its EL does not move the cursor.
     private func writeTrackingWraps(_ bytes: [UInt8]) -> (continuations: Set<Int>?, lastRow: Int) {
         var continuations: Set<Int> = []
@@ -198,6 +199,77 @@ final class TerminalScreen {
             start = newline + 1
         }
         return (reachedBottom ? nil : continuations, lastRow)
+    }
+
+    /// What collied's sanitize_ansi sends: text, CR, LF, TAB and SGR with at most 64 parameter
+    /// characters. A paired machine that was taken over sends any bytes, and the parser here is
+    /// built ReleaseFast, so every other control and escape sequence is dropped before it:
+    /// C0, DEL, C1 (U+0080...U+009F, which is C2 80...C2 9F in UTF-8), a CSI that is not SGR,
+    /// strings (OSC, DCS, SOS, PM, APC) through their BEL or ST or the end, and other escapes.
+    static func textAndSGR(_ snapshot: String) -> String {
+        var snapshot = snapshot
+        let filtered: String? = snapshot.withUTF8 { bytes in
+            let count = bytes.count
+            var out: [UInt8] = []
+            var kept = 0
+            var i = 0
+            while i < count {
+                let byte = bytes[i]
+                if byte >= 0x20 && byte != 0x7F && byte != 0xC2 || byte == 0x0A || byte == 0x0D || byte == 0x09 {
+                    i += 1
+                    continue
+                }
+                var end = i + 1
+                let c1 = byte == 0xC2 && end < count && bytes[end] < 0xA0
+                if byte == 0xC2 && !c1 {
+                    i += 1
+                    continue
+                }
+                // An ESC before a control or the end is dropped alone, so a CR or LF after it stays.
+                if c1 || byte == 0x1B && end < count && (0x20...0x7E).contains(bytes[end]) {
+                    // C2 80...C2 9F are the one-character forms of ESC @ through ESC _.
+                    let kind = c1 ? bytes[end] - 0x40 : bytes[end]
+                    end += 1
+                    switch kind {
+                    case UInt8(ascii: "["):
+                        var sgr = !c1
+                        while end < count, (0x20...0x3F).contains(bytes[end]) {
+                            sgr = sgr && (0x30...0x3B).contains(bytes[end])
+                            end += 1
+                        }
+                        if end < count, (0x40...0x7E).contains(bytes[end]) {
+                            end += 1
+                            if sgr && bytes[end - 1] == UInt8(ascii: "m") && end - i <= 67 {
+                                i = end
+                                continue
+                            }
+                        }
+                    case UInt8(ascii: "]"), UInt8(ascii: "P"), UInt8(ascii: "X"), UInt8(ascii: "^"), UInt8(ascii: "_"):
+                        while end < count {
+                            let last = bytes[end]
+                            end += 1
+                            if last == 0x07 { break }
+                            if end < count, last == 0x1B && bytes[end] == UInt8(ascii: "\\") || last == 0xC2 && bytes[end] == 0x9C {
+                                end += 1
+                                break
+                            }
+                        }
+                    case 0x20...0x2F:
+                        while end < count, (0x20...0x2F).contains(bytes[end]) { end += 1 }
+                        if end < count, (0x30...0x7E).contains(bytes[end]) { end += 1 }
+                    default:
+                        break
+                    }
+                }
+                out.append(contentsOf: bytes[kept..<i])
+                kept = end
+                i = end
+            }
+            guard kept > 0 else { return nil }
+            out.append(contentsOf: bytes[kept..<count])
+            return String(decoding: out, as: UTF8.self)
+        }
+        return filtered ?? snapshot
     }
 
     /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.
