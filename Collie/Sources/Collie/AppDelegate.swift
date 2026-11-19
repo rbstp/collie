@@ -71,11 +71,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
         let content = response.notification.request.content
-        let action = NotificationResponse(actionIdentifier: response.actionIdentifier, userInfo: content.userInfo)
-        let agent = content.title
-        let thread = (content.userInfo["node_id"] as? String)
+        let action = NotificationResponse(
+            actionIdentifier: response.actionIdentifier, userInfo: content.userInfo,
+            title: content.title, subtitle: content.subtitle, body: content.body, category: content.categoryIdentifier
+        )
+        let display = (content.userInfo["node_id"] as? String)
             .flatMap { NotificationKey.load(nodeId: $0) }
-            .flatMap { PushDisplay.open(userInfo: content.userInfo, key: $0)?.terminalId } ?? content.threadIdentifier
+            .flatMap { PushDisplay.open(userInfo: content.userInfo, key: $0) }
+        let agent = display?.shownTitle ?? "agent"
+        let thread = display?.terminalId ?? content.threadIdentifier
         Task { @MainActor in
             await self.handle(action, agent: agent, thread: thread)
             completionHandler()

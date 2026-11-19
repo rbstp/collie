@@ -1,4 +1,5 @@
 import CollieCore
+import CryptoKit
 import Foundation
 import UserNotifications
 
@@ -101,18 +102,26 @@ enum NotificationResponse: Equatable, Sendable {
     case openAgent(nodeId: String, terminalId: String)
     case ignore
 
-    init(actionIdentifier: String, userInfo: [AnyHashable: Any]) {
+    /// `title`, `subtitle`, `body` and `category` are the notification's own, as iOS showed them. An action decides only
+    /// under the text and category ColliePush writes from the authenticated display: when the extension does not run, iOS
+    /// shows the sender's, and a sender with the APNs key could put its own text and Approve over a genuine approval's envelope.
+    init(
+        actionIdentifier: String, userInfo: [AnyHashable: Any], title: String = "", subtitle: String = "", body: String = "",
+        category: String = "", key load: (String) -> SymmetricKey? = NotificationKey.load
+    ) {
         var userInfo = userInfo
         if ApprovalNotification.decision(forAction: actionIdentifier) != nil, userInfo["enc"] == nil {
             self = .ignore
             return
         }
+        var authenticated = false
         if userInfo["enc"] != nil {
-            guard let node = userInfo["node_id"] as? String, let key = NotificationKey.load(nodeId: node),
-                let display = PushDisplay.open(userInfo: userInfo, key: key),
-                ApprovalNotification.decision(forAction: actionIdentifier) == nil || display.offersApproval
+            guard let node = userInfo["node_id"] as? String, let key = load(node),
+                let display = PushDisplay.open(userInfo: userInfo, key: key)
             else { self = .ignore; return }
             userInfo["terminal_id"] = display.terminalId
+            authenticated = category == ApprovalNotification.category && display.category == category
+                && title == display.shownTitle && subtitle.isEmpty && PushBody.shows(body, display.shownBody)
         }
         guard let link = ApprovalLink(userInfo: userInfo) else {
             if actionIdentifier == UNNotificationDefaultActionIdentifier,
@@ -126,7 +135,7 @@ enum NotificationResponse: Equatable, Sendable {
             return
         }
         if let decision = ApprovalNotification.decision(forAction: actionIdentifier) {
-            self = .decide(link, decision)
+            self = authenticated ? .decide(link, decision) : .open(link)
         } else if actionIdentifier == UNNotificationDefaultActionIdentifier {
             self = .open(link)
         } else {

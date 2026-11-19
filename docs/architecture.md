@@ -393,7 +393,7 @@ Every agent takes manual input on permissions, trust prompts, questions and plan
 | `node_id`, `event_id`, optional `approval_id` | opaque machine, fresh event and approval lookup IDs |
 | `enc` | versioned authenticated display envelope, canonical unpadded base64url |
 
-The alert as sent carries no category. ColliePush adds `APPROVAL` locally only after authenticating display content that offers both Approve and Deny, and restores the private terminal ID for navigation. An extension timeout, unavailable key or failed decryption leaves the generic alert without approval controls. The app authenticates encrypted responses again before classifying a decision.
+The alert as sent carries no category. ColliePush adds `APPROVAL` locally only after authenticating display content that offers both Approve and Deny, and restores the private terminal ID for navigation. An extension timeout, unavailable key or failed decryption leaves the generic alert without approval controls. The app authenticates encrypted responses again before classifying a decision, and holds the notification's own title, body and category against what ColliePush writes for that display (`PushDisplay.shownTitle`, `shownBody` and `category`; the body with or without the unreachable note, through `PushBody`; no subtitle, which ColliePush clears): iOS shows the sender's text and category when the extension does not run. A decision action under any other text or category only opens the approval in the app.
 
 ### Relay sender
 
@@ -425,6 +425,7 @@ Relay delivery has its own bounded worker: a 64-job ingress and at most 64 each 
 - Category `APPROVAL` has two actions, Approve and Deny (no Always allow, no note), both `authenticationRequired`: iOS makes the user unlock first, then launches the app in the background without UI.
 - The app holds a background task assertion and calls collie-core's `decide_from_notification` with a 20 s budget (the cap; 0 is refused). This one-shot session runs outside the connection supervisor: node up from cached state (never a login), the pinned Mac in the netmap, dial, `hello`, the nonce from the cached snapshot or `approval.list`, then `approval.decide`, never retrying past the budget.
 - It fails at once with `Unauthorized` when Tailscale is not set up on the phone, the node reports `NeedsLogin` or `NeedsMachineAuth`, the netmap violates the pin, or `hello` reports the phone unpaired.
+- An action decides only from a notification that shows the authenticated display's text and category ([APNs](#apns)); from any other it opens the approval, as a tap on the alert does. The follow-up names the agent from the authenticated display, never from the notification's title.
 - A follow-up local notification in the same thread claims success only for `applied`:
 
 | Background outcome | Follow-up | Opens the approval |
@@ -788,7 +789,7 @@ The session's Terminal view (an agent's, or a shell's) has no prompt field; its 
 ## ColliePush (notification service extension)
 
 - Pure Swift, no CollieCore, no network. It shares only `Sources/Shared`, the App Group `group.dev.rbstp.collie` and the notification keys' Keychain access group with the app.
-- It authenticates the display envelope against node, thread, event and approval IDs before replacing title and body and restoring the terminal ID. Only authenticated content offering a decision gets the approval category; on failure or timeout the generic original shows, without controls.
+- It authenticates the display envelope against node, thread, event and approval IDs before replacing title and body and restoring the terminal ID, and always clears the subtitle, which collied never sends. Only authenticated content offering a decision gets the approval category; on failure or timeout the generic original shows, without controls. The app checks an action's notification against the same text and category before it decides.
 - collie-core writes each machine's last connection success and failure times, nothing else, to `reachability.json` in the App Group. When the alert's machine last failed, the NSE appends " (machine may be unreachable, open collie to check)" to the body.
 - Codex alert context leaves out the user-input region before an assistant response. On Codex 0.162.1's detection screen, a structured question's context is the text from the last `Question N/M (K unanswered)` heading to the first numbered choice, wrapped lines joined, read only while the screen ends with the exact submit or notes footer; missing choices, incomplete dialogs and ambiguous screens fall back to the encrypted `Blocked in <workspace>`. The older question editor and action extraction stay supported; completion alerts stay generic. No version bump: no wire field, encryption, routing or approval action changed.
 

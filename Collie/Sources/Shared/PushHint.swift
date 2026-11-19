@@ -49,4 +49,9 @@ enum PushBody {
         else { return body }
         return body + unreachableSuffix
     }
+
+    /// Whether `shown` is `body` as `rewrite` leaves it.
+    static func shows(_ shown: String, _ body: String) -> Bool {
+        shown == body || !body.hasSuffix(unreachableSuffix) && shown == body + unreachableSuffix
+    }
 }

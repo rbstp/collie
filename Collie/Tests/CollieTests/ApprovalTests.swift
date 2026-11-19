@@ -1,4 +1,5 @@
 import CollieCore
+import CryptoKit
 import Foundation
 import SwiftUI
 import Synchronization
@@ -29,6 +30,49 @@ import UserNotifications
     )
     #expect(NotificationResponse(actionIdentifier: UNNotificationDismissActionIdentifier, userInfo: done) == .ignore)
     #expect(NotificationResponse(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: ["node_id": "n/x", "terminal_id": "t"]) == .ignore)
+}
+
+/// An alert as iOS hands it to the app: collied's public fields around `display`, sealed for nMAC.
+private func alert(_ display: PushDisplay) throws -> [AnyHashable: Any] {
+    let enc = try #require(PushEnvelope.seal(display, kind: 1, nodeId: "nMAC", scope: "thread", key: vectorKey))
+    var info: [AnyHashable: Any] = ["node_id": "nMAC", "event_id": try #require(PushEnvelope.header(enc)).eventId, "aps": ["thread-id": "thread"], "enc": enc]
+    info["approval_id"] = display.approvalId
+    return info
+}
+
+@Test func aNotificationActionDecidesOnlyUnderTheAuthenticatedTextAndCategory() throws {
+    let body = "Bash: rm -rf build"
+    let info = try alert(PushDisplay(v: 1, title: "api-fixer\u{202E}", body: body, terminalId: "term_1", approvalId: "ap_1", offersApproval: true))
+    let link = try #require(ApprovalLink(nodeId: "nMAC", approvalId: "ap_1"))
+    func response(
+        _ action: String = "APPROVE", _ info: [AnyHashable: Any] = info, title: String = "api-fixer", subtitle: String = "",
+        body: String = body, category: String = "APPROVAL", key: SymmetricKey = vectorKey
+    ) -> NotificationResponse {
+        NotificationResponse(actionIdentifier: action, userInfo: info, title: title, subtitle: subtitle, body: body, category: category) { _ in key }
+    }
+    #expect(response() == .decide(link, .approve))
+    #expect(response("DENY") == .decide(link, .deny))
+    #expect(response(body: PushBody.rewrite(body, nodeId: "nMAC", reachability: Data(#"{"nMAC":{"last_fail_ms":2}}"#.utf8))) == .decide(link, .approve))
+
+    // What iOS shows when ColliePush did not run is the sender's: the app opens, and decides nothing.
+    #expect(response(title: "Collie") == .open(link))
+    #expect(response(title: "api-fixer\u{202E}") == .open(link))
+    #expect(response(subtitle: "Approve to run the tests") == .open(link))
+    #expect(response(body: "An agent needs attention") == .open(link))
+    #expect(response(body: "Bash: ls") == .open(link))
+    #expect(response(body: body + PushBody.unreachableSuffix + PushBody.unreachableSuffix) == .open(link))
+    #expect(response("DENY", category: "") == .open(link))
+    #expect(response(category: "OTHER") == .open(link))
+    #expect(NotificationResponse(actionIdentifier: "APPROVE", userInfo: info, key: { _ in vectorKey }) == .open(link))
+    let silent = try alert(PushDisplay(v: 1, title: "api-fixer", body: body, terminalId: "term_1", approvalId: "ap_1", offersApproval: false))
+    #expect(response("APPROVE", silent) == .open(link))
+
+    #expect(response(UNNotificationDefaultActionIdentifier, title: "Collie", body: "An agent needs attention", category: "") == .open(link))
+    #expect(response(key: SymmetricKey(size: .bits256)) == .ignore)
+    #expect(response(UNNotificationDefaultActionIdentifier, key: SymmetricKey(size: .bits256)) == .ignore)
+    var other = info
+    other["approval_id"] = "ap_2"
+    #expect(response("APPROVE", other) == .ignore)
 }
 
 @Test func approvalCategoryNeedsAuthenticationForBothActions() throws {
