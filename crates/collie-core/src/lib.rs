@@ -1543,7 +1543,13 @@ impl CollieCore {
             let link = lock(&conn.shared.link);
             (link.phase, link_error(&conn, &link))
         };
-        let state = lock(&conn.shared.flock);
+        let mut state = lock(&conn.shared.flock);
+        let now = Instant::now();
+        let revision = state.output_revision;
+        let output = state
+            .screen(&terminal_id, now)
+            .filter(|_| revision > after_revision)
+            .map(|o| o.clone().into());
         let flock = state.flock.as_ref();
         Some(AgentView {
             link,
@@ -1553,13 +1559,7 @@ impl CollieCore {
                 .flat_map(|f| &f.agents)
                 .find(|a| a.terminal_id.as_str() == terminal_id)
                 .map(agent_summary),
-            output: state
-                .output
-                .as_ref()
-                .filter(|o| {
-                    o.terminal_id.as_str() == terminal_id && state.output_revision > after_revision
-                })
-                .map(|o| o.clone().into()),
+            output,
             output_revision: state.output_revision,
             terminal: flock.and_then(|f| {
                 let t = f
@@ -1568,7 +1568,7 @@ impl CollieCore {
                     .find(|t| t.terminal_id.as_str() == terminal_id)?;
                 Some(terminal_summary(f, t, &state))
             }),
-            terminal_locked: !state.unlocked(&terminal_id, Instant::now()),
+            terminal_locked: !state.unlocked(&terminal_id, now),
             terminals_enabled: flock.is_some_and(|f| f.terminals_enabled),
         })
     }
@@ -2856,7 +2856,7 @@ impl CollieCore {
     /// A grant collied no longer holds (expired, or dropped as an agent started there).
     fn locked_on<T>(&self, conn: &Conn, response: &Result<T, CoreError>) {
         if matches!(response, Err(CoreError::TerminalLocked)) {
-            lock(&conn.shared.flock).unlocked.clear();
+            lock(&conn.shared.flock).end_grants();
         }
     }
 
@@ -4952,6 +4952,42 @@ mod tests {
             ),
             "no challenge on this connection"
         );
+    }
+
+    #[test]
+    fn a_view_gets_no_shell_screen_without_a_live_grant() {
+        let (_dir, state) = stored(&[mac("m1")]);
+        let core = CollieCore::new(state.to_string_lossy().into()).unwrap();
+        let conn = core.conn("m1").unwrap();
+        let t1 = || TerminalId::new("term_1").unwrap();
+        let unlocked_with_output = |seq| {
+            let mut s = lock(&conn.shared.flock);
+            s.watch_terminal(t1());
+            s.unlocked
+                .insert(t1(), Instant::now() + Duration::from_secs(300));
+            let read = serde_json::from_value(serde_json::json!({
+                "terminal_id": "term_1", "source": "recent", "ansi": "$ cat .env", "truncated": false
+            }))
+            .unwrap();
+            s.apply_event(seq, protocol::Event::AgentOutput(read), 0);
+        };
+        let view = || core.agent_view("m1".into(), "term_1".into(), 0).unwrap();
+        let screen = || view().output.map(|o| o.ansi);
+
+        unlocked_with_output(1);
+        assert_eq!(screen().as_deref(), Some("$ cat .env"));
+        core.locked_on(&conn, &Err::<(), _>(CoreError::TerminalLocked));
+        assert!(view().terminal_locked);
+        assert_eq!(screen(), None, "collied answered terminal_locked");
+
+        unlocked_with_output(2);
+        assert_eq!(screen().as_deref(), Some("$ cat .env"));
+        // The grant's end moves to now, in place of a wait.
+        lock(&conn.shared.flock)
+            .unlocked
+            .insert(t1(), Instant::now());
+        assert!(view().terminal_locked);
+        assert_eq!(screen(), None, "the grant ran out");
     }
 
     #[test]
