@@ -740,6 +740,7 @@ mod tests {
             Event::ApprovalNeeded {
                 approval: approval("a1"),
             },
+            0,
         );
         s.apply_event(
             2,
@@ -750,6 +751,7 @@ mod tests {
                     by: "mac".into(),
                 },
             },
+            0,
         );
         let all = feed(LinkPhase::Connected, &s);
         assert_eq!(all.pending.len(), 1);

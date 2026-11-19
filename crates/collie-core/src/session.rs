@@ -25,6 +25,9 @@ pub const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const MAX_MESSAGE_BYTES: usize = 4 << 20;
 const MAX_REPLAY_EVENTS: usize = 1024;
+/// Events are applied only while the queue takes them, so a machine can make the phone hold a
+/// flock of one snapshot frame and this much in events, however many frames it sends.
+const MAX_REPLAY_BYTES: usize = MAX_MESSAGE_BYTES;
 const MAX_ERROR_CHARS: usize = 200;
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -198,7 +201,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         tokio::time::timeout(timeout, async {
             let id = self.send(request).await?;
             loop {
-                match self.recv().await? {
+                match self.recv().await?.0 {
                     ServerFrame::Result { id: rid, result } if rid == id => return Ok(result),
                     ServerFrame::Error {
                         id: Some(rid),
@@ -233,21 +236,23 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
         Ok(id)
     }
 
-    async fn recv(&mut self) -> Result<ServerFrame, SessionError> {
+    async fn recv(&mut self) -> Result<(ServerFrame, usize), SessionError> {
         loop {
             let message = self.ws.next().await.ok_or(SessionError::Closed)??;
             self.last_frame = Instant::now();
             match message {
                 Message::Text(text) => {
                     // serde's own message quotes the frame, which the machine chose.
-                    return serde_json::from_str(text.as_str()).map_err(|e| {
-                        SessionError::Protocol(format!(
-                            "{:?} error at line {} column {}",
-                            e.classify(),
-                            e.line(),
-                            e.column()
-                        ))
-                    });
+                    return serde_json::from_str(text.as_str())
+                        .map(|frame| (frame, text.len()))
+                        .map_err(|e| {
+                            SessionError::Protocol(format!(
+                                "{:?} error at line {} column {}",
+                                e.classify(),
+                                e.line(),
+                                e.column()
+                            ))
+                        });
                 }
                 Message::Close(_) => return Err(SessionError::Closed),
                 Message::Binary(_) => {
@@ -333,22 +338,29 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                     }
                 }
                 frame = self.recv() => {
-                    let frame = match frame {
+                    let (frame, bytes) = match frame {
                         Ok(frame) => frame,
                         Err(e) => break e,
                     };
                     match frame {
                         ServerFrame::Result { id, result } => {
                             let (reply, read_mark) = pending.remove(&id).unwrap_or_default();
-                            match &result {
+                            let behind = match &result {
                                 Response::Flock(flock) => lock(state).apply_snapshot(flock.clone()),
                                 Response::Terminal(read) if read_mark.is_some() => {
                                     lock(state).apply_read(read.clone(), read_mark);
+                                    false
                                 }
-                                _ => {}
-                            }
+                                _ => false,
+                            };
                             if let Some(reply) = reply {
                                 let _ = reply.send(Ok(result));
+                            }
+                            if behind {
+                                match self.send(Request::FlockSnapshot(Empty {})).await {
+                                    Ok(id) => { pending.insert(id, (None, None)); }
+                                    Err(e) => break e,
+                                }
                             }
                         }
                         ServerFrame::Error { id: Some(id), error } => {
@@ -365,7 +377,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Session<S> {
                         }
                         ServerFrame::Error { id: None, error } => break error.into(),
                         ServerFrame::Event { seq, event } => {
-                            let outcome = lock(state).apply_event(seq, event);
+                            let outcome = lock(state).apply_event(seq, event, bytes);
                             let request = match outcome {
                                 EventOutcome::NeedsSnapshot => Request::FlockSnapshot(Empty {}),
                                 EventOutcome::NeedsWatch(terminal_id) => {
@@ -437,9 +449,13 @@ pub fn expect_flock(response: Response) -> Result<Flock, SessionError> {
     }
 }
 
+/// The name becomes the machine's label, which the app shows and logs.
 pub fn expect_paired(response: Response) -> Result<protocol::MachineInfo, SessionError> {
     match response {
-        Response::Paired { machine } => Ok(machine),
+        Response::Paired { machine } => match Label::new(machine.name.as_str()) {
+            Ok(_) => Ok(machine),
+            Err(_) => Err(SessionError::Protocol("invalid machine name".into())),
+        },
         other => Err(unexpected(&other)),
     }
 }
@@ -478,7 +494,10 @@ pub struct FlockState {
     watched_output: Option<TerminalRead>,
     output_events: u64,
     last_seq: u64,
-    since_snapshot: VecDeque<(u64, Event)>,
+    since_snapshot: VecDeque<(u64, usize, Event)>,
+    replay_bytes: usize,
+    /// The newest event the full queue left out: only a snapshot at or past it is current.
+    skipped: u64,
 }
 
 impl FlockState {
@@ -486,6 +505,8 @@ impl FlockState {
     pub fn new_connection(&mut self) {
         self.last_seq = 0;
         self.since_snapshot.clear();
+        self.replay_bytes = 0;
+        self.skipped = 0;
         self.herdr_down = false;
         self.watched_output = None;
         self.lock_terminals();
@@ -544,7 +565,8 @@ impl FlockState {
         }
     }
 
-    pub fn apply_event(&mut self, seq: u64, event: Event) -> EventOutcome {
+    /// `bytes` is the size of the event's frame.
+    pub fn apply_event(&mut self, seq: u64, event: Event, bytes: usize) -> EventOutcome {
         if seq <= self.last_seq {
             return EventOutcome::Dropped;
         }
@@ -571,33 +593,45 @@ impl FlockState {
             Event::FlockChanged {} => return EventOutcome::NeedsSnapshot,
             Event::Unrecognized => {}
             event => {
+                if self.since_snapshot.len() == MAX_REPLAY_EVENTS
+                    || self.replay_bytes + bytes > MAX_REPLAY_BYTES
+                {
+                    self.skipped = seq;
+                    return EventOutcome::NeedsSnapshot;
+                }
                 if let Some(flock) = &mut self.flock {
                     apply(flock, &event);
                 }
-                if self.since_snapshot.len() == MAX_REPLAY_EVENTS {
-                    self.since_snapshot.pop_front();
-                }
-                self.since_snapshot.push_back((seq, event));
+                self.replay_bytes += bytes;
+                self.since_snapshot.push_back((seq, bytes, event));
             }
         }
         EventOutcome::Applied
     }
 
     /// A snapshot answered after newer events were applied must not erase them, so
-    /// events past `snapshot.seq` are replayed onto it.
-    pub fn apply_snapshot(&mut self, mut snapshot: Flock) {
+    /// events past `snapshot.seq` are replayed onto it. True when the full queue left out an
+    /// event newer than the snapshot, which then needs another.
+    pub fn apply_snapshot(&mut self, mut snapshot: Flock) -> bool {
         // The app keys its lists on the terminal id, and events update the first match.
         let mut seen = HashSet::new();
         snapshot
             .agents
             .retain(|a| seen.insert(a.terminal_id.clone()));
-        self.since_snapshot.retain(|(seq, _)| *seq > snapshot.seq);
-        for (_, event) in &self.since_snapshot {
+        self.since_snapshot
+            .retain(|(seq, _, _)| *seq > snapshot.seq);
+        self.replay_bytes = self.since_snapshot.iter().map(|(_, bytes, _)| bytes).sum();
+        for (_, _, event) in &self.since_snapshot {
             apply(&mut snapshot, event);
         }
         self.last_seq = self.last_seq.max(snapshot.seq);
+        let behind = self.skipped > snapshot.seq;
+        if !behind {
+            self.skipped = 0;
+        }
         self.flock = Some(snapshot);
         self.herdr_down = false;
+        behind
     }
 
     /// From a one-shot listing while this connection is closed, so the app does not
@@ -741,25 +775,25 @@ mod tests {
         let mut s = FlockState::default();
         s.apply_snapshot(flock(5, vec![agent("t1", AgentStatus::Idle)]));
         assert_eq!(
-            s.apply_event(5, status_event("t1", AgentStatus::Blocked)),
+            s.apply_event(5, status_event("t1", AgentStatus::Blocked), 0),
             EventOutcome::Dropped
         );
         assert_eq!(
-            s.apply_event(3, status_event("t1", AgentStatus::Blocked)),
+            s.apply_event(3, status_event("t1", AgentStatus::Blocked), 0),
             EventOutcome::Dropped
         );
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Idle));
         assert_eq!(
-            s.apply_event(6, status_event("t1", AgentStatus::Working)),
+            s.apply_event(6, status_event("t1", AgentStatus::Working), 0),
             EventOutcome::Applied
         );
         assert_eq!(
-            s.apply_event(6, status_event("t1", AgentStatus::Done)),
+            s.apply_event(6, status_event("t1", AgentStatus::Done), 0),
             EventOutcome::Dropped
         );
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Working));
         assert_eq!(
-            s.apply_event(7, status_event("t2", AgentStatus::Blocked)),
+            s.apply_event(7, status_event("t2", AgentStatus::Blocked), 0),
             EventOutcome::Applied
         );
         assert_eq!(status_of(&s, "t2"), Some(AgentStatus::Blocked));
@@ -769,13 +803,16 @@ mod tests {
     fn unknown_events_advance_the_cursor() {
         let mut s = FlockState::default();
         s.apply_snapshot(flock(1, vec![]));
-        assert_eq!(s.apply_event(2, Event::Unrecognized), EventOutcome::Applied);
         assert_eq!(
-            s.apply_event(2, status_event("t1", AgentStatus::Idle)),
+            s.apply_event(2, Event::Unrecognized, 0),
+            EventOutcome::Applied
+        );
+        assert_eq!(
+            s.apply_event(2, status_event("t1", AgentStatus::Idle), 0),
             EventOutcome::Dropped
         );
         assert_eq!(
-            s.apply_event(3, Event::FlockChanged {}),
+            s.apply_event(3, Event::FlockChanged {}, 0),
             EventOutcome::NeedsSnapshot
         );
     }
@@ -799,17 +836,67 @@ mod tests {
     }
 
     #[test]
+    fn events_past_the_replay_queue_wait_for_a_snapshot() {
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(0, vec![]));
+        let status = |seq: u64| status_event(&format!("t{seq}"), AgentStatus::Idle);
+        let agents = |s: &FlockState| s.flock.as_ref().unwrap().agents.len();
+        for seq in 1..=2000 {
+            let asks = s.apply_event(seq, status(seq), 0) == EventOutcome::NeedsSnapshot;
+            assert_eq!(asks, seq > MAX_REPLAY_EVENTS as u64, "{seq}");
+        }
+        assert_eq!(agents(&s), MAX_REPLAY_EVENTS);
+        assert!(s.apply_snapshot(flock(1999, vec![])), "event 2000 is newer");
+        assert!(!s.apply_snapshot(flock(2000, vec![agent("t2000", AgentStatus::Idle)])));
+        assert_eq!(agents(&s), 1);
+        assert_eq!(s.apply_event(2001, status(2001), 0), EventOutcome::Applied);
+    }
+
+    #[test]
+    fn the_replay_queue_is_bounded_in_bytes() {
+        let mut s = FlockState::default();
+        s.apply_snapshot(flock(0, vec![]));
+        let status = |seq: u64| status_event(&format!("t{seq}"), AgentStatus::Idle);
+        let half = MAX_REPLAY_BYTES / 2;
+        assert_eq!(s.apply_event(1, status(1), half), EventOutcome::Applied);
+        assert_eq!(s.apply_event(2, status(2), half), EventOutcome::Applied);
+        assert_eq!(s.apply_event(3, status(3), 1), EventOutcome::NeedsSnapshot);
+        assert_eq!(status_of(&s, "t3"), None);
+        assert!(!s.apply_snapshot(flock(3, vec![])));
+        assert_eq!(
+            s.apply_event(4, status(4), MAX_REPLAY_BYTES),
+            EventOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn a_paired_reply_needs_a_name_that_is_a_label() {
+        let paired = |name: &str| {
+            expect_paired(Response::Paired {
+                machine: MachineInfo {
+                    name: name.into(),
+                    ..machine()
+                },
+            })
+        };
+        assert_eq!(paired("Mac mini").unwrap().name, "Mac mini");
+        for name in ["", "mac\u{202e}", "mac\n", &"m".repeat(65)] {
+            assert!(matches!(paired(name), Err(SessionError::Protocol(_))));
+        }
+    }
+
+    #[test]
     fn late_snapshot_keeps_newer_events() {
         let mut s = FlockState::default();
         s.apply_snapshot(flock(1, vec![agent("t1", AgentStatus::Idle)]));
-        s.apply_event(2, status_event("t1", AgentStatus::Working));
-        s.apply_event(3, status_event("t1", AgentStatus::Blocked));
+        s.apply_event(2, status_event("t1", AgentStatus::Working), 0);
+        s.apply_event(3, status_event("t1", AgentStatus::Blocked), 0);
         s.apply_snapshot(flock(2, vec![agent("t1", AgentStatus::Working)]));
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Blocked));
         s.apply_snapshot(flock(9, vec![agent("t1", AgentStatus::Done)]));
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Done));
         assert_eq!(
-            s.apply_event(9, status_event("t1", AgentStatus::Idle)),
+            s.apply_event(9, status_event("t1", AgentStatus::Idle), 0),
             EventOutcome::Dropped
         );
     }
@@ -836,7 +923,7 @@ mod tests {
         let event = Event::PlanUsage {
             plan_usage: plan(30),
         };
-        assert_eq!(s.apply_event(2, event), EventOutcome::Applied);
+        assert_eq!(s.apply_event(2, event, 0), EventOutcome::Applied);
         s.apply_snapshot(with(1, 10));
         assert_eq!(used(&s), Some(plan(30)));
         s.apply_snapshot(with(5, 40));
@@ -933,7 +1020,7 @@ mod tests {
         });
         s.apply_snapshot(with_codex);
         assert_eq!(
-            s.apply_event(2, Event::FlockChanged {}),
+            s.apply_event(2, Event::FlockChanged {}, 0),
             EventOutcome::NeedsSnapshot
         );
         s.apply_snapshot(flock(2, vec![]));
@@ -947,7 +1034,7 @@ mod tests {
         s.new_connection();
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Idle));
         assert_eq!(
-            s.apply_event(1, status_event("t1", AgentStatus::Working)),
+            s.apply_event(1, status_event("t1", AgentStatus::Working), 0),
             EventOutcome::Applied
         );
         assert_eq!(status_of(&s, "t1"), Some(AgentStatus::Working));
@@ -969,8 +1056,9 @@ mod tests {
             Event::ApprovalNeeded {
                 approval: approval.clone(),
             },
+            0,
         );
-        s.apply_event(2, Event::ApprovalNeeded { approval });
+        s.apply_event(2, Event::ApprovalNeeded { approval }, 0);
         assert_eq!(s.flock.as_ref().unwrap().approvals.len(), 1);
         s.apply_event(
             3,
@@ -978,6 +1066,7 @@ mod tests {
                 approval_id: ApprovalId::new("a1").unwrap(),
                 outcome: protocol::ApprovalOutcome::Expired,
             },
+            0,
         );
         assert!(s.flock.as_ref().unwrap().approvals.is_empty());
     }
@@ -988,7 +1077,7 @@ mod tests {
         s.watch(Some(TerminalId::new("t1").unwrap()));
         let ev = |ansi| Event::AgentOutput(output("t1", ansi, ReadSource::Recent));
         let mark = s.output_events;
-        s.apply_event(1, ev("newer"));
+        s.apply_event(1, ev("newer"), 0);
         s.apply_read(output("t1", "older", ReadSource::Recent), Some(mark));
         assert_eq!((shown(&s), s.output_revision), (Some("newer"), 1));
         s.apply_read(
@@ -997,7 +1086,11 @@ mod tests {
         );
         assert_eq!((shown(&s), s.output_revision), (Some("fresh"), 2));
         let mark = s.output_events;
-        s.apply_event(2, Event::AgentOutput(output("t2", "x", ReadSource::Recent)));
+        s.apply_event(
+            2,
+            Event::AgentOutput(output("t2", "x", ReadSource::Recent)),
+            0,
+        );
         s.apply_read(output("t1", "still fresh", ReadSource::Recent), Some(mark));
         assert_eq!(
             shown(&s),
@@ -1023,19 +1116,19 @@ mod tests {
         let (a, c) = (text("a"), text("c"));
 
         assert_eq!(
-            s.apply_event(1, patch(&a, &b)),
+            s.apply_event(1, patch(&a, &b), 0),
             EventOutcome::NeedsWatch(t1.clone())
         );
         assert_eq!(shown(&s), None);
-        s.apply_event(2, Event::AgentOutput(a.clone()));
+        s.apply_event(2, Event::AgentOutput(a.clone()), 0);
         let mark = s.output_events;
-        assert_eq!(s.apply_event(3, patch(&a, &b)), EventOutcome::Applied);
+        assert_eq!(s.apply_event(3, patch(&a, &b), 0), EventOutcome::Applied);
         assert_eq!((shown(&s), s.output_revision), (Some(b.ansi.as_str()), 2));
         assert_eq!(s.output.as_ref().unwrap().wraps, [50]);
         assert_eq!(s.output_events, mark + 1, "a patch is an output event");
 
         s.apply_read(output("t1", "read", ReadSource::Recent), None);
-        assert_eq!(s.apply_event(4, patch(&b, &c)), EventOutcome::Applied);
+        assert_eq!(s.apply_event(4, patch(&b, &c), 0), EventOutcome::Applied);
         assert_eq!(
             shown(&s),
             Some(c.ansi.as_str()),
@@ -1043,17 +1136,17 @@ mod tests {
         );
 
         assert_eq!(
-            s.apply_event(5, patch(&a, &b)),
+            s.apply_event(5, patch(&a, &b), 0),
             EventOutcome::NeedsWatch(t1.clone())
         );
         assert_eq!((shown(&s), s.output_revision), (Some(c.ansi.as_str()), 4));
         assert_eq!(
-            s.apply_event(6, patch(&c, &b)),
+            s.apply_event(6, patch(&c, &b), 0),
             EventOutcome::NeedsWatch(t1.clone()),
             "nothing to patch until the next full output"
         );
-        s.apply_event(7, Event::AgentOutput(c.clone()));
-        assert_eq!(s.apply_event(8, patch(&c, &a)), EventOutcome::Applied);
+        s.apply_event(7, Event::AgentOutput(c.clone()), 0);
+        assert_eq!(s.apply_event(8, patch(&c, &a), 0), EventOutcome::Applied);
         assert_eq!(shown(&s), Some(a.ansi.as_str()));
 
         let other = OutputPatch {
@@ -1061,14 +1154,14 @@ mod tests {
             ..OutputPatch::between(&a, &b).unwrap()
         };
         assert_eq!(
-            s.apply_event(9, Event::AgentOutputPatch(other)),
+            s.apply_event(9, Event::AgentOutputPatch(other), 0),
             EventOutcome::Applied
         );
         assert_eq!(shown(&s), Some(a.ansi.as_str()));
 
         s.new_connection();
         assert_eq!(
-            s.apply_event(1, patch(&a, &b)),
+            s.apply_event(1, patch(&a, &b), 0),
             EventOutcome::NeedsWatch(t1)
         );
         assert_eq!(
@@ -1101,37 +1194,37 @@ mod tests {
         s.apply_snapshot(flock(1, vec![agent("t1", AgentStatus::Working)]));
         let ev = |id, ansi| Event::AgentOutput(output(id, ansi, ReadSource::Recent));
         assert_eq!(
-            s.apply_event(2, ev("t1", "unwatched")),
+            s.apply_event(2, ev("t1", "unwatched"), 0),
             EventOutcome::Applied
         );
         assert_eq!(shown(&s), None);
 
         s.watch(Some(TerminalId::new("t1").unwrap()));
-        s.apply_event(3, ev("t1", "a"));
+        s.apply_event(3, ev("t1", "a"), 0);
         assert_eq!((shown(&s), s.output_revision), (Some("a"), 1));
-        assert_eq!(s.apply_event(3, ev("t1", "dup")), EventOutcome::Dropped);
-        assert_eq!(s.apply_event(2, ev("t1", "old")), EventOutcome::Dropped);
-        s.apply_event(4, ev("t2", "other agent"));
+        assert_eq!(s.apply_event(3, ev("t1", "dup"), 0), EventOutcome::Dropped);
+        assert_eq!(s.apply_event(2, ev("t1", "old"), 0), EventOutcome::Dropped);
+        s.apply_event(4, ev("t2", "other agent"), 0);
         s.apply_read(output("t1", "visible", ReadSource::Visible), None);
         assert_eq!((shown(&s), s.output_revision), (Some("a"), 1));
-        s.apply_event(5, ev("t1", "b"));
+        s.apply_event(5, ev("t1", "b"), 0);
         assert_eq!((shown(&s), s.output_revision), (Some("b"), 2));
         assert!(
             s.since_snapshot
                 .iter()
-                .all(|(_, e)| !matches!(e, Event::AgentOutput(_)))
+                .all(|(_, _, e)| !matches!(e, Event::AgentOutput(_)))
         );
 
         s.new_connection();
         assert_eq!(shown(&s), Some("b"), "kept on screen while reconnecting");
-        s.apply_event(1, ev("t1", "c"));
+        s.apply_event(1, ev("t1", "c"), 0);
         assert_eq!((shown(&s), s.output_revision), (Some("c"), 3));
 
         s.watch(Some(TerminalId::new("t1").unwrap()));
         assert_eq!(shown(&s), Some("c"));
         s.watch(Some(TerminalId::new("t2").unwrap()));
         assert_eq!(shown(&s), None);
-        s.apply_event(2, ev("t2", "d"));
+        s.apply_event(2, ev("t2", "d"), 0);
         assert_eq!((shown(&s), s.output_revision), (Some("d"), 4));
         s.watch(None);
         assert_eq!(shown(&s), None);
@@ -1601,6 +1694,43 @@ mod tests {
         assert_eq!(status_of(&lock(&state), "t1"), Some(AgentStatus::Blocked));
         assert_eq!(status_of(&lock(&state), "t2"), Some(AgentStatus::Working));
         drop(server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn run_asks_again_while_a_snapshot_is_older_than_a_skipped_event() {
+        let (session, server) = pair_of(Some(WS_SUBPROTOCOL)).await;
+        let (session, mut ws) = (session.unwrap(), server.unwrap());
+        let state = Mutex::new(FlockState::default());
+        let (_tx, mut rx) = mpsc::channel(8);
+        let server = tokio::spawn(async move {
+            let snapshot = |id, seq, agents| ServerFrame::Result {
+                id,
+                result: Response::Flock(flock(seq, agents)),
+            };
+            let seed = read(&mut ws).await;
+            write(&mut ws, snapshot(seed.id, 0, vec![])).await;
+            for seq in 1..=2 {
+                let mut agent = agent("t1", AgentStatus::Idle);
+                agent.title = Some("x".repeat(MAX_REPLAY_BYTES / 2));
+                let event = Event::AgentStatus { agent };
+                write(&mut ws, ServerFrame::Event { seq, event }).await;
+            }
+            for (seq, agents) in [(1, vec![]), (2, vec![agent("t2", AgentStatus::Done)])] {
+                let asked = read(&mut ws).await;
+                assert!(matches!(asked.request, Request::FlockSnapshot(_)));
+                write(&mut ws, snapshot(asked.id, seq, agents)).await;
+            }
+            let more = tokio::time::timeout(Duration::from_millis(200), read(&mut ws)).await;
+            assert!(more.is_err(), "the snapshot is current: {more:?}");
+        });
+        let end = session
+            .run(&mut rx, &state, Vec::new(), std::future::pending())
+            .await;
+        assert!(!end.is_auth());
+        server.await.unwrap();
+        let s = lock(&state);
+        assert_eq!(status_of(&s, "t2"), Some(AgentStatus::Done));
+        assert_eq!(status_of(&s, "t1"), None);
     }
 
     #[tokio::test]
