@@ -11,7 +11,7 @@ use protocol::{
 use rustix::fs::{Mode, OFlags};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::drive::{Fail, resolve_cwd};
@@ -22,6 +22,7 @@ const FILE_LIMIT: u64 = 1024 * 1024;
 const RESPONSE_LIMIT: usize = 48 * 1024;
 const MAX_FILES: usize = 200;
 const MAX_WORKTREES: usize = 20;
+const MAX_SUBMODULES: usize = 100;
 const PULL_PAGE: usize = 100;
 
 fn error(message: &str) -> Fail {
@@ -31,15 +32,56 @@ fn error(message: &str) -> Fail {
 async fn git(cwd: &Cwd, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool, bool), Fail> {
     let mut overrides = Vec::new();
     if matches!(args.first(), Some(&"diff" | &"status")) {
+        // The listing can run three git commands for each of 101 repositories, each with 8 s
+        // of its own; it gets 8 s in all, as long as the one command it guards may run.
+        let listed = tokio::time::timeout(Duration::from_secs(8), filters(cwd))
+            .await
+            .map_err(|_| error("Git took too long; try again"))??;
+        let Some(keys) = listed else {
+            return Ok((Vec::new(), false, false));
+        };
+        overrides = keys;
+    }
+    git_command(cwd, args, limit, &overrides).await
+}
+
+/// The filter keys a `diff` or `status` in `cwd` blanks, or none when one is unreadable.
+/// `--ignore-submodules=none` runs `git status` with `GIT_DIR=.git` in every populated
+/// submodule, nested ones included, and that reads the submodule's own config, so each one is
+/// read here the same way.
+async fn filters(cwd: &Cwd) -> Result<Option<Vec<String>>, Fail> {
+    let mut keys = Vec::new();
+    let mut pending = vec![(cwd.clone(), None)];
+    for _ in 0..=MAX_SUBMODULES {
+        let Some((folder, git_dir)) = pending.pop() else {
+            break;
+        };
+        let options: Vec<&str> = git_dir.iter().map(String::as_str).collect();
+        let with = |args: &[&'static str]| [&options[..], args].concat();
+        let (out, ok, truncated) =
+            git_command(&folder, &with(&["rev-parse", "--show-toplevel"]), 4096, &[]).await?;
+        let top = std::str::from_utf8(&out)
+            .ok()
+            .and_then(|top| Cwd::new(top.trim_end_matches('\n')).ok());
+        let Some(top) = top.filter(|_| ok && !truncated) else {
+            return Ok(None);
+        };
+        let Some(found) = submodules(&top, &options).await? else {
+            return Ok(None);
+        };
+        for submodule in found {
+            let git_dir = format!("--git-dir={}/.git", submodule.as_str());
+            pending.push((submodule, Some(git_dir)));
+        }
         let (out, _, truncated) = git_command(
-            cwd,
-            &[
+            &folder,
+            &with(&[
                 "config",
                 "--null",
                 "--name-only",
                 "--get-regexp",
                 "^filter\\..*\\.(clean|process|required)$",
-            ],
+            ]),
             64 * 1024,
             &[],
         )
@@ -50,17 +92,71 @@ async fn git(cwd: &Cwd, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool, b
         for key in out.split(|b| *b == 0).filter(|s| !s.is_empty()) {
             let key =
                 std::str::from_utf8(key).map_err(|_| error("Invalid Git filter configuration"))?;
-            overrides.push(format!(
-                "{key}={}",
-                if key.ends_with(".required") {
-                    "false"
-                } else {
-                    ""
-                }
-            ));
+            if !keys.iter().any(|k| k == key) {
+                keys.push(key.to_owned());
+            }
         }
     }
-    git_command(cwd, args, limit, &overrides).await
+    if !pending.is_empty() {
+        return Err(error("Too many Git submodules to safely read changes"));
+    }
+    Ok(Some(keys))
+}
+
+/// The populated submodules in the index git finds from `top`, read as a stream that keeps
+/// only gitlinks, so a large index is never held in memory.
+async fn submodules(top: &Cwd, options: &[&str]) -> Result<Option<Vec<Cwd>>, Fail> {
+    let mut command = git_process(
+        top,
+        &[options, &["ls-files", "--stage", "-z"]].concat(),
+        &[],
+    );
+    tokio::time::timeout(Duration::from_secs(8), async {
+        let mut child = command.spawn().map_err(|_| error("Git is unavailable"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| error("Git output unavailable"))?;
+        let mut stdout = tokio::io::BufReader::new(stdout);
+        let (mut found, mut record) = (Vec::new(), Vec::new());
+        loop {
+            record.clear();
+            (&mut stdout)
+                .take(8192)
+                .read_until(0, &mut record)
+                .await
+                .map_err(|_| error("Could not read Git output"))?;
+            match record.pop() {
+                None => break,
+                Some(0) => {}
+                Some(_) => return Ok(None),
+            }
+            let Some(entry) = record.strip_prefix(b"160000 ") else {
+                continue;
+            };
+            let Some(tab) = entry.iter().position(|b| *b == b'\t') else {
+                continue;
+            };
+            let Ok(name) = std::str::from_utf8(&entry[tab + 1..]) else {
+                return Ok(None);
+            };
+            let path = Path::new(top.as_str()).join(name);
+            if path.join(".git").symlink_metadata().is_err() {
+                continue;
+            }
+            let Some(submodule) = path.to_str().and_then(|p| Cwd::new(p).ok()) else {
+                return Ok(None);
+            };
+            if found.len() == MAX_SUBMODULES {
+                return Err(error("Too many Git submodules to safely read changes"));
+            }
+            found.push(submodule);
+        }
+        let status = child.wait().await.map_err(|_| error("Git failed"))?;
+        Ok(status.success().then_some(found))
+    })
+    .await
+    .map_err(|_| error("Git took too long; try again"))?
 }
 
 async fn git_command(
@@ -69,47 +165,7 @@ async fn git_command(
     limit: usize,
     overrides: &[String],
 ) -> Result<(Vec<u8>, bool, bool), Fail> {
-    let mut command = Command::new("git");
-    command.current_dir(cwd.as_str()).args([
-        "--no-pager",
-        "--literal-pathspecs",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "fetch.bundleURI=",
-        "-c",
-        "diff.external=",
-        "-c",
-        "diff.submodule=short",
-        "-c",
-        "diff.renames=true",
-        "-c",
-        "diff.renameLimit=1000",
-    ]);
-    for value in overrides {
-        command.args(["-c", value]);
-    }
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(key);
-        }
-    }
-    // A partial clone's lazy fetch runs repository-configured programs (uploadpack,
-    // sshCommand, credential helpers). GIT_NO_LAZY_FETCH needs git 2.45 or a 2.39.4 to
-    // 2.44.1 security release; for older git, an empty GIT_ALLOW_PROTOCOL refuses every
-    // transport and outranks repository config, and the blank fetch.bundleURI above stops
-    // the fetch from starting git-remote-https before that check.
-    command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .env("GIT_ALLOW_PROTOCOL", "");
+    let mut command = git_process(cwd, args, overrides);
     tokio::time::timeout(Duration::from_secs(8), async {
         let mut child = command.spawn().map_err(|_| error("Git is unavailable"))?;
         let mut bytes = Vec::new();
@@ -136,9 +192,70 @@ async fn git_command(
     .map_err(|_| error("Git took too long; try again"))?
 }
 
+fn git_process(cwd: &Cwd, args: &[&str], overrides: &[String]) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(cwd.as_str()).args([
+        "--no-pager",
+        "--literal-pathspecs",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "fetch.bundleURI=",
+        "-c",
+        "diff.external=",
+        "-c",
+        "diff.submodule=short",
+        "-c",
+        "diff.renames=true",
+        "-c",
+        "diff.renameLimit=1000",
+        "-c",
+        "safe.bareRepository=explicit",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ]);
+    // Not `-c`, which splits at the first `=`, and a filter's name may hold one (a driver named
+    // `a.clean=<command>` would set `filter.a.clean`). `--config-env` splits at the last `=`,
+    // reaches the `git status` git runs in a submodule, and git before 2.31 refuses it, so the
+    // read fails. Its values sit in `COLLIE_GIT_*` variables: no name git reads, and none the
+    // `GIT_*` removal below drops.
+    for key in overrides {
+        let value = if key.ends_with(".required") {
+            "COLLIE_GIT_FALSE"
+        } else {
+            "COLLIE_GIT_EMPTY"
+        };
+        command.arg(format!("--config-env={key}={value}"));
+    }
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
+    // A partial clone's lazy fetch runs repository-configured programs (uploadpack,
+    // sshCommand, credential helpers). GIT_NO_LAZY_FETCH needs git 2.45 or a 2.39.4 to
+    // 2.44.1 security release; for older git, an empty GIT_ALLOW_PROTOCOL refuses every
+    // transport and outranks repository config, and the blank fetch.bundleURI above stops
+    // the fetch from starting git-remote-https before that check.
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "")
+        .env("COLLIE_GIT_EMPTY", "")
+        .env("COLLIE_GIT_FALSE", "false");
+    command
+}
+
 /// The first line of a short answer, or none when git fails.
 pub(crate) async fn line(cwd: &Cwd, args: &[&str]) -> Result<Option<String>, Fail> {
-    let (out, ok, truncated) = git_command(cwd, args, 4096, &[]).await?;
+    let (out, ok, truncated) = folder_git(cwd, args, 4096).await?;
     Ok((ok && !truncated).then(|| {
         String::from_utf8_lossy(&out)
             .lines()
@@ -146,6 +263,22 @@ pub(crate) async fn line(cwd: &Cwd, args: &[&str]) -> Result<Option<String>, Fai
             .unwrap_or_default()
             .to_owned()
     }))
+}
+
+/// `safe.bareRepository=explicit` refuses a bare repository found from its own folder. A
+/// worktree task's folder can be one kept for worktrees: it is named with `--git-dir`, but
+/// only with no `.git` at or above it, as inside a checkout it can be the checkout's content.
+async fn folder_git(cwd: &Cwd, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool, bool), Fail> {
+    let (out, ok, truncated) = git_command(cwd, args, limit, &[]).await?;
+    if ok
+        || Path::new(cwd.as_str())
+            .ancestors()
+            .any(|dir| dir.join(".git").symlink_metadata().is_ok())
+    {
+        return Ok((out, ok, truncated));
+    }
+    let git_dir = format!("--git-dir={}", cwd.as_str());
+    git_command(cwd, &[&[git_dir.as_str()][..], args].concat(), limit, &[]).await
 }
 
 async fn root(cwd: &Cwd, roots: &[PathBuf]) -> Result<Option<Cwd>, Fail> {
@@ -232,13 +365,8 @@ async fn worktrees(checkout: &Cwd, roots: &[PathBuf]) -> Result<Vec<GitWorktree>
 /// What herdr's `worktree.list` answers, for a herdr-core task: the main checkout is the
 /// first entry and the source, every other entry a linked worktree.
 pub(crate) async fn worktree_list(cwd: &Cwd) -> Result<WorktreeList, Fail> {
-    let (out, ok, truncated) = git_command(
-        cwd,
-        &["worktree", "list", "--porcelain", "-z"],
-        256 * 1024,
-        &[],
-    )
-    .await?;
+    let (out, ok, truncated) =
+        folder_git(cwd, &["worktree", "list", "--porcelain", "-z"], 256 * 1024).await?;
     if !ok || truncated {
         return Err(error("Git could not list the worktrees"));
     }
@@ -1297,6 +1425,28 @@ mod tests {
         assert_eq!(list.source.source_checkout_path, path(&bare));
         assert!(list.worktrees[0].is_bare && !list.worktrees[0].is_linked_worktree);
         assert!(list.worktrees[1].is_linked_worktree && !list.worktrees[1].is_bare);
+        // A bare repository inside a checkout may be the checkout's content: refused. One kept
+        // on its own for worktrees reads as before, for the list and a task's branch checks.
+        let inside = Cwd::new(bare.to_str().unwrap()).unwrap();
+        assert!(worktree_list(&inside).await.is_err());
+        let standalone = tempfile::tempdir().unwrap();
+        let alone = standalone.path().canonicalize().unwrap().join("repo.git");
+        run(
+            root,
+            &["clone", "-q", "--bare", ".", alone.to_str().unwrap()],
+        );
+        let tree = alone.with_file_name("main");
+        run(
+            &alone,
+            &["worktree", "add", "-q", tree.to_str().unwrap(), "main"],
+        );
+        let alone = Cwd::new(alone.to_str().unwrap()).unwrap();
+        let list = worktree_list(&alone).await.unwrap();
+        assert_eq!(list.source.source_checkout_path, alone.as_str());
+        assert!(list.worktrees[0].is_bare && list.worktrees[1].is_linked_worktree);
+        let main = ["rev-parse", "--verify", "--quiet", "refs/heads/main"];
+        assert!(line(&alone, &main).await.unwrap().is_some());
+        assert_eq!(line(&inside, &main).await.unwrap(), None);
 
         let plain = tempfile::tempdir().unwrap();
         let plain = Cwd::new(plain.path().canonicalize().unwrap().to_str().unwrap()).unwrap();
@@ -1955,6 +2105,228 @@ mod tests {
                 .contains("+changed")
         );
         assert!(!root.join("executed").exists());
+    }
+
+    #[tokio::test]
+    async fn reads_blank_a_filter_whose_name_holds_an_equals_sign() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        std::fs::write(root.join("file"), "base\n").unwrap();
+        std::fs::write(root.join("other"), "base\n").unwrap();
+        std::fs::write(
+            root.join(".gitattributes"),
+            "file filter=x=y\nother filter=a\n",
+        )
+        .unwrap();
+        run(root, &["add", "."]);
+        run(root, &["commit", "-m", "base"]);
+        let marker = root.join("executed");
+        let command = format!("touch {}; cat", marker.display());
+        run(root, &["config", "filter.x=y.clean", &command]);
+        // The old `-c <key>=` form set `filter.a.clean` to the rest of this driver's name.
+        let injected = root.join("injected");
+        let key = format!("filter.a.clean=touch {}; cat #.clean", injected.display());
+        run(root, &["config", &key, "cat"]);
+        std::fs::write(root.join("file"), "next\n").unwrap();
+        std::fs::write(root.join("other"), "next\n").unwrap();
+        run(root, &["status"]);
+        run(root, &["-c", &format!("{key}="), "status"]);
+        for marker in [&marker, &injected] {
+            assert!(marker.exists());
+            std::fs::remove_file(marker).unwrap();
+        }
+        assert!(
+            !changes(&cwd, &roots, None, GitScope::Uncommitted)
+                .await
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        assert!(
+            patch(&cwd, &roots, "file", GitSection::Unstaged)
+                .await
+                .patch
+                .contains("+next")
+        );
+        assert!(!marker.exists() && !injected.exists());
+    }
+
+    #[tokio::test]
+    async fn reads_blank_filters_only_a_populated_submodule_defines() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let (_nested_dir, nested, _) = repo();
+        let (_sub_dir, sub, _) = repo();
+        for (repo, name) in [(&nested, "n"), (&sub, "s")] {
+            let path = Path::new(repo.as_str());
+            std::fs::write(path.join("file"), "base\n").unwrap();
+            std::fs::write(path.join(".gitattributes"), format!("file filter={name}\n")).unwrap();
+            run(path, &["add", "."]);
+            run(path, &["commit", "-qm", "base"]);
+        }
+        let add = |dir: &Path, url: &str, path: &str| {
+            let file = "protocol.file.allow=always";
+            run(dir, &["-c", file, "submodule", "add", "-q", url, path]);
+            run(
+                dir,
+                &[
+                    "-c",
+                    file,
+                    "submodule",
+                    "update",
+                    "-q",
+                    "--init",
+                    "--recursive",
+                ],
+            );
+            run(dir, &["commit", "-qm", path]);
+        };
+        add(Path::new(sub.as_str()), nested.as_str(), "nested");
+        add(root, sub.as_str(), "lib");
+        let lib = root.join("lib");
+        let markers = [(lib.clone(), "s"), (lib.join("nested"), "n")].map(|(path, name)| {
+            let marker = root.join(format!("{name}-executed"));
+            let command = format!("touch {}; cat", marker.display());
+            run(
+                &path,
+                &["config", &format!("filter.{name}.clean"), &command],
+            );
+            std::fs::write(path.join("file"), "next\n").unwrap();
+            marker
+        });
+        run(root, &["status", "--ignore-submodules=none"]);
+        for marker in &markers {
+            assert!(marker.exists());
+            std::fs::remove_file(marker).unwrap();
+        }
+        assert!(!clean(&cwd).await.unwrap());
+        assert!(
+            !changes(&cwd, &roots, None, GitScope::Uncommitted)
+                .await
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        assert!(markers.iter().all(|marker| !marker.exists()));
+    }
+
+    #[tokio::test]
+    async fn reads_do_not_take_a_bare_shaped_folder_for_a_repository() {
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        let vendor = root.join("vendor");
+        run(root, &["init", "-q", "--bare", "vendor"]);
+        for (key, value) in [
+            ("core.bare", "false"),
+            ("core.worktree", vendor.to_str().unwrap()),
+        ] {
+            run(root, &["config", "--file", "vendor/config", key, value]);
+        }
+        let inside = vendor.join("src");
+        std::fs::create_dir(&inside).unwrap();
+        let found = std::process::Command::new("git")
+            .current_dir(&inside)
+            .args([
+                "-c",
+                "safe.bareRepository=all",
+                "rev-parse",
+                "--show-toplevel",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(found.stdout, format!("{}\n", vendor.display()).as_bytes());
+        let inside = Cwd::new(inside.to_str().unwrap()).unwrap();
+        let list = changes(&inside, &roots, None, GitScope::Uncommitted)
+            .await
+            .unwrap();
+        assert_eq!(list.root, None);
+    }
+
+    #[tokio::test]
+    async fn reads_a_checkout_whose_index_listing_passes_16_mib() {
+        use std::io::Write;
+        let (_dir, cwd, roots) = repo();
+        let root = Path::new(cwd.as_str());
+        let git = |args: &[&str], input: &[u8]| {
+            let mut child = std::process::Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "{args:?}");
+            out.stdout
+        };
+        let blob = git(&["hash-object", "-w", "--stdin"], b"");
+        let blob = std::str::from_utf8(&blob).unwrap().trim();
+        let folder = ["a", "b", "c", "d"].map(|c| c.repeat(200)).join("/");
+        let paths: Vec<String> = (0..20_000).map(|i| format!("{folder}/{i}")).collect();
+        let entries: String = paths
+            .iter()
+            .map(|p| format!("100644 {blob}\t{p}\n"))
+            .collect();
+        git(&["update-index", "--index-info"], entries.as_bytes());
+        git(
+            &["update-index", "--skip-worktree", "-z", "--stdin"],
+            paths.join("\0").as_bytes(),
+        );
+        run(root, &["commit", "-qm", "large"]);
+        let (_sub_dir, sub, _) = repo();
+        let path = Path::new(sub.as_str());
+        std::fs::write(path.join("file"), "base\n").unwrap();
+        std::fs::write(path.join(".gitattributes"), "file filter=s\n").unwrap();
+        run(path, &["add", "."]);
+        run(path, &["commit", "-qm", "base"]);
+        let file = "protocol.file.allow=always";
+        run(
+            root,
+            &["-c", file, "submodule", "add", "-q", sub.as_str(), "lib"],
+        );
+        run(root, &["commit", "-qm", "lib"]);
+        let listing = git(&["ls-files", "--stage", "-z"], b"");
+        let at = listing.windows(5).position(|w| w == b"\tlib\0").unwrap();
+        assert!(at > 16 * 1024 * 1024);
+        let lib = root.join("lib");
+        let marker = root.join("executed");
+        let command = format!("touch {}; cat", marker.display());
+        run(&lib, &["config", "filter.s.clean", &command]);
+        std::fs::write(lib.join("file"), "next\n").unwrap();
+        run(root, &["status", "--ignore-submodules=none"]);
+        assert!(marker.exists());
+        std::fs::remove_file(&marker).unwrap();
+        let list = changes(&cwd, &roots, None, GitScope::Uncommitted)
+            .await
+            .unwrap();
+        assert!(list.files.iter().any(|f| f.path == "lib"));
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn the_read_builder_runs_no_hook() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cwd, _) = repo();
+        let root = Path::new(cwd.as_str());
+        run(root, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let marker = root.join("hooked");
+        let hook = root.join("hooks/reference-transaction");
+        std::fs::create_dir(root.join("hooks")).unwrap();
+        std::fs::write(&hook, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run(root, &["config", "core.hooksPath", "hooks"]);
+        run(root, &["branch", "control"]);
+        assert!(marker.exists());
+        std::fs::remove_file(&marker).unwrap();
+        let track = ["branch", "--track", "--", "read", "main"];
+        assert!(line(&cwd, &track).await.unwrap().is_some());
+        run(
+            root,
+            &["rev-parse", "--verify", "--quiet", "refs/heads/read"],
+        );
+        assert!(!marker.exists());
     }
 
     #[tokio::test]
