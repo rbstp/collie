@@ -280,7 +280,6 @@ impl Menu {
         let after = lines[last + 1..]
             .iter()
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
-            .take(MAX_CONTINUATION_LINES + 1)
             .map(|l| l.trim().to_owned())
             .collect();
         let mut options: Vec<(bool, String, String)> = Vec::new();
@@ -322,10 +321,10 @@ impl Menu {
         }
         let rule = top_rule(&lines, first);
         let top = rule.map_or(0, |r| r + 1);
-        let raw_body: Vec<String> = lines[top..first]
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| (*l).to_owned())
+        let block = command_rows(&lines[top..first]);
+        let raw_body: Vec<String> = (lines[top..first].iter().enumerate())
+            .filter(|(i, l)| block.contains(i) || !l.trim().is_empty())
+            .map(|(_, l)| (*l).to_owned())
             .collect();
         let rows: Vec<&str> = raw_body.iter().map(String::as_str).collect();
         let block = command_rows(&rows);
@@ -511,12 +510,14 @@ impl Menu {
     }
 
     /// Whether `now` is this menu with the cursor on option `i` and no option but `i`
-    /// changed.
+    /// changed, nor the rows under the last option, unless `i` is that option, whose label
+    /// wraps onto them.
     pub fn only_changed(&self, i: usize, now: &Menu) -> bool {
         now.cursor == i
             && now.body == self.body
             && now.options.len() == self.options.len()
             && (0..now.options.len()).all(|j| j == i || now.options[j] == self.options[j])
+            && (i + 1 == now.options.len() || now.after == self.after)
     }
 
     pub fn tail(&self) -> &[String] {
@@ -564,7 +565,8 @@ impl Menu {
     /// What the fingerprint covers: the whole dialog from its top rule to the last option and
     /// the rows wrapped under it, with the cursor, and not the rest of the screen (spinners,
     /// status lines), which changes on its own. A command row keeps its indent within the
-    /// block, so a changed indent supersedes the approval.
+    /// block and a blank one stays, so a changed indent or a command moved under a blank row
+    /// supersedes the approval.
     pub fn region(&self) -> String {
         self.region_at(self.cursor)
     }
@@ -635,27 +637,25 @@ fn trust_wording(text: &str) -> bool {
 }
 
 pub fn clean(line: &str) -> String {
-    shown(line)
+    let row = shown(line);
+    let words: Vec<&str> = row.split_whitespace().collect();
+    (words.join(" "))
         .trim_matches(|c: char| matches!(c, '│' | '┃') || c.is_whitespace())
         .to_owned()
 }
 
-/// A row as shown: controls, bidi and format characters dropped, tabs and runs of
-/// whitespace one space, and its indent kept. A command row is shown so, without
-/// [`clean`]'s trimming: a heredoc's `EOF`, Python's or YAML's indent and a row that is
-/// itself `│` read as the fingerprint binds them.
+/// A row as shown: controls, bidi and format characters dropped, a tab or any other
+/// whitespace character one space, and its indent and inner spaces kept. A command row is
+/// shown so, without [`clean`]'s trimming and joining of spaces: a heredoc's `EOF`, Python's
+/// or YAML's indent, the two spaces in a quoted `'a  b'` and a row that is itself `│` read
+/// as the fingerprint binds them.
 fn shown(row: &str) -> String {
     let kept: String = row
         .chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| !c.is_control() && !is_format(*c))
+        .filter(|c| *c == '\t' || !c.is_control() && !is_format(*c))
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
         .collect();
-    let words: Vec<&str> = kept.split_whitespace().collect();
-    if words.is_empty() {
-        return String::new();
-    }
-    let indent = kept.chars().take_while(|c| c.is_whitespace()).count();
-    format!("{}{}", " ".repeat(indent), words.join(" "))
+    kept.trim_end().to_owned()
 }
 
 fn is_border(line: &str) -> bool {
@@ -708,23 +708,28 @@ fn tip_rows(lines: &[&str]) -> Vec<bool> {
         .collect()
 }
 
-/// The rows strictly between the first and last `╌` rule Claude Code draws: since 2.1.289,
-/// the command block, none of whose rows is dropped as a tip or a border, whatever it reads.
-/// Claude Code draws those rules left of the dialog's text margin, the indent of the first
-/// row of `lines`: a `╌` row at or right of it, which a command or the description the
-/// agent writes can hold, delimits nothing.
-fn command_rows(lines: &[&str]) -> std::ops::Range<usize> {
+/// The `╌` rules Claude Code draws in a dialog. It draws them left of the dialog's text
+/// margin, the indent of the first row of `lines`: a `╌` row at or right of it, which a
+/// command or the description the agent writes can hold, is none, so it neither delimits a
+/// block nor unpairs Claude Code's own rules.
+fn dashed_rules(lines: &[&str]) -> Vec<usize> {
     let indent = |l: &str| l.len() - l.trim_start().len();
     let margin = lines
         .iter()
         .find(|l| !l.trim().is_empty())
         .map_or(0, |l| indent(l));
-    let dashed = |i: &usize| is_dashed(lines[*i]) && indent(lines[*i]) < margin;
-    match (
-        (0..lines.len()).find(dashed),
-        (0..lines.len()).rfind(dashed),
-    ) {
-        (Some(first), Some(last)) if first < last => first + 1..last,
+    (0..lines.len())
+        .filter(|&i| is_dashed(lines[i]) && indent(lines[i]) < margin)
+        .collect()
+}
+
+/// The rows strictly between the first and last of the [`dashed_rules`]: since 2.1.289, the
+/// command block, none of whose rows is dropped as a tip or a border, whatever it reads, and
+/// whose blank rows stay everywhere but in the snippet.
+fn command_rows(lines: &[&str]) -> std::ops::Range<usize> {
+    let rules = dashed_rules(lines);
+    match (rules.first(), rules.last()) {
+        (Some(&first), Some(&last)) if first < last => first + 1..last,
         _ => 0..0,
     }
 }
@@ -771,8 +776,8 @@ fn command_row<'a>(line: &'a str, prefix: &str) -> &'a str {
 /// input is excluded; an ambiguous Codex screen has no preview. Other prompts fall back
 /// to the first line (with the line after it when it ends in `:`). The approver acts on
 /// this text, so
-/// no non-blank row inside the command block is ever dropped: it is cut only at the length cap,
-/// with `…`.
+/// no row inside the command block is ever dropped, a blank one included: it is cut only at
+/// the length cap, with `…`.
 pub fn context(kind: &str, text: &str) -> String {
     context_and_tool(kind, text).0
 }
@@ -917,15 +922,19 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
         return (String::new(), None);
     };
     let question = lines.iter().rposition(|l| l.ends_with('?'));
-    let asks = question.filter(|&q| {
-        q > head && lines[q].starts_with("Do you want to") && !(whole && kind == "claude")
-    });
+    let asks = question
+        .and_then(|q| question_start(q, |i| (!command[i]).then(|| lines[i].as_str())))
+        .filter(|&q| q > head && !(whole && kind == "claude"));
+    let kept = |i: &usize| command[*i] || !lines[*i].is_empty();
     let action = asks.and_then(|q| {
         let header = &lines[head];
         let mut rest = lines[head + 1..q].iter().filter(|l| !l.is_empty());
         if header == "Bash command" {
-            let block: Vec<&str> = rest.map(String::as_str).collect();
-            (!block.is_empty()).then(|| format!("Bash: {}", block.join("\n")))
+            let block: Vec<&str> = (head + 1..q)
+                .filter(kept)
+                .map(|i| lines[i].as_str())
+                .collect();
+            rest.next().map(|_| format!("Bash: {}", block.join("\n")))
         } else {
             let tool = header
                 .strip_suffix(" command")
@@ -937,7 +946,7 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
     let tool = asks
         .filter(|_| kind == "claude" && action.is_some())
         .map(|q| {
-            let rows = (head + 1..q).filter(|&i| !lines[i].is_empty());
+            let rows = (head + 1..q).filter(kept);
             let (name, rows): (&str, Vec<usize>) = if lines[head] == "Bash command" {
                 let (block, rest): (Vec<usize>, Vec<usize>) = rows.partition(|&i| command[i]);
                 ("Bash", [block, rest].concat())
@@ -977,6 +986,20 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
     let mut cut: String = out.chars().take(MAX_CONTEXT_CHARS - 1).collect();
     cut.push('…');
     (cut, tool)
+}
+
+/// The first row of the permission question whose last row is `last`. A long file name wraps
+/// the question over up to three rows: its first row is the nearest one starting "Do you want
+/// to" among `last` and the two rows above it, so no row above it is left out of what is
+/// read. `row` gives a row's text, or none for a row no question holds (a command row, a
+/// rule); the walk stops there and at a blank row, so a row the agent writes in a command or
+/// above a blank row never passes for the question.
+fn question_start<'a>(last: usize, row: impl Fn(usize) -> Option<&'a str>) -> Option<usize> {
+    (last.saturating_sub(2)..=last)
+        .rev()
+        .map_while(|i| row(i).filter(|t| !t.is_empty()).map(|t| (i, t)))
+        .find(|(_, t)| t.starts_with("Do you want to"))
+        .map(|(i, _)| i)
 }
 
 fn cut(s: String, max: usize) -> String {
@@ -1075,8 +1098,9 @@ const DENY_COUNTDOWN: (&str, &str) = (
 /// `text` without Claude Code's deny countdown, whose time changes every second: in the
 /// fingerprint it would supersede the approval on every tick. Only for a Claude Code dialog
 /// whose last option block parses as a menu, and only where Claude Code draws it: under the
-/// last `╌` rule of that dialog when it has any (none when the rules are unpaired, as the
-/// command block could still be open), else under its top rule, then a blank line, the question, and option 1 of that block, in its exact
+/// last of that dialog's [`dashed_rules`] when it has any (none when they are unpaired, as the
+/// command block could still be open), else under its top rule, then a blank line, the
+/// question from its first row ([`question_start`]), and option 1 of that block, in its exact
 /// wording at the dialog's margin (command lines are indented further), on one line or
 /// wrapped over up to three, with nothing else on them. Anything else is left alone; the
 /// time is never read.
@@ -1095,14 +1119,16 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
         return text.to_owned();
     };
     let dialog = lines.len() - after_last_rule(text).len();
-    let dashed: Vec<usize> = (dialog..first).filter(|&i| is_dashed(lines[i])).collect();
+    let dashed = dashed_rules(lines.get(dialog..first).unwrap_or_default());
     if dashed.len() % 2 == 1 {
         return text.to_owned();
     }
-    let floor = dashed.last().map_or(dialog, |i| i + 1);
+    let floor = dashed.last().map_or(dialog, |i| dialog + i + 1);
     let filled = |i: &usize| !lines[*i].trim().is_empty();
+    let asked = |i: usize| (!is_border(lines[i])).then(|| lines[i].trim());
     let Some(end) = first
         .checked_sub(1)
+        .map(|q| question_start(q, asked).unwrap_or(q))
         .filter(|q| *q >= floor && filled(q))
         .and_then(|q| (floor..q).rfind(filled).filter(|&e| e + 1 < q))
     else {
@@ -1126,13 +1152,14 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
 }
 
 /// `text` without Claude Code's reason for asking, and the reason. Claude Code prints it
-/// (its hook input has no such field) under a dialog's closing `╌` rule, at the question's
-/// margin, then a blank line (or the deny countdown, taken out before), the question, and
+/// (its hook input has no such field) under the last of a dialog's [`dashed_rules`], which
+/// must be paired, at the question's margin, then a blank line (or the deny countdown,
+/// taken out before), the question from its first row ([`question_start`]), and
 /// option 1 of the dialog's menu: every row starting `│ ` as it wraps (2.1.308), or plain
 /// rows (2.1.295 in an unattended session). The rows are joined, terminal escape
 /// sequences dropped and whitespace collapsed; a reason with any other control, bidi or
-/// invisible format character, or one that only repeats lines of the dialog, leaves the
-/// screen whole and gives none. Cut at [`MAX_SNIPPET_CHARS`] with `…`.
+/// invisible format character, one longer than [`MAX_SNIPPET_CHARS`], or one that only
+/// repeats lines of the dialog, leaves the screen whole and gives none.
 pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>) {
     let unchanged = || (text.to_owned(), None);
     if kind != "claude" || Menu::parse_numbered(text).is_none() {
@@ -1146,7 +1173,7 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
             (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
         })
         .and_then(|first| first.checked_sub(1))
-        .filter(|&q| lines[q].trim_start().starts_with("Do you want to"))
+        .and_then(|q| question_start(q, |i| (!is_border(lines[i])).then(|| lines[i].trim())))
     else {
         return unchanged();
     };
@@ -1169,11 +1196,11 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         .rfind(|&i| row(lines[i]).is_none())
         .map_or(0, |i| i + 1);
     let dialog = lines.len() - after_last_rule(text).len();
+    let dashed = dashed_rules(lines.get(dialog..start).unwrap_or_default());
     if end == question
         || start == end
-        || start <= dialog
-        || !is_dashed(lines[start - 1])
-        || (dialog..start).filter(|&i| is_dashed(lines[i])).count() % 2 == 1
+        || dashed.last().map(|i| dialog + i + 1) != Some(start)
+        || dashed.len() % 2 == 1
     {
         return unchanged();
     }
@@ -1183,21 +1210,21 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         return unchanged();
     }
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Cut to fit, a reason's end would be neither shown nor hashed: left in the dialog, every
+    // row of it is in the region.
+    if reason.is_empty() || reason.chars().count() > MAX_SNIPPET_CHARS {
+        return unchanged();
+    }
     let rest = lines[..start]
         .iter()
         .chain(&lines[end..])
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
-    if reason.is_empty() || shows_whole(&squashed_lines(&rest), &reason) {
+    if shows_whole(&squashed_lines(&rest), &reason) {
         return unchanged();
     }
-    if reason.chars().count() <= MAX_SNIPPET_CHARS {
-        return (rest, Some(reason));
-    }
-    let mut cut: String = reason.chars().take(MAX_SNIPPET_CHARS - 1).collect();
-    cut.push('…');
-    (rest, Some(cut))
+    (rest, Some(reason))
 }
 
 fn without_escapes(s: &str) -> String {
@@ -1315,19 +1342,18 @@ pub fn squashed_lines(text: &str) -> Vec<String> {
 
 /// Whether `part` is a run of whole dialog lines. Wrapping only splits a line, so a
 /// command shows as whole lines however it wraps, and a shorter one never matches inside
-/// a longer line.
+/// a longer line. From each line, `part` is read once at most, each line against what is
+/// left of it: lines that nearly repeat a long `part` cost their count times its length.
 pub fn shows_whole(lines: &[String], part: &str) -> bool {
     let want: String = part.lines().map(|l| unspaced(&clean(l))).collect();
     !want.is_empty()
         && (0..lines.len()).any(|i| {
-            let mut got = String::new();
+            let mut left = want.as_str();
             for line in &lines[i..] {
-                got.push_str(line);
-                if !want.starts_with(&got) {
-                    return false;
-                }
-                if got.len() == want.len() {
-                    return true;
+                match left.strip_prefix(line.as_str()) {
+                    Some("") => return true,
+                    Some(rest) => left = rest,
+                    None => return false,
                 }
             }
             false
@@ -1516,6 +1542,32 @@ pub mod fixtures {
         include_str!("../tests/fixtures/claude-2.1.328/write.tmux.txt"),
         include_str!("../tests/fixtures/claude-2.1.328/fetch.tmux.txt"),
     ];
+    // Hand-built from the 2.1.328 Edit capture, not captured: 60 columns and a file name long
+    // enough that the question and the second option wrap, the question onto a row at the
+    // dialog's margin, as the 2.1.322 capture wraps its tip, and the option as the 2.1.328
+    // tall capture wraps its own.
+    pub const EDIT_WRAPPED: &str = "\
+⏺ Update(a-file-with-a-long-name-that-wraps.txt)
+
+────────────────────────────────────────────────────────────
+ Edit file
+ a-file-with-a-long-name-that-wraps.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ 1  alpha
+ 2 -beta
+ 2 +delta
+ 3  gamma
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to make this edit to
+ a-file-with-a-long-name-that-wraps.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file
+      edits and common file commands) for this session
+      (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend
+";
     // Captured from Claude Code 2.1.328 (tmux capture-pane, 120 columns, 24 rows): a command
     // of 42 lines, whose dialog is taller than the screen, so its top rule, its head and its
     // first 28 lines have scrolled off.
@@ -1780,6 +1832,16 @@ mod tests {
                 }
             }
         }
+
+        #[test]
+        fn shows_whole_is_a_run_of_whole_lines(
+            lines in prop::collection::vec("[ab]{1,3}", 0..8),
+            part in "[ab]{0,9}",
+        ) {
+            let run = (0..lines.len())
+                .any(|i| (i..lines.len()).any(|j| lines[i..=j].concat() == part));
+            prop_assert_eq!(shows_whole(&lines, &part), run);
+        }
     }
 
     #[test]
@@ -2020,6 +2082,22 @@ mod tests {
                 "{dropped}"
             );
         }
+        for question in [
+            " Do you want to make this edit to\n a-long-name.txt?",
+            " Do you want to make this\n edit to\n a-long-name.txt?",
+        ] {
+            let wrap = |screen: &str| screen.replace(" Do you want to proceed?", question);
+            assert_eq!(
+                without_deny_countdown("claude", &wrap(&dialog("rm x", line))),
+                wrap(&plain),
+                "{question}"
+            );
+        }
+        assert_eq!(
+            without_deny_countdown("claude", &dialog("rm x\n ╌╌╌", line)),
+            dialog("rm x\n ╌╌╌", "").replace(" \n\n Do", "\n Do"),
+            "a dashed row the command writes leaves Claude Code's own rules paired"
+        );
         let fetch = |countdown: &str| {
             format!(
                 "────\n Fetch\n   https://example.com\n Claude wants to fetch content from example.com\n{countdown}\n Do you want to allow Claude to fetch this content?\n ❯ 1. Yes\n   2. No"
@@ -2063,6 +2141,10 @@ mod tests {
                 "────\n Bash command\n╌╌╌\n rm x\n {line}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
             ),
             format!("{line}\n{}", dialog("rm x", "")),
+            // Under a dashed row of the command, its block still open.
+            format!(
+                "────\n Bash command\n╌╌╌\n rm x\n ╌╌╌\n {line}\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No"
+            ),
             // Indented like a command line.
             fetch(&format!("   {line}\n")),
             // Anchored on a numbered line that is not the menu.
@@ -2866,6 +2948,20 @@ mod tests {
     }
 
     #[test]
+    fn a_reason_that_nearly_repeats_the_dialog_costs_each_row_once() {
+        let row = "a".repeat(200);
+        let rows = |bar: &str| format!(" {bar}{row}\n").repeat(3000);
+        let screen = format!(
+            "────\n Bash command\n{}╌╌╌\n rm x\n╌╌╌\n{} │ b\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n",
+            rows(""),
+            rows("│ ")
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(without_reason("claude", &screen), (screen.clone(), None));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
     fn a_permission_prompt_names_the_call_it_shows() {
         let read = |screen: &str| {
             let (text, _) = without_reason("claude", &without_deny_countdown("claude", screen));
@@ -3018,7 +3114,7 @@ mod tests {
             (
                 "Edit: notes.txt",
                 "Edit file",
-                "notes.txt\n1 alpha\n2 -beta\n2 +delta\n3 gamma",
+                "notes.txt\n1  alpha\n2 -beta\n2 +delta\n3  gamma",
             ),
             (
                 "Create: hello.txt",
@@ -3042,6 +3138,65 @@ mod tests {
                 })
             );
             assert!(!Menu::parse(screen).unwrap().decisions().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_wrapped_question_still_names_the_tool() {
+        let name = "a-file-with-a-long-name-that-wraps.txt";
+        let edit = Some(PendingTool {
+            name: "Edit file".into(),
+            summary: format!("{name}\n1  alpha\n2 -beta\n2 +delta\n3  gamma"),
+        });
+        let three = EDIT_WRAPPED.replace(
+            " Do you want to make this edit to\n",
+            " Do you want to make this\n edit to\n",
+        );
+        for screen in [EDIT_WRAPPED, &three] {
+            assert_eq!(
+                context_and_tool("claude", screen),
+                (format!("Edit: {name}"), edit.clone())
+            );
+            assert_eq!(
+                Menu::parse(screen).unwrap().decisions(),
+                [(Approve, 0), (Deny, 2)]
+            );
+        }
+        let asked = |time: &str| {
+            let rows = format!(
+                " This edit requires approval\n \u{26a0} Claude Code will automatically deny this request in {time},\n to avoid blocking progress on an unattended session\n\n Do you want to make this edit to\n"
+            );
+            let screen = EDIT_WRAPPED.replace(" Do you want to make this edit to\n", &rows);
+            let (text, reason) =
+                without_reason("claude", &without_deny_countdown("claude", &screen));
+            let region = Menu::parse(&text).unwrap().region();
+            (context_and_tool("claude", &text), reason, region)
+        };
+        let (now, later) = (asked("1:09"), asked("0:58"));
+        assert_eq!(now, later, "a tick changes nothing an approval reads");
+        assert_eq!(now.0, (format!("Edit: {name}"), edit.clone()));
+        assert_eq!(now.1.as_deref(), Some("This edit requires approval"));
+        let four = three.replace(" edit to\n", " edit\n to\n");
+        assert_eq!(
+            context_and_tool("claude", &four),
+            (format!("{name}?"), None),
+            "a question starts no more than two rows above its last"
+        );
+        let in_command = BASH_LIVE
+            .replace(" Do you want to proceed?\n", " Proceed?\n")
+            .replace(
+                " touch probe2.txt\n",
+                " ls\n Do you want to see\n rm -rf ~\n",
+            );
+        let above_a_blank = BASH
+            .replace(" Do you want to proceed?\n", " Proceed?\n")
+            .replace("   Remove the build directory\n", "   Do you want to see\n");
+        for screen in [in_command, above_a_blank] {
+            assert_eq!(
+                context_and_tool("claude", &screen),
+                ("Proceed?".to_owned(), None),
+                "a command row or a row above a blank one starts no question"
+            );
         }
     }
 
@@ -3119,6 +3274,67 @@ mod tests {
     }
 
     #[test]
+    fn a_command_block_keeps_its_blank_rows_and_inner_spaces() {
+        let region = |s: &str| Menu::parse(s).unwrap().region();
+        let summary = |s: &str| context_and_tool("claude", s).1.unwrap().summary;
+        for (screen, rows, prefix, blank, described) in [
+            (
+                BASH_LIVE,
+                " touch probe2.txt\n",
+                " ",
+                "\n",
+                "Create empty probe2.txt file",
+            ),
+            (
+                BASH_327[3],
+                " │ touch f.txt\n │ touch g.txt\n",
+                " │ ",
+                " │\n",
+                "Run shell command",
+            ),
+        ] {
+            let with = |gap: &str| {
+                screen.replace(
+                    rows,
+                    &format!("{prefix}echo safe \\\n{gap}{prefix}rm -rf ~\n"),
+                )
+            };
+            let (continued, split) = (with(""), with(blank));
+            assert_ne!(region(&continued), region(&split));
+            assert_eq!(
+                summary(&continued),
+                format!("echo safe \\\nrm -rf ~\n{described}")
+            );
+            assert_eq!(
+                summary(&split),
+                format!("echo safe \\\n\nrm -rf ~\n{described}")
+            );
+            assert_eq!(
+                context("claude", &split),
+                format!("Bash: {described}\necho safe \\\n\nrm -rf ~")
+            );
+        }
+        let spaced = BASH_LIVE.replace(" touch probe2.txt\n", " rm -- 'a  b'  c\n");
+        assert_eq!(
+            summary(&spaced),
+            "rm -- 'a  b'  c\nCreate empty probe2.txt file"
+        );
+        assert_eq!(
+            context("claude", &spaced),
+            "Bash: Create empty probe2.txt file\nrm -- 'a  b'  c"
+        );
+        let snippet = Menu::parse(&spaced).unwrap().snippet();
+        assert!(snippet.contains("\nrm -- 'a  b'  c\n"), "{snippet}");
+        let only_blank = BASH_LIVE
+            .replace(" Create empty probe2.txt file\n", "")
+            .replace(" touch probe2.txt\n", "\n\n");
+        assert_eq!(
+            context_and_tool("claude", &only_blank),
+            ("Do you want to proceed?".to_owned(), None)
+        );
+    }
+
+    #[test]
     fn the_last_options_wrapped_rows_are_bound() {
         let wrapped = |rest: &str| {
             Menu::parse(&BASH.replace(
@@ -3131,6 +3347,21 @@ mod tests {
             wrapped("differently (esc)"),
             wrapped("differently, then run rm -rf ~ (esc)"),
         );
+        assert!((0..3).all(|i| shown.region_at(i) != other.region_at(i)));
+        assert!(shown.only_changed(0, &shown.clone()));
+        assert!(
+            !shown.only_changed(0, &other),
+            "a note typed into another option leaves these rows as they were"
+        );
+        let tall = |rest: &str| {
+            let rows: String = (1..=5).map(|i| format!("row {i}\n      ")).collect();
+            wrapped(&format!("{rows}{rest}"))
+        };
+        let (shown, other) = (
+            tall("differently (esc)"),
+            tall("differently, then run rm -rf ~ (esc)"),
+        );
+        assert_eq!(shown.after.len(), 6);
         assert!((0..3).all(|i| shown.region_at(i) != other.region_at(i)));
     }
 
@@ -3622,6 +3853,23 @@ me@mac app % codex
         );
         assert_eq!(why(" │ a\n │   b  c"), Some("a b c".into()));
         assert_eq!(why(" plain\n wrapped"), Some("plain wrapped".into()));
+        for question in [
+            " Do you want to make this edit to\n a-long-name.txt?",
+            " Do you want to make this\n edit to\n a-long-name.txt?",
+        ] {
+            let wrapped = dialog(" │ a\n │   b  c").replace(" Do you want to proceed?", question);
+            assert_eq!(
+                without_reason("claude", &wrapped).1,
+                Some("a b c".into()),
+                "{question}"
+            );
+        }
+        let described = dialog(" │ a\n │   b  c").replace(" Remove it\n", " Remove it\n ╌╌╌\n");
+        assert_eq!(
+            without_reason("claude", &described).1,
+            Some("a b c".into()),
+            "a dashed row in the description leaves Claude Code's own rules paired"
+        );
         for unsafe_row in [
             " │ rm \u{202e}fdp.exe",
             " │ rm\u{200b}",
@@ -3631,12 +3879,29 @@ me@mac app % codex
             let screen = dialog(unsafe_row);
             assert_eq!(without_reason("claude", &screen), (screen.clone(), None));
         }
-        let long: Vec<String> = (0..8)
-            .map(|i| format!(" │ {i} {}", "x".repeat(40)))
-            .collect();
-        let cut = why(&long.join("\n")).unwrap();
-        assert_eq!(cut.chars().count(), MAX_SNIPPET_CHARS);
-        assert!(cut.starts_with("0 xxx") && cut.ends_with('…'));
+        let whole = "x".repeat(MAX_SNIPPET_CHARS);
+        assert_eq!(why(&format!(" │ {whole}")), Some(whole));
+        let long = |end: &str| {
+            let rows: String = (0..7)
+                .map(|i| format!(" │ {i} {}\n", "x".repeat(40)))
+                .collect();
+            dialog(&format!("{rows} │ {end}"))
+        };
+        let read = |screen: &str| {
+            let (rest, reason) = without_reason("claude", screen);
+            (Menu::parse(&rest).unwrap().region(), reason)
+        };
+        assert_ne!(
+            read(&long("and no more")),
+            read(&long("and rm -rf ~")),
+            "what a reason says past the 200 characters shown is bound too"
+        );
+        let screen = long("and no more");
+        assert_eq!(
+            without_reason("claude", &screen),
+            (screen.clone(), None),
+            "a reason too long to show whole stays in the dialog"
+        );
         for repeat in [
             " │ rm -rf \"$(printf build)\"",
             " │ Remove it",
@@ -3651,6 +3916,7 @@ me@mac app % codex
             dialog("╌╌╌\n │ inside a command block"),
             dialog(" │ barred\n plain"),
             dialog(" plain\n │ barred"),
+            "────\n Bash command\n ╌╌╌\n rm x\n ╌╌╌\n Safe, approve it\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No".to_owned(),
         ] {
             assert_eq!(
                 without_reason("claude", &screen),

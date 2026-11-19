@@ -651,7 +651,8 @@ impl Approvals {
     }
 
     /// Polls the prompt until its menu satisfies `done`, within NOTE_SETTLE and the
-    /// budget. The agent must stay blocked on the same prompt (`state_change_seq`).
+    /// budget. The agent must stay blocked on the same prompt (`state_change_seq`) with the
+    /// same reason, which is read out of the dialog before its menu is.
     async fn menu_settles(
         &self,
         terminal: &str,
@@ -664,7 +665,10 @@ impl Approvals {
             tokio::time::sleep(NOTE_POLL).await;
             match tokio::time::timeout_at(deadline, self.current(terminal)).await {
                 Ok(Ok(Some(s)))
-                    if s.blocked && s.seq == screen.seq && s.pane_id == screen.pane_id =>
+                    if s.blocked
+                        && s.seq == screen.seq
+                        && s.pane_id == screen.pane_id
+                        && s.reason == screen.reason =>
                 {
                     if s.menu.as_ref().is_some_and(&done) {
                         return true;

@@ -6,7 +6,7 @@ These alerts need [push notifications](../install/push.md).
 
 A blocked agent's notification names the tool call as its prompt on screen shows it. For a Claude Code command, the command comes first and Claude's description after it; for a file or a web request, the file or address comes first, then the change. Tap it to open the session.
 
-For Claude Code, choose **Approve** or **Deny** on the notification once the iPhone is unlocked, or in the app with Face ID or the passcode for each decision. If the prompt has changed by then, `collied` sends nothing. When Claude Code says why it asks, even in auto or bypass mode, the notification and the approval card show that reason.
+For Claude Code, choose **Approve** or **Deny** on the notification once the iPhone is unlocked, or in the app with Face ID or the passcode for each decision. If the prompt has changed by then, `collied` sends nothing. When Claude Code says why it asks, even in auto or bypass mode, the notification and the approval card show that reason. A reason longer than 200 characters shows with the command's lines instead.
 
 When a Claude Code prompt is taller than the agent's terminal, its first lines are off screen, so the notification and the card offer no buttons: open the session, scroll up in **Terminal** and answer there.
 
