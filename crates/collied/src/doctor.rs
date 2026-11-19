@@ -135,8 +135,6 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
         let (s, d) = check_signature();
         r.line(s, "codesign", d);
     }
-    let (s, d) = check_hooks();
-    r.line(s, "hooks", d);
     let codex = match std::env::var_os("CODEX_HOME") {
         Some(dir) => Some(PathBuf::from(dir)),
         None => config::home_dir().ok().map(|h| h.join(".codex")),
@@ -157,25 +155,6 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
     r.line(s, "copilot", d);
 
     Ok(!r.failed)
-}
-
-fn check_hooks() -> (Status, String) {
-    let missing = "Claude Code PermissionRequest hook `collied hook` not installed; approvals name the tool call from the screen only";
-    let Ok(path) = hooks::settings_path() else {
-        return (Status::Warn, missing.to_owned());
-    };
-    let settings = std::fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    if hooks::installed(&settings, "PermissionRequest") {
-        (
-            Status::Ok,
-            format!("PermissionRequest hook in {}", path.display()),
-        )
-    } else {
-        (Status::Warn, missing.to_owned())
-    }
 }
 
 /// herdr 0.9.5 writes version 10, the SessionStart hook only. Version 9 (0.9.4) also

@@ -30,7 +30,9 @@ pub mod limits {
     pub const DEFAULT_WATCH_LINES: u16 = 200;
     pub const MAX_SNIPPET_CHARS: usize = 200;
     pub const MAX_LABEL_CHARS: usize = 64;
-    pub const MAX_CHOICE_LABEL_CHARS: usize = 120;
+    /// A whole option row of a wide terminal: the app shows an option's wording as what
+    /// Always allow grants, and collied does not offer that decision under a cut one.
+    pub const MAX_CHOICE_LABEL_CHARS: usize = 300;
     /// The amend field must still parse after the note: Menu::parse takes an option
     /// wrapped onto at most 4 rows, about 300 columns at an 80 column pane.
     pub const MAX_NOTE_CHARS: usize = 200;

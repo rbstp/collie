@@ -216,6 +216,17 @@ async fn scenario(
     gone.call(&Request::Watch).await.unwrap();
     drop(gone);
 
+    println!("an older collied hook's report is answered and kept nowhere");
+    let report = Request::Hook {
+        session_id: "sess-1".into(),
+        tool_name: "Bash".into(),
+        shown: vec!["ls".into(), "List files".into()],
+    };
+    assert!(matches!(
+        collied::control::request(&control, &report).await,
+        Ok(Some(Reply::Noted))
+    ));
+
     println!("unpaired phone without a window is rejected before the upgrade");
     assert!(
         connect(

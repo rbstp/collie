@@ -11,7 +11,7 @@
 - [Install the app](install/app.md)
 - [Pair a phone](install/pair.md)
 - [Push notifications](install/push.md)
-- [Claude Code hook and plan usage](install/claude-code.md)
+- [Claude Code plan usage](install/claude-code.md)
 - [Terminals](install/terminals.md)
 
 # Agent guides

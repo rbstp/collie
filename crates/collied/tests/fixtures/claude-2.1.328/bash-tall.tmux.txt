@@ -1,0 +1,23 @@
+ │ touch t29.txt
+ │ touch t30.txt
+ │ touch t31.txt
+ │ touch t32.txt
+ │ touch t33.txt
+ │ touch t34.txt
+ │ touch t35.txt
+ │ touch t36.txt
+ │ touch t37.txt
+ │ touch t38.txt
+ │ touch t39.txt
+ │ touch t40.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for : Edit file, : safe.txt, touch t01.txt, touch t02.txt, and touch t03.txt commands in
+      /private/tmp/planlab
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+ ↑ 35 more lines
+ Esc to cancel · Tab to amend

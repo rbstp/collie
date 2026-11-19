@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use protocol::{
     AgentStatus, Approval, ApprovalDecideParams, ApprovalId, ApprovalOutcome, Decision, ErrorCode,
-    Event, Nonce, Response, TerminalId, limits::MAX_LABEL_CHARS,
+    Event, Nonce, PendingTool, Response, TerminalId, limits::MAX_LABEL_CHARS,
 };
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -16,7 +16,6 @@ use zeroize::Zeroizing;
 use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, fail, herdr_fail};
 use crate::flock;
-use crate::hooks;
 use crate::prompt::{self, Menu};
 use crate::push::{self, Push};
 use crate::runtime::herdr_core::{self, Core};
@@ -40,7 +39,6 @@ const DECIDE_BUDGET: Duration = Duration::from_secs(6);
 // Reissues of a prompt (after a burned nonce) alert at most this often per terminal, so
 // bad attempts cannot flood the phone; the reissued approval still reaches live sessions.
 pub const ALERT_GAP: Duration = Duration::from_secs(30);
-const MAX_HOOKS: usize = 64;
 /// Each Rex screen read makes Rex render the whole scrollback, and Claude Code reports each
 /// dialog anew (a new `state_change_seq`): while a blocked Rex agent's approval stands, its
 /// screen is read on this many reconciles of a report, for a dialog still drawing, then not
@@ -62,13 +60,12 @@ struct Screen {
     has_text_field: bool,
     supports_note: bool,
     fingerprint: [u8; 32],
-    /// The dialog's lines without whitespace, which a hook report must show on.
-    dialog: Vec<String>,
     /// The fingerprint with the menu cursor on each option in turn.
     cursor_at: Vec<[u8; 32]>,
     snippet: String,
     reason: Option<String>,
     context: String,
+    tool: Option<PendingTool>,
 }
 
 impl Screen {
@@ -82,6 +79,7 @@ impl Screen {
             && self.accepts_input == other.accepts_input
             && self.has_text_field == other.has_text_field
             && self.supports_note == other.supports_note
+            && self.tool == other.tool
     }
 }
 
@@ -89,11 +87,6 @@ struct Pending {
     approval: Approval,
     screen: Screen,
     deciding: bool,
-}
-
-struct Hooked {
-    at: Instant,
-    report: hooks::Report,
 }
 
 struct Alerted {
@@ -113,7 +106,6 @@ struct Inner {
     /// The approval id the phone's alert for a terminal carries: a quiet reissue keeps it, a
     /// later alert replaces it, and it is cleared once the agent there is no longer blocked.
     notified: HashMap<String, ApprovalId>,
-    hooks: HashMap<String, Hooked>,
     /// A blocked Rex agent's report and the reconciles that read its screen.
     rex_reads: HashMap<String, (u64, u8)>,
 }
@@ -363,8 +355,6 @@ impl Approvals {
         let mut live = Vec::new();
         {
             let mut inner = self.lock();
-            let ttl = self.ttl;
-            inner.hooks.retain(|_, h| h.at.elapsed() < ttl);
             let done: Vec<(String, ApprovalOutcome)> = inner
                 .pending
                 .iter()
@@ -469,15 +459,15 @@ impl Approvals {
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
+        // A granting dialog whose top is off screen gets no answer from the phone: its first
+        // rows are neither shown nor bound. A form that grants nothing, such as the rate limit
+        // form under its `▔` border, is chosen from as before.
         let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
-            .flatten();
+            .flatten()
+            .filter(|m| m.topped || !m.grants());
         let (region, snippet, offered) = match &menu {
-            Some(m) => (
-                m.region(),
-                prompt::snippet(m.tail().iter().map(String::as_str)),
-                m.decisions(),
-            ),
+            Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
                 text.clone(),
                 prompt::snippet(prompt::after_last_rule(&text).into_iter()),
@@ -490,6 +480,10 @@ impl Approvals {
         let supports_note =
             offered.iter().any(|(d, _)| prompt::amend(*d).is_some()) && prompt::offers_note(&text);
         let session = a.agent_session.as_ref().map(|s| s.value.as_str());
+        // From the same read the fingerprint hashes, and only from rows of its region: every row
+        // the approver is shown is on the dialog a decision answers.
+        let (context, tool) = prompt::context_and_tool(kind, &text);
+        let tool = tool.filter(|_| !offered.is_empty());
         let print = |region: &str| {
             fingerprint(
                 kind,
@@ -506,7 +500,6 @@ impl Approvals {
             blocked: is_blocked(a),
             settings_picker: prompt::settings_picker(kind, rule, &text),
             fingerprint: print(&region),
-            dialog: prompt::squashed_lines(&text),
             cursor_at: menu.as_ref().map_or_else(Vec::new, |m| {
                 (0..m.options.len())
                     .map(|i| print(&m.region_at(i)))
@@ -519,7 +512,8 @@ impl Approvals {
             offered,
             snippet,
             reason,
-            context: prompt::context(kind, &text),
+            context,
+            tool,
         })
     }
 
@@ -531,19 +525,6 @@ impl Approvals {
         if !screen.blocked || screen.settings_picker {
             return Ok(());
         }
-        // The hook runs beside the dialog, not before it, and a session's dialogs can come
-        // and go before collied looks: a report names only a dialog that shows its call.
-        let tool = a
-            .agent_session
-            .as_ref()
-            .filter(|_| !screen.offered.is_empty())
-            .and_then(|s| {
-                self.lock()
-                    .hooks
-                    .get(&s.value)
-                    .filter(|h| h.report.on(&screen.dialog))
-                    .map(|h| h.report.tool.clone())
-            });
         let now = crate::now_ms();
         let approval = Approval {
             approval_id: ApprovalId::new(random(16)?)?,
@@ -551,7 +532,7 @@ impl Approvals {
             agent_label: agent_label(a),
             workspace_label: workspace_label(&a.workspace_id, workspaces),
             snippet: screen.snippet.clone(),
-            tool: tool.clone(),
+            tool: screen.tool.clone(),
             reason: screen.reason.clone(),
             options: screen.offered.iter().map(|(d, _)| *d).collect(),
             choices: screen.menu.as_ref().map_or_else(Vec::new, Menu::choices),
@@ -562,9 +543,10 @@ impl Approvals {
             created_at_ms: now,
             expires_at_ms: now + self.ttl.as_millis() as u64,
         };
-        let context = tool
-            .as_ref()
-            .map_or_else(|| screen.context.clone(), hooks::context);
+        let context = screen.tool.as_ref().map_or_else(
+            || screen.context.clone(),
+            |t| format!("{}: {}", t.name, t.summary),
+        );
         // The phone cuts the alert body to MAX_CONTEXT_CHARS: the context is cut first, so the
         // reason stays. The Live Activity shows only the first lines: there the command wins.
         let context = match &screen.reason {
@@ -614,31 +596,6 @@ impl Approvals {
         }
         let _ = self.events.send(Event::ApprovalNeeded { approval });
         Ok(())
-    }
-
-    /// The last call Claude Code's PermissionRequest hook reported for a session.
-    pub fn hook(&self, session_id: String, report: hooks::Report) {
-        if !hooks::valid_session(&session_id) {
-            return;
-        }
-        let mut inner = self.lock();
-        if inner.hooks.len() >= MAX_HOOKS
-            && !inner.hooks.contains_key(&session_id)
-            && let Some(oldest) = inner
-                .hooks
-                .iter()
-                .min_by_key(|(_, h)| h.at)
-                .map(|(s, _)| s.clone())
-        {
-            inner.hooks.remove(&oldest);
-        }
-        inner.hooks.insert(
-            session_id,
-            Hooked {
-                at: Instant::now(),
-                report,
-            },
-        );
     }
 
     fn take_token(&self, peer: &str) -> bool {

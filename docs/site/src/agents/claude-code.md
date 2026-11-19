@@ -15,9 +15,8 @@
 
 ## Set up
 
-1. Install the [PermissionRequest hook](../install/claude-code.md#the-permissionrequest-hook) so approval alerts name the exact command.
-2. Add the [status line tap](../install/claude-code.md#plan-usage) for plan usage and exact context windows.
-3. Check both with `collied doctor`.
+1. Add the [status line tap](../install/claude-code.md#plan-usage) for plan usage and exact context windows.
+2. Check it with `collied doctor`.
 
 ## Approvals
 

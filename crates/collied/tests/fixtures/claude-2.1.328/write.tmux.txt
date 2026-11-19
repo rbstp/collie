@@ -1,0 +1,31 @@
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Sonnet 5.5 · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+
+❯ Use the Edit tool to replace the line beta with the line delta in notes.txt. Do not use Bash.
+
+⏺ Update(notes.txt)
+  ⎿  Rejected update to notes.txt
+      1  alpha
+      2 -beta
+      2 +delta
+      3  gamma
+
+❯ Use the Write tool to create a new file named hello.txt containing exactly two lines: hi and bye. Do not use Bash.
+
+⏺ Write(hello.txt)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create file
+ hello.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hi
+  2 bye
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create hello.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

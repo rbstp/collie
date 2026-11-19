@@ -63,8 +63,9 @@ enum Command {
         #[command(subcommand)]
         command: ApnsCommand,
     },
-    /// Claude Code PermissionRequest hook: reports the pending tool call to collied. Also
-    /// Codex's SessionStart hook in herdr-core: reports the session for its terminal.
+    /// Codex's SessionStart hook in herdr-core and Rex: reports the session for its terminal.
+    /// As Claude Code's PermissionRequest hook, which earlier versions asked for, it does
+    /// nothing.
     Hook,
     /// Claude Code status line tap: records the plan usage and context window from the
     /// status line input on stdin. Prints nothing.

@@ -1,22 +1,10 @@
-# Claude Code hook and plan usage
+# Claude Code plan usage
 
-The hook and the status line tap are optional; `collied doctor` checks both.
+The status line tap is optional; `collied doctor` checks it.
 
 ## The PermissionRequest hook
 
-Add this to `~/.claude/settings.json` so approval alerts name the exact command or file:
-
-```json
-{
-  "hooks": {
-    "PermissionRequest": [
-      { "hooks": [{ "type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5 }] }
-    ]
-  }
-}
-```
-
-The hook only reports the call: Claude Code's dialog does not change.
+You no longer need Claude Code's PermissionRequest hook: `collied` names the command or file from the prompt on screen. If `~/.claude/settings.json` still runs `collied hook` under `PermissionRequest`, that entry does nothing, and you can remove it.
 
 ## Plan usage
 
