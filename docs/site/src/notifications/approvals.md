@@ -8,6 +8,8 @@ A blocked agent's notification names the tool call as its prompt on screen shows
 
 For Claude Code, choose **Approve** or **Deny** on the notification once the iPhone is unlocked, or in the app with Face ID or the passcode for each decision. If the prompt has changed by then, `collied` sends nothing. When Claude Code says why it asks, even in auto or bypass mode, the notification and the approval card show that reason.
 
+When a Claude Code prompt is taller than the agent's terminal, its first lines are off screen, so the notification and the card offer no buttons: open the session, scroll up in **Terminal** and answer there.
+
 Codex and Copilot CLI notifications have no Approve or Deny: answer in the session. A Codex notification previews the pending question, the action or the agent's latest response.
 
 Once the agent moves on, `collied` tries to remove the notification.

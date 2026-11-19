@@ -256,6 +256,9 @@ pub struct Menu {
     pub cursor: usize,
     /// The lines right under the last option: where its label wraps, and hints.
     pub after: Vec<String>,
+    /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
+    /// its first rows, a command's first lines among them: no read shows or binds them.
+    pub topped: bool,
 }
 
 impl Menu {
@@ -317,7 +320,8 @@ impl Menu {
         if cursors.next().is_some() {
             return None;
         }
-        let top = top_rule(&lines, first).map_or(0, |r| r + 1);
+        let rule = top_rule(&lines, first);
+        let top = rule.map_or(0, |r| r + 1);
         let raw_body: Vec<String> = lines[top..first]
             .iter()
             .filter(|l| !l.trim().is_empty())
@@ -343,6 +347,7 @@ impl Menu {
             heads,
             cursor,
             after,
+            topped: rule.is_some(),
         })
     }
 
@@ -413,6 +418,7 @@ impl Menu {
             options,
             cursor: at - first,
             after: Vec::new(),
+            topped: true,
         })
     }
 
@@ -765,8 +771,8 @@ pub fn context(kind: &str, text: &str) -> String {
 /// only at the end, so `<name>: <summary>` fits [`MAX_CONTEXT_CHARS`].
 pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>) {
     let region = after_last_rule(text);
-    // Read from the whole screen, no rule tops the dialog, so its rows can start above the
-    // region the fingerprint hashes: they name no call.
+    // Read from the whole screen, no rule tops the dialog: its first rows are not the
+    // dialog's head and name no call.
     let whole = region.len() == text.lines().count();
     let structured_question = kind == "codex"
         && region
@@ -896,7 +902,9 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
         return (String::new(), None);
     };
     let question = lines.iter().rposition(|l| l.ends_with('?'));
-    let asks = question.filter(|&q| q > head && lines[q].starts_with("Do you want to"));
+    let asks = question.filter(|&q| {
+        q > head && lines[q].starts_with("Do you want to") && !(whole && kind == "claude")
+    });
     let action = asks.and_then(|q| {
         let header = &lines[head];
         let mut rest = lines[head + 1..q].iter().filter(|l| !l.is_empty());
@@ -912,7 +920,7 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
         }
     });
     let tool = asks
-        .filter(|_| kind == "claude" && !whole && action.is_some())
+        .filter(|_| kind == "claude" && action.is_some())
         .map(|q| {
             let rows = (head + 1..q).filter(|&i| !lines[i].is_empty());
             let (name, rows): (&str, Vec<usize>) = if lines[head] == "Bash command" {
@@ -1337,11 +1345,10 @@ fn top_rule(lines: &[&str], first: usize) -> Option<usize> {
     None
 }
 
-/// The dialog: the rows under the last rule on screen when it is below the last option (a
-/// numbered menu above it is stale output), else under [`top_rule`], or the whole screen
-/// when there is none or only blank rows follow it. A rule-like row between option 1 and the
-/// last option, such as an option's label wrapped onto a row starting with `─`, never tops
-/// it.
+/// The dialog: the rows under the last rule on screen when it is below the last option and
+/// rows follow it (a numbered menu above it is stale output), else under [`top_rule`], or
+/// the whole screen when there is none. A rule-like row between option 1 and the last
+/// option, such as an option's label wrapped onto a row starting with `─`, never tops it.
 pub fn after_last_rule(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
     let last = lines.iter().rposition(|l| option_line(l).is_some());
@@ -1351,8 +1358,11 @@ pub fn after_last_rule(text: &str) -> Vec<&str> {
     let ruled = |from: usize| {
         (from..lines.len()).rfind(|&i| is_rule(lines[i]) && !splits_options(&lines, i))
     };
+    let rows_follow = |r: &usize| lines[r + 1..].iter().any(|l| !l.trim().is_empty());
     let start = match (first, last) {
-        (Some(first), Some(last)) => ruled(last + 1).or_else(|| top_rule(&lines, first)),
+        (Some(first), Some(last)) => ruled(last + 1)
+            .filter(rows_follow)
+            .or_else(|| top_rule(&lines, first)),
         _ => ruled(0),
     }
     .map_or(0, |i| i + 1);
@@ -1491,6 +1501,11 @@ pub mod fixtures {
         include_str!("../tests/fixtures/claude-2.1.328/write.tmux.txt"),
         include_str!("../tests/fixtures/claude-2.1.328/fetch.tmux.txt"),
     ];
+    // Captured from Claude Code 2.1.328 (tmux capture-pane, 120 columns, 24 rows): a command
+    // of 42 lines, whose dialog is taller than the screen, so its top rule, its head and its
+    // first 28 lines have scrolled off.
+    pub const BASH_TALL_328: &str =
+        include_str!("../tests/fixtures/claude-2.1.328/bash-tall.tmux.txt");
     // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
     // the same with feedback typed into its third option.
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
@@ -2888,18 +2903,27 @@ mod tests {
         ] {
             assert_eq!(read(screen), None);
         }
-        let trailing = format!("{BASH}────────────────\n\n\n");
-        assert!(!Menu::parse(&trailing).unwrap().decisions().is_empty());
+        let trailing = format!(" Edit file\n safe.txt\n{BASH}────────────────\n\n\n");
         assert_eq!(
             read(&trailing),
-            None,
-            "the agent's own rows above the region name no call"
+            read(BASH),
+            "a rule under the dialog leaves its top where it is"
         );
         for (_, screen) in CODEX.iter().chain(&COPILOT) {
             for kind in ["codex", "copilot"] {
                 assert_eq!(context_and_tool(kind, screen).1, None);
             }
         }
+    }
+
+    #[test]
+    fn a_dialog_taller_than_the_screen_names_no_call() {
+        assert!(!Menu::parse(BASH_TALL_328).unwrap().topped);
+        assert_eq!(
+            context_and_tool("claude", BASH_TALL_328),
+            ("Do you want to proceed?".to_owned(), None)
+        );
+        assert!(Menu::parse(BASH_327[3]).unwrap().topped);
     }
 
     #[test]

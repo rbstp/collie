@@ -459,9 +459,12 @@ impl Approvals {
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
+        // A dialog whose top is off screen gets no answer from the phone: its first rows are
+        // neither shown nor bound.
         let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
-            .flatten();
+            .flatten()
+            .filter(|m| m.topped);
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
