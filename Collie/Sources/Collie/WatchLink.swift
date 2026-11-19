@@ -59,13 +59,45 @@ private func clip(_ text: String, _ limit: Int) -> String {
 }
 
 extension WatchApproval {
+    /// One approval's texts together, in UTF-8 bytes. A permission prompt at every one of collied's caps is under it (its
+    /// labels, a command of 600 characters, a reason and a snippet of 200, four options of 300 with 300 of detail: about
+    /// 3,600), and five approvals at it still fit an application context beside the agents.
+    static let maxTextBytes = 4_096
+    /// collied numbers a menu's options 1 to 9.
+    static let maxChoices = 9
+
+    /// Every text whole, in the order the watch shows them. The first one that passes the bound is cut at an ellipsis,
+    /// nothing after it is sent, and the approval is marked `cut`: a silent prefix once stood above Approve and Deny.
     init(item: ApprovalItem) {
         let approval = item.approval
+        var room = Self.maxTextBytes
+        var cut = false
+        func fit(_ text: String?) -> String? {
+            guard let text, !cut else { return nil }
+            guard text.utf8.count > room else {
+                room -= text.utf8.count
+                return text
+            }
+            cut = true
+            var kept = String.UnicodeScalarView()
+            for scalar in text.unicodeScalars {
+                room -= UTF8.width(scalar)
+                if room < 3 { break }
+                kept.append(scalar)
+            }
+            return String(kept) + "…"
+        }
+        let agent = fit(approval.agentLabel)
+        let place = fit([approval.workspaceLabel, item.machine.label].filter { !$0.isEmpty }.joined(separator: " · "))
+        let command = fit(approval.toolName.map { [$0, approval.toolSummary].compactMap { $0 }.joined(separator: ": ") })
+        let reason = fit(approval.reason)
+        let snippet = fit(approval.snippet)
+        let choices = approval.choices.prefix(Self.maxChoices).compactMap { choice in
+            fit(choice.label).map { WatchChoice(index: choice.index, label: $0, detail: fit(choice.detail)) }
+        }
         self.init(
-            nodeId: item.machine.nodeId, approvalId: approval.approvalId, agent: clip(approval.agentLabel, 60),
-            place: clip([approval.workspaceLabel, item.machine.label].filter { !$0.isEmpty }.joined(separator: " · "), 60),
-            command: approval.toolName.map { clip([$0, approval.toolSummary].compactMap { $0 }.joined(separator: ": "), 200) },
-            snippet: clip(approval.snippet, 400),
+            nodeId: item.machine.nodeId, approvalId: approval.approvalId, agent: agent ?? "", place: place ?? "",
+            command: command, reason: reason, snippet: snippet ?? "",
             options: approval.options.compactMap {
                 switch $0 {
                 case .approve: .approve
@@ -73,7 +105,7 @@ extension WatchApproval {
                 case .approveAlways, .choose: nil
                 }
             },
-            choices: approval.choices.prefix(9).map { WatchChoice(index: $0.index, label: clip($0.label, 60)) },
+            choices: choices, cut: cut || approval.choices.count > Self.maxChoices,
             answeredInTerminal: approval.answeredInTerminal, expiresAtMs: approval.expiresAtMs
         )
     }

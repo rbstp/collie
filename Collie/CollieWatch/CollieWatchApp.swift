@@ -480,7 +480,20 @@ private struct ApprovalDetail: View {
                 if let command = approval.command {
                     Text(verbatim: command).font(.footnote.monospaced())
                 }
+                if let reason = approval.reason {
+                    Label {
+                        Text(verbatim: reason)
+                    } icon: {
+                        Image(systemName: "exclamationmark.shield.fill").foregroundStyle(.orange)
+                    }
+                    .font(.footnote)
+                }
                 Text(verbatim: approval.snippet).font(.footnote).foregroundStyle(.secondary)
+                // A menu the watch can answer draws its choices as buttons. Any other prompt lists them, so every text the
+                // phone sent is on screen, a cut one with its ellipsis.
+                if !approval.options.isEmpty || approval.cut || model.state?.decisionsAllowed != true {
+                    ForEach(approval.choices, id: \.index) { ChoiceText(choice: $0).font(.footnote) }
+                }
                 GlassEffectContainer(spacing: 8) {
                     TimelineView(.explicit([expiry])) { _ in
                         VStack(spacing: 8) {
@@ -497,7 +510,9 @@ private struct ApprovalDetail: View {
 
     @ViewBuilder
     private func actions(expired: Bool) -> some View {
-        if approval.answeredInTerminal {
+        if approval.cut {
+            Text("Too long for the watch. Answer it on the iPhone").font(.footnote).foregroundStyle(.secondary)
+        } else if approval.answeredInTerminal {
             Text("Answer it on the iPhone").font(.footnote).foregroundStyle(.secondary)
         } else if model.state?.decisionsAllowed != true {
             Text("Read only. Turn on Decide from Apple Watch in collie Settings on the iPhone.")
@@ -526,7 +541,7 @@ private struct ApprovalDetail: View {
                 Button {
                     decide(.choose(choice.index))
                 } label: {
-                    Text(verbatim: "\(Int(choice.index) + 1). \(choice.label)")
+                    ChoiceText(choice: choice)
                 }
                 .buttonStyle(.glass)
                 .disabled(expired || model.sending != nil)
@@ -537,5 +552,18 @@ private struct ApprovalDetail: View {
     /// Back to the list once answered, where the notice reports it; on failure the buttons stay.
     private func decide(_ decision: WatchDecision) {
         Task { if await model.decide(approval, decision) { dismiss() } }
+    }
+}
+
+private struct ChoiceText: View {
+    let choice: WatchChoice
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(verbatim: "\(Int(choice.index) + 1). \(choice.label)")
+            if let detail = choice.detail {
+                Text(verbatim: detail).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
     }
 }

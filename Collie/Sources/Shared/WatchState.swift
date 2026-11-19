@@ -21,9 +21,12 @@ struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
     let agent: String
     let place: String
     let command: String?
+    let reason: String?
     let snippet: String
     let options: [WatchDecision]
     let choices: [WatchChoice]
+    /// The phone cut this prompt to fit the watch. It is then read-only: nobody decides under text they cannot read whole.
+    let cut: Bool
     let answeredInTerminal: Bool
     let expiresAtMs: UInt64
 
@@ -31,6 +34,7 @@ struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
 
     /// A menu option is only ever chosen where collied offers no Approve/Deny, as on the phone.
     func offers(_ decision: WatchDecision) -> Bool {
+        guard !cut else { return false }
         if case .choose(let index) = decision {
             return options.isEmpty && choices.contains { $0.index == index }
         }
@@ -46,6 +50,7 @@ struct WatchApproval: Codable, Equatable, Identifiable, Sendable {
 struct WatchChoice: Codable, Equatable, Sendable {
     let index: UInt8
     let label: String
+    var detail: String? = nil
 }
 
 /// No Always allow, as on the lock screen.
