@@ -2357,6 +2357,54 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func anUploadedPathIsNotTypedIntoADialogThatAppearedMeanwhile() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    await attach(model, core, "a.png")
+    let path = model.attachments[0].path
+    model.typePath(of: model.attachments[0])
+    await poll { !core.snapshot.input.isEmpty }
+    #expect(core.snapshot.input == [.typed(path + " ")])
+    #expect(model.attachments.isEmpty)
+
+    await attach(model, core, "b.txt")
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    model.typePath(of: model.attachments[0])
+    #expect(model.attachments.map(\.name) == ["b.txt"], "kept for Chat")
+    #expect(model.notice?.contains("attached in Chat") == true)
+    await model.tap(.down)?.value
+    #expect(core.snapshot.input == [.typed(path + " "), .keys([.down])], "a digit of the path would answer the dialog")
+}
+
+@MainActor
+@Test func dictationInTheTerminalViewIsNotTypedIntoADialog() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.draft = "run the tests"
+    model.typeDictation(restoring: "kept")
+    await poll { !core.snapshot.input.isEmpty }
+    #expect(core.snapshot.input == [.typed("run the tests")])
+    #expect(model.draft == "kept")
+
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    model.draft = ""
+    model.typeDictation(restoring: "kept")
+    #expect(model.draft == "kept" && model.notice == nil, "dictation that never started only gives the draft back")
+    model.draft = "option 2"
+    model.typeDictation(restoring: "kept")
+    #expect(model.draft == "kept option 2")
+    #expect(model.notice?.contains("Chat’s draft") == true)
+    await model.tap(.down)?.value
+    #expect(core.snapshot.input == [.typed("run the tests"), .keys([.down])], "the words were never shown, and a digit would answer the dialog")
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }

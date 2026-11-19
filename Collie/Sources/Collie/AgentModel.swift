@@ -958,6 +958,30 @@ final class AgentModel {
         return type(text.split(whereSeparator: \.isNewline).joined(separator: " "))
     }
 
+    /// The terminal view types an uploaded file's path instead of holding it for a prompt. On a dialog
+    /// that appeared during the upload a digit of the path could be the answer, so the file stays attached.
+    func typePath(of file: AttachedFile) {
+        guard !answering else {
+            notice = "The agent is waiting for an answer. The file is attached in Chat, not typed."
+            return
+        }
+        type(file.path + " ")
+        remove(file)
+    }
+
+    /// Dictation in the terminal view types what was said, then gives the chat draft back. On a dialog
+    /// the words, never shown first, could be the answer, so they join the draft instead.
+    func typeDictation(restoring kept: String) {
+        let said = draft
+        guard answering, !said.isEmpty else {
+            draft = kept
+            type(said)
+            return
+        }
+        draft = kept.isEmpty ? said : kept + " " + said
+        notice = "The agent is waiting for an answer. What you said is in Chat’s draft, not typed."
+    }
+
     /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
     @discardableResult
     func press(_ key: AgentKey) -> Task<Void, Never>? {
