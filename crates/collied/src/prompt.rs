@@ -280,7 +280,6 @@ impl Menu {
         let after = lines[last + 1..]
             .iter()
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
-            .take(MAX_CONTINUATION_LINES + 1)
             .map(|l| l.trim().to_owned())
             .collect();
         let mut options: Vec<(bool, String, String)> = Vec::new();
@@ -511,12 +510,14 @@ impl Menu {
     }
 
     /// Whether `now` is this menu with the cursor on option `i` and no option but `i`
-    /// changed.
+    /// changed, nor the rows under the last option, unless `i` is that option, whose label
+    /// wraps onto them.
     pub fn only_changed(&self, i: usize, now: &Menu) -> bool {
         now.cursor == i
             && now.body == self.body
             && now.options.len() == self.options.len()
             && (0..now.options.len()).all(|j| j == i || now.options[j] == self.options[j])
+            && (i + 1 == now.options.len() || now.after == self.after)
     }
 
     pub fn tail(&self) -> &[String] {
@@ -3275,6 +3276,21 @@ mod tests {
             wrapped("differently (esc)"),
             wrapped("differently, then run rm -rf ~ (esc)"),
         );
+        assert!((0..3).all(|i| shown.region_at(i) != other.region_at(i)));
+        assert!(shown.only_changed(0, &shown.clone()));
+        assert!(
+            !shown.only_changed(0, &other),
+            "a note typed into another option leaves these rows as they were"
+        );
+        let tall = |rest: &str| {
+            let rows: String = (1..=5).map(|i| format!("row {i}\n      ")).collect();
+            wrapped(&format!("{rows}{rest}"))
+        };
+        let (shown, other) = (
+            tall("differently (esc)"),
+            tall("differently, then run rm -rf ~ (esc)"),
+        );
+        assert_eq!(shown.after.len(), 6);
         assert!((0..3).all(|i| shown.region_at(i) != other.region_at(i)));
     }
 
