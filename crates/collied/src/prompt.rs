@@ -440,20 +440,27 @@ impl Menu {
                         _ => None,
                     }
                 })
-                // The app shows this option's wording as what Always allow grants: cut by
-                // [`Menu::choices`], it would hide the rule's scope.
-                .filter(|&(d, i)| {
-                    let whole = |s: &str| clean(s).chars().count() <= MAX_CHOICE_LABEL_CHARS;
-                    d != Decision::ApproveAlways
-                        || whole(&self.heads[i])
-                            && whole(self.options[i][self.heads[i].len()..].trim())
-                })
                 .collect();
-        if offered.iter().any(|(d, _)| *d != Decision::Deny) {
-            offered
-        } else {
-            Vec::new()
+        if !offered.iter().any(|(d, _)| *d != Decision::Deny) {
+            return Vec::new();
         }
+        // The app shows this option's wording as what Always allow grants: cut by
+        // [`Menu::choices`], it would hide the rule's scope. Taken out only once the menu
+        // counts as a permission prompt, so that its options are never chosen by index.
+        let whole = |s: &str| clean(s).chars().count() <= MAX_CHOICE_LABEL_CHARS;
+        offered
+            .into_iter()
+            .filter(|&(d, i)| {
+                d != Decision::ApproveAlways
+                    || whole(&self.heads[i]) && whole(self.options[i][self.heads[i].len()..].trim())
+            })
+            .collect()
+    }
+
+    /// Whether an option grants something (any `Yes`): a permission prompt or a plan, not a
+    /// question or a form.
+    pub fn grants(&self) -> bool {
+        self.options.iter().any(|l| grants(l))
     }
 
     pub fn choices(&self) -> Vec<ApprovalChoice> {
@@ -2942,6 +2949,11 @@ mod tests {
             ("Do you want to proceed?".to_owned(), None)
         );
         assert!(Menu::parse(BASH_327[3]).unwrap().topped);
+        assert!(Menu::parse(BASH_TALL_328).unwrap().grants());
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        let form = Menu::parse(form).unwrap();
+        assert!(!form.topped && !form.grants(), "a ▔ border tops this form");
     }
 
     #[test]
@@ -2966,6 +2978,13 @@ mod tests {
                 "{rule}"
             );
         }
+        let amended =
+            BASH_AMEND_TYPED_LIVE.replace("access to /tmp/planlab", &format!("access to {dir}"));
+        assert_eq!(
+            offered(&amended),
+            [Decision::Deny],
+            "still a permission prompt: no option is chosen by index"
+        );
     }
 
     #[test]

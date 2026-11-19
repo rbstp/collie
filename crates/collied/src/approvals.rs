@@ -459,12 +459,13 @@ impl Approvals {
         let (rule, form) = prompt::without_session_name(kind, matched.as_deref(), &detected);
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
-        // A dialog whose top is off screen gets no answer from the phone: its first rows are
-        // neither shown nor bound.
+        // A granting dialog whose top is off screen gets no answer from the phone: its first
+        // rows are neither shown nor bound. A form that grants nothing, such as the rate limit
+        // form under its `▔` border, is chosen from as before.
         let menu = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten()
-            .filter(|m| m.topped);
+            .filter(|m| m.topped || !m.grants());
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
