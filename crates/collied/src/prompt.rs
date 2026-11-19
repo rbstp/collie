@@ -322,10 +322,10 @@ impl Menu {
         }
         let rule = top_rule(&lines, first);
         let top = rule.map_or(0, |r| r + 1);
-        let raw_body: Vec<String> = lines[top..first]
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| (*l).to_owned())
+        let block = command_rows(&lines[top..first]);
+        let raw_body: Vec<String> = (lines[top..first].iter().enumerate())
+            .filter(|(i, l)| block.contains(i) || !l.trim().is_empty())
+            .map(|(_, l)| (*l).to_owned())
             .collect();
         let rows: Vec<&str> = raw_body.iter().map(String::as_str).collect();
         let block = command_rows(&rows);
@@ -564,7 +564,8 @@ impl Menu {
     /// What the fingerprint covers: the whole dialog from its top rule to the last option and
     /// the rows wrapped under it, with the cursor, and not the rest of the screen (spinners,
     /// status lines), which changes on its own. A command row keeps its indent within the
-    /// block, so a changed indent supersedes the approval.
+    /// block and a blank one stays, so a changed indent or a command moved under a blank row
+    /// supersedes the approval.
     pub fn region(&self) -> String {
         self.region_at(self.cursor)
     }
@@ -635,27 +636,25 @@ fn trust_wording(text: &str) -> bool {
 }
 
 pub fn clean(line: &str) -> String {
-    shown(line)
+    let row = shown(line);
+    let words: Vec<&str> = row.split_whitespace().collect();
+    (words.join(" "))
         .trim_matches(|c: char| matches!(c, '│' | '┃') || c.is_whitespace())
         .to_owned()
 }
 
-/// A row as shown: controls, bidi and format characters dropped, tabs and runs of
-/// whitespace one space, and its indent kept. A command row is shown so, without
-/// [`clean`]'s trimming: a heredoc's `EOF`, Python's or YAML's indent and a row that is
-/// itself `│` read as the fingerprint binds them.
+/// A row as shown: controls, bidi and format characters dropped, a tab or any other
+/// whitespace character one space, and its indent and inner spaces kept. A command row is
+/// shown so, without [`clean`]'s trimming and joining of spaces: a heredoc's `EOF`, Python's
+/// or YAML's indent, the two spaces in a quoted `'a  b'` and a row that is itself `│` read
+/// as the fingerprint binds them.
 fn shown(row: &str) -> String {
     let kept: String = row
         .chars()
-        .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| !c.is_control() && !is_format(*c))
+        .filter(|c| *c == '\t' || !c.is_control() && !is_format(*c))
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
         .collect();
-    let words: Vec<&str> = kept.split_whitespace().collect();
-    if words.is_empty() {
-        return String::new();
-    }
-    let indent = kept.chars().take_while(|c| c.is_whitespace()).count();
-    format!("{}{}", " ".repeat(indent), words.join(" "))
+    kept.trim_end().to_owned()
 }
 
 fn is_border(line: &str) -> bool {
@@ -709,7 +708,8 @@ fn tip_rows(lines: &[&str]) -> Vec<bool> {
 }
 
 /// The rows strictly between the first and last `╌` rule Claude Code draws: since 2.1.289,
-/// the command block, none of whose rows is dropped as a tip or a border, whatever it reads.
+/// the command block, none of whose rows is dropped as a tip, a border or a blank row,
+/// whatever it reads.
 /// Claude Code draws those rules left of the dialog's text margin, the indent of the first
 /// row of `lines`: a `╌` row at or right of it, which a command or the description the
 /// agent writes can hold, delimits nothing.
@@ -771,8 +771,8 @@ fn command_row<'a>(line: &'a str, prefix: &str) -> &'a str {
 /// input is excluded; an ambiguous Codex screen has no preview. Other prompts fall back
 /// to the first line (with the line after it when it ends in `:`). The approver acts on
 /// this text, so
-/// no non-blank row inside the command block is ever dropped: it is cut only at the length cap,
-/// with `…`.
+/// no row inside the command block is ever dropped, a blank one included: it is cut only at
+/// the length cap, with `…`.
 pub fn context(kind: &str, text: &str) -> String {
     context_and_tool(kind, text).0
 }
@@ -920,12 +920,16 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
     let asks = question.filter(|&q| {
         q > head && lines[q].starts_with("Do you want to") && !(whole && kind == "claude")
     });
+    let kept = |i: &usize| command[*i] || !lines[*i].is_empty();
     let action = asks.and_then(|q| {
         let header = &lines[head];
         let mut rest = lines[head + 1..q].iter().filter(|l| !l.is_empty());
         if header == "Bash command" {
-            let block: Vec<&str> = rest.map(String::as_str).collect();
-            (!block.is_empty()).then(|| format!("Bash: {}", block.join("\n")))
+            let block: Vec<&str> = (head + 1..q)
+                .filter(kept)
+                .map(|i| lines[i].as_str())
+                .collect();
+            rest.next().map(|_| format!("Bash: {}", block.join("\n")))
         } else {
             let tool = header
                 .strip_suffix(" command")
@@ -937,7 +941,7 @@ pub fn context_and_tool(kind: &str, text: &str) -> (String, Option<PendingTool>)
     let tool = asks
         .filter(|_| kind == "claude" && action.is_some())
         .map(|q| {
-            let rows = (head + 1..q).filter(|&i| !lines[i].is_empty());
+            let rows = (head + 1..q).filter(kept);
             let (name, rows): (&str, Vec<usize>) = if lines[head] == "Bash command" {
                 let (block, rest): (Vec<usize>, Vec<usize>) = rows.partition(|&i| command[i]);
                 ("Bash", [block, rest].concat())
@@ -3018,7 +3022,7 @@ mod tests {
             (
                 "Edit: notes.txt",
                 "Edit file",
-                "notes.txt\n1 alpha\n2 -beta\n2 +delta\n3 gamma",
+                "notes.txt\n1  alpha\n2 -beta\n2 +delta\n3  gamma",
             ),
             (
                 "Create: hello.txt",
@@ -3115,6 +3119,67 @@ mod tests {
                 .unwrap()
                 .region()
                 .contains("\n│ touch f.txt\n│ │\n")
+        );
+    }
+
+    #[test]
+    fn a_command_block_keeps_its_blank_rows_and_inner_spaces() {
+        let region = |s: &str| Menu::parse(s).unwrap().region();
+        let summary = |s: &str| context_and_tool("claude", s).1.unwrap().summary;
+        for (screen, rows, prefix, blank, described) in [
+            (
+                BASH_LIVE,
+                " touch probe2.txt\n",
+                " ",
+                "\n",
+                "Create empty probe2.txt file",
+            ),
+            (
+                BASH_327[3],
+                " │ touch f.txt\n │ touch g.txt\n",
+                " │ ",
+                " │\n",
+                "Run shell command",
+            ),
+        ] {
+            let with = |gap: &str| {
+                screen.replace(
+                    rows,
+                    &format!("{prefix}echo safe \\\n{gap}{prefix}rm -rf ~\n"),
+                )
+            };
+            let (continued, split) = (with(""), with(blank));
+            assert_ne!(region(&continued), region(&split));
+            assert_eq!(
+                summary(&continued),
+                format!("echo safe \\\nrm -rf ~\n{described}")
+            );
+            assert_eq!(
+                summary(&split),
+                format!("echo safe \\\n\nrm -rf ~\n{described}")
+            );
+            assert_eq!(
+                context("claude", &split),
+                format!("Bash: {described}\necho safe \\\n\nrm -rf ~")
+            );
+        }
+        let spaced = BASH_LIVE.replace(" touch probe2.txt\n", " rm -- 'a  b'  c\n");
+        assert_eq!(
+            summary(&spaced),
+            "rm -- 'a  b'  c\nCreate empty probe2.txt file"
+        );
+        assert_eq!(
+            context("claude", &spaced),
+            "Bash: Create empty probe2.txt file\nrm -- 'a  b'  c"
+        );
+        let snippet = Menu::parse(&spaced).unwrap().snippet();
+        assert!(snippet.contains("\nrm -- 'a  b'  c\n"), "{snippet}");
+        let only_blank = BASH_LIVE
+            .replace(" Create empty probe2.txt file\n", "")
+            .replace(" touch probe2.txt\n", "\n\n");
+        assert_eq!(
+            context_and_tool("claude", &only_blank),
+            ("Do you want to proceed?".to_owned(), None)
         );
     }
 
