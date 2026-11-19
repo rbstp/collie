@@ -2333,6 +2333,30 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func thePasteGestureTypesNothingIntoABlockedAgent() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    await model.pasteIntoTerminal("git status\n-s")?.value
+    #expect(core.snapshot.input == [.typed("git status -s")], "new lines go as spaces, never Return")
+
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    #expect(model.answering)
+    await model.pasteIntoTerminal("1")?.value
+    #expect(core.snapshot.input == [.typed("git status -s")], "a digit would answer the dialog")
+
+    let shellCore = FakeCore()
+    shellCore.state.withLock { $0.shell = shellPane }
+    let shell = terminalModel(shellCore, FakeUnlocker(signs: true))
+    shell.poll()
+    shell.pasteIntoTerminal("ls")
+    await poll { !shellCore.snapshot.terminalTyped.isEmpty }
+    #expect(shellCore.snapshot.terminalTyped == ["ls"])
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }

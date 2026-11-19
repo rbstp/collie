@@ -384,8 +384,7 @@ struct AgentScreen: View {
     private func perform(_ action: GestureAction) {
         switch action {
         case .none: break
-        // A paste never sends: its new lines are typed as spaces, not Return.
-        case .paste: if let text = UIPasteboard.general.string { model.type(text.split(whereSeparator: \.isNewline).joined(separator: " ")) }
+        case .paste: if let text = UIPasteboard.general.string { model.pasteIntoTerminal(text) }
         case .escape: model.tap(.esc)
         }
     }

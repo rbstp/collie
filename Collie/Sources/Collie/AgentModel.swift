@@ -950,6 +950,14 @@ final class AgentModel {
         return task
     }
 
+    /// The paste gesture. A paste never sends: its new lines are typed as spaces, not Return. On a
+    /// prompt one character can be the answer, so nothing is pasted there.
+    @discardableResult
+    func pasteIntoTerminal(_ text: String) -> Task<Void, Never>? {
+        guard !answering else { return nil }
+        return type(text.split(whereSeparator: \.isNewline).joined(separator: " "))
+    }
+
     /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
     @discardableResult
     func press(_ key: AgentKey) -> Task<Void, Never>? {
