@@ -4,7 +4,7 @@ These alerts need [push notifications](../install/push.md).
 
 ## Approval alerts
 
-A blocked agent's notification names the tool call: the exact command or file with the [Claude Code hook](../install/claude-code.md#the-permissionrequest-hook), otherwise what `collied` read from the screen. Tap it to open the session.
+A blocked agent's notification names the tool call as its prompt on screen shows it. For a Claude Code command, the command comes first and Claude's description after it; for a file or a web request, the file or address comes first, then the change. Tap it to open the session.
 
 For Claude Code, choose **Approve** or **Deny** on the notification once the iPhone is unlocked, or in the app with Face ID or the passcode for each decision. If the prompt has changed by then, `collied` sends nothing. When Claude Code says why it asks, even in auto or bypass mode, the notification and the approval card show that reason.
 
@@ -17,7 +17,7 @@ Once the agent moves on, `collied` tries to remove the notification.
 <img class="screenshot-dark" src="../images/approval-dark.png" width="300" height="652" loading="lazy" alt="A blocked Claude Code agent with its approval card: the Bash command, why Claude asked, Review, and Approve, Always allow and Deny buttons">
 </div>
 
-The card shows the tool, its command and **Review**, with a shield when the agent gave a reason. In the approval's last 2 minutes a countdown shows beside **Review**, red in the last minute. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the sheet, with the task (and its machine when you pair more than one), the whole command, the reason and the output, and **Add note** with the buttons. At half height the sheet is as tall as what it shows: the output, the command when the card above cuts it, and the reason when the card leaves it out. The card and the session header show the rest. Drag it up to see everything. To send a note with your decision, tap **Review**, then **Add note**, and type it. If a decision fails, for example when Face ID does not confirm it, a warning under that task's card, and in its sheet above the buttons, says so until your next decision or until the approval ends, even while other approvals arrive or leave. Other tasks never show it.
+The card shows the tool, its command as the notification shows it and **Review**, with a shield when the agent gave a reason. In the approval's last 2 minutes a countdown shows beside **Review**, red in the last minute. In landscape and with larger text, the card narrows to a band: the tool, a line of its command, **Review** and, when they fit, the buttons. **Review** opens the sheet, with the task (and its machine when you pair more than one), the whole command, the reason and the output, and **Add note** with the buttons. At half height the sheet is as tall as what it shows: the output, the command when the card above cuts it, and the reason when the card leaves it out. The card and the session header show the rest. Drag it up to see everything. To send a note with your decision, tap **Review**, then **Add note**, and type it. If a decision fails, for example when Face ID does not confirm it, a warning under that task's card, and in its sheet above the buttons, says so until your next decision or until the approval ends, even while other approvals arrive or leave. Other tasks never show it.
 
 ## Answering by hand
 

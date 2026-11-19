@@ -71,7 +71,7 @@ Every herdr call collied makes today, by caller (`herdr.rs` wrappers). "Built" m
 | `pane.process_info` | the `claude attach` target, transcript pids | `terminal.get` `foreground` (leader's argv and pid only) | equivalent for the leader |
 | `pane.close` | the phone's `pane.close`, archive | `terminal.kill`, `terminal.rm` | equivalent |
 | `server.agent_manifests` | which kinds New task offers | none | built (the CLI on the machine) |
-| `agent_session` (from herdr's hooks) | Chat, costs, context, resume, the Claude Code hook's binding | none: herdr's hooks exit without `HERDR_PANE_ID` | built ([sessions](#the-claude-code-hook-and-herdr_pane_id)) |
+| `agent_session` (from herdr's hooks) | Chat, costs, context, resume | none: herdr's hooks exit without `HERDR_PANE_ID` | built ([sessions](#the-claude-code-hook-and-herdr_pane_id)) |
 
 The architecture page describes a herdr event subscription; the code has none and polls `agent.list` and `workspace.list` every second. herdr-core's `events.subscribe` replaces that poll for its terminals: a snapshot with `seq`, then every change in order, a heartbeat every 15 s, and `missed` with a fresh snapshot for a subscriber that fell behind.
 
@@ -128,10 +128,10 @@ So a herdr-core agent goes in a group of its own, never in a herdr workspace. Ph
 
 ### The Claude Code hook and `HERDR_PANE_ID`
 
-- herdr's integration hooks (`herdr-agent-state.sh` for Claude Code, Codex's SessionStart hook) exit unless `HERDR_ENV=1` and `HERDR_PANE_ID` are set, and herdr-core has no `pane.report_agent_session`, so a herdr-core agent has no `agent_session`: no Chat, costs, context or resume exclusion, and the `collied hook` report (keyed by session id) binds to nothing.
+- herdr's integration hooks (`herdr-agent-state.sh` for Claude Code, Codex's SessionStart hook) exit unless `HERDR_ENV=1` and `HERDR_PANE_ID` are set, and herdr-core has no `pane.report_agent_session`, so a herdr-core agent has no `agent_session`: no Chat, costs, context or resume exclusion.
 - Claude Code: collied already reads `~/.claude/sessions/<pid>.json` (`pid`, `sessionId`, `cwd`) for subagents. The terminal's `foreground.pid` gives the session id from it without a hook (read from an existing session file; not run under herdr-core).
 - An inherited `CLAUDE_CODE_CHILD_SESSION` breaks this: the spike's Claude Code drew "Transcript saving is off, inherited CLAUDE_CODE_CHILD_SESSION marker" on its first screen, so it wrote no transcript, and Chat, costs, context and resume have nothing to read. It writes no `sessions/<pid>.json` either (checked with Claude Code 2.1.316 for #635), so collied finds no session for it. Stripping the variable when collied starts the agent avoids it; an agent started by Herdr UI or Herdr.app in such a core keeps it, which `doctor` reports.
-- Codex: collied's own SessionStart hook, reading `HC_TERMINAL_ID` from its environment and reporting it with the session id over the control socket, like `collied hook` does for permissions. Without `--no-daemon`, Codex runs the hook under its shared app-server, a child of the first Codex, so every session reports that first terminal's `HC_TERMINAL_ID` (verified with codex-cli 0.166.0); collied keeps a report only when the hook's process ancestry reaches the terminal's foreground process through exactly one `codex`.
+- Codex: collied's own SessionStart hook, reading `HC_TERMINAL_ID` from its environment and reporting it with the session id over the control socket. Without `--no-daemon`, Codex runs the hook under its shared app-server, a child of the first Codex, so every session reports that first terminal's `HC_TERMINAL_ID` (verified with codex-cli 0.166.0); collied keeps a report only when the hook's process ancestry reaches the terminal's foreground process through exactly one `codex`.
 - Focus on the desktop is lost; everything else keyed on `HERDR_PANE_ID` follows from the session id.
 
 ### Socket discovery, access and the threat model
@@ -175,7 +175,7 @@ Phase 2 adds this to AGENTS.md beside the live-herdr rule. The spike broke it ([
 2. Agents and status (M): discovery, `hello`, `events.subscribe`, the herdr-core group, cards, status times, push alerts, done alerts, `collied status` and `doctor`, quiet absence both ways, the phone's `pane.close` for a herdr-core agent and the refusal of `workspace.close` for a herdr-core group, the threat model section, the AGENTS.md testing rule.
 3. Screen (M to L): watch-only attach on demand, ANSI rendering with soft wraps, `agent.read`, `agent.watch`, grid previews, banner, notices and draft reads.
 4. Input and approvals (M): `terminal.send` (with `if` when the status seen is `idle` or `working`, without it for `done` and `error`) and `terminal.keys` behind the allowlist, read-only agents without OSC 7501, approvals gated on `kind`, decisions, typed answers, the slash mirror and notes through a same-size typing attach.
-5. Sessions (S to M): Claude Code's pid file, collied's Codex SessionStart hook, then Chat, costs, context, resume and the hook binding.
+5. Sessions (S to M): Claude Code's pid file, collied's Codex SessionStart hook, then Chat, costs, context and resume.
 6. Tasks (M): New task, resume, worktrees and archive in herdr-core when herdr is not running, with the starter's variables stripped.
 
 What a herdr-core agent cannot do that a herdr one can, after all phases: be focused on the desktop, sit in the herdr workspace Herdr UI shows it in, close with its whole group, and, when the CLI does not emit OSC 7501 (Devin CLI today), report a status, or, while its report cannot say a dialog is open (Copilot CLI, [below](#copilot-cli-741)), take prompts, typed answers and keys from the phone. Plain shells in herdr-core are not planned: they stay off Terminals, and when #755 listed Rex's shells there the owner decided Herdr Core's stay unplanned.
@@ -317,7 +317,7 @@ Watch-only attaches into `alacritty_terminal`, rendered back to ANSI with soft w
 
 ### 5. Bind Claude Code and Codex sessions to herdr-core terminals
 
-Claude Code's session from `~/.claude/sessions/<pid>.json` for the terminal's foreground pid; Codex's from a collied SessionStart hook reporting `HC_TERMINAL_ID`. Chat, costs, context, resume and the permission hook then work for herdr-core agents.
+Claude Code's session from `~/.claude/sessions/<pid>.json` for the terminal's foreground pid; Codex's from a collied SessionStart hook reporting `HC_TERMINAL_ID`. Chat, costs, context and resume then work for herdr-core agents.
 
 - [ ] Chat shows a herdr-core Claude Code agent's conversation.
 - [ ] `task.sessions` leaves out sessions a herdr-core agent runs.

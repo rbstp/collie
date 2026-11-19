@@ -32,6 +32,8 @@ pub enum Request {
     },
     /// Holds the connection open: the pending approval count now, then on every change.
     Watch,
+    /// Kept so an older `collied hook`, run as Claude Code's PermissionRequest hook, still
+    /// gets `Noted`. Its report is ignored: nothing ties it to the dialog on screen.
     Hook {
         session_id: String,
         tool_name: String,
@@ -339,16 +341,7 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
                 message: e.to_string(),
             },
         },
-        Request::Hook {
-            session_id,
-            tool_name,
-            shown,
-        } => {
-            if let Some(report) = crate::hooks::Report::new(&tool_name, shown) {
-                state.approvals.hook(session_id, report);
-            }
-            Reply::Noted
-        }
+        Request::Hook { .. } => Reply::Noted,
         Request::Session {
             terminal_id,
             session_id,
@@ -661,6 +654,14 @@ mod tests {
                 .is_err()
         );
         assert!(serde_json::from_str::<Request>(r#"{"cmd":"shell"}"#).is_err());
+        // An older `collied hook` sends this line as Claude Code's PermissionRequest hook.
+        assert!(matches!(
+            serde_json::from_str(
+                r#"{"cmd":"hook","session_id":"s","tool_name":"Bash","shown":["ls","List files"]}"#
+            )
+            .unwrap(),
+            Request::Hook { .. }
+        ));
         // The menu bar app sends these exact lines.
         assert!(matches!(
             serde_json::from_str(r#"{"cmd":"watch"}"#).unwrap(),

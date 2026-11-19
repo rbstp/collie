@@ -1,0 +1,39 @@
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Sonnet 5.5 · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+
+❯ Use the Edit tool to replace the line beta with the line delta in notes.txt. Do not use Bash.
+
+⏺ Update(notes.txt)
+  ⎿  Rejected update to notes.txt
+      1  alpha
+      2 -beta
+      2 +delta
+      3  gamma
+
+❯ Use the Write tool to create a new file named hello.txt containing exactly two lines: hi and bye. Do not use Bash.
+
+⏺ Write(hello.txt)
+  ⎿  Rejected write to hello.txt
+      1 hi
+      2 bye
+
+❯ Use the WebFetch tool to fetch https://example.com and tell me its title. Do not use Bash.
+
+  Fetch(https://example.com)
+  ⎿  Fetching…
+     (ctrl+b to run in background)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Fetch · from the web-fetch agent
+ Claude wants to fetch content from example.com
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ url: https://example.com/
+ │ prompt: What is the exact text of the page's <title> element? If no <title> is visible, give the main heading
+ │ instead. Reply with just the title text.
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to allow Claude to fetch this content?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for example.com
+   3. No, and tell Claude what to do differently (esc)
