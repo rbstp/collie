@@ -1362,7 +1362,7 @@ private struct PromptBar: View {
             NavigationStack {
                 PromptShortcutsView { shortcut in
                     if typesIntoTerminal {
-                        model.type(shortcut.text)
+                        model.typeShortcut(shortcut)
                     } else {
                         model.insert(shortcut)
                         editing = true

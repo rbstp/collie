@@ -987,6 +987,18 @@ final class AgentModel {
         notice = "The agent is waiting for an answer. What you said is in Chat’s draft, not typed."
     }
 
+    /// A saved prompt picked in the terminal view is typed, new lines as Return. Its list can stay open
+    /// while a dialog appears, where a digit or a Return of its text could be the answer, so it joins
+    /// the draft instead.
+    func typeShortcut(_ shortcut: PromptShortcut) {
+        guard answering else {
+            type(shortcut.text)
+            return
+        }
+        draft = shortcut.appending(to: draft)
+        notice = "The agent is waiting for an answer. The saved prompt is in Chat’s draft, not typed."
+    }
+
     /// A key from the strip: with a modifier selected, the two go out together and the modifier clears.
     @discardableResult
     func press(_ key: AgentKey) -> Task<Void, Never>? {

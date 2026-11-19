@@ -2406,6 +2406,28 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func aSavedPromptPickedInTheTerminalViewIsNotTypedIntoADialog() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    model.typeShortcut(PromptShortcut(text: "run the tests\n"))
+    await poll { core.snapshot.input.count == 2 }
+    #expect(core.snapshot.input == [.typed("run the tests"), .keys([.enter])], "new lines go as Return")
+
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    model.draft = "kept"
+    model.typeShortcut(PromptShortcut(text: "1\n"))
+    #expect(model.draft == "kept\n\n1\n")
+    #expect(model.notice?.contains("Chat’s draft") == true)
+    await model.tap(.down)?.value
+    #expect(
+        core.snapshot.input == [.typed("run the tests"), .keys([.enter]), .keys([.down])],
+        "its list stayed open while the dialog appeared, and a digit or a Return would answer it")
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }
