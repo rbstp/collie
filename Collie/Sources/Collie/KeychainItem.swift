@@ -16,51 +16,6 @@ struct KeychainItem: @unchecked Sendable {
     /// is never optional.
     static let accessGroup = Bundle.main.object(forInfoDictionaryKey: "ColliePrivateKeychainGroup") as! String
 
-    /// The items a build up to 0.2.3 wrote without a group, so into the shared one.
-    static var movedItems: [(service: String, account: String)] {
-        let keys = [
-            (Identity.keychain.storedService, Identity.keychain.account),
-            (TerminalKey.keychain.storedService, TerminalKey.keychain.account),
-        ]
-        #if DEBUG && targetEnvironment(simulator)
-        // The relay item has no VM name: a VM run leaves the regular one where it is.
-        if SimulatorVM.enabled { return keys }
-        #endif
-        return keys + [(RelayCredentialStore.service, RelayCredentialStore.account)]
-    }
-
-    /// One item's copy in the group shared with the extensions. Never without the group: the
-    /// move and the deletes built on it would then match the app's own copy.
-    static func sharedQuery(service: String, account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrAccessGroup as String: NotificationKey.accessGroup!,
-            kSecUseDataProtectionKeychain as String: true,
-        ]
-    }
-
-    static var moveAttributes: [String: Any] { [kSecAttrAccessGroup as String: accessGroup] }
-
-    /// Moves an item from the shared group to the app's own, data and accessibility unchanged.
-    /// errSecItemNotFound when the shared group holds none, errSecDuplicateItem when the app's
-    /// own group holds one already.
-    static func moveShared(service: String, account: String) -> OSStatus {
-        SecItemUpdate(sharedQuery(service: service, account: account) as CFDictionary, moveAttributes as CFDictionary)
-    }
-
-    /// At launch, before any other Keychain work. A failure is left to the read path (the Keychain is locked before the first
-    /// unlock, and the terminal key's item whenever the phone is locked). With a copy in both
-    /// groups the app's own is the one in use, and the shared one goes.
-    static func moveSharedItems(_ items: [(service: String, account: String)] = movedItems) {
-        for (service, account) in items {
-            if moveShared(service: service, account: account) == errSecDuplicateItem {
-                SecItemDelete(sharedQuery(service: service, account: account) as CFDictionary)
-            }
-        }
-    }
-
     var storedService: String {
         #if DEBUG && targetEnvironment(simulator)
         if SimulatorVM.enabled { return "dev.rbstp.collie.vm-test." + service }
@@ -92,38 +47,22 @@ struct KeychainItem: @unchecked Sendable {
         return item
     }
 
-    /// nil only when neither group holds the item. A caller makes a new key on nil, so a copy
-    /// in the shared group that could not be moved (the Keychain is locked) throws instead:
-    /// no key is ever made over an older one this read could not reach. The second read comes
-    /// after every move, whatever it answered: another reader or the launch move may have
-    /// moved the item between this read's first look and its own move, which then finds none.
-    func read(move: (String, String) -> OSStatus = KeychainItem.moveShared) throws -> Data? {
+    /// nil only when no item is stored. A caller makes a new key on nil, so every other failure
+    /// (the Keychain is locked) throws: no key is ever made over one this read could not reach.
+    func read() throws -> Data? {
         var result: CFTypeRef?
-        var status = SecItemCopyMatching(readQuery as CFDictionary, &result)
-        if status == errSecItemNotFound {
-            let moved = move(storedService, account)
-            status = SecItemCopyMatching(readQuery as CFDictionary, &result)
-            if status == errSecItemNotFound {
-                if moved == errSecItemNotFound { return nil }
-                if moved != errSecSuccess { throw KeychainError(status: moved) }
-            }
-        }
+        let status = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
         return data
     }
 
-    /// Both copies, each by its exact group, service and account: a query short of one would
-    /// match another item of the app.
-    var deleteQueries: [[String: Any]] { [query, Self.sharedQuery(service: storedService, account: account)] }
-
     /// Replaces any stored blob in place, never by a delete and an add: an add that failed (the
-    /// phone locked in between) would leave no copy. Then a copy left in the shared group goes,
-    /// which would keep the replaced key readable by the extensions.
+    /// phone locked in between) would leave no copy.
     func write(_ data: Data) throws {
         var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(addQuery(data) as CFDictionary, nil) }
         guard status == errSecSuccess else { throw KeychainError(status: status) }
-        SecItemDelete(Self.sharedQuery(service: storedService, account: account) as CFDictionary)
     }
 }
 
@@ -175,9 +114,11 @@ enum EnclaveBlob {
     /// machine refuses the new key until the phone is revoked there and paired again. The error
     /// on that screen is as old as the process, which may have started while the phone was
     /// locked, so the keys are deleted only when the rebuild still fails now.
-    static func reset(_ items: [KeychainItem] = keys, rebuild: () throws -> Void) {
+    static func reset(
+        _ items: [KeychainItem] = keys, delete: (CFDictionary) -> OSStatus = SecItemDelete, rebuild: () throws -> Void
+    ) {
         do { try rebuild() } catch is Kept {
-            for query in items.flatMap(\.deleteQueries) { SecItemDelete(query as CFDictionary) }
+            for item in items { _ = delete(item.query as CFDictionary) }
         } catch {}
     }
 }

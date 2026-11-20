@@ -56,6 +56,10 @@ If a Codex agent stays `unknown`, or a finished turn sends no done alert:
 
 The app shows what stopped it. When it says that the stored key could not be used, unlock the phone and open the app again. If the message stays, tap **Reset this phone's key**: the phone gets a new key and keeps its sign-in, settings and machines, but each machine refuses it until you [pair again](install/pair.md#pair-again).
 
+## "This phone's terminal key could not be used"
+
+A shell shows this when the phone could not use the key that unlocks terminals; the message ends with the error to quote if you report it. Tap the Face ID button beside it to try again: the cause may have passed. If the message stays, tap the struck-out key and confirm **Replace key**. The phone makes a new terminal key and keeps everything else, but shell terminals stop working on every machine until you [pair each one again](install/pair.md#pair-again), without revoking the phone.
+
 ## Pairing refused
 
 - **The window closed**: it lasts 120 seconds and closes at the first attempt, right or wrong. Run `collied pair` again.

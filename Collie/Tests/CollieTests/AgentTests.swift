@@ -1,4 +1,5 @@
 import CollieCore
+import CryptoTokenKit
 import Foundation
 import Synchronization
 import Testing
@@ -82,6 +83,9 @@ final class FakeCore: AgentCore {
         var challenges = 0
         var grants: [Data] = []
         var terminalError: CoreError?
+        var terminalKey: Data?
+        /// The key the machine recorded at pairing: the core refuses a challenge with another, or with none.
+        var pairedTerminalKey: Data?
         var shellWatches: [String] = []
         var commands: [String] = []
         var terminalKeys: [[AgentKey]] = []
@@ -390,10 +394,11 @@ final class FakeCore: AgentCore {
     }
     func maxAttachmentBytes() -> UInt64 { state.withLock { $0.maxAttachmentBytes } }
     func cancelUploads(machineId: String) { state.withLock { $0.cancelledUploads.append(machineId) } }
+    func setTerminalKey(publicKey: Data) { state.withLock { $0.terminalKey = publicKey } }
     func terminalChallenge(machineId: String, terminalId: String) async throws -> Data {
         let error = state.withLock { s in
             s.challenges += 1
-            return s.terminalError
+            return s.pairedTerminalKey != nil && s.terminalKey != s.pairedTerminalKey ? .TerminalKeyMissing : s.terminalError
         }
         if let error { throw error }
         return Data("challenge \(terminalId)".utf8)
@@ -2242,15 +2247,32 @@ private final class FakeUnlocker: TerminalUnlocker {
     let signs: Bool
     let passcodeSet: Bool
     let reasons = Mutex<[String]>([])
+    let key = Mutex(Data("paired key".utf8))
+    /// What the enclave answers the rebuild of the stored key with, until the key is replaced.
+    let kept = Mutex<EnclaveBlob.Kept?>(nil)
 
     init(signs: Bool, passcodeSet: Bool = true) {
         self.signs = signs
         self.passcodeSet = passcodeSet
     }
 
-    func sign(_ message: Data, reason: String) async -> Data? {
+    func publicKey() throws(EnclaveBlob.Kept) -> Data? {
+        if let kept = kept.withLock({ $0 }) { throw kept }
+        return passcodeSet ? key.withLock { $0 } : nil
+    }
+
+    func sign(_ message: Data, reason: String) async throws(EnclaveBlob.Kept) -> Data? {
+        if let kept = kept.withLock({ $0 }) { throw kept }
         reasons.withLock { $0.append(reason) }
         return signs ? Data("signed \(String(decoding: message, as: UTF8.self))".utf8) : nil
+    }
+
+    func replaceKey() -> Data? {
+        kept.withLock { $0 = nil }
+        return key.withLock {
+            $0 = Data("new key".utf8)
+            return $0
+        }
     }
 }
 
@@ -2558,6 +2580,81 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
     noPasscode.poll()
     await noPasscode.unlock()
     #expect(noPasscode.paneNotice == "Set a passcode on this phone, then pair it again to use terminals on this machine.")
+}
+
+/// #876: a stored terminal key the enclave would not rebuild showed the pair-again notice, which
+/// pairing again cannot clear while the item stays.
+@MainActor
+@Test func aKeptTerminalKeyShowsItsCauseWhereTheUnlockFails() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.shell = shellPane
+        $0.pairedTerminalKey = Data("paired key".utf8)
+    }
+    let unlocker = FakeUnlocker(signs: true)
+    unlocker.kept.withLock { $0 = EnclaveBlob.Kept(cause: TKError(.communicationError)) }
+    let cause = "This phone's terminal key could not be used: CryptoTokenKit error -2."
+
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    #expect(!(await model.unlock()), "the core has no key: the last foreground could not rebuild it")
+    #expect(model.paneNotice == cause)
+    #expect(model.notice == nil, "the card says it once")
+    #expect(unlocker.reasons.withLock { $0 }.isEmpty)
+    #expect(model.canUnlock, "the cause may pass")
+
+    core.setTerminalKey(publicKey: Data("paired key".utf8))
+    let signing = terminalModel(core, unlocker)
+    signing.poll()
+    #expect(!(await signing.unlock()), "the enclave refuses the key when it signs")
+    #expect(signing.paneNotice == cause)
+    #expect(signing.notice == nil)
+    #expect(core.snapshot.grants.isEmpty)
+    #expect(signing.canReplaceTerminalKey)
+    core.state.withLock {
+        $0.shell = nil
+        $0.terminalsEnabled = false
+    }
+    signing.poll()
+    #expect(signing.paneNotice == "No longer running")
+    #expect(!signing.canReplaceTerminalKey, "only beside the cause")
+    core.state.withLock {
+        $0.shell = shellPane
+        $0.terminalsEnabled = true
+    }
+
+    core.state.withLock { $0.terminalKey = nil }
+    unlocker.kept.withLock { $0 = nil }
+    #expect(await model.unlock(), "a cause that passed costs no pairing")
+    #expect(core.snapshot.terminalKey == Data("paired key".utf8))
+    model.poll()
+    #expect(model.paneNotice == nil)
+}
+
+/// #876: the owner's way out when the cause stays. The core must get the new key, or the next
+/// pairing would record the old one.
+@MainActor
+@Test func replacingAKeptTerminalKeyHandsTheNewOneToTheCoreAndAsksToPairAgain() async {
+    let core = FakeCore()
+    core.state.withLock {
+        $0.shell = shellPane
+        $0.pairedTerminalKey = Data("paired key".utf8)
+        $0.terminalKey = Data("paired key".utf8)
+    }
+    let unlocker = FakeUnlocker(signs: true)
+    unlocker.kept.withLock { $0 = EnclaveBlob.Kept(cause: TKError(.communicationError)) }
+    let model = terminalModel(core, unlocker)
+    model.poll()
+    await model.unlock()
+    #expect(model.canReplaceTerminalKey)
+    #expect(core.snapshot.terminalKey == Data("paired key".utf8), "nothing is replaced without the owner")
+
+    model.replaceTerminalKey()
+    #expect(core.snapshot.terminalKey == Data("new key".utf8))
+    #expect(model.paneNotice == "This pane is a shell.")
+    #expect(!(await model.unlock()))
+    #expect(model.paneNotice == "Pair this phone again to use terminals on this machine.")
+    #expect(core.snapshot.grants.isEmpty)
 }
 
 @MainActor

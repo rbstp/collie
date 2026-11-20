@@ -841,16 +841,33 @@ private struct AgentTerminal: UIViewRepresentable {
 private struct PaneCard: View {
     let model: AgentModel
     let notice: String
+    @State private var replacing = false
 
     var body: some View {
         HStack(spacing: 12) {
             Text(notice).font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+            if model.canReplaceTerminalKey {
+                Button("Replace key", systemImage: "key.slash", role: .destructive) { replacing = true }
+                    .labelStyle(.iconOnly)
+                    .tint(.red)
+                    .appGlassButton()
+                    .controlSize(.small)
+                    .disabled(model.unlocking)
+                    .confirmationDialog("Replace this phone's terminal key?", isPresented: $replacing, titleVisibility: .visible) {
+                        Button("Replace key", role: .destructive, action: model.replaceTerminalKey)
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Shell terminals stop working on every machine until you pair each one again.")
+                    }
+            }
             if model.canUnlock || model.unlocking {
                 Button {
                     Task { await model.unlock() }
                 } label: {
                     if model.unlocking {
                         ProgressView().controlSize(.small)
+                    } else if model.canReplaceTerminalKey {
+                        Label("Unlock with Face ID", systemImage: "faceid").labelStyle(.iconOnly)
                     } else {
                         Label("Unlock with Face ID", systemImage: "faceid")
                     }

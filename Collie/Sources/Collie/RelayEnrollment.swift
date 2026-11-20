@@ -154,12 +154,7 @@ struct RelayCredentialStore: Sendable {
         read[kSecReturnData as String] = true
         read[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        var status = SecItemCopyMatching(read as CFDictionary, &result)
-        if status == errSecItemNotFound {
-            // Read again whatever the move answered: another reader may have moved the item first.
-            _ = KeychainItem.moveShared(service: Self.service, account: Self.account)
-            status = SecItemCopyMatching(read as CFDictionary, &result)
-        }
+        let status = SecItemCopyMatching(read as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else { throw RelayEnrollmentError.storage }
         let state = try JSONDecoder().decode(RelayEnrollmentState.self, from: data)
         guard state.installationId == markerId else { throw RelayEnrollmentError.storage }
@@ -174,7 +169,6 @@ struct RelayCredentialStore: Sendable {
         let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         guard updated == errSecSuccess || (updated == errSecItemNotFound && SecItemAdd(item as CFDictionary, nil) == errSecSuccess)
         else { throw RelayEnrollmentError.storage }
-        SecItemDelete(KeychainItem.sharedQuery(service: Self.service, account: Self.account) as CFDictionary)
         try Data(state.installationId.utf8).write(to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         var target = marker
         var values = URLResourceValues()

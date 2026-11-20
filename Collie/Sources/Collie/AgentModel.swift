@@ -27,6 +27,9 @@ final class AgentModel {
     private(set) var hadAgent = false
     /// This phone did not pair with the terminal key it has now.
     private(set) var terminalKeyMissing = false
+    /// The domain and code of what kept this phone from using its stored terminal key, which
+    /// pairing again would not replace.
+    private var terminalKeyKept: String?
     private(set) var unlocking = false
     private var watchingShell = false
     private var lastMode: PaneMode?
@@ -286,6 +289,7 @@ final class AgentModel {
     var paneNotice: String? {
         switch mode {
         case .terminal?:
+            if let terminalKeyKept { return "This phone's terminal key could not be used: \(terminalKeyKept)." }
             if terminalKeyMissing {
                 return unlocker.passcodeSet
                     ? "Pair this phone again to use terminals on this machine."
@@ -304,6 +308,9 @@ final class AgentModel {
     }
 
     var canUnlock: Bool { isTerminal && terminalLocked && !terminalKeyMissing && !unlocking }
+
+    /// Only beside the cause: the card also shows for a pane that is gone.
+    var canReplaceTerminalKey: Bool { isTerminal && terminalKeyKept != nil }
 
     var blockedHint: String? {
         answering ? "Use the terminal buttons or type an answer." : nil
@@ -543,21 +550,49 @@ final class AgentModel {
         let workspace = terminal?.workspaceLabel ?? "a workspace"
         let reason = "Open a terminal in \(workspace) on \(machineLabel ?? "the machine")"
         do {
-            let message = try await core.terminalChallenge(machineId: route.machineId, terminalId: route.terminalId)
-            guard let signature = await unlocker.sign(message, reason: reason) else { return false }
+            let message = try await terminalChallenge()
+            let signature = try await unlocker.sign(message, reason: reason)
+            terminalKeyKept = nil
+            guard let signature else { return false }
             try await core.terminalGrant(machineId: route.machineId, terminalId: route.terminalId, signature: signature)
             terminalLocked = false
             notice = nil
             followMode()
             return true
+        } catch let kept as EnclaveBlob.Kept {
+            // Never in `notice` or a system sheet: the card alone names the cause.
+            let cause = kept.cause as NSError
+            terminalKeyKept = "\(cause.domain) error \(cause.code)"
         } catch {
             if case .TerminalKeyMissing = error as? CoreError {
+                terminalKeyKept = nil
                 terminalKeyMissing = true
             } else {
                 notice = Self.message(for: error)
             }
-            return false
         }
+        return false
+    }
+
+    /// The core answers TerminalKeyMissing without a key as it does with another key than the
+    /// paired one, and it has none while the phone could not rebuild its own. So the key is
+    /// rebuilt again here: a kept one throws its cause, and one that works by now costs no pairing.
+    private func terminalChallenge() async throws -> Data {
+        do {
+            return try await core.terminalChallenge(machineId: route.machineId, terminalId: route.terminalId)
+        } catch CoreError.TerminalKeyMissing {
+            guard let key = try unlocker.publicKey() else { throw CoreError.TerminalKeyMissing }
+            try core.setTerminalKey(publicKey: key)
+            return try await core.terminalChallenge(machineId: route.machineId, terminalId: route.terminalId)
+        }
+    }
+
+    /// Only from the owner's confirmation on the pane's card. The core gets the key in use
+    /// afterwards, which the next pairing sends.
+    func replaceTerminalKey() {
+        terminalKeyKept = nil
+        guard let key = unlocker.replaceKey() else { return }
+        do { try core.setTerminalKey(publicKey: key) } catch { notice = Self.message(for: error) }
     }
 
     /// A shell is only read through its watch, under a grant.
