@@ -586,8 +586,8 @@ impl Menu {
     }
 
     /// The plan prompt by its own wording (2.1.289 to 2.1.329): its question over option 1,
-    /// and `Yes` leading that option. A question can word itself so; see
-    /// [`Menu::is_question`].
+    /// and `Yes` leading that option. A question can word itself so, and is told by how it is
+    /// drawn ([`Menu::is_question`]).
     fn is_plan(&self) -> bool {
         self.body.join(" ").ends_with("Would you like to proceed?")
             && self.text(0).starts_with("Yes")
@@ -628,37 +628,35 @@ impl Menu {
         })
     }
 
-    /// Whether the menu is drawn as Claude Code draws AskUserQuestion's form or its review
-    /// page: the cursor row at column 0, an entry Claude Code adds to a question's options, or
-    /// the review page's two options. None of it is the agent's to write or to leave out.
+    /// Whether Claude Code drew this menu as it draws AskUserQuestion's form: the cursor row at
+    /// column 0, or an entry it adds to a question's options. Neither is the agent's to write
+    /// or to leave out. The review page needs no mark of its own: `Submit answers` and
+    /// `Cancel` read as no other dialog.
     fn asked_shape(&self) -> bool {
         let added = |o: &String| {
             let option = unspaced(o);
             let option = option.trim_end_matches('─');
             ["Typesomething.", "Chataboutthis", "[]TypesomethingSubmit"].contains(&option)
         };
-        self.flush || self.options.iter().any(added) || self.options == ["Submit answers", "Cancel"]
+        self.flush || self.options.iter().any(added)
     }
 
     /// Whether this menu may be AskUserQuestion's form or its review page, whose top the
-    /// screen cannot tell ([`Menu::asks`]), and is not one under a `▔` border.
+    /// screen cannot tell ([`Menu::asks`]): one with no `▔` border over it that is drawn as a
+    /// question form ([`Menu::asked_shape`]), whatever its labels read, or that reads as no
+    /// other dialog.
     ///
-    /// When the session is known to wait on a call that is no question (`elsewhere`), the
-    /// dialog is that call's whatever its labels read, in its amend state too, unless it is
-    /// drawn as a question form ([`Menu::asked_shape`]): a transcript written late can still
-    /// name the call before the question, so that state answers no form the others refuse.
-    ///
-    /// Otherwise only the screen speaks, and wording does not make a question: it can label
-    /// its options `No, defer` and `Later`. A menu is another dialog when an option reads as
-    /// an approval or as an amend field, which is a permission prompt, or when it is worded as
-    /// the plan prompt, which holds no approval: plans are then still chosen from with no
-    /// session tied. What is left to wording is a question that copies one of those there.
-    pub fn is_question(&self, elsewhere: bool) -> bool {
+    /// How it is drawn comes before any wording: the agent writes a question's labels, and
+    /// can word one as an approval, as an amend field or as the plan prompt. Only a menu not
+    /// drawn so is another dialog by its wording: a permission prompt holds an option that
+    /// reads as an approval or, left in its amend state, as an amend field, and the plan
+    /// prompt, which holds neither, is told by its own wording, so that plans are still
+    /// chosen from with no session tied. A menu with none of these is no dialog collied
+    /// knows, whatever call the transcript names: a question form Claude Code came to draw
+    /// without those marks does not fail open.
+    pub fn is_question(&self) -> bool {
         !self.bordered
-            && match elsewhere {
-                true => self.asked_shape(),
-                false => !self.approves() && !self.amends() && !self.is_plan(),
-            }
+            && (self.asked_shape() || !(self.approves() || self.amends() || self.is_plan()))
     }
 
     /// What this menu draws of `asked`, the questions of the session's one pending
@@ -3491,50 +3489,102 @@ mod tests {
 
     #[test]
     fn a_menu_is_a_question_unless_the_screen_makes_it_another_dialog() {
-        let question = |screen: &str| {
-            let m = Menu::parse(screen).unwrap();
-            (m.is_question(false), m.is_question(true))
-        };
-        let form =
-            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
-        let dialogs = [BASH, BASH_TWO, EDIT, TRUST, TRUST_LIVE, BASH_LIVE, form];
-        let plans = [PLAN, PLAN_LIVE, PLAN_TYPED_LIVE];
-        for screen in dialogs.into_iter().chain(plans) {
+        let menu = |screen: &str| Menu::parse(screen).unwrap();
+        let question = |screen: &str| (menu(screen).asked_shape(), menu(screen).is_question());
+        // Every permission, trust, amend and plan screen of the fixtures: not drawn as a
+        // question form, and another dialog by its wording.
+        let dialogs = [
+            BASH,
+            BASH_TWO,
+            EDIT,
+            TRUST,
+            TRUST_LIVE,
+            TRUST_292,
+            TRUST_292_ON_YES,
+            BASH_LIVE,
+            BASH_AMEND_LIVE,
+            BASH_AMEND_TYPED_LIVE,
+            BASH_COUNTDOWN,
+            RM_REASON,
+            RM_REASON_WRAPPED,
+            BASH_TIP_WRAPPED,
+            EDIT_WRAPPED,
+            BASH_TALL_328,
+            PLAN,
+            PLAN_LIVE,
+            PLAN_TYPED_LIVE,
+            include_str!("../tests/fixtures/claude-2.1.329/bash.txt"),
+            include_str!("../tests/fixtures/claude-2.1.329/plan.txt"),
+        ];
+        let dialogs = (dialogs.into_iter().chain(BASH_327)).chain(OTHER_TOOLS_328);
+        for screen in dialogs.chain(RENAMED_BASH) {
             assert_eq!(question(screen), (false, false), "{screen}");
         }
-        for screen in [QUESTION, QUESTION_LIVE] {
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        assert!(!menu(form).is_question(), "under its border");
+        // Every question form of the fixtures is drawn as one: the 2.1.289, 2.1.300 and
+        // 2.1.329 captures with their cursor at column 0, and the reconstructed QUESTION,
+        // set in by a column, by its `Type something.`.
+        macro_rules! asked {
+            ($name:literal) => {
+                include_str!(concat!("../tests/fixtures/claude-2.1.329/", $name, ".txt"))
+            };
+        }
+        let named = RENAMED_QUESTIONS
+            .map(|s| without_session_name("claude", Some(NAMED_SESSION_RULE), s).1);
+        let questions = [
+            QUESTION,
+            QUESTION_LIVE,
+            asked!("question-one"),
+            asked!("question-multiline"),
+            asked!("two-questions-first"),
+            asked!("two-questions-second-multiselect"),
+            asked!("two-questions-second-checked"),
+            asked!("two-questions-after-tab"),
+        ];
+        for screen in questions.into_iter().chain(named) {
             assert_eq!(question(screen), (true, true), "{screen}");
         }
-        // No option approves and the wording is not the plan's. The workflow prompt, drawn at
-        // the dialog's margin, is another dialog once the session is known to wait on another
-        // call. A question whose options read as decisions (hand-built from the 2.1.289
-        // capture) is drawn as a question and stays one.
-        assert_eq!(question(RENAMED_WORKFLOW), (true, false));
-        let deferred = QUESTION_LIVE
-            .replace("1. SQLite", "1. No, defer")
-            .replace("2. Redis", "2. Later");
-        assert!(Menu::parse(&deferred).unwrap().grants());
-        assert_eq!(question(&deferred), (true, true));
-        // One that labels an option `Yes` reads as a permission prompt on the screen alone,
-        // and is still drawn as a question.
+        assert!(!menu(QUESTION).flush && menu(QUESTION_LIVE).flush);
+
+        // Hand-built from the 2.1.289 capture: a question whose first option reads as an
+        // approval, drawn with both marks, then with each alone: without the entries Claude
+        // Code adds, and set in by a column. It is a question each time.
         let (above, under) = QUESTION_LIVE.split_once("1. SQLite\n").unwrap();
         let (_, under) = under.split_once('\n').unwrap();
-        assert_eq!(question(&format!("{above}1. Yes\n{under}")), (false, true));
-        // Each mark of a question form alone, hand-built: the 2.1.289 capture without the
-        // entries Claude Code adds, flush left; QUESTION above, with one, set in by a column;
-        // and the 2.1.329 review page set in by a column.
-        let (bare, _) = QUESTION_LIVE.split_once("  3. Type something.\n").unwrap();
-        assert_eq!(question(bare), (true, true));
-        let review = include_str!("../tests/fixtures/claude-2.1.329/two-questions-after-tab.txt");
-        let inset: Vec<String> = review.lines().map(|l| format!(" {l}")).collect();
-        assert_eq!(question(&inset.join("\n")), (true, true));
+        let agreed = format!("{above}1. Yes\n{under}");
+        let (flush, _) = agreed.split_once("  3. Type something.\n").unwrap();
+        let inset: Vec<String> = agreed.lines().map(|l| format!(" {l}")).collect();
+        for screen in [&*agreed, flush, &inset.join("\n")] {
+            assert!(menu(screen).approves(), "{screen}");
+            assert_eq!(question(screen), (true, true), "{screen}");
+        }
+        // The same with an option worded as an amend field, and worded as the plan prompt.
+        let amending =
+            QUESTION_LIVE.replace("1. SQLite", "1. Yes, and tell Claude what to do next");
+        let asks = "\nWhich storage backend should the cache use?\n";
+        let planned = QUESTION_LIVE
+            .replacen(asks, "\nWould you like to proceed?\n", 1)
+            .replace("1. SQLite", "1. Yes, and use auto mode");
+        assert!(menu(&amending).amends() && menu(&planned).is_plan());
+        for screen in [amending, planned] {
+            assert_eq!(question(&screen), (true, true), "{screen}");
+        }
+
+        // Not drawn as a question, and no dialog its wording tells: the workflow prompt, and
+        // (hand-built) QUESTION without its `Type something.`, ordinary labels set in by a
+        // column. Each offers nothing, whatever call is pending.
+        let (plain, _) = QUESTION.split_once("   3. Type something.\n").unwrap();
+        for screen in [RENAMED_WORKFLOW, plain] {
+            assert_eq!(question(screen), (false, true), "{screen}");
+        }
         // Claude Code 2.1.328's Edit prompt, whose only option reading as an approval is
         // `Yes`, after Tab on it (hand-built from the capture): the same permission prompt.
         let amended =
             OTHER_TOOLS_328[0].replace("1. Yes\n", "1. Yes, and tell Claude what to do next\n");
         assert_ne!(amended, OTHER_TOOLS_328[0]);
-        let m = Menu::parse(&amended).unwrap();
-        assert!(!m.approves() && m.decisions().is_empty());
+        assert!(!menu(&amended).approves() && menu(&amended).decisions().is_empty());
         assert_eq!(question(&amended), (false, false));
         // The plan's question wrapped by a narrow terminal still reads as the plan's.
         let narrow = PLAN.replace("Would you like to proceed?", "Would you like to\n proceed?");

@@ -2273,23 +2273,67 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
         assert!(a.options.is_empty() && !a.accepts_input && !a.has_text_field);
     }
 
-    // The workflow prompt approves nothing either and is not worded as the plan is: it is
-    // chosen from once the session is known to wait on a call that is no question.
-    show(&rig, "dynamic_workflow_prompt", WORKFLOW, CUT);
-    assert!(rig.needed().await.choices.is_empty());
-    show(
-        &rig,
-        "dynamic_workflow_prompt",
-        WORKFLOW,
-        &fresh(ASKED_BASH.1),
-    );
-    assert_eq!(rig.needed().await.choices.len(), 3);
+    // Not drawn as a question, and no dialog its wording tells: the workflow prompt, and
+    // (hand-built) QUESTION without its `Type something.`, ordinary labels under a cursor set
+    // in by a column. Nothing is offered, whether or not another call is pending.
+    let (plain, _) = QUESTION.split_once("   3. Type something.\n").unwrap();
+    for (rule, screen) in [
+        ("dynamic_workflow_prompt", WORKFLOW),
+        ("live_blocked_form", plain),
+    ] {
+        for transcript in [CUT, &*bash] {
+            show(&rig, rule, screen, transcript);
+            let a = rig.needed().await;
+            assert!(
+                a.options.is_empty() && a.choices.is_empty() && !a.accepts_input,
+                "{screen}"
+            );
+        }
+    }
     // Not known: the plan prompt is told by its wording, a permission prompt by its approval.
     show(&rig, "legacy_no_prompt_blocker", ASKED_PLAN.0, CUT);
     assert_eq!(rig.needed().await.choices.len(), 3);
     show(&rig, "bash_permission_prompt", ASKED_BASH.0, CUT);
     assert_eq!(rig.needed().await.options.len(), 3);
     assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_menu_drawn_as_a_question_is_one_whatever_its_labels_read() {
+    // Hand-built from the 2.1.329 capture, its cursor at column 0 and Claude Code's own
+    // entries under its options: an option worded as an amend field, one worded as an
+    // approval, and the form worded as the plan prompt. What the session waits on is not
+    // known, then known to be nothing.
+    let one = ASKED_ONE.0;
+    let asks = "\nWhich cache backend should we use?\n";
+    let screens = [
+        one.replace("1. SQLite", "1. Yes, and tell Claude what to do next"),
+        one.replace("1. SQLite\n     Simple and embedded\n", "1. Yes\n"),
+        one.replacen(asks, "\nWould you like to proceed?\n", 1)
+            .replace("1. SQLite", "1. Yes, and use auto mode"),
+    ];
+    let mut read = Vec::new();
+    for screen in &screens {
+        assert_ne!(screen, one);
+        let mut rig = Rig::start(TTL).await;
+        rig.herdr.with(|h| h.rule = "live_blocked_form".into());
+        for transcript in [CUT, ""] {
+            rig.transcript(transcript);
+            rig.herdr.with(|h| {
+                h.text = screen.clone();
+                set_status(h, "blocked");
+            });
+            let a = rig.needed().await;
+            let chosen = rig.choose(&a, 0, &a.nonce).await;
+            read.push((
+                (a.options.len(), a.choices.len()),
+                (a.accepts_input, a.has_text_field),
+                matches!(chosen, Err((ErrorCode::InvalidParams, _))),
+                rig.mutations().len(),
+            ));
+        }
+    }
+    assert_eq!(read, [((0, 0), (false, false), true, 0); 6]);
 }
 
 #[tokio::test]

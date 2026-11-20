@@ -492,10 +492,10 @@ impl Approvals {
         let unnumbered = parsed.is_none() && !prompt::numbered(&text);
         // The screen cannot say a question form is whole, so it is answered only when it draws
         // the session's one pending AskUserQuestion call whole, as the transcript records it.
-        // While such a call is pending, any other menu gets no answer either: a question whose
-        // labels read as decisions is drawn like a permission prompt. When what the session
-        // waits on is not known, that is not "no question": only a menu the screen alone
-        // makes another dialog is answered, so that approvals work without the transcript.
+        // While such a call is pending, no other menu gets an answer either. With no such call
+        // known, whatever else the transcript says or fails to say, only a menu the screen
+        // alone makes another dialog is answered ([`Menu::is_question`]), so that approvals
+        // work without the transcript.
         let waits = match &parsed {
             Some(_) => self.waits(a),
             None => Waits::Nothing,
@@ -506,9 +506,8 @@ impl Approvals {
                 call,
                 questions,
             } => (m.asks(questions)).map(|asked| Some(format!("{session} {call:?} {asked}"))),
-            Waits::Other if m.is_question(true) => Err(Refused::NoCall),
-            Waits::Nothing if m.is_question(false) => Err(Refused::NoCall),
-            Waits::Unknown(why) if m.is_question(false) => Err(*why),
+            Waits::Other | Waits::Nothing if m.is_question() => Err(Refused::NoCall),
+            Waits::Unknown(why) if m.is_question() => Err(*why),
             _ => Ok(None),
         });
         let (question, refused) = match asked {
@@ -517,7 +516,7 @@ impl Approvals {
             None => (None, None),
         };
         // A question-shaped menu with no top is refused before any match: logged as one too.
-        let headless = |m: &&Menu| !m.on_screen() && m.is_question(false);
+        let headless = |m: &&Menu| !m.on_screen() && m.is_question();
         let refused =
             refused.or_else(|| (parsed.as_ref().filter(headless)).map(|_| Refused::NotWhole));
         let drawn = parsed.filter(Menu::on_screen);

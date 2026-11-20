@@ -285,10 +285,7 @@ mod tests {
         for (screen, transcript) in [BASH, PLAN] {
             assert_eq!(waits(transcript, true, 0), Waits::Other, "{screen}");
             let menu = Menu::parse(screen).unwrap();
-            assert!(
-                !menu.is_question(true) && !menu.is_question(false),
-                "{screen}"
-            );
+            assert!(!menu.is_question(), "{screen}");
         }
     }
 
