@@ -15,7 +15,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 ## Working style
 
 - Keep changes barebone: the smallest change that solves the problem. No speculative options, helpers, abstractions or config knobs, and no drive-by refactors. If something extra seems worth doing, say so in the pull request instead.
-- Comments are critical-only: invariants, security rationale, provenance, constraints the code cannot show. No narration of what the code does and no doc comments that restate a signature. Do not add comments the surrounding code would not have.
+- No comments outside the classes [ADR-0001](docs/adr/0001-comments-and-adrs.md) allows: doc comments that become data (the protocol schemas, the UniFFI bindings, `collied --help`, `just --list`), tool directives, pin comments, and a bare `ADR-NNNN` pointer where an invariant is security relevant or the code looks wrong without it. A decision goes into an ADR under `docs/adr/`; a hack gets an issue, not a comment. `scripts/comment-ratchet.py`, run by `just lint`, holds each file to its count in `scripts/comment-baseline.txt`, which only goes down (`python3 scripts/comment-ratchet.py --update` lowers it); the `/delete-comment` skill clears a path.
 - Never use em dashes anywhere: code, comments, docs, commit messages, pull requests and issues.
 - No migration code. There is a single user; a format change means re-pairing, not migrating.
 - UI: no sheep or flock branding in UI text. Follow the existing SwiftUI and Liquid Glass patterns (`docs/reviews/liquid-glass.md`).
@@ -25,7 +25,7 @@ Guidance for coding agents working in this repository. User-facing documentation
 
 | Command | When |
 |---|---|
-| `just lint` | Always: `cargo fmt --check`, clippy with `-D warnings`, `cargo deny` |
+| `just lint` | Always: the comment ratchet, `cargo fmt --check`, clippy with `-D warnings`, `cargo deny` |
 | `just test` | Always: all Rust tests with cargo-nextest, end-to-end tests included |
 | `just ios-test` | iOS, watch or CollieCore changes |
 | `just mac-test` | `Mac/` changes |

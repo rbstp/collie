@@ -29,6 +29,7 @@ On Linux, collied is a systemd user unit ([Linux](#linux)). The service logs war
 - 2026-10-04: each machine sends its own pushes with its own APNs key (own key ID, revoked on its own). On Linux the key is a systemd user credential (host key, plus the TPM2 when systemd finds one usable), or a 0600 file when systemd-creds is unavailable.
 - 2026-10-06: plain shell panes from the phone ([Terminals](#terminals)): off by default, turned on per machine only in `collied.toml`, never from the phone; their own allowlist class, audited like prompts. Opening one and typing into it need a grant collied verifies, signed by a second Secure Enclave key that signs only after Face ID or the passcode; one grant covers one terminal for 5 minutes in one session.
 - 2026-10-16: user-owned embedded desktop nodes replace the per-OS tagged identities. Existing tagged nodes and old phone owner pins need an explicit reset and re-pairing; nothing is migrated or retagged. Normal user key expiry applies on both ends. No version bump: no phone wire type changed; the positive owner pin is local persistence and the OS is netmap presentation metadata.
+- 2026-11-20: decisions that code comments carried are architecture decision records in [`docs/adr`](https://github.com/rbstp/collie/blob/master/docs/adr/README.md). Comments are limited to the classes ADR-0001 allows, and `scripts/comment-ratchet.py` keeps their count per file from growing.
 
 ## herdr integration (verified against 0.9.3 source and live socket)
 

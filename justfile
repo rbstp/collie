@@ -22,6 +22,7 @@ fmt:
     cargo fmt --all
 
 lint:
+    python3 scripts/comment-ratchet.py
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo deny check
