@@ -2534,7 +2534,7 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     ];
     assert_eq!(lines.len(), reasons.len(), "{lines:?}");
     for (line, reason) in lines.iter().zip(reasons) {
-        assert!(line.contains("INFO") && line.contains(TERMINAL), "{line}");
+        assert!(line.contains("WARN") && line.contains(TERMINAL), "{line}");
         assert!(line.contains(reason), "{line}");
         for told in ["cache", "SQLite", "Lint", "planlab", SESSION] {
             assert!(!line.contains(told), "{line}");

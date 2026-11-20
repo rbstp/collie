@@ -642,7 +642,7 @@ impl Approvals {
                 && (inner.refused).insert(a.terminal_id.clone(), (screen.seq, why))
                     != Some((screen.seq, why))
             {
-                tracing::info!(
+                tracing::warn!(
                     terminal = %a.terminal_id,
                     reason = why.as_str(),
                     "question form not answered from the phone"
