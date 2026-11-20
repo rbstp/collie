@@ -1,0 +1,39 @@
+  embedded'), 'Redis' (description 'Shared across processes'), 'Memory' (description 'Fastest, lost
+  on restart').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Which cache backend should we use? (SQLite / Redis / Memory)
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: two questions in the one call.
+  First: 'Which cache backend should we use?' header 'Cache', options 'SQLite' (description 'Simple
+  and embedded'), 'Redis' (description 'Shared across processes'). Second: 'Which checks should
+  run?' header 'Checks', multiSelect true, options 'Lint' (description 'Fast'), 'Tests'
+  (description 'Slow'), 'Schema' (description 'Only when types change').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Which cache backend should we use? (SQLite / Redis)
+     · Which checks should run? (Lint / Tests / Schema)
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question whose text is exactly
+  these three lines joined with newline characters: 'We need to pick how the daemon stores its
+  usage figures between restarts, and the choice affects how a reset is detected.' then
+  '──────────────────────────────' then 'Which store should it use?' with header 'Store' and
+  options 'File' (description 'One JSON file under a lock'), 'SQLite' (description 'A small
+  database').
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Store
+
+│ We need to pick how the daemon stores its usage figures between restarts, and the choice affects
+│ how a reset is detected.
+│ ──────────────────────────────
+│ Which store should it use?
+
+❯ 1. File
+     One JSON file under a lock
+  2. SQLite
+     A small database
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

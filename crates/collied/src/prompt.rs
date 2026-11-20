@@ -322,6 +322,18 @@ impl Menu {
         let unshown = lines[last + 1 + continued..]
             .iter()
             .any(|l| !l.trim().is_empty());
+        // Claude Code 2.1.329 scrolls the options of a form taller than the terminal and
+        // marks the last one on screen `↓` in the cursor column when more are hidden under
+        // it. That row is no option row, so it lands here, under the last option read, and no
+        // index or decision answers a list not seen whole. A gap in the numbers already stops
+        // the read when a numbered row follows, or when `↑` marks options hidden above.
+        let scrolls = |l: &&str| {
+            let marked = l.trim_start().strip_prefix('↓');
+            marked.is_some_and(|rest| option_line(rest).is_some())
+        };
+        if under.iter().any(scrolls) {
+            return None;
+        }
         let after = under.iter().map(|l| l.trim().to_owned()).collect();
         let mut options: Vec<(bool, String, String)> = Vec::new();
         let mut continuation: Vec<&str> = Vec::new();
@@ -1668,6 +1680,14 @@ pub mod fixtures {
     // first 28 lines have scrolled off.
     pub const BASH_TALL_328: &str =
         include_str!("../tests/fixtures/claude-2.1.328/bash-tall.tmux.txt");
+    // Captured from Claude Code 2.1.329 (100 columns, 12 rows): a question with four options,
+    // which scrolls. The header and the top rule are not drawn, and the options hidden under
+    // or above the rows on screen are marked `↓` and `↑` in the cursor column. The cursor on
+    // option 1, then on option 4.
+    pub const QUESTION_TALL_329: [&str; 2] = [
+        include_str!("../tests/fixtures/claude-2.1.329/question-tall-12-rows.txt"),
+        include_str!("../tests/fixtures/claude-2.1.329/question-tall-12-rows-cursor-4.txt"),
+    ];
     // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
     // the same with feedback typed into its third option.
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
@@ -3259,6 +3279,33 @@ mod tests {
             assert!(!numbered(screen) && Menu::parse(screen).is_none());
             assert!(open_to_keys("claude", Some("live_blocked_form"), screen));
         }
+    }
+
+    #[test]
+    fn a_form_that_scrolls_its_options_is_no_menu() {
+        for screen in QUESTION_TALL_329 {
+            assert!(
+                numbered(screen) && Menu::parse(screen).is_none(),
+                "{screen}"
+            );
+        }
+        // Hand-built from the capture, not captured: no description rows and no `Chat about
+        // this`, so no number is missing among the rows read, under a header and a rule.
+        let scrolled = "\
+────────────────────────────────────────────────────────────
+ ☐ Channel
+
+Which release channel should this build go to?
+
+❯ 1. Stable
+  2. Beta
+↓ 3. Nightly
+ ↑ 1 more line
+Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+        assert!(numbered(scrolled) && Menu::parse(scrolled).is_none());
+        let unmarked = scrolled.replace("↓ 3.", "  3.");
+        assert_eq!(Menu::parse(&unmarked).unwrap().options.len(), 3);
     }
 
     #[test]

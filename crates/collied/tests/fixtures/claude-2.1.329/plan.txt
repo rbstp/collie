@@ -1,0 +1,39 @@
+  present the plan for approval now.
+
+⏺ Updated plan
+  ⎿  /plan to preview
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Ready to code?
+
+ Here is Claude's plan:
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Plan: Add README.md to /private/tmp/planlab
+
+ Context
+
+ The folder /private/tmp/planlab is not a git repo and has no README. Add a short README.md
+ describing the folder.
+
+ Steps
+
+ 1. Inspect the folder (read-only ls) to see what it contains, so the README describes it
+    accurately.
+ 2. Write /private/tmp/planlab/README.md with a title, one-paragraph purpose, and a short list of
+    the folder's contents.
+ 3. Verify the file exists and renders sensibly by reading it back.
+
+ Verification
+
+ ls /private/tmp/planlab/README.md and read the file to confirm the content matches the folder.
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+ ❯ 1. Yes, and use auto mode
+   2. Yes, manually approve edits
+   3. Tell Claude what to change
+      shift+tab to approve with this feedback
+
+ ctrl+g to edit in Vim · ~/.claude/plans/plan-in-three-short-cozy-hinton.md
