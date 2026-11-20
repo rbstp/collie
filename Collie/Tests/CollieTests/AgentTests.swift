@@ -2428,6 +2428,27 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func aSavedPromptQueuedBehindASendIsNotTypedIntoADialogThatAppearedMeanwhile() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let sending = model.tap(.up)
+    await core.waitHeld(1)
+    model.typeShortcut(PromptShortcut(text: "run the tests\n1\n"))
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    #expect(model.answering)
+    model.tap(.down)
+    core.release()
+    await sending?.value
+    #expect(core.snapshot.input == [.keys([.up]), .keys([.down])], "a key the owner typed still answers; a digit or a Return of the prompt would too")
+    #expect(model.draft == "run the tests\n1\n")
+    #expect(model.notice?.contains("Chat’s draft") == true)
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }
@@ -3483,9 +3504,18 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func herdrCoreGroupReadsCoreBesideTheBadgeOnly() {
-    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: true) == "Core")
-    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: false) == "Herdr Core")
-    #expect(RuntimeBadge.groupLabel("api", runtime: .rex, badged: true) == "api")
-    #expect(RuntimeBadge.groupLabel("collie", runtime: .herdr, badged: true) == "collie")
+@Test func herdrCoreGroupReadsCoreBesideTheBadgeOnlyWithoutAFolder() {
+    func agent(_ runtime: TaskRuntime, cwd: String? = nil) -> AgentSummary {
+        AgentSummary(
+            terminalId: "t", workspaceId: "w", kind: "claude", name: nil, title: nil,
+            status: .idle, statusSinceMs: 0, cwd: cwd, lastLine: nil, runtime: runtime
+        )
+    }
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore), badged: true) == "Core")
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore, cwd: "/"), badged: true) == "Core")
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore), badged: false) == "Herdr Core")
+    #expect(RuntimeBadge.groupLabel("herd", agent: agent(.herdrCore, cwd: "/Users/me/git/herd"), badged: true) == "herd")
+    #expect(RuntimeBadge.groupLabel("herd", agent: agent(.herdrCore, cwd: "/Users/me/git/herd"), badged: false) == "herd")
+    #expect(RuntimeBadge.groupLabel("api", agent: agent(.rex), badged: true) == "api")
+    #expect(RuntimeBadge.groupLabel("collie", agent: agent(.herdr), badged: true) == "collie")
 }

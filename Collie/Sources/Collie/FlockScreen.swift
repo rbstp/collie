@@ -510,7 +510,7 @@ private struct AgentRow: View {
                 Text(agent.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 HStack(spacing: 4) {
                     if let kind = agent.kind {
-                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil))
+                        AgentKindLabel(kind: kind, iconOnly: true).modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil && agent.folder == nil))
                     }
                     if followed {
                         Image(systemName: "pin.fill")
@@ -518,7 +518,7 @@ private struct AgentRow: View {
                             .accessibilityLabel("Followed")
                     }
                     if let workspace {
-                        Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
+                        Text(RuntimeBadge.groupLabel(workspace, agent: agent, badged: runtimeMarks && agent.kind != nil))
                         Text(verbatim: "·").fixedSize()
                     }
                     StatusAge(agent: agent, now: now).fixedSize()
@@ -600,9 +600,9 @@ struct RuntimeBadge: ViewModifier {
     @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 12
     @Environment(\.runtimeMarks) private var shown
 
-    /// "Core" for the Herdr Core group's label beside the badge, whose mark already says herdr.
-    static func groupLabel(_ label: String, runtime: TaskRuntime?, badged: Bool) -> String {
-        badged && runtime == .herdrCore ? "Core" : label
+    /// "Core" for the Herdr Core group's label beside the badge, whose mark already says herdr. With a folder, the label is that folder.
+    static func groupLabel(_ label: String, agent: AgentSummary, badged: Bool) -> String {
+        badged && agent.runtime == .herdrCore && agent.folder == nil ? "Core" : label
     }
 
     static func mark(_ runtime: TaskRuntime?) -> (title: String, image: String)? {

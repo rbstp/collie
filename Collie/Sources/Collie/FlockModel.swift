@@ -29,14 +29,22 @@ struct MachineFlockEntry: Identifiable, Equatable {
 
     func workspaceLabel(for agent: AgentSummary) -> String? {
         let workspace = flock?.workspaces.first { $0.workspaceId == agent.workspaceId }?.label
-        guard flock?.agents.contains(where: { $0.workspaceId == agent.workspaceId && $0.terminalId != agent.terminalId }) == true,
-              let name = agent.cwd?.split(separator: "/").last
+        // The Herdr Core group's label is the same for every agent in every core, so its agents show their folder even alone.
+        guard agent.runtime == .herdrCore
+            || flock?.agents.contains(where: { $0.workspaceId == agent.workspaceId && $0.terminalId != agent.terminalId }) == true
         else { return workspace }
+        return agent.folder ?? workspace
+    }
+}
+
+extension AgentSummary {
+    var folder: String? {
+        guard let name = cwd?.split(separator: "/").last else { return nil }
         // A folder's name may hold a line break or a bidi override, and this label is also searched and sent to the watch.
         let folder = String(String.UnicodeScalarView(name.unicodeScalars.filter {
             ![.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory)
         })).trimmingCharacters(in: .whitespaces)
-        return folder.isEmpty ? workspace : folder
+        return folder.isEmpty ? nil : folder
     }
 }
 

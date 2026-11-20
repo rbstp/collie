@@ -97,10 +97,10 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
 }
 
 @Test func agentsSharingAWorkspaceShowTheirFolderAndOthersTheWorkspace() {
-    func agent(_ id: String, _ workspace: String, _ cwd: String?) -> AgentSummary {
+    func agent(_ id: String, _ workspace: String, _ cwd: String?, runtime: TaskRuntime? = nil) -> AgentSummary {
         AgentSummary(
             terminalId: id, workspaceId: workspace, kind: "claude", name: nil, title: nil,
-            status: .idle, statusSinceMs: 0, cwd: cwd, lastLine: nil
+            status: .idle, statusSinceMs: 0, cwd: cwd, lastLine: nil, runtime: runtime
         )
     }
     let machine = Machine(id: "m", label: "m", host: "m.ts.net", port: 8457, nodeId: "nm", kind: .mac, key: "")
@@ -109,10 +109,12 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
         agent("none", "shared", nil), agent("empty", "shared", ""), agent("root", "shared", "/"),
         agent("lines", "shared", "/tmp/one\ntwo\u{2028}three\u{202E}"), agent("blank", "shared", "/tmp/ \n"),
         agent("alone", "own", "/Users/me/git/site"),
+        agent("core", "core", "/Users/me/git/herd", runtime: .herdrCore),
     ]
     let workspaces = [
         WorkspaceSummary(workspaceId: "shared", label: "claude", number: 1, status: .idle, cwd: nil),
         WorkspaceSummary(workspaceId: "own", label: "site work", number: 2, status: .idle, cwd: nil),
+        WorkspaceSummary(workspaceId: "core", label: "Herdr Core", number: 3, status: .idle, cwd: nil),
     ]
     let flock = MachineFlock(machine: machine, link: .connected, lastError: nil, details: nil, workspaces: workspaces, agents: agents, approvalsCount: 0)
     let entry = MachineFlockEntry(machine: machine, flock: flock)
@@ -122,6 +124,8 @@ func compactElapsedFormatting(seconds: Double, compact: String, spoken: String) 
     #expect(["none", "empty", "root", "blank"].map(label) == Array(repeating: "claude", count: 4), "no folder name keeps the workspace")
     #expect(label("lines") == "onetwothree", "the name stays one line, with no bidi override")
     #expect(label("alone") == "site work", "an agent alone in its workspace keeps the workspace")
+    #expect(label("core") == "herd", "the Herdr Core group's label says nothing of its own, so an agent alone in it shows its folder too")
+    #expect(entry.workspaceLabel(for: agent("bare", "core", nil, runtime: .herdrCore)) == "Herdr Core")
 }
 
 private func node(_ state: TailnetState, authUrl: String? = nil) -> NodeState {
