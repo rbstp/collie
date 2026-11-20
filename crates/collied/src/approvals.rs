@@ -72,10 +72,13 @@ impl Screen {
     /// Whether both tell the phone the same, the cursor aside: arrows alone do not
     /// reissue an approval.
     fn shows_same(&self, other: &Screen) -> bool {
+        fn menu(s: &Screen) -> Option<(&[String], &[String], usize)> {
+            (s.menu.as_ref()).map(|m| (&m.options[..], &m.after[..], m.continued))
+        }
         self.snippet == other.snippet
             && self.reason == other.reason
             && self.offered == other.offered
-            && self.menu.as_ref().map(|m| &m.options) == other.menu.as_ref().map(|m| &m.options)
+            && menu(self) == menu(other)
             && self.accepts_input == other.accepts_input
             && self.has_text_field == other.has_text_field
             && self.supports_note == other.supports_note
@@ -460,12 +463,13 @@ impl Approvals {
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
         // A dialog whose top is off screen gets no answer from the phone, by decision, by index
-        // or by keys: its first rows are neither shown nor bound.
+        // or by keys: its first rows are neither shown nor bound. Nor does a numbered form that
+        // does not read as a menu, which may be one cut under its option 1.
         let parsed = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten();
-        let headless = parsed.as_ref().is_some_and(|m| !m.on_screen());
-        let menu = parsed.filter(|_| !headless);
+        let unnumbered = parsed.is_none() && !prompt::numbered(&text);
+        let menu = parsed.filter(Menu::on_screen);
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
@@ -474,7 +478,8 @@ impl Approvals {
                 Vec::new(),
             ),
         };
-        let accepts_input = !headless && prompt::open_to_keys(kind, rule, &text);
+        let accepts_input =
+            (menu.is_some() || unnumbered) && prompt::open_to_keys(kind, rule, &text);
         let has_text_field = prompt::open_to_text(kind, rule, &text)
             && menu.as_ref().is_some_and(|m| m.free_text().is_some());
         let supports_note =
@@ -785,12 +790,16 @@ impl Approvals {
             );
         }
         // A choice is only offered where no decision is: picking a permission prompt's
-        // option by index would bypass the decision it maps to (Deny sent as Esc).
+        // option by index would bypass the decision it maps to (Deny sent as Esc). Nor is a
+        // granting option of a menu that holds an approval ever chosen by index: a menu whose
+        // only decision was withheld offers none, and the index would press it all the same.
         let choice = p.choice.filter(|_| p.decision == Decision::Choose);
         let target = match choice {
             Some(i) => {
-                let options = screen.menu.as_ref().map_or(0, |m| m.options.len());
-                if !screen.offered.is_empty() || usize::from(i) >= options {
+                let chosen = (screen.menu.as_ref())
+                    .filter(|m| usize::from(i) < m.options.len())
+                    .filter(|m| m.takes_choice(usize::from(i)));
+                if !screen.offered.is_empty() || chosen.is_none() {
                     return reject(
                         ApprovalOutcome::Superseded,
                         ErrorCode::InvalidParams,

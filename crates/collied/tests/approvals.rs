@@ -60,6 +60,9 @@ const RM_REASON: &str = include_str!("fixtures/claude-2.1.308/rm-reason.detectio
 const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt");
 const TIME_FORMAT: &str = include_str!("fixtures/claude-2.1.294/config-time-format.detection.txt");
 const IDE: &str = include_str!("fixtures/claude-2.1.294/ide.detection.txt");
+// The same capture's `/memory` and usage credits forms: like `/ide`, no numbered option.
+const MEMORY: &str = include_str!("fixtures/claude-2.1.294/memory.detection.txt");
+const USAGE_CREDITS: &str = include_str!("fixtures/claude-2.1.294/usage-credits.detection.txt");
 
 // Claude Code 2.1.300 in herdr 0.9.5, in a session named with `/rename`, with tasks open: a
 // question over the task panel (live_blocked_form_named_session), the name drawn on a rule
@@ -1264,6 +1267,56 @@ async fn a_form_taller_than_the_screen_is_answered_in_the_terminal() {
 }
 
 #[tokio::test]
+async fn a_numbered_form_that_reads_as_no_menu_takes_no_keys() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.rule = "live_blocked_form".into());
+    // Hand-built from the captures, not captured: the question and the rate limit form from
+    // under their option 1, as a terminal too short for them would show them, and the question
+    // with four rows under its option 1, one more than a menu reads.
+    let (_, question) = QUESTION_LIVE.split_once("local persistence\n").unwrap();
+    let (_, rate_limit) = RATE_LIMIT.split_once("limit to reset\n").unwrap();
+    let long = QUESTION_LIVE.replace(
+        "     File-based database",
+        "     Embedded\n     One file\n     No server\n     File-based database",
+    );
+    // And the cut question with a row of rule characters under its last option, as that
+    // option's own text can draw one.
+    let ruled = question.replace("Chat about this\n", "Chat about this\n     ──────\n");
+    assert_ne!(ruled, question);
+    for form in [question, rate_limit, &long, &ruled] {
+        rig.herdr.with(|h| {
+            h.text = form.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(
+            a.options.is_empty() && a.choices.is_empty() && !a.accepts_input && !a.has_text_field,
+            "{form}"
+        );
+        assert_eq!(
+            code(rig.choose(&a, 0, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+    }
+    // The 2.1.294 captures of the forms without numbers, and `/ide` under a numbered list
+    // (hand-added to the capture's transcript rows): each takes keys as before.
+    let listed = IDE.replacen("❯ /add-dir\n", "  1. First\n  2. Second\n", 1);
+    assert_ne!(listed, IDE);
+    for form in [MEMORY, IDE, USAGE_CREDITS, &listed] {
+        rig.herdr.with(|h| {
+            h.text = form.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(
+            a.choices.is_empty() && a.accepts_input && !a.has_text_field,
+            "{form}"
+        );
+    }
+    assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
 async fn codex_attention_preview_excludes_user_input_for_direct_and_relay_delivery() {
     for relay in [false, true] {
         for (text, expected) in [
@@ -2229,6 +2282,99 @@ async fn a_changed_question_supersedes_the_choice() {
     assert_eq!(
         rig.herdr.params("agent.send_keys"),
         [json!({"target": "w7:p1", "keys": ["down", "down"]})]
+    );
+}
+
+#[tokio::test]
+async fn rows_under_the_last_option_are_shown_and_reissue_when_they_change() {
+    let mut rig = Rig::start(TTL).await;
+    // Hand-built from the reconstructed Bash dialog, not captured: the last option's label
+    // wrapped onto the row under it.
+    let wrapped = |rest: &str| {
+        BASH.replace(
+            "   3. No, and tell Claude what to do differently (esc)\n",
+            &format!("   3. No, and tell Claude what to do\n      {rest}\n"),
+        )
+    };
+    rig.herdr.with(|h| h.text = wrapped("differently (esc)"));
+    let a = rig.needed().await;
+    assert_eq!(a.choices[2].label, "No, and tell Claude what to do");
+    assert_eq!(a.choices[2].detail.as_deref(), Some("differently (esc)"));
+
+    let other = "differently, then run rm -rf ~ (esc)";
+    rig.herdr.with(|h| h.text = wrapped(other));
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == a.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: b } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!(b.choices[2].detail.as_deref(), Some(other));
+
+    // The same row a column left of the label is no longer shown as the option's text.
+    rig.herdr
+        .with(|h| h.text = wrapped(other).replace("      differently", "     differently"));
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == b.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: c } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!(c.choices[2].detail, None);
+    assert_ne!(c.approval_id, b.approval_id);
+}
+
+#[tokio::test]
+async fn a_granting_option_is_never_chosen_by_index_beside_an_approval() {
+    let mut rig = Rig::start(TTL).await;
+    // Hand-built from the reconstructed Bash dialog, not captured: one option that reads as
+    // no decision, then options that grant. Each menu offers no decision and lists its
+    // options as choices. The first: a rule with a scope longer than a choice holds, and an
+    // option that starts with `Yes` and reads as no decision. The others hold a rule that
+    // reads as one only as the phone shows it: behind a format character, and split between
+    // the last label and the row under it.
+    let (head, _) = BASH.split_once(" ❯ 1. Yes\n").unwrap();
+    let scope = format!("/Users/me/src/{}", "d".repeat(300));
+    let menu = |options: &str| {
+        format!("{head} ❯ 1. Review the command first\n{options}\n\n Esc to cancel\n")
+    };
+    let cut = menu(&format!(
+        "   2. Yes, and don't ask again for rm commands in {scope}\n   3. Yes, and switch to auto mode"
+    ));
+    let hidden = menu("   2. \u{200b}Yes, and always allow access to src/");
+    let split = menu("   2. Yes, and\n      don't ask again for rm commands in src/");
+    for (text, granting) in [(&cut, 1), (&cut, 2), (&hidden, 1), (&split, 1)] {
+        rig.herdr.with(|h| {
+            h.text = text.clone();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(a.options.is_empty());
+        assert!(a.choices[1].label.starts_with("Yes, and"));
+        assert_eq!(
+            code(rig.choose(&a, granting, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+        assert!(rig.mutations().is_empty());
+    }
+
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&b, 0, &b.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 0,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["enter"]})]
     );
 }
 
