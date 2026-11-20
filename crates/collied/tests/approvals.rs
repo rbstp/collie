@@ -2334,20 +2334,29 @@ async fn rows_under_the_last_option_are_shown_and_reissue_when_they_change() {
 async fn a_granting_option_is_never_chosen_by_index_beside_an_approval() {
     let mut rig = Rig::start(TTL).await;
     // Hand-built from the reconstructed Bash dialog, not captured: one option that reads as
-    // no decision, one that saves a rule, its scope longer than a choice holds, and one that
-    // starts with `Yes` and reads as no decision either. The menu offers no decision and
-    // lists its options as choices.
+    // no decision, then options that grant. Each menu offers no decision and lists its
+    // options as choices. The first: a rule with a scope longer than a choice holds, and an
+    // option that starts with `Yes` and reads as no decision. The others hold a rule that
+    // reads as one only as the phone shows it: behind a format character, and split between
+    // the last label and the row under it.
     let (head, _) = BASH.split_once(" ❯ 1. Yes\n").unwrap();
     let scope = format!("/Users/me/src/{}", "d".repeat(300));
-    let text = format!(
-        "{head} ❯ 1. Review the command first\n   2. Yes, and don't ask again for rm commands in {scope}\n   3. Yes, and switch to auto mode\n\n Esc to cancel\n"
-    );
-    rig.herdr.with(|h| h.text = text);
-    for granting in [1, 2] {
+    let menu = |options: &str| {
+        format!("{head} ❯ 1. Review the command first\n{options}\n\n Esc to cancel\n")
+    };
+    let cut = menu(&format!(
+        "   2. Yes, and don't ask again for rm commands in {scope}\n   3. Yes, and switch to auto mode"
+    ));
+    let hidden = menu("   2. \u{200b}Yes, and always allow access to src/");
+    let split = menu("   2. Yes, and\n      don't ask again for rm commands in src/");
+    for (text, granting) in [(&cut, 1), (&cut, 2), (&hidden, 1), (&split, 1)] {
+        rig.herdr.with(|h| {
+            h.text = text.clone();
+            set_status(h, "blocked");
+        });
         let a = rig.needed().await;
         assert!(a.options.is_empty());
-        assert_eq!(a.choices.len(), 3);
-        assert!(a.choices[1].label.ends_with('…'));
+        assert!(a.choices[1].label.starts_with("Yes, and"));
         assert_eq!(
             code(rig.choose(&a, granting, &a.nonce).await),
             ErrorCode::InvalidParams
