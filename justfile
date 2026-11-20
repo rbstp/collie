@@ -9,7 +9,7 @@ setup:
 schema:
     cargo run -q -p protocol --features schema --bin protocol-schema docs/protocol
 
-litellm_commit := "01401efee615b18e869b28ed3e6869dbc9c94637"
+litellm_commit := "fb0077053885f95ab3d4f302aec15024733705e2"
 
 # The Claude, OpenAI and Gemini chat prices from LiteLLM's table at `litellm_commit`, bundled in collied.
 prices:
