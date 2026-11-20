@@ -28,6 +28,16 @@
 				<string>35F9.1</string>
 			</array>
 		</dict>
+		<!-- @AppStorage in the app's own defaults (CA92.1) and the accent in the App Group suite, read by the Live Activity extension (1C8F.1). -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+				<string>1C8F.1</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>
