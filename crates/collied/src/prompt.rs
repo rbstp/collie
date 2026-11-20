@@ -462,8 +462,7 @@ impl Menu {
         offered
             .into_iter()
             .filter(|&(d, i)| {
-                d != Decision::ApproveAlways
-                    || whole(&self.heads[i]) && whole(self.options[i][self.heads[i].len()..].trim())
+                d != Decision::ApproveAlways || whole(&self.heads[i]) && whole(&self.detail(i))
             })
             .collect()
     }
@@ -485,18 +484,28 @@ impl Menu {
         self.topped || self.bordered && !self.grants()
     }
 
+    /// The rows under option `i`'s first line. For the last option they include
+    /// [`Menu::after`]: nothing tells a hint there from the label wrapped onto those rows, so
+    /// they are shown and counted as its own.
+    fn detail(&self, i: usize) -> String {
+        let mut rows = vec![self.options[i][self.heads[i].len()..].trim()];
+        if i + 1 == self.options.len() {
+            rows.extend(self.after.iter().map(String::as_str));
+        }
+        rows.retain(|r| !r.is_empty());
+        rows.join(" ")
+    }
+
     pub fn choices(&self) -> Vec<ApprovalChoice> {
-        self.options
-            .iter()
-            .enumerate()
-            .map(|(i, label)| {
+        (0..self.options.len())
+            .map(|i| {
                 let cap = |s: &str| cut(clean(s), MAX_CHOICE_LABEL_CHARS);
-                let detail = label[self.heads[i].len()..].trim();
+                let detail = self.detail(i);
                 ApprovalChoice {
                     index: i as u8,
                     label: cap(&self.heads[i]),
                     current: i == self.cursor,
-                    detail: (!detail.is_empty()).then(|| cap(detail)),
+                    detail: (!detail.is_empty()).then(|| cap(&detail)),
                 }
             })
             .collect()
@@ -2484,6 +2493,15 @@ mod tests {
             labels(BASH)[2].1,
             "No, and tell Claude what to do differently (esc)"
         );
+        let plan = Menu::parse(PLAN_LIVE).unwrap().choices();
+        assert_eq!(
+            (plan[2].label.as_str(), plan[2].detail.as_deref()),
+            (
+                "Tell Claude what to change",
+                Some("shift+tab to approve with this feedback")
+            ),
+            "the row under the last option is its detail"
+        );
         let hostile = QUESTION.replace(
             "2. Redis",
             &format!(
@@ -3137,6 +3155,22 @@ mod tests {
                 "{rule}"
             );
         }
+        // Hand-built from the 2.1.327 capture, not captured: the rule's option last, its scope
+        // wrapped onto the row under it. Every captured permission dialog ends on `No`.
+        let (head, _) = BASH_327[3].split_once("   3. Yes, and switch").unwrap();
+        let last = |dir: &str| {
+            let head = head.replace("commands in /private/tmp/planlab", "commands in");
+            format!("{head}      {dir}\n\n Esc to cancel · Tab to amend\n")
+        };
+        assert_eq!(
+            offered(&last("/private/tmp/planlab")),
+            [Decision::Approve, Decision::ApproveAlways]
+        );
+        assert_eq!(
+            offered(&last(&dir)),
+            [Decision::Approve],
+            "a scope cut under the last option"
+        );
         let amended =
             BASH_AMEND_TYPED_LIVE.replace("access to /tmp/planlab", &format!("access to {dir}"));
         assert_eq!(
@@ -3426,6 +3460,14 @@ mod tests {
         );
         assert_eq!(shown.after.len(), 6);
         assert!((0..3).all(|i| shown.region_at(i) != other.region_at(i)));
+        let detail = |m: &Menu| m.choices()[2].detail.clone().unwrap();
+        assert_eq!(
+            detail(&other),
+            "row 1 row 2 row 3 row 4 row 5 differently, then run rm -rf ~ (esc)"
+        );
+        let cut = detail(&wrapped(&"x".repeat(2 * MAX_CHOICE_LABEL_CHARS)));
+        assert_eq!(cut.chars().count(), MAX_CHOICE_LABEL_CHARS);
+        assert!(cut.ends_with("x…"), "{cut}");
     }
 
     #[test]

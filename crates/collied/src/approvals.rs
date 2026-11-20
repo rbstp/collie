@@ -75,7 +75,8 @@ impl Screen {
         self.snippet == other.snippet
             && self.reason == other.reason
             && self.offered == other.offered
-            && self.menu.as_ref().map(|m| &m.options) == other.menu.as_ref().map(|m| &m.options)
+            && self.menu.as_ref().map(|m| (&m.options, &m.after))
+                == other.menu.as_ref().map(|m| (&m.options, &m.after))
             && self.accepts_input == other.accepts_input
             && self.has_text_field == other.has_text_field
             && self.supports_note == other.supports_note

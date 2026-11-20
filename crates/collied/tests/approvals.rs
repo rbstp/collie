@@ -2233,6 +2233,36 @@ async fn a_changed_question_supersedes_the_choice() {
 }
 
 #[tokio::test]
+async fn rows_under_the_last_option_are_shown_and_reissue_when_they_change() {
+    let mut rig = Rig::start(TTL).await;
+    // Hand-built from the reconstructed Bash dialog, not captured: the last option's label
+    // wrapped onto the row under it.
+    let wrapped = |rest: &str| {
+        BASH.replace(
+            "   3. No, and tell Claude what to do differently (esc)\n",
+            &format!("   3. No, and tell Claude what to do\n      {rest}\n"),
+        )
+    };
+    rig.herdr.with(|h| h.text = wrapped("differently (esc)"));
+    let a = rig.needed().await;
+    assert_eq!(a.choices[2].label, "No, and tell Claude what to do");
+    assert_eq!(a.choices[2].detail.as_deref(), Some("differently (esc)"));
+
+    let other = "differently, then run rm -rf ~ (esc)";
+    rig.herdr.with(|h| h.text = wrapped(other));
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == a.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: b } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!(b.choices[2].detail.as_deref(), Some(other));
+}
+
+#[tokio::test]
 async fn a_screen_that_drifts_under_a_blocked_agent_reissues_quietly() {
     let mut rig = Rig::start(TTL).await;
     rig.herdr.with(|h| {
