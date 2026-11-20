@@ -274,12 +274,17 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     func approvalFeed(machineId: String) -> ApprovalFeed? {
         if simulation.withLock({ $0.resolved }) { return ApprovalFeed(link: .connected, pending: []) }
         let now = Date.now.unixMs
+        #if DEBUG
+        let command = ProcessInfo.processInfo.environment["COLLIE_DEMO_APPROVAL_COMMAND"]
+        #else
+        let command: String? = nil
+        #endif
         return ApprovalFeed(link: .connected, pending: [
             PendingApproval(
                 approvalId: "ap_demo", terminalId: "term_2", agentLabel: "Claude Code", workspaceLabel: "collie",
                 snippet: (1...8).map { "test approvals::case_\($0) ... ok" }.joined(separator: "\n"),
                 toolName: "Bash",
-                toolSummary: ProcessInfo.processInfo.environment["COLLIE_DEMO_APPROVAL_COMMAND"] ?? "cargo test -p collied --test approvals -- --nocapture",
+                toolSummary: command ?? "cargo test -p collied --test approvals -- --nocapture",
                 reason: "Command is not read-only, requires further permission checks",
                 options: [.approve, .approveAlways, .deny],
                 choices: [

@@ -12,8 +12,8 @@ enum GitFeedback {
     }
 
     static func draft(file: GitFile, selection: String, root: String? = nil) -> String {
-        let place = file.pullRequest.map { " in pull request #\($0)" } ?? root.map { " in \($0)" } ?? ""
-        let heading = "Feedback for \(file.path)\(place): "
+        let place = file.pullRequest.map { " in pull request #\($0)" } ?? root.map { " in \(GitCleanup.quoted($0))" } ?? ""
+        let heading = "Feedback for \(GitCleanup.quoted(file.path))\(place): "
         guard !selection.isEmpty else { return heading }
         return heading + "\n\n\(CodeFence.block(selection, info: "diff"))\n\n"
     }
