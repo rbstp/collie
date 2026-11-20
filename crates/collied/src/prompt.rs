@@ -928,7 +928,9 @@ fn classify(label: &str) -> Option<Decision> {
     }
     let l = l.trim();
     let starts = |prefixes: &[&str]| prefixes.iter().any(|p| l.starts_with(p));
-    if l == "yes" || starts(&["yes, proceed", "yes, i trust"]) {
+    // `Yes, run it` is the dynamic workflow prompt's approval (2.1.300), that label whole: a
+    // label that goes on past it is not one.
+    if l == "yes" || l == "yes, run it" || starts(&["yes, proceed", "yes, i trust"]) {
         Some(Decision::Approve)
     } else if starts(&[
         "yes, and don't ask again",
@@ -3574,13 +3576,13 @@ mod tests {
             assert_eq!(question(&screen), (true, true), "{screen}");
         }
 
-        // Not drawn as a question, and no dialog its wording tells: the workflow prompt, and
-        // (hand-built) QUESTION without its `Type something.`, ordinary labels set in by a
-        // column. Each offers nothing, whatever call is pending.
+        // The workflow prompt is a permission prompt by its `Yes, run it`. Not drawn as a
+        // question, and no dialog its wording tells: (hand-built) QUESTION without its `Type
+        // something.`, ordinary labels set in by a column, which offers nothing whatever call
+        // is pending.
+        assert_eq!(question(RENAMED_WORKFLOW), (false, false));
         let (plain, _) = QUESTION.split_once("   3. Type something.\n").unwrap();
-        for screen in [RENAMED_WORKFLOW, plain] {
-            assert_eq!(question(screen), (false, true), "{screen}");
-        }
+        assert_eq!(question(plain), (false, true));
         // Claude Code 2.1.328's Edit prompt, whose only option reading as an approval is
         // `Yes`, after Tab on it (hand-built from the capture): the same permission prompt.
         let amended =
@@ -4462,7 +4464,9 @@ me@mac app % codex
         }
         let m = Menu::parse(RENAMED_WORKFLOW).unwrap();
         assert_eq!(m.heads, ["Yes, run it", "View raw script", "No"]);
-        assert!(m.decisions().is_empty());
+        assert_eq!(m.decisions(), [(Approve, 0), (Deny, 2)]);
+        assert_eq!(classify("yes, run it  "), Some(Approve));
+        assert_eq!(classify("Yes, run it and skip the review"), None);
         assert_eq!(
             context("claude", RENAMED_WORKFLOW),
             "Run a dynamic workflow?"

@@ -2273,22 +2273,14 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
         assert!(a.options.is_empty() && !a.accepts_input && !a.has_text_field);
     }
 
-    // Not drawn as a question, and no dialog its wording tells: the workflow prompt, and
-    // (hand-built) QUESTION without its `Type something.`, ordinary labels under a cursor set
-    // in by a column. Nothing is offered, whether or not another call is pending.
+    // Not drawn as a question, and no dialog its wording tells: (hand-built) QUESTION without
+    // its `Type something.`, ordinary labels under a cursor set in by a column. Nothing is
+    // offered, whether or not another call is pending.
     let (plain, _) = QUESTION.split_once("   3. Type something.\n").unwrap();
-    for (rule, screen) in [
-        ("dynamic_workflow_prompt", WORKFLOW),
-        ("live_blocked_form", plain),
-    ] {
-        for transcript in [CUT, &*bash] {
-            show(&rig, rule, screen, transcript);
-            let a = rig.needed().await;
-            assert!(
-                a.options.is_empty() && a.choices.is_empty() && !a.accepts_input,
-                "{screen}"
-            );
-        }
+    for transcript in [CUT, &*bash] {
+        show(&rig, "live_blocked_form", plain, transcript);
+        let a = rig.needed().await;
+        assert!(a.options.is_empty() && a.choices.is_empty() && !a.accepts_input);
     }
     // Not known: the plan prompt is told by its wording, a permission prompt by its approval.
     show(&rig, "legacy_no_prompt_blocker", ASKED_PLAN.0, CUT);
@@ -2299,11 +2291,66 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
 }
 
 #[tokio::test]
+async fn the_workflow_prompt_is_decided_as_a_permission_prompt() {
+    // `Yes, run it` approves and `No` denies, whatever the transcript says of the session: no
+    // transcript, what it waits on not known, nothing, or a call that is no question.
+    let workflow = json!({"type": "assistant", "sessionId": SESSION, "message": {"content": [
+        {"type": "tool_use", "id": "toolu_1", "name": "Workflow", "input": {}},
+    ]}});
+    let pending = fresh(&workflow.to_string());
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr
+        .with(|h| h.rule = "dynamic_workflow_prompt".into());
+    let mut last = None;
+    for transcript in [None, Some(CUT), Some(""), Some(&*pending)] {
+        if let Some(text) = transcript {
+            rig.transcript(text);
+        }
+        rig.herdr.with(|h| {
+            h.text = WORKFLOW.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert_eq!(
+            a.options,
+            [Decision::Approve, Decision::Deny],
+            "{transcript:?}"
+        );
+        last = Some(a);
+    }
+    // `View raw script` is listed and is no decision; with decisions offered no option is
+    // pressed by index.
+    let a = last.unwrap();
+    let labels: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+    assert_eq!(labels, ["Yes, run it", "View raw script", "No"]);
+    assert_eq!(
+        code(rig.choose(&a, 1, &a.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(rig.mutations().is_empty());
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.decide(&b, Decision::Deny, &b.nonce).await),
+        ApprovalOutcome::Applied {
+            decision: Decision::Deny,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down", "down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_menu_drawn_as_a_question_is_one_whatever_its_labels_read() {
     // Hand-built from the 2.1.329 capture, its cursor at column 0 and Claude Code's own
     // entries under its options: an option worded as an amend field, one worded as an
-    // approval, and the form worded as the plan prompt. What the session waits on is not
-    // known, then known to be nothing.
+    // approval, the form worded as the plan prompt, and an option worded as the workflow
+    // prompt's approval. What the session waits on is not known, then known to be nothing.
     let one = ASKED_ONE.0;
     let asks = "\nWhich cache backend should we use?\n";
     let screens = [
@@ -2311,6 +2358,7 @@ async fn a_menu_drawn_as_a_question_is_one_whatever_its_labels_read() {
         one.replace("1. SQLite\n     Simple and embedded\n", "1. Yes\n"),
         one.replacen(asks, "\nWould you like to proceed?\n", 1)
             .replace("1. SQLite", "1. Yes, and use auto mode"),
+        one.replace("1. SQLite\n     Simple and embedded\n", "1. Yes, run it\n"),
     ];
     let mut read = Vec::new();
     for screen in &screens {
@@ -2333,7 +2381,7 @@ async fn a_menu_drawn_as_a_question_is_one_whatever_its_labels_read() {
             ));
         }
     }
-    assert_eq!(read, [((0, 0), (false, false), true, 0); 6]);
+    assert_eq!(read, [((0, 0), (false, false), true, 0); 8]);
 }
 
 #[tokio::test]
