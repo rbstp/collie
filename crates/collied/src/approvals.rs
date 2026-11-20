@@ -518,6 +518,20 @@ impl Approvals {
                     .and_then(|literals| m.scripted(literals))
                     .map(|asked| Some(format!("{session} {call:?} {asked}")))
             }
+            // No call on disk is all a question asked outside Code Mode leaves there: it is
+            // held to what the screen alone proves, for the version known to draw it so, and
+            // to the report that a form is what blocks the agent.
+            Waits::Open { version } if m.is_question() => {
+                if !prompt::reports_form(kind, rule) {
+                    Err(Refused::NotReported)
+                } else if version.is_none_or(|v| v < prompt::QUESTION_VERSION) {
+                    Err(Refused::Version)
+                } else if !m.stands_whole() {
+                    Err(Refused::NotWhole)
+                } else {
+                    Ok(None)
+                }
+            }
             Waits::Other if m.is_question() => Err(Refused::OtherCall),
             Waits::Nothing if m.is_question() => Err(Refused::NoCall),
             Waits::Unknown(why) if m.is_question() => Err(*why),

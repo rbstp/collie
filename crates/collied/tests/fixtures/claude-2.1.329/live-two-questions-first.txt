@@ -1,0 +1,49 @@
+⏺ OK
+
+✻ Sautéed for 0s · done 3:34 PM
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question 'This is a test
+  question: which option do you pick?' with header 'Test' and four options 'ops' (description
+  'tooling'), 'dev' (description 'building'), 'qa' (description 'testing'), 'docs' (description
+  'writing').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · This is a test question: which option do you pick? (ops / dev / qa / docs)
+
+❯ First run the Bash command 'ls /private/tmp/planlab' and then, in the same turn, use the
+  AskUserQuestion tool once: question 'Keep the listing?' header 'Listing' options 'Keep'
+  (description 'Leave it') and 'Drop' (description 'Forget it'). Nothing else.
+
+  Listed 1 directory
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Keep the listing? (Keep / Drop)
+
+❯ In one reply, first write the sentence 'Here is my question.' as plain text and then use the
+  AskUserQuestion tool once: question 'Ship it today?' header 'Ship' options 'Today' (description
+  'Now') and 'Later' (description 'Next week'). Nothing else.
+
+⏺ Here is my question.
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Ship it today? (Today / Later)
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: two questions in the one call.
+  First: 'Which cache backend should we use?' header 'Cache', options 'SQLite' (description 'Simple
+  and embedded'), 'Redis' (description 'Shared across processes'). Second: 'Which checks should
+  run?' header 'Checks', multiSelect true, options 'Lint' (description 'Fast'), 'Tests'
+  (description 'Slow'), 'Schema' (description 'Only when types change').
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Cache  ☐ Checks  ✔ Submit  →
+
+Which cache backend should we use?
+
+❯ 1. SQLite
+     Simple and embedded
+  2. Redis
+     Shared across processes
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

@@ -1,0 +1,49 @@
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question 'Which cache backend
+  should we use?' with header 'Cache' and options 'SQLite' (description 'Simple and embedded') and
+  'Redis' (description 'Shared across processes').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Which cache backend should we use? (SQLite / Redis)
+
+❯ Reply with just the word OK and nothing else. Do not use any tools.
+
+⏺ OK
+
+✻ Sautéed for 0s · done 3:34 PM
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question 'This is a test
+  question: which option do you pick?' with header 'Test' and four options 'ops' (description
+  'tooling'), 'dev' (description 'building'), 'qa' (description 'testing'), 'docs' (description
+  'writing').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · This is a test question: which option do you pick? (ops / dev / qa / docs)
+
+❯ First run the Bash command 'ls /private/tmp/planlab' and then, in the same turn, use the
+  AskUserQuestion tool once: question 'Keep the listing?' header 'Listing' options 'Keep'
+  (description 'Leave it') and 'Drop' (description 'Forget it'). Nothing else.
+
+  Listed 1 directory
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Keep the listing? (Keep / Drop)
+
+❯ In one reply, first write the sentence 'Here is my question.' as plain text and then use the
+  AskUserQuestion tool once: question 'Ship it today?' header 'Ship' options 'Today' (description
+  'Now') and 'Later' (description 'Next week'). Nothing else.
+
+⏺ Here is my question.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Ship
+
+Ship it today?
+
+❯ 1. Today
+     Now
+  2. Later
+     Next week
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

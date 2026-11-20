@@ -71,6 +71,18 @@ pub fn numbered(text: &str) -> bool {
 const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker", "permission"];
 
 const FEEDBACK: &str = "Tell Claude what to change";
+/// The widest question Claude Code 2.1.329 draws without its `│` gutter.
+const QUESTION_COLUMNS: usize = 80;
+/// The first Claude Code whose question form is known to be drawn as [`Menu::stands_whole`]
+/// reads it: the captures are 2.1.329's.
+pub const QUESTION_VERSION: [u32; 3] = [2, 1, 329];
+
+/// Whether what blocks the agent is reported as a form: herdr's rule for one, or the kind a
+/// herdr-core or Rex agent's own report gives (Claude Code says `question` for
+/// AskUserQuestion's form and `permission` for its permission and plan prompts).
+pub fn reports_form(kind: &str, rule: Option<&str>) -> bool {
+    kind == "claude" && rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r))
+}
 const FEEDBACK_HINT: &str = "shift+tab to approve with this feedback";
 
 pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
@@ -277,6 +289,8 @@ pub enum Refused {
     Ambiguous,
     NotInScript,
     ScriptNotRead,
+    NotReported,
+    Version,
 }
 
 impl Refused {
@@ -294,6 +308,8 @@ impl Refused {
             Self::Ambiguous => "ambiguous",
             Self::NotInScript => "question not found in the pending script",
             Self::ScriptNotRead => "pending script not read whole",
+            Self::NotReported => "not reported as a question",
+            Self::Version => "Claude Code version not known",
         }
     }
 }
@@ -330,6 +346,8 @@ pub struct Menu {
     /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
     /// its first rows, a command's first lines among them: no read shows or binds them.
     pub topped: bool,
+    /// How many columns that rule spans: Claude Code draws it across the terminal.
+    span: usize,
     /// Whether a `▔` border tops the form: from the last option up, the nearest row that
     /// starts at column 0 starts with `▔`. Claude Code draws that border at column 0 and
     /// every row of the form under it indented, its options included, so no text of the form
@@ -459,6 +477,7 @@ impl Menu {
             continued,
             unshown,
             topped: rule.is_some(),
+            span: rule.map_or(0, |r| lines[r].trim().chars().count()),
             bordered,
             flush,
         })
@@ -534,6 +553,7 @@ impl Menu {
             continued: 0,
             unshown: false,
             topped: true,
+            span: 0,
             bordered: false,
             flush: false,
         })
@@ -787,6 +807,60 @@ impl Menu {
         Some(asked)
     }
 
+    /// The entries Claude Code 2.1.329 draws under a question's own options, when the menu
+    /// ends in them: how many, and whether the question is a multi-select one (`Type
+    /// something.` then `Chat about this`; `[ ] Type something` over `Submit`, then `Chat
+    /// about this`). `Chat about this` keeps its number under options a form hides, so a
+    /// menu numbered through to it holds every option.
+    fn own_entries(&self) -> Option<(usize, bool)> {
+        let options: Vec<String> = self.options.iter().map(|o| unspaced(o)).collect();
+        match &options[..] {
+            [.., typed, chat]
+                if chat == "Chataboutthis"
+                    && typed.trim_end_matches('─') == "[]TypesomethingSubmit" =>
+            {
+                Some((2, true))
+            }
+            [.., typed, chat] if typed == "Typesomething." && chat == "Chataboutthis" => {
+                Some((2, false))
+            }
+            [.., typed] if typed == "Typesomething." => Some((1, false)),
+            _ => None,
+        }
+    }
+
+    /// Whether the screen alone shows this question form whole, as Claude Code 2.1.329 draws
+    /// one: what stands in for the transcript where it holds no call to match, a question
+    /// asked outside Code Mode ([`crate::transcript::Waits::Open`]).
+    ///
+    /// The danger is a row of `─` in the question's text passing for the top rule, with the
+    /// rows above it unseen. 2.1.329 draws a question that holds a line break, or is wider
+    /// than 80 columns, behind a `│` gutter, where no row is a rule. Any other question is
+    /// one line of at most 80 columns, which is one row, and no rule of its own making, when
+    /// the terminal is wider than that. So the form is whole when its top rule spans more
+    /// than 80 columns, Claude Code's header or its tabs sit directly under that rule, and
+    /// the text under them is one row of at most 80 columns or rows all behind the gutter. A
+    /// form taller than the terminal hides its header and its top rule; no row the agent
+    /// writes above it starts at the screen's edge. The menu ends in Claude Code's own
+    /// entries, with no row under the last. The review page of several questions is not
+    /// shown whole this way, nor a form in a terminal of 80 columns or fewer.
+    ///
+    /// It holds for the version that draws so: the caller checks which one runs.
+    pub fn stands_whole(&self) -> bool {
+        let header = |row: &String| {
+            row.starts_with(" ☐ ")
+                || row.starts_with(" ☒ ")
+                || row.starts_with("←  ") && row.ends_with('→')
+        };
+        let text = self.raw_body.get(1..).unwrap_or_default();
+        let one = matches!(text, [row] if !row.starts_with('│') && row.chars().count() <= QUESTION_COLUMNS);
+        self.span > QUESTION_COLUMNS
+            && self.after.is_empty()
+            && self.raw_body.first().is_some_and(header)
+            && (one || !text.is_empty() && text.iter().all(|row| row.starts_with('│')))
+            && self.own_entries().is_some()
+    }
+
     /// [`Menu::asks`] for a session in Code Mode, whose pending call is a script that calls
     /// AskUserQuestion: `literals` are that script's whole string literals. The script is
     /// not parsed, so nothing says which call or question of it is drawn. What is drawn must
@@ -824,19 +898,8 @@ impl Menu {
             return found(&asked).map(|()| format!("{asked:?}"));
         }
         let options: Vec<String> = self.options.iter().map(|o| unspaced(o)).collect();
-        let (options, multi) = match &options[..] {
-            [options @ .., typed, chat]
-                if chat == "Chataboutthis"
-                    && typed.trim_end_matches('─') == "[]TypesomethingSubmit" =>
-            {
-                (options, true)
-            }
-            [options @ .., typed, chat] if typed == "Typesomething." && chat == "Chataboutthis" => {
-                (options, false)
-            }
-            [options @ .., typed] if typed == "Typesomething." => (options, false),
-            _ => return Err(Refused::NotWhole),
-        };
+        let (own, multi) = self.own_entries().ok_or(Refused::NotWhole)?;
+        let options = &options[..options.len() - own];
         let reads = |shown: &String| {
             let shown = match multi {
                 true => shown
@@ -3684,6 +3747,59 @@ mod tests {
         let narrow = PLAN.replace("Would you like to proceed?", "Would you like to\n proceed?");
         assert_ne!(narrow, PLAN);
         assert_eq!(question(&narrow), (false, false));
+    }
+
+    #[test]
+    fn a_question_form_stands_whole_only_as_claude_code_draws_one() {
+        // Captured from Claude Code 2.1.329 while the form was up (100 columns).
+        let live = include_str!("../tests/fixtures/claude-2.1.329/live-question.txt");
+        let whole = |screen: &str| Menu::parse(screen).is_some_and(|m| m.stands_whole());
+        assert!(whole(live));
+        let asks = "\nWhich cache backend should we use?\n";
+        let header = " ☐ Cache\n";
+        let wide = "─".repeat(100);
+        assert_eq!(live.matches(&wide).count(), 2);
+        let draw = |text: &str| live.replacen(asks, &format!("\n{text}\n"), 1);
+        // Hand-built from it, each a thing the form's own text or a short terminal does. A
+        // question whose rows draw a rule and a copy of the header, the rule narrower than
+        // any terminal that leaves a short question on one row: the rule is no top.
+        let narrow = format!(
+            "Drop the database first.\n{}\n ☐ Cache\nContinue?",
+            "─".repeat(80)
+        );
+        assert!(Menu::parse(&draw(&narrow)).unwrap().on_screen());
+        assert!(!whole(&draw(&narrow)));
+        // The same in a terminal of 80 columns, where a question of 80 can wrap.
+        assert!(!whole(&live.replace(&wide, &"─".repeat(80))));
+        // A rule the text draws with nothing of a header under it, text over two rows with
+        // no gutter, a row too wide to have none, and rows only some of which have it.
+        for text in [
+            format!("Drop the database first.\n{wide}\nContinue?"),
+            "Drop the database first.\nContinue?".to_owned(),
+            "x".repeat(81),
+            "│ Drop the database first.\nContinue?".to_owned(),
+        ] {
+            assert!(!whole(&draw(&text)), "{text}");
+        }
+        assert!(whole(&draw(&"x".repeat(80))));
+        assert!(whole(&draw(
+            "│ Drop the database first.\n│ ───\n│ Continue?"
+        )));
+        // No header under the rule, a row under the last option, and options that do not
+        // end in Claude Code's own entries.
+        assert!(!whole(&live.replacen(header, "", 1)));
+        assert!(!whole(&live.replacen(
+            "Chat about this\n",
+            "Chat about this\n ↑ 1 more line\n",
+            1
+        )));
+        let (bare, _) = live.split_once("  3. Type something.\n").unwrap();
+        assert!(Menu::parse(bare).is_some() && !whole(bare));
+        // A rule of the terminal's width with a copy of the header under it reads as a whole
+        // form: Claude Code drew a question of several lines so before its gutter. Nothing on
+        // the screen tells the two apart, so the caller asks which version runs.
+        let old = format!("Drop the database first.\n{wide}\n ☐ Cache\nContinue?");
+        assert!(whole(&draw(&old)));
     }
 
     #[test]

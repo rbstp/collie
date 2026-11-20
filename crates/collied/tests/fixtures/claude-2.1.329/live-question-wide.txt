@@ -1,0 +1,49 @@
+⏺ Declined to answer Claude's questions:
+  ⎿  · This is a test question: which option do you pick? (ops / dev / qa / docs)
+
+❯ First run the Bash command 'ls /private/tmp/planlab' and then, in the same turn, use the
+  AskUserQuestion tool once: question 'Keep the listing?' header 'Listing' options 'Keep'
+  (description 'Leave it') and 'Drop' (description 'Forget it'). Nothing else.
+
+  Listed 1 directory
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Keep the listing? (Keep / Drop)
+
+❯ In one reply, first write the sentence 'Here is my question.' as plain text and then use the
+  AskUserQuestion tool once: question 'Ship it today?' header 'Ship' options 'Today' (description
+  'Now') and 'Later' (description 'Next week'). Nothing else.
+
+⏺ Here is my question.
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Ship it today? (Today / Later)
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: two questions in the one call.
+  First: 'Which cache backend should we use?' header 'Cache', options 'SQLite' (description 'Simple
+  and embedded'), 'Redis' (description 'Shared across processes'). Second: 'Which checks should
+  run?' header 'Checks', multiSelect true, options 'Lint' (description 'Fast'), 'Tests'
+  (description 'Slow'), 'Schema' (description 'Only when types change').
+
+⏺ Declined to answer Claude's questions:
+  ⎿  · Which cache backend should we use? (SQLite / Redis)
+     · Which checks should run? (Lint / Tests / Schema)
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question whose text is exactly
+  this single line with no line break: 'Should the daemon keep its usage figures in one JSON file
+  under a lock between restarts or not?' header 'Store', options 'File' (description 'One JSON
+  file') and 'None' (description 'Keep nothing').
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Store
+
+│ Should the daemon keep its usage figures in one JSON file under a lock between restarts or not?
+
+❯ 1. File
+     One JSON file
+  2. None
+     Keep nothing
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

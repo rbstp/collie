@@ -75,8 +75,21 @@ const RENAMED_QUESTION: &str =
 const RENAMED_TIME_FORMAT: &str =
     include_str!("fixtures/claude-2.1.300/renamed-config-time-format-tasks.detection.txt");
 
-// Claude Code 2.1.329 (100 columns), each screen with the last lines of its session's
-// transcript at that moment, the pending call last; see `transcript::asked`'s tests.
+// Claude Code 2.1.329 (100 columns). `cut!`: a screen with its finished transcript cut at
+// the call, which is not what 2.1.329 holds while a question is up; `capture!`: a screen with
+// the transcript read at that moment. See `transcript::asked`'s tests.
+macro_rules! cut {
+    ($name:literal) => {
+        (
+            include_str!(concat!("fixtures/claude-2.1.329/", $name, ".txt")),
+            include_str!(concat!(
+                "fixtures/claude-2.1.329/",
+                $name,
+                ".transcript.cut.jsonl"
+            )),
+        )
+    };
+}
 macro_rules! capture {
     ($name:literal) => {
         (
@@ -89,11 +102,17 @@ macro_rules! capture {
         )
     };
 }
-const ASKED_ONE: (&str, &str) = capture!("question-one");
-const ASKED_MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
-const ASKED_REVIEW: (&str, &str) = capture!("two-questions-after-tab");
-const ASKED_TALL: (&str, &str) = capture!("question-tall-12-rows");
-const ASKED_BASH: (&str, &str) = capture!("bash");
+const ASKED_ONE: (&str, &str) = cut!("question-one");
+const ASKED_MULTI: (&str, &str) = cut!("two-questions-second-multiselect");
+const ASKED_REVIEW: (&str, &str) = cut!("two-questions-after-tab");
+const ASKED_TALL: (&str, &str) = cut!("question-tall-12-rows");
+const ASKED_BASH: (&str, &str) = cut!("bash");
+// Read while the form was up, outside Code Mode: a first prompt, a third prompt after a
+// declined question and a text turn, a form in 12 rows, and the review page of two questions.
+const LIVE: (&str, &str) = capture!("live-question");
+const LIVE_LATER: (&str, &str) = capture!("live-question-later");
+const LIVE_TALL: (&str, &str) = capture!("live-question-tall");
+const LIVE_REVIEW: (&str, &str) = capture!("live-two-questions-review");
 // The same with Code Mode on: the pending call is a `REPL` script that calls the question.
 const SCRIPTED: (&str, &str) = capture!("codemode-question-one");
 const SCRIPTED_BUILT: (&str, &str) = capture!("codemode-question-built");
@@ -110,7 +129,7 @@ const WORKFLOW: &str = include_str!("fixtures/claude-2.1.300/renamed-workflow.de
 // A transcript whose last line Claude Code is still writing: what the session waits on is
 // not known.
 const CUT: &str = "{\"type\":\"assi";
-const ASKED_PLAN: (&str, &str) = capture!("plan");
+const ASKED_PLAN: (&str, &str) = cut!("plan");
 // The session and folder of those transcripts, which the rig's own process stands for.
 const SESSION: &str = "00000000-0000-4000-8000-000000000000";
 const CWD: &str = "/private/tmp/planlab";
@@ -2532,6 +2551,94 @@ async fn a_question_from_a_dispatched_script_is_answered_while_the_script_runs()
 }
 
 #[tokio::test]
+async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
+    // Claude Code 2.1.329 writes a plain AskUserQuestion call only with its result: while
+    // the form is up the transcript ends at the prompt.
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    let form = "live_blocked_form";
+    let own = ["Type something.", "Chat about this"];
+    for ((screen, transcript), labels) in [
+        (LIVE, &["SQLite", "Redis"][..]),
+        (LIVE_LATER, &["ops", "dev", "qa", "docs"][..]),
+    ] {
+        show(&rig, form, screen, &fresh(transcript));
+        let a = rig.needed().await;
+        let shown: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(shown, [labels, &own[..]].concat());
+        assert!(a.options.is_empty() && a.accepts_input && a.has_text_field);
+    }
+    let open = fresh(LIVE.1);
+    let over = json!({"type": "assistant", "timestamp": "2999-01-01T00:00:00.000Z",
+        "sessionId": SESSION, "version": "2.1.329",
+        "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "OK"}]}});
+    let refused = [
+        // Not reported as a form: herdr's rule for a permission prompt.
+        ("bash_permission_prompt", LIVE.0, open.clone()),
+        // The capture's own lines, older than this process.
+        (form, LIVE.0, LIVE.1.to_owned()),
+        // A Claude Code not known to draw a question so.
+        (
+            form,
+            LIVE.0,
+            open.replace(r#""version":"2.1.329""#, r#""version":"2.1.328""#),
+        ),
+        // The turn is over.
+        (form, LIVE.0, format!("{open}{over}\n")),
+        // A form that scrolls, and the review page.
+        (form, LIVE_TALL.0, fresh(LIVE_TALL.1)),
+        (form, LIVE_REVIEW.0, fresh(LIVE_REVIEW.1)),
+    ];
+    assert_ne!(refused[2].2, open);
+    for (rule, screen, transcript) in &refused {
+        show(&rig, rule, screen, transcript);
+        let a = rig.needed().await;
+        assert!(
+            a.options.is_empty() && a.choices.is_empty() && !a.accepts_input,
+            "{rule} {screen}"
+        );
+    }
+    assert!(rig.mutations().is_empty());
+
+    // A read that cannot be trusted refuses; the next reconcile reads again.
+    show(&rig, form, LIVE.0, CUT);
+    let a = rig.needed().await;
+    assert!(a.choices.is_empty());
+    rig.transcript(&open);
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == a.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: b } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!(b.choices.len(), 4);
+    assert_eq!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 1,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_question_approval_is_bound_to_its_session() {
     let mut rig = Rig::start(TTL).await;
     let asked = fresh(ASKED_ONE.1);
@@ -2682,6 +2789,14 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     assert_ne!(stray, fresh(SCRIPTED.1));
     show(&rig, "live_blocked_form", SCRIPTED.0, &stray);
     assert!(rig.needed().await.choices.is_empty());
+    // Outside Code Mode, the turn open: a form no report calls one, and a Claude Code older
+    // than the one known to draw a question so.
+    let open = fresh(LIVE.1);
+    show(&rig, "bash_permission_prompt", LIVE.0, &open);
+    rig.needed().await;
+    let older = open.replace(r#""version":"2.1.329""#, r#""version":"2.1.328""#);
+    show(&rig, "live_blocked_form", LIVE.0, &older);
+    rig.needed().await;
     let lines = refusals();
     let reasons = [
         "transcript unreadable or incomplete",
@@ -2691,6 +2806,8 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
         "another call pending",
         "question not found in the pending script",
         "pending script not read whole",
+        "not reported as a question",
+        "Claude Code version not known",
     ];
     assert_eq!(lines.len(), reasons.len(), "{lines:?}");
     for (line, reason) in lines.iter().zip(reasons) {

@@ -36,6 +36,15 @@ pub enum Waits {
     },
     /// One call that is no question.
     Other,
+    /// No call and no script, and the turn is open: the transcript ends, records of Claude
+    /// Code's own aside, at a prompt or at the results of the last calls, written by this
+    /// session's process. Claude Code 2.1.329 writes a message that holds an AskUserQuestion
+    /// call only once the call has its result, so this is all the transcript holds while a
+    /// question asked outside Code Mode is on screen. The version is that line's.
+    Open {
+        version: Option<[u32; 3]>,
+    },
+    /// No call, no script, and the turn is over.
     Nothing,
     Unknown(Refused),
 }
@@ -73,6 +82,7 @@ struct Call {
     by: Value,
     at: Option<u64>,
     stop: Value,
+    version: Option<[u32; 3]>,
 }
 
 impl Call {
@@ -82,6 +92,10 @@ impl Call {
             by: line["sessionId"].clone(),
             at: line["timestamp"].as_str().and_then(timestamp_ms),
             stop: line["message"]["stop_reason"].clone(),
+            version: line["version"].as_str().and_then(|v| {
+                let mut parts = v.split('.').map(|p| p.parse().ok());
+                Some([parts.next()??, parts.next()??, parts.next()??])
+            }),
         }
     }
 
@@ -139,6 +153,7 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     let mut ended = Vec::new();
     let mut receipts = Vec::new();
     let mut running = Vec::new();
+    let mut end = None;
     for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return unknown;
@@ -162,6 +177,9 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
             }
             Some("user") => {
                 let result = |b: &&Value| b["type"] == "tool_result";
+                // Claude Code writes this line when a call is interrupted: the turn is over.
+                let interrupted = matches!(blocks, [b] if b["text"].as_str().is_some_and(|t| t.starts_with("[Request interrupted")));
+                end.get_or_insert_with(|| (!interrupted).then(|| Call::of(&Value::Null, &v)));
                 if last
                     && (blocks.is_empty() || !blocks.iter().all(|b| result(&b)))
                     && !matches!(message, Some(Value::String(_)))
@@ -182,9 +200,19 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
                         Some(_) => receipts.push(id.clone()),
                         None => {}
                     }
+                    // When the model waits for its scripts itself (`Poll`), the events come
+                    // as that call's result, under a line that names their nonces.
+                    for event in polled(&block["content"]) {
+                        match settled(event) {
+                            Some(Some(n)) if !ended.contains(&n) => ended.push(n),
+                            Some(None) => return unknown,
+                            _ => {}
+                        }
+                    }
                 }
             }
             Some("assistant") => {
+                end.get_or_insert(None);
                 let id = &v["message"]["id"];
                 if last && *message.get_or_insert_with(|| id.clone()) != *id {
                     (bounded, last) = (true, false);
@@ -220,7 +248,16 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     scripts.extend(calls.iter().filter(|c| c.asks().is_some()));
     let questions = || calls.iter().filter(|c| c.call["name"] == "AskUserQuestion");
     let call = match (&scripts[..], questions().count(), &calls[..]) {
-        ([], 0, []) => return Waits::Nothing,
+        ([], 0, []) => {
+            let quiet = running.iter().all(|c| c.at.is_some_and(|at| at < since));
+            return match end.flatten().filter(|_| quiet) {
+                Some(prompt) if alive(&prompt) => Waits::Open {
+                    version: prompt.version,
+                },
+                Some(_) => stale,
+                None => Waits::Nothing,
+            };
+        }
         ([], 0, [one]) if alive(one) => return Waits::Other,
         ([script], 0, _) => *script,
         ([], 1, [one]) => one,
@@ -290,6 +327,24 @@ fn receipt(content: &Value) -> Option<u64> {
         .then(|| n.parse().ok())?
 }
 
+/// The events of a `Poll` call's result: the lines that open one, in a result that starts
+/// with the line Claude Code puts first (`<system>authentic event nonces ...`). A script
+/// that prints such a line in its own output makes a script read as ended, and its question
+/// as asked no more.
+fn polled(content: &Value) -> impl Iterator<Item = &str> {
+    let text = match content {
+        Value::String(text) => text.as_str(),
+        Value::Array(blocks) => match &blocks[..] {
+            [block] => block["text"].as_str().unwrap_or_default(),
+            _ => "",
+        },
+        _ => "",
+    };
+    let polled = text.starts_with("<system>authentic event nonces");
+    text.lines()
+        .filter(move |l| polled && l.starts_with("<event"))
+}
+
 /// The script a `poll_events` envelope says ended: an event whose opening tag reads
 /// `kind="repl-eval"` and `eval="N"`. Only that tag is read: the event's body is the
 /// script's output. `Some(None)` for such an event with no number.
@@ -353,13 +408,33 @@ mod tests {
     use crate::prompt::{Menu, numbered};
 
     // Claude Code 2.1.329 in a terminal of 100 columns, captured 2026-11-20 (the plan file's
-    // folder renamed): each screen with the last lines of its session's transcript at that
-    // moment, reduced to the fields read here and its tool ids replaced. The pending call is
-    // each transcript's last line. A question; the first question of a call with two, its
-    // second, a multi-select one, the same with a box checked, and the call's review page; a
-    // question of three lines, the second a row of `─`, drawn behind the gutter; a question
-    // with four options in 12 rows, which scrolls, its cursor on option 1 and on option 4; a
-    // Bash prompt and the plan prompt.
+    // folder renamed). The screens are captures. Their transcripts are not what was on disk
+    // while the form was up: each is the finished transcript cut at the call, reduced to the
+    // fields read here. 2.1.329 writes a message that holds an AskUserQuestion call only
+    // with the call's result (see the `live-` captures), so these stand for a Claude Code
+    // that writes the call first, which the Bash capture shows it does for other tools. A
+    // question; the first question of a call with two, its second, a multi-select one, the
+    // same with a box checked, and the call's review page; a question of three lines, the
+    // second a row of `─`, drawn behind the gutter; a question with four options in 12
+    // rows, which scrolls, its cursor on option 1 and on option 4; a Bash prompt and the
+    // plan prompt.
+    macro_rules! cut {
+        ($name:literal) => {
+            (
+                include_str!(concat!(
+                    "../../tests/fixtures/claude-2.1.329/",
+                    $name,
+                    ".txt"
+                )),
+                include_str!(concat!(
+                    "../../tests/fixtures/claude-2.1.329/",
+                    $name,
+                    ".transcript.cut.jsonl"
+                )),
+            )
+        };
+    }
+    // A screen and the transcript read at that moment, reduced and its ids replaced.
     macro_rules! capture {
         ($name:literal) => {
             (
@@ -376,16 +451,16 @@ mod tests {
             )
         };
     }
-    const ONE: (&str, &str) = capture!("question-one");
-    const FIRST: (&str, &str) = capture!("two-questions-first");
-    const MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
-    const CHECKED: (&str, &str) = capture!("two-questions-second-checked");
-    const REVIEW: (&str, &str) = capture!("two-questions-after-tab");
-    const MULTILINE: (&str, &str) = capture!("question-multiline");
-    const TALL: (&str, &str) = capture!("question-tall-12-rows");
-    const TALL_ON_4: (&str, &str) = capture!("question-tall-12-rows-cursor-4");
-    const BASH: (&str, &str) = capture!("bash");
-    const PLAN: (&str, &str) = capture!("plan");
+    const ONE: (&str, &str) = cut!("question-one");
+    const FIRST: (&str, &str) = cut!("two-questions-first");
+    const MULTI: (&str, &str) = cut!("two-questions-second-multiselect");
+    const CHECKED: (&str, &str) = cut!("two-questions-second-checked");
+    const REVIEW: (&str, &str) = cut!("two-questions-after-tab");
+    const MULTILINE: (&str, &str) = cut!("question-multiline");
+    const TALL: (&str, &str) = cut!("question-tall-12-rows");
+    const TALL_ON_4: (&str, &str) = cut!("question-tall-12-rows-cursor-4");
+    const BASH: (&str, &str) = cut!("bash");
+    const PLAN: (&str, &str) = cut!("plan");
     const FORMS: [(&str, &str); 6] = [ONE, FIRST, MULTI, CHECKED, REVIEW, MULTILINE];
     // The same Claude Code with Code Mode on (`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`): the
     // model's one tool is `REPL`, and the question is a function its script calls. The form
@@ -426,6 +501,7 @@ mod tests {
             Waits::Question { questions, .. } => format!("{} asked", questions.len()),
             Waits::Script { .. } => "a script".to_owned(),
             Waits::Other => "another call".to_owned(),
+            Waits::Open { version } => format!("open {version:?}"),
             Waits::Nothing => "nothing".to_owned(),
             Waits::Unknown(why) => why.as_str().to_owned(),
         }
@@ -629,12 +705,14 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
             "stale call",
             "another session's"
         );
+        let open = "open Some([2, 1, 329])";
         // The first call was declined, a prompt followed, and the second call is pending.
         let rows: Vec<&str> = FIRST.1.lines().collect();
         let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
         assert_eq!(
             [upto(2), upto(3), upto(4), upto(5), upto(6)],
-            ["1 asked", "nothing", "nothing", "nothing", "2 asked"]
+            ["1 asked", open, "nothing", open, "2 asked"],
+            "the result of a declined call, the line that says it was interrupted, a prompt"
         );
 
         let call = |id: &str, message: &str, name: &str| {
@@ -647,11 +725,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
             .to_string()
         };
         let ask = |id: &str, message: &str| call(id, message, "AskUserQuestion");
-        let result = |id: &str| {
-            let block = json!({"type": "tool_result", "tool_use_id": id});
-            json!({"type": "user", "message": {"content": [block]}}).to_string()
+        let user = |content: Value| {
+            json!({"type": "user", "timestamp": at, "sessionId": SESSION,
+                "version": "2.1.329", "message": {"content": content}})
+            .to_string()
         };
-        let prompt = || json!({"type": "user", "message": {"content": "go"}}).to_string();
+        let result = |id: &str| user(json!([{"type": "tool_result", "tool_use_id": id}]));
+        let prompt = || user(json!("go"));
         let side = json!({"type": "user", "isSidechain": true, "message": {"content": "go"}});
         let reads = |rows: &[String], whole| says(waits(&rows.join("\n"), whole, 0));
         assert_eq!(
@@ -664,7 +744,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         );
         assert_eq!(
             reads(&[ask("a", "m1"), prompt()], true),
-            "nothing",
+            open,
             "a prompt since"
         );
         let several = "several pending calls";
@@ -720,7 +800,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         // A last line that Claude Code is still writing, the call's result or a second call:
         // nothing is known, whether the cut line has its newline yet or not.
         let asked = [prompt(), ask("a", "m1")].join("\n");
-        for (next, whole) in [(result("a"), "nothing"), (ask("c", "m1"), several)] {
+        for (next, whole) in [(result("a"), open), (ask("c", "m1"), several)] {
             let cut = &next[..next.len() / 2];
             let read = |text: String| says(pending(&text, true, SESSION, 0));
             assert_eq!(read(format!("{asked}\n{next}\n")), whole);
@@ -933,7 +1013,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 
     fn answer(id: &str, content: Value) -> String {
         let block = json!({"type": "tool_result", "tool_use_id": id, "content": content});
-        json!({"type": "user", "message": {"content": [block]}}).to_string()
+        json!({"type": "user", "timestamp": "2026-11-20T17:25:01.500Z", "sessionId": SESSION,
+            "version": "2.1.329", "message": {"content": [block]}})
+        .to_string()
     }
 
     fn events(envelopes: &[&str]) -> String {
@@ -954,6 +1036,107 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         };
         let menu = Menu::parse(screen).filter(Menu::on_screen)?;
         menu.scripted(&literals?).ok().map(|_| (menu.heads, call))
+    }
+
+    // Claude Code 2.1.329 on 2026-11-20, each screen with the transcript read while the form
+    // was up (100 columns; reduced, ids and nonces replaced). Outside Code Mode: a question
+    // on a session's first prompt in auto mode and in manual mode; one on a third prompt,
+    // after a declined question and a text turn; one asked after a Bash call in the same
+    // turn, and one after a sentence in the same message; the two questions of one call, a
+    // box checked, and the review page; a question of one line of 96 columns, and one of
+    // three lines, each behind the gutter; a question in 12 rows. In none is the call on
+    // disk. A Bash permission prompt in manual mode, whose call is. In Code Mode: a
+    // question in manual mode, its `REPL` call with no result; one in auto mode beside the
+    // model's own `Poll`, and the transcript after its answer, the event in `Poll`'s result.
+    const LIVE: [(&str, &str); 9] = [
+        capture!("live-question"),
+        capture!("live-question-manual"),
+        capture!("live-question-later"),
+        capture!("live-question-after-tool"),
+        capture!("live-question-after-text"),
+        capture!("live-two-questions-first"),
+        capture!("live-two-questions-second"),
+        capture!("live-two-questions-second-checked"),
+        capture!("live-question-wide"),
+    ];
+    const LIVE_MULTILINE: (&str, &str) = capture!("live-question-multiline");
+    const LIVE_REVIEW: (&str, &str) = capture!("live-two-questions-review");
+    const LIVE_TALL: [(&str, &str); 2] = [
+        capture!("live-question-tall"),
+        capture!("live-question-tall-cursor-4"),
+    ];
+    const LIVE_BASH: (&str, &str) = capture!("live-bash-manual");
+    const LIVE_SCRIPTED: (&str, &str) = capture!("live-scripted-manual");
+    const LIVE_POLL: (&str, &str) = capture!("live-scripted-poll");
+    const LIVE_POLL_ANSWERED: &str = include_str!(
+        "../../tests/fixtures/claude-2.1.329/live-scripted-poll-answered.transcript.min.jsonl"
+    );
+
+    #[test]
+    fn a_question_outside_code_mode_leaves_no_call_and_an_open_turn() {
+        let open = "open Some([2, 1, 329])";
+        let whole =
+            |screen: &str| Menu::parse(screen).is_some_and(|m| m.on_screen() && m.stands_whole());
+        for (screen, transcript) in LIVE.into_iter().chain([LIVE_MULTILINE]) {
+            assert_eq!(says(waits(transcript, true, 0)), open, "{screen}");
+            assert!(whole(screen), "{screen}");
+        }
+        // The review page and a form that scrolls are not shown whole by the screen.
+        for (screen, transcript) in LIVE_TALL.into_iter().chain([LIVE_REVIEW]) {
+            assert_eq!(says(waits(transcript, true, 0)), open, "{screen}");
+            assert!(!whole(screen), "{screen}");
+        }
+        assert_eq!(says(waits(LIVE_BASH.1, true, 0)), "another call");
+        assert_eq!(says(waits(LIVE_SCRIPTED.1, true, 0)), "a script");
+        assert!(runs(LIVE_SCRIPTED.0, LIVE_SCRIPTED.1).is_some());
+        // Beside the model's own Poll the script is the state; its event, in Poll's result,
+        // ends it.
+        let (heads, _) = runs(LIVE_POLL.0, LIVE_POLL.1).unwrap();
+        assert_eq!(heads[..2], ["Carry on", "Stop here"]);
+        assert_eq!(says(waits(LIVE_POLL_ANSWERED, true, 0)), "nothing");
+        let rows: Vec<&str> = LIVE_POLL_ANSWERED.lines().collect();
+        let poll = rows
+            .iter()
+            .position(|r| r.contains("authentic event nonces"))
+            .unwrap();
+        let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
+        assert_eq!(
+            [upto(poll), upto(poll + 1)],
+            ["a script", "open Some([2, 1, 329])"]
+        );
+
+        // The third prompt's transcript, line by line: the turn is open at a prompt, and
+        // over once Claude Code wrote that a call was interrupted or a reply ended.
+        let rows: Vec<&str> = LIVE[2].1.lines().collect();
+        let at = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
+        let line = |part: &str| rows.iter().rposition(|r| r.contains(part)).unwrap() + 1;
+        let (declined, replied) = (
+            line("[Request interrupted"),
+            line(r#""stop_reason":"end_turn""#),
+        );
+        assert!(declined < replied && replied < rows.len());
+        assert_eq!(
+            [at(declined), at(replied), at(rows.len())],
+            ["nothing", "nothing", open]
+        );
+        // A prompt older than the process, or another session's, is not this turn.
+        let stamp = timestamp_ms("2026-11-20T23:59:59.000Z").unwrap();
+        assert_eq!(says(pending(LIVE[0].1, true, SESSION, stamp)), "stale call");
+        let other = "11111111-0000-4000-8000-000000000000";
+        assert_eq!(says(pending(LIVE[0].1, true, other, 0)), "stale call");
+        // A script still running, whatever it does, is not a quiet transcript.
+        let quiet = [
+            repl("b", "await build()"),
+            answer("b", json!("(dispatched #1)")),
+        ];
+        let prompt = json!({"type": "user", "timestamp": "2026-11-20T17:25:02.000Z",
+            "sessionId": SESSION, "version": "2.1.329", "message": {"content": "go"}});
+        let reads = |rows: &[String]| says(waits(&rows.join("\n"), true, 0));
+        assert_eq!(reads(&[prompt.to_string()]), open);
+        assert_eq!(
+            reads(&[&quiet[..], &[prompt.to_string()]].concat()),
+            "nothing"
+        );
     }
 
     #[test]
@@ -999,6 +1182,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         // The answered transcript, line by line: the call, its receipt, the event that ends
         // the script, the question written as a call of its own, that call's result.
         let unknown = "transcript unreadable or incomplete";
+        let open = "open Some([2, 1, 329])";
         let rows: Vec<&str> = ANSWERED.lines().collect();
         let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
         assert!(rows[5].contains(r#""name":"REPL""#) && rows[8].contains("poll_events"));
@@ -1013,7 +1197,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
                 upto(12)
             ],
             [
-                "a script", "a script", "a script", "nothing", unknown, "nothing", "nothing"
+                "a script", "a script", "a script", open, unknown, open, "nothing"
             ],
             "between the question's own call and its result nothing is asked any more"
         );
@@ -1026,7 +1210,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         // Only an event for that script, under its receipt, ends it. The numbers start again
         // in a new context: an event counts for the nearest receipt above it.
         assert_eq!(reads(&[&one[..], &[ended(2)]].concat()), "a script");
-        assert_eq!(reads(&[&one[..], &[ended(1)]].concat()), "nothing");
+        assert_eq!(reads(&[&one[..], &[ended(1)]].concat()), open);
         assert_eq!(reads(&[&[ended(1)], &one[..]].concat()), "a script");
         let again = [repl("b", "1 + 1"), answer("b", receipt(1)), ended(1)];
         assert_eq!(reads(&[&one[..], &again[..]].concat()), "a script");
@@ -1053,7 +1237,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         ] {
             assert_eq!(
                 reads(&[repl("a", asks), answer("a", other.clone())]),
-                "nothing",
+                open,
                 "{other}"
             );
         }
@@ -1096,7 +1280,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
                 since,
             ))
         };
-        assert_eq!([read(at), read(at + 1)], ["a script", "nothing"]);
+        assert_eq!([read(at), read(at + 1)], ["a script", open]);
         let other = one
             .join("\n")
             .replace(SESSION, "11111111-0000-4000-8000-000000000000");
