@@ -3788,13 +3788,17 @@ mod tests {
         // No header under the rule, a row under the last option, and options that do not
         // end in Claude Code's own entries.
         assert!(!whole(&live.replacen(header, "", 1)));
+        let rows = draw("│ Drop the database first.\n│ Continue?");
+        assert!(whole(&rows) && !whole(&rows.replacen(header, "", 1)));
         assert!(!whole(&live.replacen(
             "Chat about this\n",
             "Chat about this\n ↑ 1 more line\n",
             1
         )));
-        let (bare, _) = live.split_once("  3. Type something.\n").unwrap();
-        assert!(Menu::parse(bare).is_some() && !whole(bare));
+        let entries = format!("  3. Type something.\n{wide}\n  4. Chat about this\n");
+        let bare = live.replacen(&entries, "  3. Memory\n", 1);
+        assert_ne!(bare, live);
+        assert!(Menu::parse(&bare).is_some_and(|m| m.after.is_empty()) && !whole(&bare));
         // A rule of the terminal's width with a copy of the header under it reads as a whole
         // form: Claude Code drew a question of several lines so before its gutter. Nothing on
         // the screen tells the two apart, so the caller asks which version runs.
