@@ -696,6 +696,14 @@ impl FlockState {
             {
                 current.copilot = Some(copilot.clone());
             }
+            if let Some(agy) = &plan.agy
+                && current
+                    .agy
+                    .as_ref()
+                    .is_none_or(|old| old.recorded_ms < agy.recorded_ms)
+            {
+                current.agy = Some(agy.clone());
+            }
         }
     }
 }
@@ -945,6 +953,7 @@ mod tests {
             recorded_ms: 1,
             codex: None,
             copilot: None,
+            agy: None,
         };
         let with = |seq, used| Flock {
             plan_usage: Some(plan(used)),
@@ -974,6 +983,7 @@ mod tests {
             recorded_ms,
             codex: None,
             copilot: None,
+            agy: None,
         };
         let used = |s: &FlockState| s.flock.as_ref()?.plan_usage.clone();
         let mut s = FlockState::default();
@@ -1001,6 +1011,7 @@ mod tests {
                 recorded_ms: 20,
             }),
             copilot: None,
+            agy: None,
         };
         s.listed_plan(&codex);
         let mut claude = codex.clone();
@@ -1050,6 +1061,7 @@ mod tests {
                 recorded_ms: 20,
             }),
             copilot: None,
+            agy: None,
         });
         s.apply_snapshot(with_codex);
         assert_eq!(

@@ -298,15 +298,18 @@ extension PlanUsage {
 
     /// No reading is current: each is past its own agent's limit.
     func readingsStale(now: Date) -> Bool {
-        isStale(now: now) && codex?.isStale(now: now) != false && copilot?.isStale(now: now) != false
+        isStale(now: now)
+            && codex?.isStale(now: now) != false
+            && copilot?.isStale(now: now) != false
+            && agy?.isStale(now: now) != false
     }
 
     func age(now: Date) -> String {
-        Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
+        Self.age(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0, agy?.recordedMs ?? 0), now: now)
     }
 
     func spokenAge(now: Date) -> String {
-        Self.spokenAge(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0), now: now)
+        Self.spokenAge(sinceMs: max(recordedMs, codex?.recordedMs ?? 0, copilot?.recordedMs ?? 0, agy?.recordedMs ?? 0), now: now)
     }
 
     static func age(sinceMs: UInt64, now: Date) -> String {
@@ -345,6 +348,16 @@ extension PlanUsage {
             spokenResets = resets
             sinceMs = copilot.recordedMs
             stale = copilot.isStale(now: now)
+        case "agy":
+            guard let agy,
+                  let bucket = agy.liveBuckets(now: now).max(by: { ($0.usedPercent, $0.resetsAtMs) < ($1.usedPercent, $1.resetsAtMs) })
+            else { return nil }
+            name = "Antigravity \(bucket.title)"
+            used = min(bucket.usedPercent, 100)
+            resets = bucket.resetsLine(now: now)
+            spokenResets = bucket.spokenResetsLine(now: now)
+            sinceMs = agy.recordedMs
+            stale = agy.isStale(now: now)
         default:
             return nil
         }
@@ -441,6 +454,84 @@ extension CopilotUsage {
     }
 
     func elapsed(now: Date) -> Double { monthElapsed(resetsAtMs: resetsAtMs, now: now) }
+}
+
+extension AgyUsage {
+    static let staleAfterMs: UInt64 = 5 * 60_000
+
+    func isStale(now: Date) -> Bool {
+        let nowMs = now.unixMs
+        return nowMs > recordedMs && nowMs - recordedMs > Self.staleAfterMs
+    }
+
+    func liveBuckets(now: Date) -> [AgyQuotaBucket] {
+        let nowMs = now.unixMs
+        return buckets.filter { $0.resetsAtMs > nowMs }
+    }
+}
+
+extension AgyQuotaBucket {
+    var title: String {
+        switch id {
+        case "gemini-5h": return "Gemini 5-hour limit"
+        case "gemini-weekly": return "Gemini weekly limit"
+        case "3p-5h": return "Claude & GPT 5-hour limit"
+        case "3p-weekly": return "Claude & GPT weekly limit"
+        case "gemini-argon-wtu-weekly": return "Gemini 4 Argon weekly limit"
+        default:
+            let parts = id.split(separator: "-").filter { $0 != "wtu" }.map(String.init)
+            let suffix: String
+            let head: [String]
+            if parts.last == "5h" {
+                suffix = "5-hour limit"
+                head = Array(parts.dropLast())
+            } else if parts.last == "weekly" {
+                suffix = "weekly limit"
+                head = Array(parts.dropLast())
+            } else {
+                suffix = "limit"
+                head = parts
+            }
+            let prefix = head.map { $0 == "3p" ? "Claude & GPT" : $0.capitalized }.joined(separator: " ")
+            return prefix.isEmpty ? suffix.capitalized : "\(prefix) \(suffix)"
+        }
+    }
+
+    private func secondsLeft(now: Date) -> Int {
+        let nowMs = now.unixMs
+        return resetsAtMs > nowMs ? Int((resetsAtMs - nowMs) / 1000) : 0
+    }
+
+    func elapsed(now: Date) -> Double {
+        guard let length = windowSeconds, length > 0 else { return 0 }
+        return min(1, max(0, 1 - Double(secondsLeft(now: now)) / Double(length)))
+    }
+
+    func resetsLine(now: Date, style: Date.FormatStyle = .init(date: .omitted, time: .shortened)) -> String {
+        if usedPercent == 0 && elapsed(now: now) < 0.01 {
+            return "Quota available"
+        }
+        let seconds = secondsLeft(now: now)
+        if windowSeconds == 5 * 3600 {
+            return "resets at \(now.addingTimeInterval(TimeInterval(seconds)).formatted(style))"
+        }
+        return "resets in \(PlanUsage.countdown(seconds: seconds))"
+    }
+
+    func spokenResetsLine(now: Date) -> String {
+        if usedPercent == 0 && elapsed(now: now) < 0.01 {
+            return "quota available"
+        }
+        if windowSeconds == 5 * 3600 {
+            return resetsLine(now: now)
+        }
+        return "resets in \(PlanUsage.spoken(seconds: secondsLeft(now: now)))"
+    }
+
+    func spokenLine(now: Date) -> String {
+        let used = min(usedPercent, 100)
+        return "\(title), \(used) percent used, \(spokenResetsLine(now: now))"
+    }
 }
 
 enum ArchiveSummary {

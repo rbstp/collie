@@ -1,0 +1,77 @@
+name: prices
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: prices
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    environment: docs-screenshots
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+
+      - name: install just
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.58.0/just-1.58.0-x86_64-unknown-linux-musl.tar.gz
+          echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  $RUNNER_TEMP/just.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: refresh model prices
+        id: refresh
+        run: |
+          sha="$(curl -fsSL -H 'Accept: application/vnd.github+json' https://api.github.com/repos/BerriAI/litellm/commits/main | jq -r .sha)"
+          [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected LiteLLM commit SHA: $sha"; exit 1; }
+          sed -i -E "s/^litellm_commit := \"[0-9a-f]{40}\"$/litellm_commit := \"$sha\"/" justfile
+          just prices
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # A pull request opened with GITHUB_TOKEN starts no workflow, so required checks would never run.
+      - name: open or update pull request
+        run: |
+          if [ -z "$(git status --porcelain -- crates/collied/data/prices.json)" ]; then
+            echo "Model prices are unchanged at $LITELLM_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ -n "$GH_TOKEN" ] || { echo "DOCS_SCREENSHOTS_TOKEN is not set in the docs-screenshots environment; see docs/release.md"; exit 1; }
+          git diff --stat -- justfile crates/collied/data/prices.json crates/collied/data/prices-LICENSE.txt
+          user="$(gh api user --jq '"\(.login) \(.id)"')"
+          read -r login id <<< "$user"
+          gh auth setup-git
+          git switch -c refresh-prices
+          git add -- justfile crates/collied/data/prices.json crates/collied/data/prices-LICENSE.txt
+          git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
+            commit -q -m "Refresh model prices"
+          git push -q --force origin refresh-prices
+          body="Refreshes \`crates/collied/data/prices.json\` from LiteLLM \`$LITELLM_SHA\` (run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          pr="$(gh pr list --head refresh-prices --base master --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            pr="$(gh pr create --base master --head refresh-prices \
+              --title "Refresh model prices" \
+              --body "$body")"
+          else
+            gh pr edit "$pr" --body "$body"
+          fi
+          echo "Model prices proposed in $pr" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SCREENSHOTS_TOKEN }}
+          LITELLM_SHA: ${{ steps.refresh.outputs.sha }}

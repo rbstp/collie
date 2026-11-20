@@ -200,3 +200,41 @@ private func usage(fiveHour: UInt8, resetsIn fiveHourSeconds: UInt64, sevenDay: 
     usage.copilot?.resetsAtMs = nowMs - 1
     #expect(usage.warning(agent: "copilot", now: now) == nil)
 }
+
+@Test func agyQuotaBucketsFormatTitlesResetsAndWarnings() throws {
+    let agy = AgyUsage(
+        buckets: [
+            AgyQuotaBucket(id: "gemini-5h", usedPercent: 65, resetsAtMs: nowMs + 7_200_000, windowSeconds: 18_000),
+            AgyQuotaBucket(id: "gemini-weekly", usedPercent: 19, resetsAtMs: nowMs + 302_400_000, windowSeconds: 604_800),
+            AgyQuotaBucket(id: "3p-5h", usedPercent: 0, resetsAtMs: nowMs + 17_959_000, windowSeconds: 18_000),
+            AgyQuotaBucket(id: "gemini-argon-wtu-weekly", usedPercent: 0, resetsAtMs: nowMs + 604_759_000, windowSeconds: 604_800),
+            AgyQuotaBucket(id: "expired-5h", usedPercent: 100, resetsAtMs: nowMs - 1, windowSeconds: 18_000),
+        ],
+        recordedMs: nowMs - 60_000
+    )
+    let live = agy.liveBuckets(now: now)
+    #expect(live.map(\.title) == [
+        "Gemini 5-hour limit",
+        "Gemini weekly limit",
+        "Claude & GPT 5-hour limit",
+        "Gemini 4 Argon weekly limit",
+    ])
+    #expect(live[0].elapsed(now: now) == 0.6)
+    #expect(live[0].resetsLine(now: now).hasPrefix("resets at "))
+    #expect(live[1].resetsLine(now: now) == "resets in 3d 12h")
+    #expect(live[2].resetsLine(now: now) == "Quota available")
+    #expect(live[3].resetsLine(now: now) == "Quota available")
+
+    var usage = PlanUsage(fiveHour: nil, sevenDay: nil, recordedMs: 0, agy: agy)
+    #expect(!usage.readingsStale(now: now))
+    #expect(usage.warning(agent: "agy", now: now) == nil)
+
+    usage.agy?.buckets[0].usedPercent = 88
+    let warning = try #require(usage.warning(agent: "agy", now: now))
+    #expect(warning.text.hasPrefix("Antigravity Gemini 5-hour limit at 88%, resets at "))
+    #expect(warning.used == 88)
+
+    usage.agy?.recordedMs = nowMs - 6 * 60_000
+    #expect(usage.readingsStale(now: now))
+    #expect(usage.warning(agent: "agy", now: now)?.text.hasSuffix(", recorded 6m ago") == true)
+}

@@ -1558,7 +1558,7 @@ pub struct Subagent {
     pub called_tools: bool,
 }
 
-/// From Claude Code's status line input, as `collied statusline` last recorded it.
+/// From Claude Code's and Antigravity's status line input, plus Codex and Copilot polls.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct PlanUsage {
@@ -1571,6 +1571,27 @@ pub struct PlanUsage {
     pub codex: Option<CodexUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copilot: Option<CopilotUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agy: Option<AgyUsage>,
+}
+
+/// Antigravity plan quota buckets, as `collied statusline` last recorded them from `agy`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct AgyUsage {
+    pub buckets: Vec<AgyQuotaBucket>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct AgyQuotaBucket {
+    pub id: String,
+    #[cfg_attr(feature = "schema", schemars(range(max = 100)))]
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2910,6 +2931,7 @@ mod tests {
             recorded_ms: 1_738_420_000_000,
             codex: None,
             copilot: None,
+            agy: None,
         };
         let with = Flock {
             plan_usage: Some(usage.clone()),

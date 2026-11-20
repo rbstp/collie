@@ -473,6 +473,23 @@ pub struct PlanUsage {
     pub codex: Option<CodexUsage>,
     #[uniffi(default = None)]
     pub copilot: Option<CopilotUsage>,
+    #[uniffi(default = None)]
+    pub agy: Option<AgyUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AgyUsage {
+    pub buckets: Vec<AgyQuotaBucket>,
+    pub recorded_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct AgyQuotaBucket {
+    pub id: String,
+    pub used_percent: u8,
+    pub resets_at_ms: u64,
+    #[uniffi(default = None)]
+    pub window_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -3875,6 +3892,19 @@ fn plan_usage(u: &protocol::PlanUsage) -> PlanUsage {
             resets_at_ms: c.resets_at_ms,
             recorded_ms: c.recorded_ms,
         }),
+        agy: u.agy.as_ref().map(|a| AgyUsage {
+            buckets: a
+                .buckets
+                .iter()
+                .map(|b| AgyQuotaBucket {
+                    id: b.id.clone(),
+                    used_percent: b.used_percent,
+                    resets_at_ms: b.resets_at_ms,
+                    window_seconds: b.window_seconds,
+                })
+                .collect(),
+            recorded_ms: a.recorded_ms,
+        }),
     }
 }
 
@@ -4289,6 +4319,7 @@ mod tests {
                 recorded_ms: 1_738_420_000_000,
                 codex: None,
                 copilot: None,
+                agy: None,
             }
         );
     }

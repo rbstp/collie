@@ -21,6 +21,7 @@ struct UsageSections: View {
                         TimelineView(.everyMinute) { context in
                             let codex = usage.codex.flatMap { $0.resetsAtMs > context.date.unixMs ? $0 : nil }
                             let copilot = usage.copilot.flatMap { $0.resetsAtMs > context.date.unixMs ? $0 : nil }
+                            let agy = usage.agy.flatMap { $0.liveBuckets(now: context.date).isEmpty ? nil : $0 }
                             VStack(alignment: .leading, spacing: 20) {
                                 if usage.fiveHour != nil || usage.sevenDay != nil {
                                     SubscriptionUsage(usage: usage, now: context.date)
@@ -30,6 +31,9 @@ struct UsageSections: View {
                                 }
                                 if let copilot {
                                     CopilotSubscriptionUsage(usage: copilot, now: context.date)
+                                }
+                                if let agy {
+                                    AgySubscriptionUsage(usage: agy, now: context.date)
                                 }
                             }
                             .padding(.vertical, 4)
@@ -106,6 +110,31 @@ private struct CopilotSubscriptionUsage: View {
                     ? "Copilot monthly premium usage, unlimited, \(usage.resetsLine)"
                     : "Copilot monthly premium usage, \(usage.used) of \(usage.limit) \(usage.unit) used, \(percent) percent, \(Int((usage.elapsed(now: now) * 100).rounded())) percent of the month elapsed"
             )
+        }
+    }
+}
+
+private struct AgySubscriptionUsage: View {
+    let usage: AgyUsage
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            UsageHeader(image: "Antigravity", title: "Antigravity", recordedMs: usage.isStale(now: now) ? usage.recordedMs : nil, now: now)
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(usage.liveBuckets(now: now), id: \.id) { bucket in
+                    let used = min(bucket.usedPercent, 100)
+                    UsageLimitRow(
+                        title: bucket.title,
+                        figure: "\(used)%",
+                        used: used,
+                        elapsed: bucket.elapsed(now: now),
+                        resets: bucket.resetsLine(now: now)
+                    )
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(bucket.spokenLine(now: now))
+                }
+            }
         }
     }
 }

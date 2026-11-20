@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
 
-use protocol::{CodexUsage, CopilotUsage, PlanUsage, UsageWindow};
+use protocol::{AgyQuotaBucket, AgyUsage, CodexUsage, CopilotUsage, PlanUsage, UsageWindow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -26,6 +26,9 @@ const MAX_SESSIONS: usize = 64;
 const RESTAMP_MS: u64 = 60_000;
 /// Claude Code's windows are 200K and 1M; anything far outside is not a window size.
 const WINDOW_RANGE: std::ops::RangeInclusive<u64> = 1_000..=100_000_000;
+const MAX_AGY_BUCKETS: usize = 16;
+const MAX_AGY_BUCKET_ID: usize = 64;
+const MAX_AGY_RESET_SPAN_MS: u64 = 366 * 86_400_000;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Recorded {
@@ -35,7 +38,9 @@ pub struct Recorded {
     pub codex: Option<CodexUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copilot: Option<CopilotUsage>,
-    /// Context window size and last reported limits per Claude Code session id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agy: Option<AgyUsage>,
+    /// Context window size and last reported limits per Claude Code or Antigravity session id.
     #[serde(default)]
     pub windows: BTreeMap<String, SessionWindow>,
 }
@@ -89,13 +94,14 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
             five_hour: window(&r["five_hour"]),
             seven_day: window(&r["seven_day"]),
         });
+    let agy = parse_agy_usage(&v, now_ms);
     let id = v["session_id"]
         .as_str()
         .filter(|id| crate::transcript::is_session_id(id));
     let size = v["context_window"]["context_window_size"]
         .as_u64()
         .filter(|n| WINDOW_RANGE.contains(n));
-    if limits.is_none() && (id.is_none() || size.is_none()) {
+    if limits.is_none() && agy.is_none() && (id.is_none() || size.is_none()) {
         return Ok(());
     }
     update(data_dir, |recorded| {
@@ -122,6 +128,13 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
                 _ => Report::Repeat,
             };
             recorded.plan = Some(merge_plan(recorded.plan.take(), new, report, now_ms));
+        }
+        if let Some(new) = agy
+            && !recorded.agy.as_ref().is_some_and(|old| {
+                old.buckets == new.buckets && new.recorded_ms < old.recorded_ms + RESTAMP_MS
+            })
+        {
+            recorded.agy = Some(new);
         }
         let size = size.or(session.and_then(|s| s.size));
         let limits = limits.or_else(|| session.and_then(|s| s.limits.clone()));
@@ -171,6 +184,7 @@ fn merge_plan(
             recorded_ms: now_ms,
             codex: None,
             copilot: None,
+            agy: None,
         };
     };
     let five_hour = merge_window(old.five_hour.clone(), new.five_hour.clone(), report, now_ms);
@@ -193,6 +207,7 @@ fn merge_plan(
         recorded_ms,
         codex: None,
         copilot: None,
+        agy: None,
     }
 }
 
@@ -476,6 +491,77 @@ fn merge_window(
     }
 }
 
+fn parse_agy_usage(v: &Value, now_ms: u64) -> Option<AgyUsage> {
+    let map = v.get("quota")?.as_object()?;
+    let mut buckets = Vec::new();
+    for (id, entry) in map {
+        if id.is_empty()
+            || id.len() > MAX_AGY_BUCKET_ID
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            continue;
+        }
+        if entry["disabled"].as_bool() == Some(true) {
+            continue;
+        }
+        let Some(remaining) = entry["remaining_fraction"]
+            .as_f64()
+            .filter(|f| f.is_finite() && (0.0..=1.0).contains(f))
+        else {
+            continue;
+        };
+        let resets_at_ms = entry["reset_time"]
+            .as_str()
+            .and_then(crate::transcript::timestamp_ms)
+            .or_else(|| {
+                entry["reset_in_seconds"]
+                    .as_u64()
+                    .filter(|&s| s > 0)
+                    .and_then(|s| s.checked_mul(1000))
+                    .and_then(|ms| now_ms.checked_add(ms))
+            })
+            .filter(|&ms| ms > now_ms && ms <= now_ms.saturating_add(MAX_AGY_RESET_SPAN_MS));
+        let Some(resets_at_ms) = resets_at_ms else {
+            continue;
+        };
+        let window_seconds = if id.ends_with("-5h") {
+            Some(5 * 3600)
+        } else if id.ends_with("-weekly") {
+            Some(7 * 86_400)
+        } else {
+            None
+        };
+        buckets.push(AgyQuotaBucket {
+            id: id.clone(),
+            used_percent: ((1.0 - remaining) * 100.0).round().clamp(0.0, 100.0) as u8,
+            resets_at_ms,
+            window_seconds,
+        });
+    }
+    if buckets.is_empty() {
+        return None;
+    }
+    buckets.sort_by(|a, b| agy_bucket_order(&a.id).cmp(&agy_bucket_order(&b.id)));
+    buckets.truncate(MAX_AGY_BUCKETS);
+    Some(AgyUsage {
+        buckets,
+        recorded_ms: now_ms,
+    })
+}
+
+fn agy_bucket_order(id: &str) -> (u8, &str) {
+    let rank = match id {
+        "gemini-5h" => 0,
+        "gemini-weekly" => 1,
+        "3p-5h" => 2,
+        "3p-weekly" => 3,
+        _ => 4,
+    };
+    (rank, id)
+}
+
 fn window(v: &Value) -> Option<UsageWindow> {
     let used = v["used_percentage"].as_f64().filter(|p| p.is_finite())?;
     let resets = v["resets_at"]
@@ -561,11 +647,16 @@ impl Usage {
             recorded_ms: 0,
             codex: None,
             copilot: None,
+            agy: None,
         });
         plan.codex = self.recorded.codex.clone();
         plan.copilot = self.recorded.copilot.clone();
-        (self.recorded.plan.is_some() || plan.codex.is_some() || plan.copilot.is_some())
-            .then_some(plan)
+        plan.agy = self.recorded.agy.clone();
+        (self.recorded.plan.is_some()
+            || plan.codex.is_some()
+            || plan.copilot.is_some()
+            || plan.agy.is_some())
+        .then_some(plan)
     }
 
     /// True once per change of the recorded plan, its stamp included.
@@ -633,6 +724,7 @@ mod tests {
                 recorded_ms: 1_000,
                 codex: None,
                 copilot: None,
+                agy: None,
             })
         );
         assert_eq!(r.windows[SESSION].size, Some(1_000_000));
@@ -1059,5 +1151,65 @@ mod tests {
         std::os::unix::fs::symlink(data.join(USAGE_LOCK), data.join(USAGE_FILE)).unwrap();
         usage.refresh();
         assert_eq!(usage.plan(), None);
+    }
+
+    #[test]
+    fn records_antigravity_quota_and_window_without_leaking_account_fields() {
+        let (_dir, data) = data();
+        let agy_input = include_str!("../tests/fixtures/statusline-agy.json");
+        let now_ms = crate::transcript::timestamp_ms("2026-11-20T21:17:32Z").unwrap();
+        record(&data, INPUT.as_bytes(), now_ms - 1_000).unwrap();
+        record(&data, agy_input.as_bytes(), now_ms).unwrap();
+
+        let mut usage = Usage::new(data.join(USAGE_FILE));
+        usage.refresh();
+        let plan = usage.plan().unwrap();
+        assert_eq!(plan.five_hour.as_ref().unwrap().used_percent, 24);
+        let agy = plan.agy.expect("agy quota recorded");
+        assert_eq!(agy.recorded_ms, now_ms);
+        let ids: Vec<&str> = agy.buckets.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "gemini-5h",
+                "gemini-weekly",
+                "3p-5h",
+                "3p-weekly",
+                "gemini-argon-wtu-weekly",
+            ]
+        );
+        assert_eq!(agy.buckets[0].used_percent, 65);
+        assert_eq!(agy.buckets[0].window_seconds, Some(5 * 3600));
+        assert_eq!(
+            agy.buckets[0].resets_at_ms,
+            crate::transcript::timestamp_ms("2026-11-21T00:46:42Z").unwrap()
+        );
+        assert_eq!(agy.buckets[1].used_percent, 19);
+        assert_eq!(agy.buckets[1].window_seconds, Some(7 * 86_400));
+        assert_eq!(agy.buckets[2].used_percent, 0);
+        assert_eq!(usage.window(SESSION), Some(1_048_576));
+
+        let text = std::fs::read_to_string(data.join(USAGE_FILE)).unwrap();
+        for kept_out in ["email", "example.com", "cwd", "Google AI Pro", "transcript"] {
+            assert!(!text.contains(kept_out), "{kept_out} leaked into the file");
+        }
+
+        // Unchanged reading within RESTAMP_MS leaves the timestamp alone.
+        record(&data, agy_input.as_bytes(), now_ms + 5_000).unwrap();
+        assert_eq!(read(&data).agy.unwrap().recorded_ms, now_ms);
+        record(&data, agy_input.as_bytes(), now_ms + RESTAMP_MS).unwrap();
+        assert_eq!(read(&data).agy.unwrap().recorded_ms, now_ms + RESTAMP_MS);
+
+        // Disabled, expired and invalid buckets are skipped.
+        let filtered = r#"{"product":"antigravity","quota":{"gemini-5h":{"remaining_fraction":0.5,"reset_in_seconds":3600},"off":{"remaining_fraction":0.1,"reset_in_seconds":3600,"disabled":true},"old":{"remaining_fraction":0.1,"reset_time":"2020-01-01T00:00:00Z"},"bad key":{"remaining_fraction":0.1,"reset_in_seconds":3600}}}"#;
+        record(&data, filtered.as_bytes(), now_ms + RESTAMP_MS + 1).unwrap();
+        let only = read(&data).agy.unwrap();
+        assert_eq!(only.buckets.len(), 1);
+        assert_eq!(only.buckets[0].id, "gemini-5h");
+        assert_eq!(only.buckets[0].used_percent, 50);
+        assert_eq!(
+            only.buckets[0].resets_at_ms,
+            now_ms + RESTAMP_MS + 1 + 3_600_000
+        );
     }
 }

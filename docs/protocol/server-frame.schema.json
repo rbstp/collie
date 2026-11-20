@@ -143,6 +143,59 @@
       ],
       "type": "string"
     },
+    "AgyQuotaBucket": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "resets_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "used_percent": {
+          "format": "uint8",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "used_percent",
+        "resets_at_ms"
+      ],
+      "type": "object"
+    },
+    "AgyUsage": {
+      "description": "Antigravity plan quota buckets, as `collied statusline` last recorded them from `agy`.",
+      "properties": {
+        "buckets": {
+          "items": {
+            "$ref": "#/$defs/AgyQuotaBucket"
+          },
+          "type": "array"
+        },
+        "recorded_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "buckets",
+        "recorded_ms"
+      ],
+      "type": "object"
+    },
     "Approval": {
       "properties": {
         "accepts_input": {
@@ -1394,8 +1447,18 @@
       "type": "object"
     },
     "PlanUsage": {
-      "description": "From Claude Code's status line input, as `collied statusline` last recorded it.",
+      "description": "From Claude Code's and Antigravity's status line input, plus Codex and Copilot polls.",
       "properties": {
+        "agy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgyUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "codex": {
           "anyOf": [
             {
