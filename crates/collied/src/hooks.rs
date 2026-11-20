@@ -14,13 +14,18 @@ const DEADLINE: Duration = Duration::from_secs(2);
 struct Input {
     #[serde(default)]
     hook_event_name: Option<String>,
-    session_id: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default, rename = "hookEventName")]
+    agy_event_name: Option<String>,
+    #[serde(default, rename = "conversationId")]
+    conversation_id: Option<String>,
 }
 
-/// `collied hook`: Codex's SessionStart hook. It only reports to the daemon and never
-/// answers: it prints nothing and exits 0, so the agent goes on as usual, even when collied is
-/// not running. Run as Claude Code's PermissionRequest hook, which earlier versions asked for,
-/// it reads its input and sends nothing.
+/// `collied hook`: Codex's SessionStart hook and Antigravity CLI's SessionStart/PreInvocation
+/// hook. It only reports to the daemon and never injects or blocks: for Codex it prints
+/// nothing; for Antigravity CLI (camelCase payload) it prints `{}` as required by agy's hook
+/// contract.
 pub async fn run(control_path: &Path) {
     let mut stdin = std::io::stdin();
     let mut raw = Vec::new();
@@ -37,30 +42,50 @@ pub async fn run(control_path: &Path) {
     .into_iter()
     .flatten()
     .collect();
+    let (reqs, agy) = parse(&raw, &terminals);
     let send = async {
-        for request in requests(&raw, &terminals) {
+        for request in reqs {
             let _ = control::request(control_path, &request).await;
         }
     };
     let _ = tokio::time::timeout(DEADLINE, send).await;
+    if agy {
+        println!("{{}}");
+    }
 }
 
-/// A SessionStart outside a herdr-core terminal or a Rex block reports nothing: herdr's own
-/// hook binds it. A terminal can inherit the other runtime's variable from the server that
-/// runs it, so each is reported and collied keeps only the one whose terminal Codex leads.
-fn requests(raw: &[u8], terminals: &[String]) -> Vec<Request> {
+/// A SessionStart/PreInvocation outside a herdr-core terminal or a Rex block reports nothing:
+/// herdr's own hook binds it. A terminal can inherit the other runtime's variable from the
+/// server that runs it, so each is reported and collied keeps only the one whose terminal the
+/// agent leads. Returns `(requests, is_antigravity_payload)`.
+fn parse(raw: &[u8], terminals: &[String]) -> (Vec<Request>, bool) {
     let Ok(input) = serde_json::from_slice::<Input>(raw) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    match input.hook_event_name.as_deref() {
-        Some("SessionStart") => (terminals.iter())
+    if let Some(event) = input.agy_event_name.as_deref() {
+        let reqs = match (event, input.conversation_id) {
+            ("SessionStart" | "PreInvocation", Some(session_id)) => terminals
+                .iter()
+                .map(|t| Request::Session {
+                    terminal_id: t.clone(),
+                    session_id: session_id.clone(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        return (reqs, true);
+    }
+    let reqs = match (input.hook_event_name.as_deref(), input.session_id) {
+        (Some("SessionStart"), Some(session_id)) => terminals
+            .iter()
             .map(|t| Request::Session {
                 terminal_id: t.clone(),
-                session_id: input.session_id.clone(),
+                session_id: session_id.clone(),
             })
             .collect(),
         _ => Vec::new(),
-    }
+    };
+    (reqs, false)
 }
 
 /// Claude Code's user config dir, which honors CLAUDE_CONFIG_DIR.
@@ -71,6 +96,23 @@ pub fn claude_dir() -> anyhow::Result<PathBuf> {
     })
 }
 
+/// Antigravity CLI's global customization dir (`hooks.json`), which honors
+/// `ANTIGRAVITY_CLI_CONFIG_DIR`.
+pub fn agy_config_dir() -> anyhow::Result<PathBuf> {
+    Ok(match std::env::var_os("ANTIGRAVITY_CLI_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => crate::config::home_dir()?.join(".gemini/config"),
+    })
+}
+
+/// Antigravity CLI's data dir (`brain/`), which honors `ANTIGRAVITY_APP_DATA_DIR`.
+pub fn agy_data_dir() -> anyhow::Result<PathBuf> {
+    Ok(match std::env::var_os("ANTIGRAVITY_APP_DATA_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => crate::config::home_dir()?.join(".gemini/antigravity-cli"),
+    })
+}
+
 /// Whether `collied hook` runs on `event` in Codex's `hooks.json`.
 pub fn installed(settings: &Value, event: &str) -> bool {
     settings["hooks"][event]
@@ -78,6 +120,25 @@ pub fn installed(settings: &Value, event: &str) -> bool {
         .into_iter()
         .flatten()
         .flat_map(|m| m["hooks"].as_array().into_iter().flatten())
+        .filter_map(|h| h["command"].as_str())
+        .any(|c| c.trim_end().ends_with("collied hook"))
+}
+
+/// Whether `collied hook` runs on any of `events` in an enabled hook of Antigravity's
+/// `hooks.json` (where top-level keys name hooks and session/invocation events hold flat
+/// handler arrays).
+pub fn agy_installed(settings: &Value, events: &[&str]) -> bool {
+    settings
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, spec)| spec["enabled"] != false)
+        .flat_map(|(_, spec)| {
+            events
+                .iter()
+                .filter_map(|e| spec.get(*e).and_then(Value::as_array))
+                .flatten()
+        })
         .filter_map(|h| h["command"].as_str())
         .any(|c| c.trim_end().ends_with("collied hook"))
 }
@@ -114,30 +175,79 @@ mod tests {
     fn codex_session_start_reports_only_from_a_herdr_core_terminal_or_a_rex_block() {
         let start = br#"{"session_id":"01a199ed-7993-7261-8219-300d543d764b","transcript_path":"/x.jsonl","cwd":"/w","hook_event_name":"SessionStart","model":"m","permission_mode":"default","source":"startup"}"#;
         let both = ["t3".to_owned(), "rex:block:01a1dd68".to_owned()];
-        let reported: Vec<(String, String)> = (requests(start, &both).into_iter())
-            .map(|r| match r {
-                Request::Session {
-                    terminal_id,
-                    session_id,
-                } => (terminal_id, session_id),
-                other => panic!("{other:?}"),
-            })
-            .collect();
+        let reported = |raw: &[u8], terms: &[String]| -> (Vec<(String, String)>, bool) {
+            let (reqs, agy) = parse(raw, terms);
+            (
+                reqs.into_iter()
+                    .map(|r| match r {
+                        Request::Session {
+                            terminal_id,
+                            session_id,
+                        } => (terminal_id, session_id),
+                        other => panic!("{other:?}"),
+                    })
+                    .collect(),
+                agy,
+            )
+        };
         let session = "01a199ed-7993-7261-8219-300d543d764b".to_owned();
         assert_eq!(
-            reported,
-            [
-                ("t3".to_owned(), session.clone()),
-                ("rex:block:01a1dd68".to_owned(), session)
-            ]
+            reported(start, &both),
+            (
+                vec![
+                    ("t3".to_owned(), session.clone()),
+                    ("rex:block:01a1dd68".to_owned(), session.clone())
+                ],
+                false
+            )
         );
-        assert!(requests(start, &[]).is_empty());
+        assert!(parse(start, &[]).0.is_empty());
         let permission = br#"{"hook_event_name":"PermissionRequest","session_id":"s","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        assert!(requests(permission, &both).is_empty());
+        assert_eq!(reported(permission, &both), (vec![], false));
         let unnamed = br#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        assert!(requests(unnamed, &both).is_empty());
+        assert_eq!(reported(unnamed, &both), (vec![], false));
         let stop = br#"{"hook_event_name":"Stop","session_id":"s"}"#;
-        assert!(requests(stop, &both).is_empty());
-        assert!(requests(b"not json", &both).is_empty());
+        assert_eq!(reported(stop, &both), (vec![], false));
+        assert_eq!(reported(b"not json", &both), (vec![], false));
+
+        for event in ["SessionStart", "PreInvocation"] {
+            let agy =
+                format!(r#"{{"conversationId":"{session}","hookEventName":"{event}","cwd":"/w"}}"#);
+            assert_eq!(
+                reported(agy.as_bytes(), &both),
+                (
+                    vec![
+                        ("t3".to_owned(), session.clone()),
+                        ("rex:block:01a1dd68".to_owned(), session.clone())
+                    ],
+                    true
+                )
+            );
+        }
+        let agy_stop =
+            br#"{"conversationId":"fe70ebd6-1592-44a6-9aca-8ae830e7b181","hookEventName":"Stop"}"#;
+        assert_eq!(reported(agy_stop, &both), (vec![], true));
+    }
+
+    #[test]
+    fn finds_the_agy_hook_when_enabled() {
+        let ours = json!({"type": "command", "command": "~/.cargo/bin/collied hook", "timeout": 5});
+        let herdr = json!({"type": "command", "command": "bash '/h/.gemini/config/hooks/herdr-agent-state.sh' session"});
+        let cfg = json!({
+            "herdr": { "PreInvocation": [herdr] },
+            "collie": { "PreInvocation": [ours] }
+        });
+        assert!(agy_installed(&cfg, &["SessionStart", "PreInvocation"]));
+        let disabled = json!({
+            "collie": { "enabled": false, "PreInvocation": [ours] }
+        });
+        assert!(!agy_installed(
+            &disabled,
+            &["SessionStart", "PreInvocation"]
+        ));
+        assert!(!agy_installed(
+            &json!({}),
+            &["SessionStart", "PreInvocation"]
+        ));
     }
 }

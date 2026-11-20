@@ -205,6 +205,165 @@
     "output_cost_per_token": 0.000075,
     "output_cost_per_token_above_272k_tokens": 0.0001125
   },
+  "deep-research-max-preview-04-2026": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "deep-research-preview-04-2026": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "deep-research-pro-preview-12-2025": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "gemini-2.5-computer-use-preview-10-2025": {
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001
+  },
+  "gemini-2.5-flash": {
+    "cache_read_input_token_cost": 3E-8,
+    "input_cost_per_token": 3E-7,
+    "output_cost_per_token": 0.0000025
+  },
+  "gemini-2.5-flash-lite": {
+    "cache_read_input_token_cost": 1E-8,
+    "input_cost_per_token": 1E-7,
+    "output_cost_per_token": 4E-7
+  },
+  "gemini-2.5-pro": {
+    "cache_read_input_token_cost": 1.25E-7,
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001
+  },
+  "gemini-2.5-pro-preview-tts": {
+    "cache_read_input_token_cost": 1.25E-7,
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.00002
+  },
+  "gemini-3-flash-preview": {
+    "cache_read_input_token_cost": 5E-8,
+    "input_cost_per_token": 5E-7,
+    "output_cost_per_token": 0.000003
+  },
+  "gemini-3.1-flash-lite": {
+    "cache_read_input_token_cost": 2.5E-8,
+    "input_cost_per_token": 2.5E-7,
+    "output_cost_per_token": 0.0000015
+  },
+  "gemini-3.1-flash-lite-preview": {
+    "cache_read_input_token_cost": 2.5E-8,
+    "input_cost_per_token": 2.5E-7,
+    "output_cost_per_token": 0.0000015
+  },
+  "gemini-3.1-pro-preview": {
+    "cache_read_input_token_cost": 2E-7,
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "gemini-3.1-pro-preview-customtools": {
+    "cache_read_input_token_cost": 2E-7,
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "gemini-3.5-flash": {
+    "cache_read_input_token_cost": 1.5E-7,
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.000009
+  },
+  "gemini-3.5-flash-lite": {
+    "cache_read_input_token_cost": 3E-8,
+    "input_cost_per_token": 3E-7,
+    "output_cost_per_token": 0.0000025
+  },
+  "gemini-3.6-flash": {
+    "cache_read_input_token_cost": 7.5E-8,
+    "input_cost_per_token": 7.5E-7,
+    "output_cost_per_token": 0.00000375
+  },
+  "gemini-3.7-flash": {
+    "cache_read_input_token_cost": 7.5E-8,
+    "input_cost_per_token": 7.5E-7,
+    "output_cost_per_token": 0.00000375
+  },
+  "gemini-3.8-flash": {
+    "cache_read_input_token_cost": 7.5E-8,
+    "input_cost_per_token": 7.5E-7,
+    "output_cost_per_token": 0.00000375
+  },
+  "gemini-4-argon": {
+    "cache_read_input_token_cost": 1E-7,
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.00001
+  },
+  "gemini-4-carbon": {
+    "cache_read_input_token_cost": 1E-7,
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.00001
+  },
+  "gemini-4-hydrogen": {
+    "cache_read_input_token_cost": 7.5E-8,
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.0000075
+  },
+  "gemini-4-neon": {
+    "cache_read_input_token_cost": 1.5E-7,
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015
+  },
+  "gemini-exp-1206": {
+    "cache_read_input_token_cost": 3E-8,
+    "input_cost_per_token": 3E-7,
+    "output_cost_per_token": 0.0000025
+  },
+  "gemini-flash-latest": {
+    "cache_read_input_token_cost": 7.5E-8,
+    "input_cost_per_token": 7.5E-7,
+    "output_cost_per_token": 0.00000375
+  },
+  "gemini-flash-lite-latest": {
+    "cache_read_input_token_cost": 3E-8,
+    "input_cost_per_token": 3E-7,
+    "output_cost_per_token": 0.0000025
+  },
+  "gemini-gemma-2-27b-it": {
+    "input_cost_per_token": 3.5E-7,
+    "output_cost_per_token": 0.00000105
+  },
+  "gemini-gemma-2-9b-it": {
+    "input_cost_per_token": 3.5E-7,
+    "output_cost_per_token": 0.00000105
+  },
+  "gemini-omni-1.1-flash": {
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.000009
+  },
+  "gemini-omni-1.2-flash": {
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.000009
+  },
+  "gemini-omni-flash-preview": {
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.000009
+  },
+  "gemini-pro-latest": {
+    "cache_read_input_token_cost": 2E-7,
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012
+  },
+  "gemini-robotics-er-2-preview": {
+    "cache_read_input_token_cost": 1E-7,
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "gemini-robotics-er-2-streaming-preview": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005
+  },
+  "genie-4": {
+    "input_cost_per_token": 0.0000015,
+    "output_cost_per_token": 0.000009
+  },
   "gpt-3.5-turbo": {
     "input_cost_per_token": 5E-7,
     "output_cost_per_token": 0.0000015
@@ -749,6 +908,10 @@
     "input_cost_per_token_above_272k_tokens": 0.000025,
     "output_cost_per_token": 0.000075,
     "output_cost_per_token_above_272k_tokens": 0.0001125
+  },
+  "gpt-oss-120b-maas": {
+    "input_cost_per_token": 9E-8,
+    "output_cost_per_token": 3.6E-7
   },
   "gpt-rosalind-discovery": {
     "cache_read_input_token_cost": 5E-7,

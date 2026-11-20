@@ -98,7 +98,7 @@ pub struct TasksConfig {
 impl Default for TasksConfig {
     fn default() -> Self {
         Self {
-            agents: ["claude", "codex", "copilot"]
+            agents: ["claude", "codex", "copilot", "agy"]
                 .into_iter()
                 .map(|k| AgentKind::new(k).expect("valid agent kind"))
                 .collect(),
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(c.tailnet.hostname, None);
         assert_eq!(c.tailnet.owner_user_id, None);
         let agents: Vec<&str> = c.tasks.agents.iter().map(AgentKind::as_str).collect();
-        assert_eq!(agents, ["claude", "codex", "copilot"]);
+        assert_eq!(agents, ["claude", "codex", "copilot", "agy"]);
         assert_eq!(c.tasks.roots, None);
         assert!(!c.terminals.enabled, "terminals are off by default");
         assert!(c.apns.is_none());

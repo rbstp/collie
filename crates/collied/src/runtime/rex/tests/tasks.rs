@@ -83,7 +83,7 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
         }),
         "the user's login shell runs the command: no `shell` or `login` option"
     );
-    assert_eq!(STRIPPED.len(), 16);
+    assert_eq!(STRIPPED.len(), 17);
     let block = block_of(&started).to_owned();
     assert_eq!(
         fake.state().block(&block).owner,

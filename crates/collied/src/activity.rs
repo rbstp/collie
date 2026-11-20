@@ -32,7 +32,7 @@ const GONE_AFTER: u8 = 2;
 pub const REFERENCE_DATE: u64 = 978_307_200;
 /// The kinds the widget has an icon for: any other kind would be herdr text sent to
 /// Apple in clear for nothing.
-pub const KINDS: [&str; 3] = ["claude", "codex", "copilot"];
+pub const KINDS: [&str; 4] = ["claude", "codex", "copilot", "agy"];
 /// The approval context's JSON-escaped bytes an activity carries sealed: with labels at their
 /// caps, more would take the update over APNs' 4 KB, and APNs would refuse it.
 pub(crate) const MAX_CONTEXT_BYTES: usize = 600;

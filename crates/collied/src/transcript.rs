@@ -54,6 +54,7 @@ enum Kind {
     Claude,
     Codex,
     Copilot,
+    Agy,
 }
 
 struct Cached {
@@ -70,6 +71,7 @@ pub struct Transcripts {
     claude_projects: Option<PathBuf>,
     codex_sessions: Option<PathBuf>,
     copilot_sessions: Option<PathBuf>,
+    agy_brain: Option<PathBuf>,
     cache: HashMap<String, Cached>,
     missed: HashSet<String>,
     usage: Usage,
@@ -88,6 +90,7 @@ impl Transcripts {
             claude_projects,
             codex_sessions,
             copilot_sessions: None,
+            agy_brain: None,
             cache: HashMap::new(),
             missed: HashSet::new(),
             usage: Usage::default(),
@@ -98,6 +101,11 @@ impl Transcripts {
             resolved: HashMap::new(),
             noted: HashMap::new(),
         }
+    }
+
+    pub fn with_agy_brain(mut self, dir: Option<PathBuf>) -> Self {
+        self.agy_brain = dir;
+        self
     }
 
     pub fn with_usage(mut self, path: PathBuf) -> Self {
@@ -115,6 +123,7 @@ impl Transcripts {
             claude: self.claude_projects.clone(),
             codex: self.codex_sessions.clone(),
             copilot: self.copilot_sessions.clone(),
+            agy: self.agy_brain.clone(),
         }
     }
 
@@ -136,6 +145,7 @@ impl Transcripts {
             .map(PathBuf::from)
             .or_else(|| crate::config::home_dir().ok().map(|h| h.join(".copilot")))
             .map(|d| d.join("session-state"));
+        transcripts.agy_brain = crate::hooks::agy_data_dir().ok().map(|d| d.join("brain"));
         transcripts
     }
 
@@ -199,6 +209,7 @@ impl Transcripts {
         let kind = match a.agent.as_deref()? {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
+            "agy" => Kind::Agy,
             _ => return None,
         };
         let id = self.resolve(a, relocate)?;
@@ -252,6 +263,7 @@ impl Transcripts {
                     self.providers.codex(self.codex_sessions.as_deref()?, id);
                 (None, false, subagents, truncated)
             }
+            Kind::Agy => (None, false, Vec::new(), false),
             Kind::Copilot => return None,
         };
         if let Some(c) = self.cache.get(id).filter(|c| {
@@ -270,6 +282,7 @@ impl Transcripts {
         let mut derived = match kind {
             Kind::Claude => claude(&text, window, auto_compact),
             Kind::Codex => codex(&text),
+            Kind::Agy => agy(&text),
             Kind::Copilot => return None,
         };
         // A line longer than the tail (a large tool result) can hide the older values.
@@ -353,6 +366,13 @@ impl Transcripts {
                     .as_ref()?
                     .join(id)
                     .join("events.jsonl"),
+            )
+            .filter(|p| is_file(p)),
+            Kind::Agy => Some(
+                self.agy_brain
+                    .as_ref()?
+                    .join(id)
+                    .join(".system_generated/logs/transcript.jsonl"),
             )
             .filter(|p| is_file(p)),
         }
@@ -944,6 +964,46 @@ fn codex(text: &str) -> Derived {
     d
 }
 
+/// Antigravity CLI wraps user prompts in `<USER_REQUEST>...</USER_REQUEST>` followed by
+/// metadata tags; unwrap it when present so Inbox and Chat show only what the user wrote.
+pub(super) fn agy_user_text(raw: &str) -> &str {
+    const OPEN: &str = "<USER_REQUEST>";
+    const CLOSE: &str = "</USER_REQUEST>";
+    if let Some(rest) = raw.split_once(OPEN).map(|(_, r)| r)
+        && let Some((body, _)) = rest.split_once(CLOSE)
+    {
+        return body.trim();
+    }
+    raw
+}
+
+fn agy(text: &str) -> Derived {
+    let mut d = Derived::default();
+    let lines = text
+        .lines()
+        .rev()
+        .filter(|l| l.contains("PLANNER_RESPONSE") || l.contains("USER_INPUT"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
+    for v in lines {
+        if d.last_line.is_some() && d.last_prompt.is_some() {
+            break;
+        }
+        match v["type"].as_str() {
+            Some("PLANNER_RESPONSE") if d.last_line.is_none() => {
+                d.last_line = v["content"].as_str().and_then(first_line);
+            }
+            Some("USER_INPUT") if d.last_prompt.is_none() && v["source"] == "USER_EXPLICIT" => {
+                d.last_prompt = v["content"]
+                    .as_str()
+                    .map(agy_user_text)
+                    .and_then(first_line);
+            }
+            _ => {}
+        }
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -1005,6 +1065,43 @@ mod tests {
             (d.context_left, d.last_line.as_deref()),
             (Some(94), Some("**Fixed** the flaky test."))
         );
+    }
+
+    #[test]
+    fn agy_fixture_derives_prompt_and_reply_from_brain_transcript() {
+        const AGY: &str = include_str!("../tests/fixtures/transcripts/agy.jsonl");
+        let d = agy(AGY);
+        assert_eq!(d.context_left, None);
+        assert_eq!(
+            d.last_line.as_deref(),
+            Some("Fixed the flaky approval test.")
+        );
+        assert_eq!(
+            d.last_prompt.as_deref(),
+            Some("fix the flaky approval test")
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = "fe70ebd6-1592-44a6-9aca-8ae830e7b181";
+        let brain = dir.path().join("brain");
+        write(
+            &brain
+                .join(id)
+                .join(".system_generated/logs/transcript.jsonl"),
+            AGY,
+        );
+        let mut t = Transcripts::new(None, None).with_agy_brain(Some(brain));
+        let a = agent("agy", id, "/work/app");
+        let derived = t.derive(&a, true).unwrap();
+        assert_eq!(
+            derived.last_prompt.as_deref(),
+            Some("fix the flaky approval test")
+        );
+        assert_eq!(
+            derived.last_line.as_deref(),
+            Some("Fixed the flaky approval test.")
+        );
+        assert!(derived.last_activity_ms.is_some());
     }
 
     #[test]

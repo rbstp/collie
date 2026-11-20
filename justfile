@@ -11,10 +11,10 @@ schema:
 
 litellm_commit := "fb0077053885f95ab3d4f302aec15024733705e2"
 
-# The Claude and OpenAI chat prices from LiteLLM's table at `litellm_commit`, bundled in collied.
+# The Claude, OpenAI and Gemini chat prices from LiteLLM's table at `litellm_commit`, bundled in collied.
 prices:
     curl -fsSL "https://raw.githubusercontent.com/BerriAI/litellm/{{ litellm_commit }}/model_prices_and_context_window.json" \
-        | jq -S 'with_entries(select((.key | test("^[a-z0-9][a-z0-9.-]*$")) and (.value | type == "object") and (.value.litellm_provider == "anthropic" or .value.litellm_provider == "openai") and (.value.mode == "chat" or .value.mode == "responses") and (.value.input_cost_per_token | type == "number") and (.value.output_cost_per_token | type == "number"))) | map_values({input_cost_per_token, output_cost_per_token, cache_read_input_token_cost, cache_creation_input_token_cost, cache_creation_input_token_cost_above_1hr, input_cost_per_token_above_272k_tokens, output_cost_per_token_above_272k_tokens, cache_read_input_token_cost_above_272k_tokens, cache_creation_input_token_cost_above_272k_tokens, fast: .provider_specific_entry.fast} | with_entries(select(.value != null)))' \
+        | jq -S 'to_entries | map(if (.value | type == "object") and (.value.input_cost_per_token | type == "number") and (.value.output_cost_per_token | type == "number") then if (.value.litellm_provider == "anthropic" or .value.litellm_provider == "openai") and (.value.mode == "chat" or .value.mode == "responses") and (.key | test("^[a-z0-9][a-z0-9.-]*$")) then . elif .value.litellm_provider == "gemini" and .value.mode == "chat" and .value.input_cost_per_token > 0 and (.key | test("^(gemini/)?[a-z0-9][a-z0-9.-]*$")) then .key |= sub("^gemini/"; "") elif .key == "vertex_ai/openai/gpt-oss-120b-maas" then .key = "gpt-oss-120b-maas" else empty end else empty end) | from_entries | map_values({input_cost_per_token, output_cost_per_token, cache_read_input_token_cost, cache_creation_input_token_cost, cache_creation_input_token_cost_above_1hr, input_cost_per_token_above_272k_tokens, output_cost_per_token_above_272k_tokens, cache_read_input_token_cost_above_272k_tokens, cache_creation_input_token_cost_above_272k_tokens, fast: .provider_specific_entry.fast} | with_entries(select(.value != null)))' \
         > crates/collied/data/prices.json
     curl -fsSL "https://raw.githubusercontent.com/BerriAI/litellm/{{ litellm_commit }}/LICENSE" > crates/collied/data/prices-LICENSE.txt
 

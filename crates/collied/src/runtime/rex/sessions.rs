@@ -13,10 +13,10 @@ impl Rex {
         self
     }
 
-    /// A Codex session reported by collied's SessionStart hook from `reporter` (the hook's
-    /// pid, from the control socket) for the block named by its `REX_BLOCK`. Kept only when
-    /// the followed server lists that block as a Codex agent and the hook runs under the
-    /// Codex process that leads it: any process of the user can name any block.
+    /// A session reported by collied's hook from `reporter` (the hook's pid, from the control
+    /// socket) for the block named by its `REX_BLOCK`. Kept only when the followed server
+    /// lists that block as a Codex or Antigravity agent and the hook runs under the process
+    /// that leads it: any process of the user can name any block.
     pub fn bind(&self, id: &str, session: &str, reporter: u32) -> bool {
         let Some(block) = id.strip_prefix(PREFIX) else {
             return false;
@@ -29,14 +29,18 @@ impl Rex {
         let Some(live) = live.as_mut() else {
             return false;
         };
-        let Some((rex_session, pid)) = live.model.codex(block) else {
+        let Some((rex_session, pid, kind)) = live.model.hook_agent(block) else {
             return false;
         };
-        if !agents::reported_by(pid, reporter, agents::process) {
+        if !agents::reported_by(pid, reporter, kind, agents::process) {
             return false;
         }
         if live.synced {
-            codex.retain(|b, (bound, _)| live.model.codex(b).is_some_and(|(_, p)| p == *bound));
+            codex.retain(|b, (bound, _)| {
+                live.model
+                    .hook_agent(b)
+                    .is_some_and(|(_, p, _)| p == *bound)
+            });
         }
         codex.insert(block.to_owned(), (pid, session.to_owned()));
         live.model
@@ -255,6 +259,31 @@ mod tests {
 
         assert!(rex.bind(&id(CODEX), FIRST, codex.pid()));
         assert_eq!(session_of(&rex, CODEX).as_deref(), Some(FIRST));
+
+        let agy = running(dir.path(), "agy");
+        let agy_block = "block:019a7d2e-0000-7000-8000-0000000000c5";
+        {
+            let mut s = fake.state();
+            s.add(
+                S,
+                agy_block,
+                fake::process(agy.pid(), "agy", "agy"),
+                Vec::new(),
+            );
+        }
+        fake.emit(|_| {
+            vec![fake::session_event(
+                S,
+                json!({ "type": "block_created", "payload": {} }),
+            )]
+        });
+        eventually("the agy block to be listed", || {
+            rex.get(&id(agy_block)).is_ok()
+        })
+        .await;
+        assert!(!rex.bind(&id(agy_block), FIRST, me));
+        assert!(rex.bind(&id(agy_block), FIRST, agy.pid()));
+        assert_eq!(session_of(&rex, agy_block).as_deref(), Some(FIRST));
 
         // A reconnect reads the block again and keeps the report.
         fake.drop_connection();

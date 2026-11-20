@@ -152,7 +152,17 @@ struct AgentActivityAttributes: ActivityAttributes {
         }
 
         /// The kinds collied sends, each with an icon in CollieWidgets.
-        static let kinds = ["claude", "codex", "copilot"]
+        static let kinds = ["claude", "codex", "copilot", "agy"]
+
+        static func display(for kind: String) -> (title: String, image: String)? {
+            switch kind {
+            case "claude": ("Claude", "Claude")
+            case "codex": ("Codex", "Codex")
+            case "copilot": ("Copilot", "Copilot")
+            case "agy": ("Antigravity", "Antigravity")
+            default: nil
+            }
+        }
 
         /// Matches collied's `relevance-score`: of several followed agents, iOS puts the one that
         /// most needs the user in the Dynamic Island.

@@ -174,6 +174,12 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
     return (["\u{25CF} Done.", above, top] + rows + [bottom, " Autopilot \u{B7} Assisted Permissions"]).joined(separator: "\r\n")
 }
 
+/// Antigravity CLI's screen around its input box.
+private func agy(_ box: [String], below: [String] = ["? for shortcuts  auto \u{B7} Gemini 4 Neon \u{B7} high"]) -> String {
+    (["  Done.", "", rule, "\u{1B}[38;2;99;168;248m>\u{1B}[0m " + box[0]] + box.dropFirst().map { "  " + $0 } + [rule] + below)
+        .joined(separator: "\r\n")
+}
+
 @Test func codexsBoxWalksDownItsRows() throws {
     let draft = "Explain what calc.py does in one sentence"
     let one = try #require(try inputBox(try fixture("codex-0.160.1/draft"), agent: "codex"))
@@ -230,7 +236,7 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
 }
 
 @Test func eachAgentFindsOnlyItsOwnBox() throws {
-    let screens = ["claude": claude(["\u{276F}\u{A0}hello"]), "codex": codex(["hello"]), "copilot": copilot(["hello"])]
+    let screens = ["claude": claude(["\u{276F}\u{A0}hello"]), "codex": codex(["hello"]), "copilot": copilot(["hello"]), "agy": agy(["hello"])]
     for (agent, screen) in screens {
         for other in screens.keys {
             #expect((try inputBox(screen, agent: other)?.text == "hello") == (agent == other), "\(agent) \(other)")
@@ -238,6 +244,18 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
     }
     #expect(try inputBox(try fixture("codex-0.160.1/approval"), agent: "codex") == nil)
     #expect(try inputBox(codex(["hello"]), agent: "terminal") == nil)
+}
+
+@Test func agysBoxWalksThemedTextAndSkipsHintsAndMenus() throws {
+    let themed = try #require(try inputBox(agy(["\u{1B}[38;2;230;237;243mfix the typo\u{1B}[0m", "second line"]), agent: "agy"))
+    #expect(themed.text == "fix the typo second line")
+    #expect(keys(themed, 3, 2.0 + 4.4) == [2, 0, 0, 4])
+    #expect(keys(themed, 4, 2.0 + 3.4) == [2, 0, 1, 3])
+    let placeholder = try #require(try inputBox(agy(["\u{1B}[2mAsk anything\u{1B}[0m"]), agent: "agy"))
+    #expect(keys(placeholder, 3, 4) == nil)
+    let command = try #require(try inputBox(agy(["/usage"]), agent: "agy"))
+    #expect(keys(command, 3, 4) == nil)
+    #expect(try inputBox(agy(["hello"], below: ["> 1. Allow"]), agent: "agy") == nil)
 }
 
 @Test func codexsMenusPlaceholderScrollArrowsAndPastesAreNotTapped() throws {
@@ -273,11 +291,12 @@ private func screen(_ agent: String, _ rows: [String]) -> String {
     switch agent {
     case "claude": claude(["\u{276F}\u{A0}" + rows[0]] + rows.dropFirst().map { "  " + $0 })
     case "codex": codex(rows)
+    case "agy": agy(rows)
     default: copilot(rows)
     }
 }
 
-private let agents = ["claude", "codex", "copilot"]
+private let agents = ["claude", "codex", "copilot", "agy"]
 
 /// The walk to `across` on Mac row `down` of a box of `lines` rows whose rows start with a
 /// narrow character: Codex steps right before walking down.

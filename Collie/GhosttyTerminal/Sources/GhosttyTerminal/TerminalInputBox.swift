@@ -32,7 +32,7 @@ struct TerminalInputBox {
     /// Claude Code's suggestions, drawn right above its box, which take Down.
     private var menu = false
 
-    /// `agent` is the pane's agent kind: "claude", "codex" or "copilot".
+    /// `agent` is the pane's agent kind: "claude", "codex", "copilot" or "agy".
     init?(_ frame: TerminalFrame, agent: String) {
         self.agent = agent
         var cells = [[(cluster: Cluster, style: TerminalStyle)]](repeating: [], count: frame.rows)
@@ -86,6 +86,13 @@ struct TerminalInputBox {
             {
                 found = (top, bottom)
             }
+        case "agy":
+            let rules = (0..<frame.rows).filter(isRule)
+            found = zip(rules, rules.dropFirst()).reversed().first { top, bottom in
+                bottom > top + 1 && cells[top + 1].first?.cluster.column == 0 && plain(top + 1).hasPrefix(">")
+                    && indented(top + 2..<bottom)
+            }
+            if let bottom = found?.bottom, (bottom + 1..<frame.rows).contains(where: { plain($0).hasPrefix(">") }) { return nil }
         default:
             break
         }
@@ -110,7 +117,7 @@ struct TerminalInputBox {
             // Codex's placeholder and scroll arrows are dim; its pastes and images, and Copilot
             // CLI's command suggestions, take a color of their own.
             hint = hint || line.contains {
-                ($0.style.faint || agent != "claude" && $0.style.foreground != frame.foreground)
+                ($0.style.faint || !["claude", "agy"].contains(agent) && $0.style.foreground != frame.foreground)
                     && !$0.cluster.text.allSatisfy(\.isWhitespace)
             }
             if continues {

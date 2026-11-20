@@ -19,6 +19,7 @@
 - [Claude Code](agents/claude-code.md)
 - [Codex](agents/codex.md)
 - [Copilot CLI](agents/copilot.md)
+- [Antigravity CLI](agents/antigravity.md)
 
 # Using the app
 

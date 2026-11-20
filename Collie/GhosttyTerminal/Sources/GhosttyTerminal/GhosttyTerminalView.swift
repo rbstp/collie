@@ -74,7 +74,7 @@ public final class GhosttyTerminalUIView: UIScrollView {
             if (oldValue == nil) != (onTapInput == nil) { prepare() }
         }
     }
-    /// The pane's agent kind, whose input box `onTapInput` finds: "claude", "codex" or "copilot".
+    /// The pane's agent kind, whose input box `onTapInput` finds: "claude", "codex", "copilot" or "agy".
     public var inputAgent: String? {
         didSet {
             if oldValue != inputAgent { prepare() }

@@ -147,6 +147,14 @@ pub async fn run(config_path: Option<PathBuf>) -> anyhow::Result<bool> {
             r.line(s, "codex hook", d);
         }
     }
+    if let (Ok(agy_data), Ok(agy_config)) = (hooks::agy_data_dir(), hooks::agy_config_dir()) {
+        let (s, d) = check_agy_hook(&agy_data, &agy_config);
+        r.line(s, "agy hook", d);
+        if agy_data.is_dir() {
+            let (s, d) = check_agy_session_hook(&agy_config, core_answers, rex_answers);
+            r.line(s, "agy hook", d);
+        }
+    }
     let (s, d) = check_usage(&data_dir, crate::now_ms());
     r.line(s, "plan usage", d);
     let (s, d) = check_gh().await;
@@ -219,6 +227,68 @@ fn check_codex_session_hook(
     }
 }
 
+/// herdr 0.9.5 writes version 4 of the Antigravity CLI hook at `<config>/hooks/herdr-agent-state.sh`.
+fn check_agy_hook(agy_data: &Path, agy_config: &Path) -> (Status, String) {
+    if !agy_data.is_dir() {
+        return (
+            Status::Ok,
+            format!(
+                "skipped: no {} (Antigravity CLI not set up)",
+                agy_data.display()
+            ),
+        );
+    }
+    let path = agy_config.join("hooks/herdr-agent-state.sh");
+    let fix = "run `herdr integration install antigravity-cli`";
+    let Ok(script) = std::fs::read_to_string(&path) else {
+        return (
+            Status::Warn,
+            format!("{} not installed; {fix}", path.display()),
+        );
+    };
+    let version = script
+        .lines()
+        .find_map(|l| l.strip_prefix("# HERDR_INTEGRATION_VERSION="))
+        .and_then(|v| v.trim().parse::<u32>().ok());
+    match version {
+        Some(v) if v >= 4 => (Status::Ok, format!("v{v} in {}", path.display())),
+        _ => (
+            Status::Warn,
+            format!("{} is older than v4; {fix}", path.display()),
+        ),
+    }
+}
+
+fn check_agy_session_hook(
+    agy_config: &Path,
+    core_answers: bool,
+    rex_answers: bool,
+) -> (Status, String) {
+    let path = agy_config.join("hooks.json");
+    let hooks = std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if hooks::agy_installed(&hooks, &["SessionStart", "PreInvocation"]) {
+        return (
+            Status::Ok,
+            format!("Antigravity hook `collied hook` in {}", path.display()),
+        );
+    }
+    let missing = format!(
+        "Antigravity hook `collied hook` not in {}; Herdr Core and Rex Antigravity agents get no Chat",
+        path.display()
+    );
+    if core_answers || rex_answers {
+        (Status::Warn, missing)
+    } else {
+        (
+            Status::Ok,
+            format!("{missing} (neither herdr-core nor a followed Rex is running)"),
+        )
+    }
+}
+
 async fn check_gh() -> (Status, String) {
     let Some(gh) = crate::drive::gh() else {
         return (
@@ -275,6 +345,18 @@ fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
         .values()
         .filter(|w| w.size.is_some())
         .count();
+    if recorded.plan.is_none()
+        && let Some(agy) = recorded.agy
+    {
+        let minutes = now_ms.saturating_sub(agy.recorded_ms) / 60_000;
+        return (
+            Status::Ok,
+            format!(
+                "Antigravity quota recorded {minutes} min ago ({} bucket(s)), windows for {sessions} session(s)",
+                agy.buckets.len()
+            ),
+        );
+    }
     if recorded.plan.is_none()
         && let Some(codex) = recorded.codex
     {
@@ -1122,6 +1204,41 @@ mod tests {
         .unwrap();
         let (s, d) = check_codex_session_hook(dir.path(), true, true);
         assert!(s == Status::Ok && d.starts_with("SessionStart hook"), "{d}");
+    }
+
+    #[test]
+    fn warns_on_missing_or_outdated_agy_hooks_once_agy_is_set_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("antigravity-cli");
+        let cfg = dir.path().join("config");
+        let (s, d) = check_agy_hook(&data, &cfg);
+        assert!(s == Status::Ok && d.starts_with("skipped"), "{d}");
+        std::fs::create_dir_all(&data).unwrap();
+        let (s, d) = check_agy_hook(&data, &cfg);
+        assert!(s == Status::Warn && d.contains("not installed"), "{d}");
+        let hook = cfg.join("hooks/herdr-agent-state.sh");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        for (version, want) in [("3", Status::Warn), ("4", Status::Ok)] {
+            let script = format!(
+                "#!/bin/sh\n# HERDR_INTEGRATION_ID=antigravity_cli\n# HERDR_INTEGRATION_VERSION={version}\n"
+            );
+            std::fs::write(&hook, script).unwrap();
+            let (s, d) = check_agy_hook(&data, &cfg);
+            assert!(s == want, "{version}: {d}");
+        }
+        let (s, d) = check_agy_session_hook(&cfg, false, false);
+        assert!(s == Status::Ok && d.contains("not in"), "{d}");
+        for (core, rex) in [(true, false), (false, true)] {
+            let (s, d) = check_agy_session_hook(&cfg, core, rex);
+            assert!(s == Status::Warn && d.contains("Antigravity"), "{d}");
+        }
+        std::fs::write(
+            cfg.join("hooks.json"),
+            r#"{"collie":{"PreInvocation":[{"type":"command","command":"~/.cargo/bin/collied hook","timeout":5}]}}"#,
+        )
+        .unwrap();
+        let (s, d) = check_agy_session_hook(&cfg, true, true);
+        assert!(s == Status::Ok && d.starts_with("Antigravity hook"), "{d}");
     }
 
     #[tokio::test]

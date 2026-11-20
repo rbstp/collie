@@ -8,7 +8,7 @@ struct StripShortcut: Codable, Identifiable, Equatable {
     /// collied's key name, such as `ctrl+alt+x`; nil for a text shortcut.
     var key: String?
     var text = ""
-    /// nil for every agent and shell, else one kind: "claude", "codex", "copilot" or "terminal".
+    /// nil for every agent and shell, else one kind: "claude", "codex", "copilot", "agy" or "terminal".
     var kind: String?
 
     var agentKey: AgentKey? { key.flatMap(AgentKey.init(name:)) }
@@ -25,7 +25,8 @@ struct StripShortcut: Codable, Identifiable, Equatable {
     }
 
     static let kinds: [(String, String?)] = [
-        ("All", nil), ("Claude Code", "claude"), ("Codex", "codex"), ("Copilot CLI", "copilot"), ("Terminal", "terminal"),
+        ("All", nil), ("Claude Code", "claude"), ("Codex", "codex"), ("Copilot CLI", "copilot"),
+        ("Antigravity", "agy"), ("Terminal", "terminal"),
     ]
 }
 

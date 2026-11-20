@@ -447,7 +447,7 @@ impl Driver {
         let mut reflow = None;
         let read = if agent {
             let a = self.find_agent(&p.terminal_id).await?;
-            if let Some(kind @ ("claude" | "codex" | "copilot")) = a.agent.as_deref() {
+            if let Some(kind @ ("claude" | "codex" | "copilot" | "agy")) = a.agent.as_deref() {
                 reflow = Some((a.pane_id.clone(), kind.to_owned()));
             }
             self.agent_read(&a.pane_id, source, &mut lines).await
@@ -476,7 +476,9 @@ impl Driver {
         let layout_cols = cols.as_ref().ok().copied().flatten().map(usize::from);
         let screen_cols = match kind {
             "copilot" => reflow::copilot_scrollbar_columns(&read.ansi),
-            "claude" => layout_cols.and_then(|cols| reflow::claude_rule_columns(&read.ansi, cols)),
+            "claude" | "agy" => {
+                layout_cols.and_then(|cols| reflow::claude_rule_columns(&read.ansi, cols))
+            }
             "codex" => layout_cols.and_then(|cols| reflow::codex_box_columns(&read.ansi, cols)),
             _ => None,
         };
@@ -628,7 +630,7 @@ impl Driver {
                     changed = now;
                     next = now + watch_period(low_data, Duration::ZERO);
                     let mut read = terminal_read(terminal_id.clone(), ReadSource::Recent, read);
-                    if let Some(kind @ ("claude" | "codex" | "copilot")) = kind.as_deref()
+                    if let Some(kind @ ("claude" | "codex" | "copilot" | "agy")) = kind.as_deref()
                         && !self.reflow(&pane_id, kind, &mut read).await
                     {
                         last = None;
@@ -1041,7 +1043,7 @@ impl Driver {
                 ErrorCode::NotFound,
                 match elsewhere {
                     Some(name) => format!(
-                        "no allowed agent kind that {name} starts (Claude Code, Codex) is installed"
+                        "no allowed agent kind that {name} starts (Claude Code, Codex, Antigravity) is installed"
                     ),
                     None => "no allowed agent kind is known to herdr".to_owned(),
                 },
@@ -2593,7 +2595,7 @@ async fn git_worktree(dir: &Cwd, args: &[&str], limit: Duration) -> Result<(), S
 
 fn host_kinds(host: &TaskHost) -> String {
     format!(
-        "{} starts Claude Code and Codex, and only once found on the machine",
+        "{} starts Claude Code, Codex and Antigravity, and only once found on the machine",
         host.name()
     )
 }

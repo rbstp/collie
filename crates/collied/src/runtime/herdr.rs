@@ -569,6 +569,7 @@ pub fn agent_args<'a>(kind: &str, resume: Option<&'a str>, ultracode: bool) -> V
         ("claude", Some(id)) => vec!["--resume", id],
         ("codex", Some(id)) => vec!["resume", id, "--no-daemon"],
         ("codex", None) => vec!["--no-daemon"],
+        ("agy", Some(id)) => vec!["--conversation", id],
         _ => vec![],
     };
     if kind == "claude" && ultracode {
