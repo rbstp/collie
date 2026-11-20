@@ -1,5 +1,7 @@
 import CryptoKit
+import CryptoTokenKit
 import Foundation
+import LocalAuthentication
 import Security
 import Testing
 
@@ -92,6 +94,30 @@ struct KeychainGroupQueryTests {
         #expect(query[kSecAttrAccount as String] as? String == "installation")
     }
 
+    /// #871: the reset deletes the TLS key and the terminal key, each copy by its exact group,
+    /// service and account, and no other item.
+    @Test func resetNamesTheTwoKeysAndBothGroups() throws {
+        let shared = try #require(NotificationKey.accessGroup)
+        let keys = EnclaveBlob.keys
+        #expect(keys.map(\.service) == ["dev.rbstp.collie.identity", "dev.rbstp.collie.identity"])
+        #expect(keys.map(\.account) == ["tls", "terminal"])
+        for key in keys {
+            let queries = key.deleteQueries
+            #expect(queries.count == 2)
+            for (query, group) in zip(queries, [KeychainItem.accessGroup, shared]) {
+                expectSame(
+                    query,
+                    [
+                        kSecClass as String: kSecClassGenericPassword,
+                        kSecAttrService as String: key.storedService,
+                        kSecAttrAccount as String: key.account,
+                        kSecAttrAccessGroup as String: group,
+                        kSecUseDataProtectionKeychain as String: true,
+                    ])
+            }
+        }
+    }
+
     /// A move or a delete without the shared group would match the app's own copy.
     @Test func moveNamesTheSharedGroupAndOneItem() throws {
         let shared = try #require(NotificationKey.accessGroup)
@@ -111,6 +137,93 @@ struct KeychainGroupQueryTests {
                 ])
         }
         expectSame(KeychainItem.moveAttributes, [kSecAttrAccessGroup as String: KeychainItem.accessGroup])
+    }
+}
+
+/// #871: the decision the device branches of Identity and TerminalKey share. A new key makes
+/// every machine refuse the phone, so a failure that may pass must never make one.
+struct EnclaveBlobTests {
+    let stored = Data([0x01]), fresh = Data([0x02])
+    let corrupt = NSError(
+        domain: TKErrorDomain, code: TKError.Code.corruptedData.rawValue,
+        userInfo: [NSLocalizedDescriptionKey: "corrupted objectID detected"])
+
+    private func load(_ stored: Data?, unlocked: Bool = true, rebuild: (Data) throws -> String) -> (key: Result<String, any Error>, written: [Data]) {
+        var written: [Data] = []
+        let key = Result {
+            try EnclaveBlob.key(stored: stored, unlocked: unlocked, rebuild: rebuild, make: { ("new", fresh) }, write: { written.append($0) })
+        }
+        return (key, written)
+    }
+
+    /// Locked too: a lock-screen decision loads the TLS key.
+    @Test(arguments: [true, false])
+    func goodBlobIsUsed(unlocked: Bool) throws {
+        let (key, written) = load(stored, unlocked: unlocked) { $0 == stored ? "old" : "other" }
+        #expect(try key.get() == "old")
+        #expect(written.isEmpty)
+    }
+
+    @Test func deadBlobIsReplaced() throws {
+        let (key, written) = load(stored) { _ in throw corrupt }
+        #expect(try key.get() == "new")
+        #expect(written == [fresh])
+    }
+
+    @Test func keyIsMadeWhenNoBlobIsStored() throws {
+        let (key, written) = load(nil) { _ in "old" }
+        #expect(try key.get() == "new")
+        #expect(written == [fresh])
+    }
+
+    @Test func passingFailureThrowsAndWritesNothing() {
+        let locked = NSError(domain: TKErrorDomain, code: TKError.Code.corruptedData.rawValue, userInfo: ["AKSError": -536_363_001])
+        let failures: [(error: any Error, unlocked: Bool)] = [
+            (LAError(.notInteractive), true),
+            (LAError(.authenticationFailed), true),
+            (LAError(.systemCancel), true),
+            (NSError(domain: NSOSStatusErrorDomain, code: Int(errSecInteractionNotAllowed)), true),
+            (TKError(.communicationError), true),
+            (TKError(.authenticationNeeded), true),
+            (TKError(.objectNotFound), true),
+            (CryptoKitError.authenticationFailure, true),
+            (locked, true),
+            (corrupt, false),
+        ]
+        for (error, unlocked) in failures {
+            let (key, written) = load(stored, unlocked: unlocked) { _ in throw error }
+            #expect(throws: EnclaveBlob.Kept.self, "\(error)") { try key.get() }
+            #expect(written.isEmpty, "\(error)")
+        }
+    }
+
+    /// The startup screen offers the reset for a kept blob alone: a Keychain that cannot be read
+    /// or written now, or a key that cannot be made, says nothing about the stored key.
+    @Test func onlyAKeptBlobOffersTheReset() {
+        let locked = KeychainError(status: errSecInteractionNotAllowed)
+        let kept = #expect(throws: (any Error).self) {
+            try EnclaveBlob.key(stored: stored, unlocked: true, rebuild: { _ in throw LAError(.notInteractive) }, make: { ("new", fresh) }, write: { _ in })
+        }
+        let unmade = #expect(throws: (any Error).self) {
+            try EnclaveBlob.key(stored: nil, unlocked: true, rebuild: { _ in "old" }, make: { throw LAError(.passcodeNotSet) }, write: { _ in })
+        }
+        let unwritten = #expect(throws: (any Error).self) {
+            try EnclaveBlob.key(stored: nil, unlocked: true, rebuild: { _ in "old" }, make: { ("new", fresh) }, write: { _ in throw locked })
+        }
+        #expect(kept.map(AppModel.offersKeyReset) == true)
+        #expect(unmade.map(AppModel.offersKeyReset) == false)
+        #expect(unwritten.map(AppModel.offersKeyReset) == false)
+        #expect(!AppModel.offersKeyReset(locked))
+        #expect(!AppModel.offersKeyReset(CocoaError(.featureUnsupported)))
+    }
+
+    /// The owner reads the enclave's answer on the screen that reports a kept key.
+    @Test func keptKeyNamesItsCause() {
+        let (key, _) = load(stored, unlocked: false) { _ in throw corrupt }
+        let error = #expect(throws: EnclaveBlob.Kept.self) { try key.get() }
+        let text = error.map { describe($0) } ?? ""
+        #expect(text.contains("CryptoTokenKit"))
+        #expect(text.contains("-3"))
     }
 }
 
@@ -197,6 +310,17 @@ struct KeychainGroupTests {
         #expect(copies(item.service, item.account) == [own: new])
     }
 
+    /// #871: a delete and an add would lose the only copy when the add fails. The stored item's
+    /// accessibility tells the two apart: an update keeps it, an add sets the new item's.
+    @Test func writeUpdatesTheStoredItemInPlace() throws {
+        let item = item(kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
+        defer { remove(item.service, item.account) }
+        try add(item.service, item.account, in: own, old, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        try item.write(new)
+        #expect(copies(item.service, item.account) == [own: new])
+        #expect(accessible(item.service, item.account) == kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+    }
+
     @Test func writeRemovesTheSharedCopy() throws {
         let item = item()
         defer { remove(item.service, item.account) }
@@ -270,6 +394,52 @@ struct KeychainGroupTests {
         try add(service, account, in: shared, old)
         try store.save(state)
         #expect(Array(copies(service, account).keys) == [own])
+    }
+
+    /// #871: the reset behind the startup screen's confirmation. A shared copy left behind would
+    /// be moved back by the next read, and the dead blob with it.
+    @Test func resetDeletesBothCopiesOfItsKeysAndNothingElse() throws {
+        let keys = [item(), item()]
+        let sibling = KeychainItem(service: keys[0].service, account: "sibling", accessible: keys[0].accessible)
+        let nodeId = "nTEST" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let (relayService, relayAccount) = (RelayCredentialStore.service, RelayCredentialStore.account)
+        defer {
+            (keys + [sibling]).forEach { remove($0.service, $0.account) }
+            NotificationKey.delete(nodeId: nodeId)
+            remove(relayService, relayAccount)
+        }
+        remove(relayService, relayAccount)
+        for item in keys + [sibling] {
+            try add(item.service, item.account, in: own, new)
+            try add(item.service, item.account, in: shared, old)
+        }
+        try add(relayService, relayAccount, in: own, old)
+        try NotificationKey.store(SymmetricKey(size: .bits256), nodeId: nodeId)
+        let key = copies(NotificationKey.service, nodeId)
+
+        EnclaveBlob.reset(keys) { throw EnclaveBlob.Kept(cause: CocoaError(.featureUnsupported)) }
+
+        for item in keys {
+            #expect(copies(item.service, item.account).isEmpty)
+            #expect(try item.read() == nil)
+        }
+        #expect(copies(sibling.service, sibling.account) == [own: new, shared: old])
+        #expect(copies(relayService, relayAccount) == [own: old])
+        #expect(copies(NotificationKey.service, nodeId) == key)
+    }
+
+    /// The screen's error is as old as the process: a key that can be rebuilt by now, or a
+    /// Keychain that cannot be read now, must cost no pairing.
+    @Test func resetDeletesNothingUnlessTheRebuildStillFails() throws {
+        let item = item()
+        defer { remove(item.service, item.account) }
+        try add(item.service, item.account, in: own, new)
+        try add(item.service, item.account, in: shared, old)
+
+        EnclaveBlob.reset([item]) {}
+        EnclaveBlob.reset([item]) { throw KeychainError(status: errSecInteractionNotAllowed) }
+
+        #expect(copies(item.service, item.account) == [own: new, shared: old])
     }
 
     @Test func sweepMovesEachItemAndLeavesNotificationKeys() throws {

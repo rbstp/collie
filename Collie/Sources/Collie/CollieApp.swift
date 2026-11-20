@@ -4,6 +4,7 @@ import SwiftUI
 struct CollieApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @Environment(\.scenePhase) private var scenePhase
+    @State private var restarts = 0
 
     var body: some Scene {
         WindowGroup {
@@ -12,14 +13,16 @@ struct CollieApp: App {
                 if let demo = AgentDemo(arguments: CommandLine.arguments) {
                     demo
                 } else {
-                    RootView(app: delegate.app)
+                    RootView(app: delegate.app, resetKey: resetKey)
                         .task { await delegate.app.launch() }
                         .onOpenURL { delegate.app.open($0) }
+                        .id(restarts)
                 }
                 #else
-                RootView(app: delegate.app)
+                RootView(app: delegate.app, resetKey: resetKey)
                     .task { await delegate.app.launch() }
                     .onOpenURL { delegate.app.open($0) }
+                    .id(restarts)
                 #endif
             }
             .dynamicTypeSize(...DynamicTypeSize.accessibility3)
@@ -32,12 +35,22 @@ struct CollieApp: App {
             delegate.app.scenePhaseChanged(to: phase)
         }
     }
+
+    /// The delegate's model is a new one afterwards: the root is built again around it, and it
+    /// is told the scene's phase as a launch tells it.
+    private func resetKey() {
+        delegate.resetKey()
+        delegate.app.scenePhaseChanged(to: scenePhase)
+        restarts += 1
+    }
 }
 
 struct RootView: View {
     @Bindable var app: AppModel
+    let resetKey: () -> Void
     @State private var agentsReselected = 0
     @State private var sample = false
+    @State private var resetting = false
 
     var body: some View {
         content
@@ -69,6 +82,17 @@ struct RootView: View {
             } actions: {
                 Button("Explore sample workspace", systemImage: "play.rectangle") { sample = true }
                     .appGlassButton()
+                if app.keyKept {
+                    Button("Reset this phone's key", systemImage: "key.slash", role: .destructive) { resetting = true }
+                        .tint(.red)
+                        .appGlassButton()
+                        .confirmationDialog("Reset this phone's key?", isPresented: $resetting, titleVisibility: .visible) {
+                            Button("Reset this phone's key", role: .destructive, action: resetKey)
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("This phone gets a new key. On each machine, run collied peers revoke for this phone, then pair again.")
+                        }
+                }
             }
         } else if app.showsMain {
             TabView(

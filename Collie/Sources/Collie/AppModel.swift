@@ -16,6 +16,7 @@ enum AppTab: Hashable {
 final class AppModel {
     let core: CollieCore?
     private(set) var startupError: String?
+    private(set) var keyKept = false
     private(set) var node: NodeState?
     private(set) var nodeError: String?
     private(set) var signInError: String?
@@ -68,7 +69,7 @@ final class AppModel {
             #endif
             KeychainItem.moveSharedItems()
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
-            let identity = try Identity.load()
+            let identity = try Identity.load(unlocked: UIApplication.shared.isProtectedDataAvailable)
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
             core.setLog(log: CoreLogRelay())
             if let on = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge {
@@ -78,6 +79,7 @@ final class AppModel {
         } catch {
             core = nil
             startupError = describe(error)
+            keyKept = Self.offersKeyReset(error)
         }
         approvals = ApprovalsModel(core: core)
         follows = FollowModel(core: core, approvals: approvals)
@@ -110,6 +112,9 @@ final class AppModel {
         }
         #endif
     }
+
+    /// Only a TLS key the enclave would not rebuild: no other failure to start says the key is dead.
+    nonisolated static func offersKeyReset(_ error: any Error) -> Bool { error is EnclaveBlob.Kept }
 
     /// The interface iOS routes through, never a VPN tunnel; empty when there is no path.
     nonisolated static func interface(of path: NWPath) -> String {
@@ -300,7 +305,8 @@ final class AppModel {
     /// The key is in the Keychain only while the phone is unlocked, so a launch in the background
     /// (a lock-screen decision) loads it on the next foreground.
     private func loadTerminalKey() {
-        guard let core, !terminalKeySet, let key = TerminalKey.publicKey() else { return }
+        guard let core, !terminalKeySet, let key = TerminalKey.publicKey(unlocked: UIApplication.shared.isProtectedDataAvailable)
+        else { return }
         do {
             try core.setTerminalKey(publicKey: key)
             terminalKeySet = true

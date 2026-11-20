@@ -5,7 +5,7 @@ import UserNotifications
 /// Owns the AppModel so a notification action can be handled when iOS launches the app in
 /// the background with no scene.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    let app = AppModel()
+    private(set) var app = AppModel()
 
     func application(
         _ application: UIApplication,
@@ -14,8 +14,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories(ApprovalNotification.categories)
         center.delegate = self
-        DecideApprovalIntent.decide = { [app] link, decision in await app.decideFromActivity(link, decision) }
-        app.watch.activate(decide: { [app] in await app.decideFromWatch($0) }, refresh: { [app] in await app.refreshForWatch() })
+        wire()
         NotificationCenter.default.addObserver(forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
             guard let window = note.object as? UIWindow else { return }
             MainActor.assumeIsolated { KeyboardSwipe.shared.install(on: window) }
@@ -23,6 +22,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         WindowCover.observe()
         FileViewerModel.purgeCopies()
         return true
+    }
+
+    private func wire() {
+        DecideApprovalIntent.decide = { [app] link, decision in await app.decideFromActivity(link, decision) }
+        app.watch.activate(decide: { [app] in await app.decideFromWatch($0) }, refresh: { [app] in await app.refreshForWatch() })
+    }
+
+    /// Only from the owner's confirmation on the startup screen. A new model then starts as at
+    /// launch and makes the keys a reset deleted; the sign-in, the settings and the machines stay.
+    func resetKey() {
+        EnclaveBlob.reset { _ = try Identity.load(unlocked: UIApplication.shared.isProtectedDataAvailable) }
+        app = AppModel()
+        wire()
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

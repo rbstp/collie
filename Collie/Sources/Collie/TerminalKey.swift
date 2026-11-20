@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import LocalAuthentication
 import Security
+import UIKit
 
 /// Signs terminal grants, which collied checks against the public key recorded at pairing: a
 /// Secure Enclave P-256 key, apart from the TLS key, that signs only after Face ID or the
@@ -15,13 +16,14 @@ enum TerminalKey {
         service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
     #endif
 
-    /// nil when this phone cannot hold one (no passcode, or the phone is locked): terminals
-    /// then ask to pair again. On a device there is no software fallback.
-    static func publicKey() -> Data? {
+    /// nil when this phone cannot hold one (no passcode, or the phone is locked) or the enclave
+    /// would not rebuild the stored one: terminals then ask to pair again. On a device there is
+    /// no software fallback.
+    static func publicKey(unlocked: Bool) -> Data? {
         #if targetEnvironment(simulator)
         return try? softKey().publicKey.derRepresentation
         #else
-        return try? enclaveKey(context: nil).publicKey.derRepresentation
+        return try? enclaveKey(context: nil, unlocked: unlocked).publicKey.derRepresentation
         #endif
     }
 
@@ -34,11 +36,12 @@ enum TerminalKey {
         else { return nil }
         return try? softKey().signature(for: message).derRepresentation
         #else
+        let unlocked = await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
         // The signature waits for Face ID: off the main actor.
         return await Task.detached {
             let context = LAContext()
             context.localizedReason = reason
-            return try? enclaveKey(context: context).signature(for: message).derRepresentation
+            return try? enclaveKey(context: context, unlocked: unlocked).signature(for: message).derRepresentation
         }.value
         #endif
     }
@@ -51,20 +54,20 @@ enum TerminalKey {
         return key
     }
     #else
-    private static func enclaveKey(context: LAContext?) throws -> SecureEnclave.P256.Signing.PrivateKey {
+    private static func enclaveKey(context: LAContext?, unlocked: Bool) throws -> SecureEnclave.P256.Signing.PrivateKey {
         guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
-        if let stored = try keychain.read(),
-            let key = try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: stored, authenticationContext: context)
-        {
-            return key
+        return try EnclaveBlob.key(stored: keychain.read(), unlocked: unlocked) {
+            try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0, authenticationContext: context)
+        } make: {
+            var error: Unmanaged<CFError>?
+            guard let access = SecAccessControlCreateWithFlags(
+                nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
+            else { throw error!.takeRetainedValue() as Error }
+            let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
+            return (key, key.dataRepresentation)
+        } write: {
+            try keychain.write($0)
         }
-        var error: Unmanaged<CFError>?
-        guard let access = SecAccessControlCreateWithFlags(
-            nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
-        else { throw error!.takeRetainedValue() as Error }
-        let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
-        try keychain.write(key.dataRepresentation)
-        return key
     }
     #endif
 }
