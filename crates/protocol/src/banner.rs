@@ -126,9 +126,11 @@ fn hint(rest: &str) -> bool {
         .is_some_and(|key| !key.is_empty() && !key.contains(' '))
 }
 
-/// The glyph a Claude Code notice starts with at column 0: `✦` for its tips (the Heads up,
-/// its explanation, the feedback rows after Dismiss), `●` for the session rating.
-const LEADS: [char; 2] = ['\u{2726}', '\u{25cf}'];
+/// What Claude Code's feedback surveys ask, behind `●` on every platform.
+pub const SURVEYS: [&str; 2] = [
+    "How is Claude doing this session?",
+    "How was Claude's recollection?",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeOption {
@@ -139,10 +141,10 @@ pub struct NoticeOption {
 /// The options of a Claude Code notice, in screen order, when `screen` (plain text or SGR)
 /// shows one directly above the input box; empty otherwise. A notice lists `1: <label>` to
 /// `n: <label>` (n up to 4) then `0: Dismiss`, wrapped over rows indented by two spaces,
-/// after its lead: a row starting at column 0 with a notice glyph, and the rows below it
-/// that are indented or blank. At most three blank rows and right-aligned hint rows may sit
-/// between the options and the box's top rule, so a dialog (which replaces the box) or a
-/// notice quoted in the transcript never matches.
+/// after its lead: a row starting at column 0 with `✦`, or with `●` and a survey's own
+/// wording, and the rows below it that are indented or blank. At most three blank rows and
+/// right-aligned hint rows may sit between the options and the box's top rule, so a dialog
+/// (which replaces the box) or a notice quoted in the transcript never matches.
 pub fn notice(screen: &str) -> Vec<NoticeOption> {
     let rows: Vec<String> = screen
         .split('\n')
@@ -210,11 +212,15 @@ pub fn notice(screen: &str) -> Vec<NoticeOption> {
 }
 
 /// The options a notice's lead row lists after its text, when it is one: `✦ Dismissed.   1: ...`.
+/// A lead starts at column 0 with `✦` for a tip (the Heads up, its explanation, the feedback
+/// rows after Dismiss) or `●` for the session rating. Off macOS Claude Code draws its replies
+/// behind that same `●`, and a reply's last rows can read like options, so `●` leads only
+/// with a survey's own wording.
 fn lead(row: &str) -> Option<Vec<(u8, String)>> {
-    let mut chars = row.chars();
-    if !chars.next().is_some_and(|c| LEADS.contains(&c)) || chars.next() != Some(' ') {
-        return None;
-    }
+    row.strip_prefix("\u{2726} ").or_else(|| {
+        row.strip_prefix("\u{25cf} ")
+            .filter(|text| SURVEYS.iter().any(|q| text.starts_with(q)))
+    })?;
     let rest = row.split_once("  ").map_or("", |(_, rest)| rest);
     Some(cells(rest).unwrap_or_default())
 }
@@ -587,14 +593,19 @@ mod tests {
     }
 
     #[test]
-    fn any_lead_and_labels_read_from_the_screen_match() {
+    fn any_labels_and_any_tip_lead_read_from_the_screen_match() {
         let rating = listed(&[("1", "Bad"), ("2", "Fine"), ("3", "Good"), ("0", "Dismiss")]);
         let survey = fixture!("survey.detection.txt");
         let explained = fixture!("heads-up-explained.detection.txt");
         let dismissed = fixture!("heads-up-dismissed.detection.txt");
         for (screen, expected) in [
+            // Not captured: the second wording in `SURVEYS`, assumed to be drawn as the first.
             (
-                survey.replacen("this session?", "this file?", 1),
+                survey.replacen(
+                    "How is Claude doing this session?",
+                    "How was Claude's recollection?",
+                    1,
+                ),
                 rating.clone(),
             ),
             (survey.replacen("(optional)\n", "(optional)\n\n", 1), rating),
@@ -736,6 +747,9 @@ mod tests {
             "\u{23fa} Pick one:\n  1: Ship it   0: Dismiss",
             1,
         );
+        // Off macOS Claude Code draws a reply behind the rating's dot.
+        let reply_dot = reply.replacen('\u{23fa}', "\u{25cf}", 1);
+        let reworded = survey.replacen("this session?", "this file?", 1);
         let quoted_row = bottom.replacen(
             "  120\n",
             "  120\n\u{2726} Dismissed.   1: That was helpful   2: Didn\u{2019}t understand   0: Dismiss\n",
@@ -769,6 +783,8 @@ mod tests {
             unwrapped,
             replied,
             reply,
+            reply_dot,
+            reworded,
             quoted_row,
             untitled,
             dashed,
