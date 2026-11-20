@@ -52,6 +52,10 @@ If a Codex agent stays `unknown`, or a finished turn sends no done alert:
 2. Read the `rex` lines of `collied doctor`. A warning names what keeps `collied` from following the server, such as an API revision it does not speak, which a restart of the Rex server after an update fixes ([Reading `collied doctor`](operate/commands.md#reading-collied-doctor)).
 3. Look for the agent under its Rex session's name in the Agents tab, or under **Rex** for a session with no name. Claude Code, Codex and Copilot CLI appear, as does any program that reports a status; shells do not (with [terminals](install/terminals.md) on, they appear under Terminals instead), nor do terminals Rex runs on other machines.
 
+## "collie could not start"
+
+The app shows what stopped it. When it says that the stored key could not be used, unlock the phone and open the app again. If the message stays, tap **Reset this phone's key**: the phone gets a new key and keeps its sign-in, settings and machines, but each machine refuses it until you [pair again](install/pair.md#pair-again).
+
 ## Pairing refused
 
 - **The window closed**: it lasts 120 seconds and closes at the first attempt, right or wrong. Run `collied pair` again.

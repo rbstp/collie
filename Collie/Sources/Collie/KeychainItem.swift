@@ -112,6 +112,10 @@ struct KeychainItem: @unchecked Sendable {
         return data
     }
 
+    /// Both copies, each by its exact group, service and account: a query short of one would
+    /// match another item of the app.
+    var deleteQueries: [[String: Any]] { [query, Self.sharedQuery(service: storedService, account: account)] }
+
     /// Replaces any stored blob in place, never by a delete and an add: an add that failed (the
     /// phone locked in between) would leave no copy. Then a copy left in the shared group goes,
     /// which would keep the replaced key readable by the extensions.
@@ -163,5 +167,17 @@ enum EnclaveBlob {
         let made = try make()
         try write(made.blob)
         return made.key
+    }
+
+    static var keys: [KeychainItem] { [Identity.keychain, TerminalKey.keychain] }
+
+    /// The reset the startup screen offers, only ever after the owner's confirmation: every
+    /// machine refuses the new key until the phone is revoked there and paired again. The error
+    /// on that screen is as old as the process, which may have started while the phone was
+    /// locked, so the keys are deleted only when the rebuild still fails now.
+    static func reset(_ items: [KeychainItem] = keys, rebuild: () throws -> Void) {
+        do { try rebuild() } catch is Kept {
+            for query in items.flatMap(\.deleteQueries) { SecItemDelete(query as CFDictionary) }
+        } catch {}
     }
 }

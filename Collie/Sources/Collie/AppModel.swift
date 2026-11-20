@@ -16,6 +16,7 @@ enum AppTab: Hashable {
 final class AppModel {
     let core: CollieCore?
     private(set) var startupError: String?
+    private(set) var keyKept = false
     private(set) var node: NodeState?
     private(set) var nodeError: String?
     private(set) var signInError: String?
@@ -78,6 +79,7 @@ final class AppModel {
         } catch {
             core = nil
             startupError = describe(error)
+            keyKept = Self.offersKeyReset(error)
         }
         approvals = ApprovalsModel(core: core)
         follows = FollowModel(core: core, approvals: approvals)
@@ -110,6 +112,9 @@ final class AppModel {
         }
         #endif
     }
+
+    /// Only a TLS key the enclave would not rebuild: no other failure to start says the key is dead.
+    nonisolated static func offersKeyReset(_ error: any Error) -> Bool { error is EnclaveBlob.Kept }
 
     /// The interface iOS routes through, never a VPN tunnel; empty when there is no path.
     nonisolated static func interface(of path: NWPath) -> String {

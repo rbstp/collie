@@ -11,6 +11,7 @@ The window closes after 120 seconds or at the first attempt, right or wrong, and
 ## Pair again
 
 - **After a reinstall**, the app has a new Tailscale node: first revoke the old phone with `collied peers revoke` and remove the old `collie-phone` node in the Tailscale admin console.
+- **After you reset the phone's key** (["collie could not start"](../troubleshooting.md#collie-could-not-start)), revoke the phone on each machine with `collied peers revoke`, then pair. The phone keeps its Tailscale node.
 - **When the app asks you to**, for example for [terminals](terminals.md), pair without revoking the phone or removing its node: the new pairing replaces the old one.
 
 ## Remove a machine
