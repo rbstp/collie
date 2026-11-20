@@ -155,7 +155,9 @@ struct RelayCredentialStore: Sendable {
         read[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         var status = SecItemCopyMatching(read as CFDictionary, &result)
-        if status == errSecItemNotFound, KeychainItem.moveShared(service: Self.service, account: Self.account) == errSecSuccess {
+        if status == errSecItemNotFound {
+            // Read again whatever the move answered: another reader may have moved the item first.
+            _ = KeychainItem.moveShared(service: Self.service, account: Self.account)
             status = SecItemCopyMatching(read as CFDictionary, &result)
         }
         guard status == errSecSuccess, let data = result as? Data else { throw RelayEnrollmentError.storage }

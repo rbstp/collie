@@ -62,11 +62,11 @@ final class AppModel {
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
 
     init() {
-        KeychainItem.moveSharedItems()
         do {
             #if DEBUG && targetEnvironment(simulator)
             if SimulatorVM.enabled { try SimulatorVM.verifyCore() }
             #endif
+            KeychainItem.moveSharedItems()
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
             let identity = try Identity.load()
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)

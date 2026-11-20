@@ -16,11 +16,15 @@ struct KeychainItem: @unchecked Sendable {
 
     /// The items a build up to 0.2.3 wrote without a group, so into the shared one.
     static var movedItems: [(service: String, account: String)] {
-        [
+        let keys = [
             (Identity.keychain.storedService, Identity.keychain.account),
             (TerminalKey.keychain.storedService, TerminalKey.keychain.account),
-            (RelayCredentialStore.service, RelayCredentialStore.account),
         ]
+        #if DEBUG && targetEnvironment(simulator)
+        // The relay item has no VM name: a VM run leaves the regular one where it is.
+        if SimulatorVM.enabled { return keys }
+        #endif
+        return keys + [(RelayCredentialStore.service, RelayCredentialStore.account)]
     }
 
     /// One item's copy in the group shared with the extensions. Never without the group: the
@@ -44,7 +48,7 @@ struct KeychainItem: @unchecked Sendable {
         SecItemUpdate(sharedQuery(service: service, account: account) as CFDictionary, moveAttributes as CFDictionary)
     }
 
-    /// At launch. A failure is left to the read path (the Keychain is locked before the first
+    /// At launch, before any other Keychain work. A failure is left to the read path (the Keychain is locked before the first
     /// unlock, and the terminal key's item whenever the phone is locked). With a copy in both
     /// groups the app's own is the one in use, and the shared one goes.
     static func moveSharedItems(_ items: [(service: String, account: String)] = movedItems) {
@@ -88,15 +92,19 @@ struct KeychainItem: @unchecked Sendable {
 
     /// nil only when neither group holds the item. A caller makes a new key on nil, so a copy
     /// in the shared group that could not be moved (the Keychain is locked) throws instead:
-    /// no key is ever made over an older one this read could not reach.
+    /// no key is ever made over an older one this read could not reach. The second read comes
+    /// after every move, whatever it answered: another reader or the launch move may have
+    /// moved the item between this read's first look and its own move, which then finds none.
     func read(move: (String, String) -> OSStatus = KeychainItem.moveShared) throws -> Data? {
         var result: CFTypeRef?
         var status = SecItemCopyMatching(readQuery as CFDictionary, &result)
         if status == errSecItemNotFound {
             let moved = move(storedService, account)
-            if moved == errSecItemNotFound { return nil }
-            guard moved == errSecSuccess else { throw KeychainError(status: moved) }
             status = SecItemCopyMatching(readQuery as CFDictionary, &result)
+            if status == errSecItemNotFound {
+                if moved == errSecItemNotFound { return nil }
+                if moved != errSecSuccess { throw KeychainError(status: moved) }
+            }
         }
         guard status == errSecSuccess, let data = result as? Data else { throw KeychainError(status: status) }
         return data

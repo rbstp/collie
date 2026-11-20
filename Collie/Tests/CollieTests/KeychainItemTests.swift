@@ -232,6 +232,28 @@ struct KeychainGroupTests {
         #expect(try item.read() == old)
     }
 
+    /// Another reader, or the launch move, moved the item after this read first looked: its own
+    /// move then finds none, or finds both. A nil here would make a new key over the moved one.
+    @Test(arguments: [errSecItemNotFound, errSecDuplicateItem])
+    func readReturnsAnItemMovedMeanwhile(answer: OSStatus) throws {
+        let item = item()
+        defer { remove(item.service, item.account) }
+        try add(item.service, item.account, in: shared, old)
+        let data = try item.read { service, account in
+            _ = KeychainItem.moveShared(service: service, account: account)
+            return answer
+        }
+        #expect(data == old)
+        #expect(copies(item.service, item.account) == [own: old])
+    }
+
+    @Test func readThrowsWhenAMoveLeftNoItem() throws {
+        let item = item()
+        let error = #expect(throws: KeychainError.self) { try item.read { _, _ in errSecSuccess } }
+        #expect(error?.status == errSecItemNotFound)
+        #expect(copies(item.service, item.account).isEmpty)
+    }
+
     @Test func relayStateIsMovedAndLoadedUnderItsMarker() throws {
         let (service, account) = (RelayCredentialStore.service, RelayCredentialStore.account)
         defer { remove(service, account) }
