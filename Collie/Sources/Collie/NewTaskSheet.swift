@@ -317,6 +317,9 @@ struct NewTaskSheet: View {
                             ProgressView()
                         }
                     }
+                    if model.offersCodeMode {
+                        Toggle("Code Mode", isOn: $model.codeMode)
+                    }
                     if naming {
                         TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
                             .focused($editingLabel)

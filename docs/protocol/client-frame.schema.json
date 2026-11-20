@@ -1019,6 +1019,13 @@
           ],
           "description": "When set, collied clones this repository into a new folder directly inside `cwd`,\nnamed by `CloneSource::folder_name`, and starts there."
         },
+        "code_mode": {
+          "description": "Claude Code only: start it with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` 1 or 0; absent,\nits environment decides. Sent only to a collied whose `TaskOptions` says `code_mode`:\nan older one refuses the field.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "cwd": {
           "$ref": "#/$defs/Cwd"
         },

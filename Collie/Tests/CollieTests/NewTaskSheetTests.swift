@@ -263,6 +263,50 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app -", "only Claude Code gets ultracode")
     }
 
+    func testCodeModeIsOfferedForClaudeCodeByACollieThatTakesItAndRememberedPerMachine() async throws {
+        let core = FakeCore()
+        let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let prefs = FileManager.default.temporaryDirectory.appending(path: "prefs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: prefs) }
+        core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+        let older = NewTaskModel(core: core, machines: [mac], prefsFile: prefs)
+        await older.loadOptions()
+        older.agent = "claude"
+        XCTAssertFalse(older.offersCodeMode, "an older collied refuses the field")
+        older.prompt = "go"
+        older.cwd = "/Users/me/app"
+        _ = await older.start()
+        XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app -")
+
+        core.state.withLock { $0.options.codeMode = true }
+        let model = NewTaskModel(core: core, machines: [mac], prefsFile: prefs)
+        await model.loadOptions()
+        XCTAssertTrue(model.codeMode)
+        XCTAssertFalse(model.offersCodeMode, "Codex has no Code Mode")
+        model.agent = "claude"
+        XCTAssertTrue(model.offersCodeMode)
+        model.codeMode = false
+        model.prompt = "go"
+        model.cwd = "/Users/me/app"
+        _ = await model.start()
+        XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app - codeMode=false")
+        XCTAssertEqual(DevicePrefs.load(from: prefs).taskCodeMode, ["m1": false])
+
+        let resume = NewTaskModel(core: core, machines: [mac], prefsFile: prefs)
+        await resume.loadOptions()
+        XCTAssertFalse(resume.codeMode)
+        resume.location = .resume
+        resume.cwd = "/Users/me/app"
+        await resume.loadSessions()
+        resume.session = resume.sessions?.first { $0.agent == "codex" }
+        XCTAssertFalse(resume.offersCodeMode)
+        resume.session = resume.sessions?.first { $0.agent == "claude" }
+        XCTAssertTrue(resume.offersCodeMode)
+        resume.codeMode = true
+        _ = await resume.start()
+        XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app resume=claude:3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d codeMode=true")
+    }
+
     func testPullRequestTakesANumberAndStartsOnItsBranch() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")

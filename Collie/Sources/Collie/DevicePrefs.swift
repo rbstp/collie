@@ -24,6 +24,7 @@ struct DevicePrefs: StateFile, Equatable {
     /// Per machine id: the canonical folder collied returned when it was saved.
     var taskBases: [String: String] = [:]
     var taskUltracode: [String: Bool] = [:]
+    var taskCodeMode: [String: Bool] = [:]
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
 
@@ -77,6 +78,7 @@ extension DevicePrefs {
         runtimeMarks = (try? container.decodeIfPresent(Bool.self, forKey: .runtimeMarks)) ?? defaults.runtimeMarks
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
         taskUltracode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskUltracode)) ?? defaults.taskUltracode
+        taskCodeMode = (try? container.decodeIfPresent([String: Bool].self, forKey: .taskCodeMode)) ?? defaults.taskCodeMode
     }
 
     /// Kept only once collied has listed it, in the canonical form it returned.
@@ -94,10 +96,11 @@ extension DevicePrefs {
 
     static func forgetMachine(machineId: String, in file: URL?) {
         let prefs = load(from: file)
-        guard prefs.taskBases[machineId] != nil || prefs.taskUltracode[machineId] != nil else { return }
+        guard prefs.taskBases[machineId] != nil || prefs.taskUltracode[machineId] != nil || prefs.taskCodeMode[machineId] != nil else { return }
         update(in: file) {
             $0.taskBases[machineId] = nil
             $0.taskUltracode[machineId] = nil
+            $0.taskCodeMode[machineId] = nil
         }
     }
 }

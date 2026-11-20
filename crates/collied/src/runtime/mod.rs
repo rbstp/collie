@@ -134,12 +134,16 @@ impl TaskHost {
         kind: &str,
         worktree: Option<&str>,
         cli: &str,
-        args: &[&str],
+        args: &[String],
+        code_mode: Option<bool>,
     ) -> Result<String, Error> {
         match self {
-            Self::Core(core) => core.start(cwd, name, kind, worktree, cli, args).await,
+            Self::Core(core) => {
+                core.start(cwd, name, kind, worktree, cli, args, code_mode)
+                    .await
+            }
             Self::Rex(rex) => {
-                let argv = agents::task_argv(cli, args);
+                let argv = agents::task_argv(cli, args, code_mode);
                 rex.start_task(cwd, name, label, worktree, argv).await
             }
         }
@@ -752,8 +756,18 @@ impl Runtime {
         pane_id: &str,
         resume: Option<&str>,
         ultracode: bool,
+        code_mode: Option<bool>,
     ) -> Result<AgentInfo, Error> {
-        herdr::agent_start(&self.herdr, name, kind, pane_id, resume, ultracode).await
+        herdr::agent_start(
+            &self.herdr,
+            name,
+            kind,
+            pane_id,
+            resume,
+            ultracode,
+            code_mode,
+        )
+        .await
     }
 
     pub async fn workspace_create(

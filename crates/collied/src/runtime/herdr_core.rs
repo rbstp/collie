@@ -984,6 +984,7 @@ impl Core {
 
     /// A task agent in a terminal of its own, with no parent to notify; returns its id. The
     /// terminal identity goes in `env`, as the core asks its clients to pass it.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &self,
         cwd: &str,
@@ -991,7 +992,8 @@ impl Core {
         kind: &str,
         worktree: Option<&str>,
         cli: &str,
-        args: &[&str],
+        args: &[String],
+        code_mode: Option<bool>,
     ) -> Result<String, Error> {
         #[derive(Deserialize)]
         struct Run {
@@ -1000,7 +1002,7 @@ impl Core {
         let group = (self.lock().live.as_ref())
             .map(|live| live.group.clone())
             .ok_or(Error::Closed)?;
-        let argv = agents::task_argv(cli, args);
+        let argv = agents::task_argv(cli, args, code_mode);
         let mut labels = serde_json::Map::new();
         labels.insert(TASK_LABEL.to_owned(), json!(kind));
         if let Some(checkout) = worktree {
@@ -2224,11 +2226,19 @@ pub(crate) mod tests {
         .await;
         let core = followed(socket);
         let cli = "/opt/bin/codex";
-        let args = super::super::herdr::agent_args("codex", Some(SESSION), false);
+        let args = super::super::herdr::agent_args("codex", Some(SESSION), false, None);
         assert_eq!(
-            core.start("/w", "collie-0a1b2c3d", "codex", Some("/w"), cli, &args)
-                .await
-                .unwrap(),
+            core.start(
+                "/w",
+                "collie-0a1b2c3d",
+                "codex",
+                Some("/w"),
+                cli,
+                &args,
+                None
+            )
+            .await
+            .unwrap(),
             format!("hc:{ID}:t2")
         );
         let calls = crate::lock(&seen).calls.clone();
@@ -2269,12 +2279,23 @@ pub(crate) mod tests {
             json!({"collie.kind": "codex", "collie.worktree": "/w"})
         );
         assert_eq!(
-            super::super::herdr::agent_args("codex", None, false),
+            super::super::herdr::agent_args("codex", None, false, None),
             ["--no-daemon"]
         );
         assert_eq!(
-            super::super::herdr::agent_args("claude", Some(SESSION), true),
+            super::super::herdr::agent_args("claude", Some(SESSION), true, None),
             ["--resume", SESSION, "--settings", r#"{"ultracode":true}"#]
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("claude", None, true, Some(false)),
+            [
+                "--settings",
+                r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"0"},"ultracode":true}"#
+            ]
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("codex", None, false, Some(true)),
+            ["--no-daemon"]
         );
         assert!(agents::task_cli("copilot").is_none());
     }
@@ -2899,6 +2920,7 @@ pub(crate) mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            code_mode: None,
             runtime: None,
         };
         let (reply, cwd) = drive.task_new(p, &yes).await;

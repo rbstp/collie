@@ -1213,7 +1213,8 @@ fn live_herdr_core_tasks() {
         return;
     }
     std::fs::create_dir_all(&gh).unwrap();
-    let dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
+    let mut dummies: Vec<(&str, &str)> = STARTER.iter().map(|n| (*n, "collie-e2e")).collect();
+    dummies.push(("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1"));
     let mut core = CoreSession::start_with("hct", &dummies);
     let rt = runtime();
     rt.block_on(tasks_scenario(&core, Path::new(&bin)));
@@ -1288,7 +1289,8 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     .await;
     assert!(
         held_env.contains("HERDR_PANE_ID=collie-e2e")
-            && held_env.contains("CLAUDE_CODE_CHILD_SESSION=collie-e2e"),
+            && held_env.contains("CLAUDE_CODE_CHILD_SESSION=collie-e2e")
+            && held_env.contains("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"),
         "the core passes its starter's variables to a terminal"
     );
     core.hc(&["kill", "--json", &held]);
@@ -1336,6 +1338,7 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     };
     let started = |reply| match reply {
@@ -1349,11 +1352,11 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
         (other, _) => panic!("task not started: {other:?}"),
     };
 
-    let (group, claude) = started(
-        drive
-            .task_new(new("claude", "fix the test", None), &yes)
-            .await,
-    );
+    let code_mode = TaskNewParams {
+        code_mode: Some(false),
+        ..new("claude", "fix the test", None)
+    };
+    let (group, claude) = started(drive.task_new(code_mode, &yes).await);
     assert!(group.as_str().starts_with("hc:"), "{group:?}");
     assert!(claude.as_str().starts_with(&format!("{}:", group.as_str())));
     until("the prompt in Claude Code", async || {
@@ -1372,6 +1375,11 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
     };
     let env = stripped(record("env-claude").unwrap());
     assert!(env.contains("TERM=xterm-256color") && env.contains("COLORTERM=truecolor"));
+    assert!(
+        env.lines()
+            .any(|l| l == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0"),
+        "Code Mode wins over the core's"
+    );
 
     let branch = TaskWorktree::Create {
         branch: "feat/hc-task".to_owned(),

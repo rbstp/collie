@@ -545,6 +545,7 @@ fn task(cwd: &Path, agent: &str) -> TaskNewParams {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     }
 }
@@ -2161,6 +2162,50 @@ async fn ultracode_tasks_prompt_only_once_it_shows() {
             assert!(herdr.params("agent.prompt").is_empty());
         }
     }
+}
+
+// herdr's `agent.start` takes no environment and types the command into a shell whose start-up
+// files already ran, so Code Mode can only reach Claude Code as a setting.
+#[tokio::test]
+async fn code_mode_reaches_herdr_as_a_claude_code_setting_and_needs_claude_code() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude", "codex"], &base.join("root"));
+    herdr.with(|h| {
+        h.text = IDLE_ULTRACODE_299.into();
+        h.gets.extend([
+            started_agent("idle", true, false),
+            started_agent("idle", true, false),
+        ]);
+    });
+    let p = TaskNewParams {
+        ultracode: true,
+        code_mode: Some(false),
+        ..task(&base.join("root/a"), "claude")
+    };
+    let (reply, _) = drive.task_new(p, &yes()).await;
+    assert!(reply.is_ok(), "{reply:?}");
+    assert_eq!(
+        herdr.params("agent.start")[0]["args"],
+        json!([
+            "--settings",
+            r#"{"env":{"CLAUDE_CODE_EXPERIMENTAL_CODE_MODE":"0"},"ultracode":true}"#
+        ])
+    );
+    let p = TaskNewParams {
+        op_id: op('U'),
+        code_mode: Some(true),
+        ..task(&base.join("root/a"), "codex")
+    };
+    let (reply, _) = drive.task_new(p, &yes()).await;
+    assert_eq!(
+        reply.unwrap_err(),
+        (
+            ErrorCode::InvalidParams,
+            "Code Mode needs Claude Code".to_owned()
+        )
+    );
+    assert_eq!(herdr.params("agent.start").len(), 1);
 }
 
 const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";

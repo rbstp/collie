@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","runtimeMarks":false,"taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true}}
+        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","runtimeMarks":false,"taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true},"taskCodeMode":{"m1":false}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -31,7 +31,8 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true, keysShown: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, runtimeMarks: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true]
+                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, runtimeMarks: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true],
+                taskCodeMode: ["m1": false]
             )
     )
     prefs.save(to: file)

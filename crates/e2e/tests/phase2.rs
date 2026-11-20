@@ -318,6 +318,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 runtime: TaskRuntime::Herdr,
                 agents: vec!["claude".into()],
             }],
+            code_mode: true,
         }
     );
     let before = herdr.mutations();
@@ -347,6 +348,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 None,
                 false,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -371,6 +373,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 None,
                 None,
                 false,
+                None,
                 Some(runtime),
             )
             .await
@@ -390,6 +393,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             Some("app task".into()),
             None,
             false,
+            None,
             None,
         )
         .await
@@ -455,6 +459,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             Some("fresh".into()),
             false,
             None,
+            None,
         )
     };
     assert_eq!(new_task().await.unwrap().terminal_id, NEW_TERMINAL);
@@ -481,6 +486,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "Set it up".into(),
             None,
             false,
+            None,
             None,
         )
     };
@@ -786,6 +792,7 @@ async fn live_scenario(
                 None,
                 false,
                 None,
+                None,
             )
             .await
             .unwrap_err();
@@ -826,6 +833,7 @@ async fn live_scenario(
             Some("e2e task".into()),
             None,
             false,
+            None,
             None,
         )
         .await

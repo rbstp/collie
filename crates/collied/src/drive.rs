@@ -1100,6 +1100,7 @@ impl Driver {
                     .collect(),
             ),
             runtime_agents,
+            code_mode: true,
         }))
     }
 
@@ -1212,6 +1213,12 @@ impl Driver {
         if p.ultracode && p.agent.as_str() != "claude" {
             return (
                 fail(ErrorCode::InvalidParams, "ultracode needs Claude Code"),
+                None,
+            );
+        }
+        if p.code_mode.is_some() && p.agent.as_str() != "claude" {
+            return (
+                fail(ErrorCode::InvalidParams, "Code Mode needs Claude Code"),
                 None,
             );
         }
@@ -1597,6 +1604,7 @@ impl Driver {
                 &p.agent,
                 p.resume.as_ref(),
                 p.ultracode,
+                p.code_mode,
                 retry_busy,
                 auth,
             )
@@ -1686,7 +1694,7 @@ impl Driver {
         };
         let name = agent_name()?;
         let resume = p.resume.as_ref().map(SessionId::as_str);
-        let args = runtime::herdr::agent_args(p.agent.as_str(), resume, p.ultracode);
+        let args = runtime::herdr::agent_args(p.agent.as_str(), resume, p.ultracode, None);
         authorized(auth)?;
         let id = host
             .start(
@@ -1697,6 +1705,7 @@ impl Driver {
                 worktree.map(Cwd::as_str),
                 &cli,
                 &args,
+                p.code_mode,
             )
             .await
             .map_err(herdr_fail)?;
@@ -1876,12 +1885,14 @@ impl Driver {
     // Readiness rules follow herdr's own `herdr agent start` CLI (0.9.5). The busy retry
     // gets 30 s instead of the CLI's 2 s and, unlike the CLI, does not require the shell
     // in the foreground: the CLI targets any pane, this one was just created.
+    #[allow(clippy::too_many_arguments)]
     async fn start_agent(
         &self,
         pane: &PaneInfo,
         kind: &AgentKind,
         resume: Option<&SessionId>,
         ultracode: bool,
+        code_mode: Option<bool>,
         retry_busy: bool,
         auth: &Authorized,
     ) -> Result<String, Fail> {
@@ -1892,7 +1903,14 @@ impl Driver {
             authorized(auth)?;
             match self
                 .runtime
-                .agent_start(&name, kind.as_str(), &pane.pane_id, resume, ultracode)
+                .agent_start(
+                    &name,
+                    kind.as_str(),
+                    &pane.pane_id,
+                    resume,
+                    ultracode,
+                    code_mode,
+                )
                 .await
             {
                 Ok(a) => break a,
@@ -3662,6 +3680,7 @@ mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            code_mode: None,
             runtime: None,
         };
         let yes: Authorized = Arc::new(|| true);
@@ -3733,6 +3752,7 @@ mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            code_mode: None,
             runtime: None,
         };
         let yes: Authorized = Arc::new(|| true);
@@ -3768,6 +3788,7 @@ mod tests {
             clone: None,
             resume: None,
             ultracode: false,
+            code_mode: None,
             runtime,
         }
     }
