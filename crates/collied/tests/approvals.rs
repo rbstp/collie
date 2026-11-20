@@ -60,6 +60,9 @@ const RM_REASON: &str = include_str!("fixtures/claude-2.1.308/rm-reason.detectio
 const EFFORT: &str = include_str!("fixtures/claude-2.1.294/effort.detection.txt");
 const TIME_FORMAT: &str = include_str!("fixtures/claude-2.1.294/config-time-format.detection.txt");
 const IDE: &str = include_str!("fixtures/claude-2.1.294/ide.detection.txt");
+// The same capture's `/memory` and usage credits forms: like `/ide`, no numbered option.
+const MEMORY: &str = include_str!("fixtures/claude-2.1.294/memory.detection.txt");
+const USAGE_CREDITS: &str = include_str!("fixtures/claude-2.1.294/usage-credits.detection.txt");
 
 // Claude Code 2.1.300 in herdr 0.9.5, in a session named with `/rename`, with tasks open: a
 // question over the task panel (live_blocked_form_named_session), the name drawn on a rule
@@ -1258,6 +1261,52 @@ async fn a_form_taller_than_the_screen_is_answered_in_the_terminal() {
         assert_eq!(
             code(rig.choose(&a, 0, &a.nonce).await),
             ErrorCode::InvalidParams
+        );
+    }
+    assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_numbered_form_that_reads_as_no_menu_takes_no_keys() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.rule = "live_blocked_form".into());
+    // Hand-built from the captures, not captured: the question and the rate limit form from
+    // under their option 1, as a terminal too short for them would show them, and the question
+    // with four rows under its option 1, one more than a menu reads.
+    let (_, question) = QUESTION_LIVE.split_once("local persistence\n").unwrap();
+    let (_, rate_limit) = RATE_LIMIT.split_once("limit to reset\n").unwrap();
+    let long = QUESTION_LIVE.replace(
+        "     File-based database",
+        "     Embedded\n     One file\n     No server\n     File-based database",
+    );
+    for form in [question, rate_limit, &long] {
+        rig.herdr.with(|h| {
+            h.text = form.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(
+            a.options.is_empty() && a.choices.is_empty() && !a.accepts_input && !a.has_text_field,
+            "{form}"
+        );
+        assert_eq!(
+            code(rig.choose(&a, 0, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+    }
+    // The 2.1.294 captures of the forms without numbers, and `/ide` under a numbered list
+    // (hand-added to the capture's transcript rows): each takes keys as before.
+    let listed = IDE.replacen("❯ /add-dir\n", "  1. First\n  2. Second\n", 1);
+    assert_ne!(listed, IDE);
+    for form in [MEMORY, IDE, USAGE_CREDITS, &listed] {
+        rig.herdr.with(|h| {
+            h.text = form.into();
+            set_status(h, "blocked");
+        });
+        let a = rig.needed().await;
+        assert!(
+            a.choices.is_empty() && a.accepts_input && !a.has_text_field,
+            "{form}"
         );
     }
     assert!(rig.mutations().is_empty());

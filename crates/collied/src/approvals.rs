@@ -461,12 +461,13 @@ impl Approvals {
         let (text, reason) =
             prompt::without_reason(kind, &prompt::without_deny_countdown(kind, form));
         // A dialog whose top is off screen gets no answer from the phone, by decision, by index
-        // or by keys: its first rows are neither shown nor bound.
+        // or by keys: its first rows are neither shown nor bound. Nor does a numbered form that
+        // does not read as a menu, which may be one cut under its option 1.
         let parsed = prompt::uses_menu(kind, rule)
             .then(|| Menu::parse(&text))
             .flatten();
-        let headless = parsed.as_ref().is_some_and(|m| !m.on_screen());
-        let menu = parsed.filter(|_| !headless);
+        let unnumbered = parsed.is_none() && !prompt::numbered(&text);
+        let menu = parsed.filter(Menu::on_screen);
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
@@ -475,7 +476,8 @@ impl Approvals {
                 Vec::new(),
             ),
         };
-        let accepts_input = !headless && prompt::open_to_keys(kind, rule, &text);
+        let accepts_input =
+            (menu.is_some() || unnumbered) && prompt::open_to_keys(kind, rule, &text);
         let has_text_field = prompt::open_to_text(kind, rule, &text)
             && menu.as_ref().is_some_and(|m| m.free_text().is_some());
         let supports_note =

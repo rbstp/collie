@@ -49,6 +49,19 @@ pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
         })
 }
 
+/// Whether the dialog on screen draws numbered options: a numbered row in the dialog
+/// ([`after_last_rule`]) with no `▔` border under it. Such a form that does not parse as a
+/// menu has lost rows (option 1 off screen) or holds more than a menu reads, and takes no
+/// keys from the phone. A numbered list above the border of an unnumbered form (`/memory`,
+/// `/ide`, usage credits) is old output. Claude Code draws that border at column 0, and under
+/// a numbered form's last option an agent writes only that option's rows, which are indented.
+pub fn numbered(text: &str) -> bool {
+    let rows = after_last_rule(text);
+    rows.iter()
+        .rposition(|l| option_line(l).is_some())
+        .is_some_and(|last| !rows[last + 1..].iter().any(|l| l.starts_with('▔')))
+}
+
 /// herdr rule ids (claude manifest 2026.09.11.1) under which Claude Code 2.1.289 shows its
 /// plan prompt ("Would you like to proceed?").
 const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker", "permission"];
@@ -3131,6 +3144,50 @@ mod tests {
             "a granting menu needs its top rule"
         );
         assert!(!on_screen(BASH_TALL_328));
+    }
+
+    #[test]
+    fn a_numbered_form_is_told_from_one_without_numbers() {
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        for screen in [form, QUESTION, QUESTION_LIVE] {
+            assert!(numbered(screen) && Menu::parse(screen).is_some());
+        }
+        // Hand-built from the captures, not captured: each form from under its option 1, the
+        // question also from its inner rule down, and with four rows under its option 1.
+        let (_, tall) = form.split_once("limit to reset\n").unwrap();
+        let (_, question) = QUESTION_LIVE.split_once("local persistence\n").unwrap();
+        let (_, chat) = QUESTION_LIVE.split_once("Type something.\n").unwrap();
+        let long = QUESTION_LIVE.replace(
+            "     File-based database",
+            "     Embedded\n     One file\n     No server\n     File-based database",
+        );
+        for screen in [tall, question, chat, &long] {
+            assert!(
+                numbered(screen) && Menu::parse(screen).is_none(),
+                "{screen}"
+            );
+        }
+        // Each form from under its first k rows, for every k: it says it takes keys only once
+        // no option row is left on screen, under a blank row and the footer.
+        for (form, top) in [(QUESTION_LIVE, '─'), (form, '▔')] {
+            let rows: Vec<&str> = form.lines().skip_while(|l| !l.starts_with(top)).collect();
+            for k in 1..rows.len() {
+                let screen = rows[k..].join("\n");
+                let keys = Menu::parse(&screen).map_or(!numbered(&screen), |m| m.on_screen());
+                let options = rows[k..].iter().any(|l| option_line(l).is_some());
+                assert_eq!(keys, !options, "{screen}");
+            }
+        }
+        // The 2.1.294 captures of `/memory`, `/ide` and usage credits, and `/ide` under a
+        // numbered list hand-added to its transcript rows: no numbered row is in the form.
+        let ide = ALERTING_DIALOGS[6];
+        let listed = ide.replacen("❯ /add-dir\n", "  1. First\n  2. Second\n", 1);
+        assert_ne!(listed, ide);
+        for screen in [ALERTING_DIALOGS[5], ide, ALERTING_DIALOGS[8], &listed] {
+            assert!(!numbered(screen) && Menu::parse(screen).is_none());
+            assert!(open_to_keys("claude", Some("live_blocked_form"), screen));
+        }
     }
 
     #[test]
