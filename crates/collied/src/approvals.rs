@@ -16,13 +16,13 @@ use zeroize::Zeroizing;
 use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, fail, herdr_fail};
 use crate::flock;
-use crate::prompt::{self, Menu};
+use crate::prompt::{self, Menu, Refused};
 use crate::push::{self, Push};
 use crate::runtime::herdr_core::{self, Core};
 use crate::runtime::rex::Rex;
 use crate::runtime::{self, AgentInfo, Owner, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
-use crate::transcript::Transcripts;
+use crate::transcript::{Transcripts, Waits};
 
 pub const TTL: Duration = Duration::from_secs(600);
 pub const SETTLE: Duration = Duration::from_secs(3);
@@ -67,6 +67,8 @@ struct Screen {
     reason: Option<String>,
     context: String,
     tool: Option<PendingTool>,
+    /// Why the question rule keeps this menu from the phone.
+    refused: Option<Refused>,
 }
 
 impl Screen {
@@ -112,6 +114,8 @@ struct Inner {
     notified: HashMap<String, ApprovalId>,
     /// A blocked Rex agent's report and the reconciles that read its screen.
     rex_reads: HashMap<String, (u64, u8)>,
+    /// The dialog whose refusal was last logged per terminal, so each is logged once.
+    refused: HashMap<String, [u8; 32]>,
 }
 
 impl Inner {
@@ -445,9 +449,11 @@ impl Approvals {
                 pending,
                 notified,
                 rex_reads,
+                refused,
                 ..
             } = &mut *inner;
             rex_reads.retain(|t, _| agents.iter().any(|a| a.terminal_id == *t && is_blocked(a)));
+            refused.retain(|t, _| agents.iter().any(|a| a.terminal_id == *t && is_blocked(a)));
             notified.retain(|t, id| {
                 let ended = !pending.contains_key(t)
                     && !agents.iter().any(|a| a.terminal_id == *t && is_blocked(a));
@@ -482,15 +488,31 @@ impl Approvals {
         // The screen cannot say a question form is whole, so it is answered only when it draws
         // the session's one pending AskUserQuestion call whole, as the transcript records it.
         // While such a call is pending, any other menu gets no answer either: a question whose
-        // labels read as decisions is drawn like a permission prompt.
-        let asked = parsed.as_ref().and_then(|_| {
-            let asking = crate::lock(self.transcripts.as_ref()?).asking(a)?;
-            asking.questions()
+        // labels read as decisions is drawn like a permission prompt. When what the session
+        // waits on is not known, that is not "no question": only a menu the screen alone
+        // makes another dialog is answered, so that approvals work without the transcript.
+        let waits = match &parsed {
+            Some(_) => self.waits(a),
+            None => Waits::Nothing,
+        };
+        let asked = parsed.as_ref().map(|m| match &waits {
+            Waits::Question {
+                session,
+                call,
+                questions,
+            } => (m.asks(questions)).map(|asked| Some(format!("{session} {call:?} {asked}"))),
+            Waits::Other if m.is_question(true) => Err(Refused::NoCall),
+            Waits::Nothing if m.is_question(false) => Err(Refused::NoCall),
+            Waits::Unknown(why) if m.is_question(false) => Err(*why),
+            _ => Ok(None),
         });
-        let question = parsed.as_ref().and_then(|m| m.asks(asked.as_deref()?));
-        let menu = parsed.filter(|m| {
-            m.on_screen() && (question.is_some() || asked.is_none() && !m.is_question())
-        });
+        let (question, refused) = match asked {
+            Some(Ok(question)) => (question, None),
+            Some(Err(why)) => (None, Some(why)),
+            None => (None, None),
+        };
+        let refused = refused.filter(|_| parsed.as_ref().is_some_and(Menu::on_screen));
+        let menu = parsed.filter(|m| m.on_screen() && refused.is_none());
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
@@ -541,7 +563,17 @@ impl Approvals {
             reason,
             context,
             tool,
+            refused,
         })
+    }
+
+    fn waits(&self, a: &AgentInfo) -> Waits {
+        let asking = (self.transcripts.as_ref()).map(|t| crate::lock(t).asking(a));
+        match asking {
+            Some(Ok(asking)) => asking.waits(),
+            Some(Err(why)) => Waits::Unknown(why),
+            None => Waits::Unknown(Refused::NoSession),
+        }
     }
 
     async fn create(&self, a: &AgentInfo, workspaces: &[WorkspaceInfo]) -> anyhow::Result<()> {
@@ -595,6 +627,17 @@ impl Approvals {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
+            }
+            // Never the question's text, its labels or a path: the reason and the terminal.
+            if let Some(why) = screen.refused
+                && (inner.refused).insert(a.terminal_id.clone(), screen.fingerprint)
+                    != Some(screen.fingerprint)
+            {
+                tracing::info!(
+                    terminal = %a.terminal_id,
+                    reason = why.as_str(),
+                    "question form not answered from the phone"
+                );
             }
             let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
             if alert {

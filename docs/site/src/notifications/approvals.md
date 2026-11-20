@@ -10,7 +10,7 @@ For Claude Code, choose **Approve** or **Deny** on the notification once the iPh
 
 When a Claude Code prompt is taller than the agent's terminal, its first lines are off screen, so the notification and the card offer no buttons: open the session, scroll up in **Terminal** and answer there.
 
-A question from Claude Code lists its choices only when the machine finds that question in the session's own transcript and sees all of it on the agent's screen, every option included. Otherwise the card lists no choices and no keys. A question taller than the terminal never lists them: answer it in **Terminal**. A card that comes before Claude Code has written the question down is replaced, at the machine's next read about a second later, by one with the choices.
+A question from Claude Code lists its choices only when the machine finds that question in the session's own transcript and sees all of it on the agent's screen, every option included. Otherwise the card shows the question's last lines and "Use the terminal buttons or type an answer", with no choices: answer in **Terminal**. That is always so for a question taller than the terminal, and for every question in a terminal whose Claude Code session the machine cannot tell or whose transcript it cannot read; `collied`'s log then names the reason. A card raised while Claude Code was still writing the question down is replaced by one with the choices once the machine reads it again.
 
 Codex and Copilot CLI notifications have no Approve or Deny: answer in the session. A Codex notification previews the pending question, the action or the agent's latest response.
 

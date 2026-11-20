@@ -260,6 +260,34 @@ fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
 
+/// Why a question form gets no answer from the phone: all the log says of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Refused {
+    NoSession,
+    Truncated,
+    Transcript,
+    NoCall,
+    Several,
+    Stale,
+    NotWhole,
+    Ambiguous,
+}
+
+impl Refused {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoSession => "no session tied",
+            Self::Truncated => "truncated process list",
+            Self::Transcript => "transcript unreadable or incomplete",
+            Self::NoCall => "no pending call",
+            Self::Several => "several pending calls",
+            Self::Stale => "stale call",
+            Self::NotWhole => "question not drawn whole",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
 /// One question of an AskUserQuestion call, as the session transcript records it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Question {
@@ -536,13 +564,25 @@ impl Menu {
     /// options are pressed as a decision or not at all. A plan holds no such option, so its
     /// `Yes, and ...` options stay chosen by index.
     pub fn takes_choice(&self, i: usize) -> bool {
-        let approval = |j: usize| {
+        !(grants(&self.text(i)) && self.approves())
+    }
+
+    /// Whether an option reads as an approval ([`classify`]), as shown: a permission prompt.
+    pub fn approves(&self) -> bool {
+        (0..self.options.len()).any(|j| {
             matches!(
                 classify(&self.text(j)),
                 Some(Decision::Approve | Decision::ApproveAlways)
             )
-        };
-        !(grants(&self.text(i)) && (0..self.options.len()).any(approval))
+        })
+    }
+
+    /// The plan prompt by its own wording (2.1.289 to 2.1.329): its question over option 1,
+    /// and `Yes` leading that option. A question can word itself so; see
+    /// [`Menu::is_question`].
+    fn is_plan(&self) -> bool {
+        self.body.join(" ").ends_with("Would you like to proceed?")
+            && self.text(0).starts_with("Yes")
     }
 
     /// Option `i` as the phone shows it, label then detail, cleaned as [`Menu::choices`]
@@ -570,16 +610,26 @@ impl Menu {
         self.topped || self.bordered && !self.grants()
     }
 
-    /// Whether this is a question form: a menu that grants nothing and has no `▔` border over
-    /// it, as Claude Code draws AskUserQuestion's form and its review page. Its top cannot be
-    /// told from the screen ([`Menu::asks`]).
-    pub fn is_question(&self) -> bool {
-        !self.grants() && !self.bordered
+    /// Whether this menu may be AskUserQuestion's form or its review page, whose top the
+    /// screen cannot tell ([`Menu::asks`]): any menu with no `▔` border over it that the screen
+    /// alone does not make another dialog. A permission prompt holds an option that reads as an
+    /// approval. The plan prompt holds none and is told by its wording, so that plans are
+    /// still chosen from when no session is tied to the terminal; what is left to that
+    /// wording is a question that copies it there. When the session is known to wait on a
+    /// call that is no question (`elsewhere`), the dialog is that call's, and only a menu that
+    /// grants nothing ([`Menu::grants`]) is left as a question: the plan and the workflow
+    /// prompt then need no wording of their own.
+    pub fn is_question(&self, elsewhere: bool) -> bool {
+        !self.bordered
+            && match elsewhere {
+                true => !self.grants(),
+                false => !self.approves() && !self.is_plan(),
+            }
     }
 
     /// What this menu draws of `asked`, the questions of the session's one pending
     /// AskUserQuestion call, when it draws it whole: the one question whose options these are,
-    /// or all of them on the review page. `None` for anything else, a form cut or scrolled
+    /// or all of them on the review page. Refused for anything else, a form cut or scrolled
     /// included, which then gets no answer from the phone.
     ///
     /// The screen alone cannot say a question form is whole: its text starts at the top
@@ -592,27 +642,29 @@ impl Menu {
     /// between the dialog's first row (the header or the tabs) and option 1 read the question's
     /// whole text: all behind the `│` gutter Claude Code draws a long or multi-line question
     /// behind, or none of them. A row hidden above a rule the text draws leaves less than the
-    /// whole text, and an option hidden or marked `↓` leaves the options short. Two questions
-    /// with the same labels are refused, since a cut first one can draw the second's tabs and
-    /// text. Only whitespace is set aside, as wrapping moves it: a text Claude Code rewrites on
-    /// screen (format characters, a cut at 2000 columns) offers nothing.
-    pub fn asks(&self, asked: &[Question]) -> Option<String> {
+    /// whole text, and an option hidden or marked `↓` leaves the options short. When the
+    /// options on screen read as those of more than one question of the call, the form is
+    /// refused, since a cut first one can draw the second's tabs and text: the test is the
+    /// one that matches an option, label and description together, so two questions that
+    /// split the same words between them differently are two such questions. Only whitespace
+    /// is set aside, as wrapping moves it: a text Claude Code rewrites on screen (format
+    /// characters, a cut at 2000 columns) offers nothing.
+    pub fn asks(&self, asked: &[Question]) -> Result<String, Refused> {
         if !self.after.is_empty() {
-            return None;
+            return Err(Refused::NotWhole);
         }
         if self.reviews(asked) {
-            return Some(format!("{asked:?}"));
+            return Ok(format!("{asked:?}"));
         }
-        let labels = |q: &Question| -> Vec<String> {
-            q.options.iter().map(|(label, _)| unspaced(label)).collect()
-        };
-        let mut drawn = asked.iter().filter(|q| self.draws(q));
-        let q = drawn.next()?;
-        (drawn.next().is_none() && asked.iter().filter(|o| labels(o) == labels(q)).count() == 1)
-            .then(|| format!("{q:?}"))
+        let mut listed = asked.iter().filter(|q| self.lists(q));
+        match (listed.next(), listed.next()) {
+            (Some(q), None) if self.words(q) => Ok(format!("{q:?}")),
+            (Some(_), Some(_)) => Err(Refused::Ambiguous),
+            _ => Err(Refused::NotWhole),
+        }
     }
 
-    fn draws(&self, q: &Question) -> bool {
+    fn lists(&self, q: &Question) -> bool {
         if self.options.len() <= q.options.len() {
             return false;
         }
@@ -638,16 +690,17 @@ impl Menu {
             };
             shown == Some(unspaced(&format!("{label}{description}")).as_str())
         };
+        added && options.iter().zip(&q.options).all(|(s, o)| reads(s, o))
+    }
+
+    fn words(&self, q: &Question) -> bool {
         let rows = self.raw_body.get(1..).unwrap_or_default();
         let gutter = rows.iter().all(|r| r.starts_with('│'));
         let text: String = rows
             .iter()
             .map(|r| r.strip_prefix('│').filter(|_| gutter).unwrap_or(r.as_str()))
             .collect();
-        added
-            && options.iter().zip(&q.options).all(|(s, o)| reads(s, o))
-            && !rows.is_empty()
-            && unspaced(&text) == unspaced(&q.text)
+        !rows.is_empty() && unspaced(&text) == unspaced(&q.text)
     }
 
     /// The review page of a call (2.1.329): under the tabs, `Review your answers`, then every
@@ -3400,6 +3453,38 @@ mod tests {
             assert!(!numbered(screen) && Menu::parse(screen).is_none());
             assert!(open_to_keys("claude", Some("live_blocked_form"), screen));
         }
+    }
+
+    #[test]
+    fn a_menu_is_a_question_unless_the_screen_makes_it_another_dialog() {
+        let question = |screen: &str| {
+            let m = Menu::parse(screen).unwrap();
+            (m.is_question(false), m.is_question(true))
+        };
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        let dialogs = [BASH, BASH_TWO, EDIT, TRUST, TRUST_LIVE, BASH_LIVE, form];
+        let plans = [PLAN, PLAN_LIVE, PLAN_TYPED_LIVE];
+        for screen in dialogs.into_iter().chain(plans) {
+            assert_eq!(question(screen), (false, false), "{screen}");
+        }
+        for screen in [QUESTION, QUESTION_LIVE] {
+            assert_eq!(question(screen), (true, true), "{screen}");
+        }
+        // No option approves and the wording is not the plan's: the workflow prompt, and a
+        // question whose options read as decisions (hand-built from the 2.1.289 capture). Each
+        // is another dialog only once the session is known to wait on another call.
+        let deferred = QUESTION_LIVE
+            .replace("1. SQLite", "1. No, defer")
+            .replace("2. Redis", "2. Later");
+        assert!(Menu::parse(&deferred).unwrap().grants());
+        for screen in [RENAMED_WORKFLOW, &deferred] {
+            assert_eq!(question(screen), (true, false), "{screen}");
+        }
+        // The plan's question wrapped by a narrow terminal still reads as the plan's.
+        let narrow = PLAN.replace("Would you like to proceed?", "Would you like to\n proceed?");
+        assert_ne!(narrow, PLAN);
+        assert_eq!(question(&narrow), (false, false));
     }
 
     #[test]

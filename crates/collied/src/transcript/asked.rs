@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::{Kind, TAIL_BYTES, Transcripts, open, tail, timestamp_ms};
-use crate::prompt::Question;
+use crate::prompt::{Question, Refused};
 use crate::runtime::AgentInfo;
 
 /// The transcript of a terminal's Claude Code session and what ties a call in it to that
@@ -14,15 +14,34 @@ pub struct Asking {
     started_at: u64,
 }
 
+/// What a session waits on, as its transcript says. "Not known" is kept apart from "nothing":
+/// only a transcript read whole to the last message says no question is pending.
+#[derive(Debug, PartialEq)]
+pub enum Waits {
+    /// One call, an AskUserQuestion: what an approval matches a question form against
+    /// ([`crate::prompt::Menu::asks`]), with the session and the call's id, which the
+    /// approval binds so that a later call asking the same question is another approval.
+    Question {
+        session: String,
+        call: String,
+        questions: Vec<Question>,
+    },
+    /// One call that is no question.
+    Other,
+    Nothing,
+    Unknown(Refused),
+}
+
 impl Transcripts {
     /// The session is the terminal's by process ([`Transcripts::holder`]).
-    pub fn asking(&self, a: &AgentInfo) -> Option<Asking> {
+    pub fn asking(&self, a: &AgentInfo) -> Result<Asking, Refused> {
         if a.agent.as_deref() != Some("claude") {
-            return None;
+            return Err(Refused::NoSession);
         }
         let (session, started_at) = self.holder(a)?;
-        Some(Asking {
-            path: self.locate(Kind::Claude, &session, a)?,
+        let path = self.locate(Kind::Claude, &session, a);
+        Ok(Asking {
+            path: path.ok_or(Refused::Transcript)?,
             session,
             started_at,
         })
@@ -30,34 +49,41 @@ impl Transcripts {
 }
 
 impl Asking {
-    /// The questions of the one call the session waits on, when that call is
-    /// AskUserQuestion: what an approval matches a question form against
-    /// ([`crate::prompt::Menu::asks`]). The call must be that session's and no older than
-    /// its process, so one that a killed session left in a transcript another process
-    /// resumed is none.
-    pub fn questions(&self) -> Option<Vec<Question>> {
-        let (file, len, _) = open(&self.path)?;
-        let text = tail(file, len).ok()?;
-        pending(&text, len <= TAIL_BYTES, &self.session, self.started_at)
+    pub fn waits(&self) -> Waits {
+        let read = open(&self.path).and_then(|(file, len, _)| Some((tail(file, len).ok()?, len)));
+        match read {
+            Some((text, len)) => pending(&text, len <= TAIL_BYTES, &self.session, self.started_at),
+            None => Waits::Unknown(Refused::Transcript),
+        }
     }
 }
 
 /// Read from the transcript's end up to the last assistant message's start: an assistant line
 /// of another message, or, when the lines carry no message id, a `user` line that is not only
 /// tool results. Claude Code writes one line per content block, so parallel calls are
-/// several lines of one message, and a result or another line can come between them. Exactly
-/// one call may be without a result: with a second one, the screen does not say which dialog
-/// is drawn. A `user` line that is no result under the last call ends the turn: nothing is
-/// pending. `whole` says the text starts at the file's start; otherwise a read that ends
-/// before the message's start proves nothing about the calls above it and gives none.
-fn pending(text: &str, whole: bool, session: &str, since: u64) -> Option<Vec<Question>> {
+/// several lines of one message, and a result or another line can come between them. With
+/// more than one call without a result, the screen does not say which dialog is drawn. A
+/// `user` line that is no result under the last call ends the turn: nothing is pending.
+///
+/// Nothing is concluded from a read that is not whole. A last line without its newline is
+/// one Claude Code is still writing, and a line that does not parse may be cut: either can
+/// be the result of the call above it, or a second call. `whole` says the text starts at the
+/// file's start; otherwise a read that ends before the message's start says nothing of the
+/// calls above it. The one call must be the session's and no older than its process
+/// (`since`), so one that a killed session left in a transcript another process resumed is
+/// not this terminal's.
+fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
+    let unknown = Waits::Unknown(Refused::Transcript);
+    if !text.is_empty() && !text.ends_with('\n') {
+        return unknown;
+    }
     let mut results = Vec::new();
     let mut calls = Vec::new();
     let mut message = None;
     let mut bounded = whole;
-    for line in text.lines().rev() {
+    for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
+            return unknown;
         };
         if v["isSidechain"] == true {
             continue;
@@ -95,20 +121,24 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Option<Vec<Que
             _ => {}
         }
     }
-    let [(call, by, at)] = &calls[..] else {
-        return None;
+    let (call, by, at) = match &calls[..] {
+        _ if !bounded => return unknown,
+        [] => return Waits::Nothing,
+        [one] => one,
+        _ => return Waits::Unknown(Refused::Several),
     };
     let fresh = at
         .as_str()
         .and_then(timestamp_ms)
         .is_some_and(|at| at >= since);
-    if !bounded || call["name"] != "AskUserQuestion" || by != session || !fresh {
-        return None;
+    if by != session || !fresh {
+        return Waits::Unknown(Refused::Stale);
     }
-    let questions = call["input"]["questions"].as_array()?;
-    let questions: Option<Vec<Question>> = questions
-        .iter()
-        .map(|q| {
+    if call["name"] != "AskUserQuestion" {
+        return Waits::Other;
+    }
+    let questions = call["input"]["questions"].as_array().and_then(|questions| {
+        let questions = questions.iter().map(|q| {
             let options = q["options"].as_array()?.iter().map(|o| {
                 let description = o["description"].as_str().unwrap_or_default();
                 Some((o["label"].as_str()?.to_owned(), description.to_owned()))
@@ -118,9 +148,17 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Option<Vec<Que
                 options: options.collect::<Option<_>>()?,
                 multi: q["multiSelect"] == true,
             })
-        })
-        .collect();
-    questions.filter(|q| !q.is_empty())
+        });
+        questions.collect::<Option<Vec<_>>>()
+    });
+    match (call["id"].as_str(), questions) {
+        (Some(id), Some(questions)) if !questions.is_empty() => Waits::Question {
+            session: session.to_owned(),
+            call: id.to_owned(),
+            questions,
+        },
+        _ => unknown,
+    }
 }
 
 #[cfg(test)]
@@ -167,14 +205,31 @@ mod tests {
     const FORMS: [(&str, &str); 6] = [ONE, FIRST, MULTI, CHECKED, REVIEW, MULTILINE];
     const SESSION: &str = "00000000-0000-4000-8000-000000000000";
 
+    /// A transcript read whole, each of `rows` a complete line.
+    fn waits(rows: &str, whole: bool, since: u64) -> Waits {
+        pending(&format!("{}\n", rows.trim_end()), whole, SESSION, since)
+    }
+
     fn asked(transcript: &str) -> Option<Vec<Question>> {
-        pending(transcript, true, SESSION, 0)
+        match waits(transcript, true, 0) {
+            Waits::Question { questions, .. } => Some(questions),
+            _ => None,
+        }
+    }
+
+    fn says(waits: Waits) -> String {
+        match waits {
+            Waits::Question { questions, .. } => format!("{} asked", questions.len()),
+            Waits::Other => "another call".to_owned(),
+            Waits::Nothing => "nothing".to_owned(),
+            Waits::Unknown(why) => why.as_str().to_owned(),
+        }
     }
 
     /// The options of a screen that `Approvals::screen` answers beside a pending call.
     fn offered(screen: &str, asked: &[Question]) -> Option<Vec<String>> {
         Menu::parse(screen)
-            .filter(|m| m.on_screen() && m.asks(asked).is_some())
+            .filter(|m| m.on_screen() && m.asks(asked).is_ok())
             .map(|m| m.heads)
     }
 
@@ -226,8 +281,12 @@ mod tests {
         assert_ne!(bound(MULTI), bound(REVIEW));
         assert_eq!(bound(MULTI), bound(CHECKED));
         for (screen, transcript) in [BASH, PLAN] {
-            assert_eq!(asked(transcript), None, "{screen}");
-            assert!(!Menu::parse(screen).unwrap().is_question(), "{screen}");
+            assert_eq!(waits(transcript, true, 0), Waits::Other, "{screen}");
+            let menu = Menu::parse(screen).unwrap();
+            assert!(
+                !menu.is_question(true) && !menu.is_question(false),
+                "{screen}"
+            );
         }
     }
 
@@ -334,31 +393,46 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         assert_ne!(drawn, screen);
         let mut call = asked(transcript).unwrap();
         call[1] = call[0].clone();
-        call[0].text = text;
+        call[0].text = text.clone();
         assert!(offered(&drawn, &call[1..]).is_some(), "reads as the second");
         assert_eq!(offered(&drawn, &call), None);
         call[0].text = "Which cache backend comes first?".into();
         assert_eq!(offered(screen, &call), None, "drawn whole too");
+
+        // The same spoof with the first question's options worded as the second's, the words
+        // split otherwise between label and description: the screen draws both alike.
+        let (label, description) = call[1].options[0].clone();
+        let (moved, rest) = description.split_once(' ').unwrap();
+        call[0].text = text;
+        call[0].options[0] = (format!("{label} {moved}"), rest.to_owned());
+        assert_ne!(call[0].options, call[1].options);
+        assert!(offered(&drawn, &call[1..]).is_some());
+        let menu = Menu::parse(&drawn).unwrap();
+        assert_eq!(menu.asks(&call), Err(Refused::Ambiguous));
     }
 
     #[test]
     fn only_the_last_turns_one_call_without_a_result_is_pending() {
         let at = "2026-11-20T11:35:11.762Z";
         let then = timestamp_ms(at).unwrap();
-        assert_eq!(pending(ONE.1, true, SESSION, then).unwrap().len(), 1);
+        assert_eq!(says(waits(ONE.1, true, then)), "1 asked");
         assert_eq!(
-            pending(ONE.1, true, SESSION, then + 1),
-            None,
+            says(waits(ONE.1, true, then + 1)),
+            "stale call",
             "older than the process"
         );
         let other = "11111111-0000-4000-8000-000000000000";
-        assert_eq!(pending(ONE.1, true, other, 0), None, "another session's");
+        assert_eq!(
+            says(pending(ONE.1, true, other, 0)),
+            "stale call",
+            "another session's"
+        );
         // The first call was declined, a prompt followed, and the second call is pending.
         let rows: Vec<&str> = FIRST.1.lines().collect();
-        let upto = |n: usize| asked(&rows[..n].join("\n")).map(|q| q.len());
+        let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
         assert_eq!(
             [upto(2), upto(3), upto(4), upto(5), upto(6)],
-            [Some(1), None, None, None, Some(2)]
+            ["1 asked", "nothing", "nothing", "nothing", "2 asked"]
         );
 
         let call = |id: &str, message: &str, name: &str| {
@@ -377,54 +451,70 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         };
         let prompt = || json!({"type": "user", "message": {"content": "go"}}).to_string();
         let side = json!({"type": "user", "isSidechain": true, "message": {"content": "go"}});
-        let asks =
-            |rows: &[String], whole| pending(&rows.join("\n"), whole, SESSION, 0).map(|q| q.len());
+        let reads = |rows: &[String], whole| says(waits(&rows.join("\n"), whole, 0));
         assert_eq!(
-            asks(&[prompt(), ask("a", "m1"), side.to_string()], true),
-            Some(1)
+            reads(&[prompt(), ask("a", "m1"), side.to_string()], true),
+            "1 asked"
         );
         assert_eq!(
-            asks(&[prompt(), call("a", "m1", "ExitPlanMode")], true),
-            None
+            reads(&[prompt(), call("a", "m1", "ExitPlanMode")], true),
+            "another call"
         );
         assert_eq!(
-            asks(&[ask("a", "m1"), prompt()], true),
-            None,
+            reads(&[ask("a", "m1"), prompt()], true),
+            "nothing",
             "a prompt since"
         );
+        let several = "several pending calls";
         assert_eq!(
-            asks(&[prompt(), ask("a", "m1"), prompt(), ask("c", "m1")], true),
-            None,
-            "two questions pending, a line that is no result between them"
+            reads(&[prompt(), ask("a", "m1"), prompt(), ask("c", "m1")], true),
+            several,
+            "two questions, a line that is no result between them"
         );
         assert_eq!(
-            asks(&[prompt(), call("b", "m1", "Bash"), ask("a", "m1")], true),
-            None,
-            "a Bash call pending beside it"
+            reads(&[prompt(), call("b", "m1", "Bash"), ask("a", "m1")], true),
+            several,
+            "a Bash call beside it"
         );
         let read = [call("b", "m1", "Read"), result("b")];
         assert_eq!(
-            asks(
+            reads(
                 &[&[prompt(), ask("a", "m1")], &read[..], &[ask("c", "m1")]].concat(),
                 true
             ),
-            None,
-            "two questions pending, a result between them"
+            several,
+            "two questions, a result between them"
         );
         assert_eq!(
-            asks(&[&[prompt()], &read[..], &[ask("a", "m1")]].concat(), true),
-            Some(1)
+            reads(&[&[prompt()], &read[..], &[ask("a", "m1")]].concat(), true),
+            "1 asked"
         );
         // A read that starts inside the turn: bounded by another message's line, or not.
+        let unknown = "transcript unreadable or incomplete";
         let earlier = [call("b", "m0", "Read"), result("b")];
         assert_eq!(
-            asks(&[&earlier[..], &[ask("a", "m1")]].concat(), false),
-            Some(1)
+            reads(&[&earlier[..], &[ask("a", "m1")]].concat(), false),
+            "1 asked"
         );
-        assert_eq!(asks(&[&read[..], &[ask("a", "m1")]].concat(), false), None);
         assert_eq!(
-            asks(&[&read[..], &[ask("a", "m1")]].concat(), true),
-            Some(1)
+            reads(&[&read[..], &[ask("a", "m1")]].concat(), false),
+            unknown
         );
+        assert_eq!(
+            reads(&[&read[..], &[ask("a", "m1")]].concat(), true),
+            "1 asked"
+        );
+
+        // A last line that Claude Code is still writing, the call's result or a second call:
+        // nothing is known, whether the cut line has its newline yet or not.
+        let asked = [prompt(), ask("a", "m1")].join("\n");
+        for (next, whole) in [(result("a"), "nothing"), (ask("c", "m1"), several)] {
+            let cut = &next[..next.len() / 2];
+            let read = |text: String| says(pending(&text, true, SESSION, 0));
+            assert_eq!(read(format!("{asked}\n{next}\n")), whole);
+            assert_eq!(read(format!("{asked}\n{cut}")), unknown);
+            assert_eq!(read(format!("{asked}\n{cut}\n")), unknown);
+            assert_eq!(read(format!("{asked}\n{next}")), unknown);
+        }
     }
 }

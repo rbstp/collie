@@ -4,6 +4,7 @@ mod live;
 mod provider_subagents;
 mod subagents;
 
+pub use asked::Waits;
 pub(crate) use subagents::alive;
 
 use std::collections::{HashMap, HashSet};

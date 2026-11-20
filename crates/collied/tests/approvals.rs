@@ -94,6 +94,11 @@ const ASKED_MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
 const ASKED_REVIEW: (&str, &str) = capture!("two-questions-after-tab");
 const ASKED_TALL: (&str, &str) = capture!("question-tall-12-rows");
 const ASKED_BASH: (&str, &str) = capture!("bash");
+// Claude Code 2.1.300's dynamic workflow prompt: `Yes, run it`, `View raw script`, `No`.
+const WORKFLOW: &str = include_str!("fixtures/claude-2.1.300/renamed-workflow.detection.txt");
+// A transcript whose last line Claude Code is still writing: what the session waits on is
+// not known.
+const CUT: &str = "{\"type\":\"assi";
 const ASKED_PLAN: (&str, &str) = capture!("plan");
 // The session and folder of those transcripts, which the rig's own process stands for.
 const SESSION: &str = "00000000-0000-4000-8000-000000000000";
@@ -2195,6 +2200,16 @@ async fn a_question_form_is_answered_only_as_its_transcript_asks_it() {
     assert!(rig.mutations().is_empty());
     rig.transcript(&asked);
     let b = rig.needed().await;
+    // That call ended and another asks the same question, the screen the same: the approval
+    // was for the first call.
+    assert_ne!(asked, asked.replace("toolu_scrubbed", "toolu_next"));
+    rig.transcript(&asked.replace("toolu_scrubbed", "toolu_next"));
+    assert_eq!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+    let b = rig.needed().await;
     assert_eq!(
         resolved(rig.choose(&b, 1, &b.nonce).await),
         ApprovalOutcome::Chosen {
@@ -2209,6 +2224,124 @@ async fn a_question_form_is_answered_only_as_its_transcript_asks_it() {
             json!({"target": "w7:p1", "keys": ["enter"]}),
         ]
     );
+}
+
+#[tokio::test]
+async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    // Hand-built from the 2.1.289 capture: a question whose options read as decisions and
+    // approve nothing. Not known what the session waits on, then known to wait on nothing,
+    // then on that question.
+    let deferred = QUESTION_LIVE
+        .replace("1. SQLite", "1. No, defer")
+        .replace("2. Redis", "2. Later");
+    let (question, options) = ASKS_LIVE[0];
+    let asked = [("No, defer", options[0].1), ("Later", options[1].1)];
+    let asked = asking(&[(question, &asked[..])]);
+    for (transcript, choices) in [(CUT, 0), ("", 0), (&*asked, 4)] {
+        show(&rig, "live_blocked_form", &deferred, transcript);
+        let a = rig.needed().await;
+        assert_eq!(a.choices.len(), choices, "{transcript}");
+        assert!(a.options.is_empty() && !a.accepts_input && !a.has_text_field);
+    }
+
+    // The workflow prompt approves nothing either and is not worded as the plan is: it is
+    // chosen from once the session is known to wait on a call that is no question.
+    show(&rig, "dynamic_workflow_prompt", WORKFLOW, CUT);
+    assert!(rig.needed().await.choices.is_empty());
+    show(
+        &rig,
+        "dynamic_workflow_prompt",
+        WORKFLOW,
+        &fresh(ASKED_BASH.1),
+    );
+    assert_eq!(rig.needed().await.choices.len(), 3);
+    // Not known: the plan prompt is told by its wording, a permission prompt by its approval.
+    show(&rig, "legacy_no_prompt_blocker", ASKED_PLAN.0, CUT);
+    assert_eq!(rig.needed().await.choices.len(), 3);
+    show(&rig, "bash_permission_prompt", ASKED_BASH.0, CUT);
+    assert_eq!(rig.needed().await.options.len(), 3);
+    assert!(rig.mutations().is_empty());
+}
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_refused_question_form_is_logged_once_with_its_reason() {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let refusals = || {
+        let text = String::from_utf8_lossy(&logs.0.lock().unwrap()).into_owned();
+        let refusal = |l: &&str| l.contains("question form not answered from the phone");
+        let lines = text.lines().filter(refusal).map(str::to_owned);
+        lines.collect::<Vec<_>>()
+    };
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    show(&rig, "bash_permission_prompt", ASKED_BASH.0, CUT);
+    rig.needed().await;
+    assert!(refusals().is_empty(), "a permission prompt is no question");
+
+    show(&rig, "live_blocked_form", ASKED_ONE.0, CUT);
+    rig.needed().await;
+    for _ in 0..3 {
+        rig.observe().await;
+    }
+    show(&rig, "live_blocked_form", ASKED_MULTI.0, ASKED_MULTI.1);
+    rig.needed().await;
+    show(
+        &rig,
+        "live_blocked_form",
+        ASKED_REVIEW.0,
+        &fresh(ASKED_ONE.1),
+    );
+    rig.needed().await;
+    let lines = refusals();
+    let reasons = [
+        "transcript unreadable or incomplete",
+        "stale call",
+        "question not drawn whole",
+    ];
+    assert_eq!(lines.len(), reasons.len(), "{lines:?}");
+    for (line, reason) in lines.iter().zip(reasons) {
+        assert!(line.contains("INFO") && line.contains(TERMINAL), "{line}");
+        assert!(line.contains(reason), "{line}");
+        for told in ["cache", "SQLite", "Lint", "planlab", SESSION] {
+            assert!(!line.contains(told), "{line}");
+        }
+    }
 }
 
 #[tokio::test]
