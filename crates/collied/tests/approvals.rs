@@ -94,6 +94,8 @@ const ASKED_MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
 const ASKED_REVIEW: (&str, &str) = capture!("two-questions-after-tab");
 const ASKED_TALL: (&str, &str) = capture!("question-tall-12-rows");
 const ASKED_BASH: (&str, &str) = capture!("bash");
+// Claude Code 2.1.328's Edit prompt: `Yes` is its only option that reads as an approval.
+const EDIT: &str = include_str!("fixtures/claude-2.1.328/edit.tmux.txt");
 // Claude Code 2.1.300's dynamic workflow prompt: `Yes, run it`, `View raw script`, `No`.
 const WORKFLOW: &str = include_str!("fixtures/claude-2.1.300/renamed-workflow.detection.txt");
 // A transcript whose last line Claude Code is still writing: what the session waits on is
@@ -449,6 +451,7 @@ struct Rig {
     events: Option<broadcast::Receiver<Event>>,
     audit: PathBuf,
     audit_log: Arc<Audit>,
+    claude: PathBuf,
     transcript: PathBuf,
     _dir: tempfile::TempDir,
 }
@@ -554,9 +557,24 @@ impl Rig {
             events: Some(events),
             audit,
             audit_log,
+            claude,
             transcript,
             _dir: dir,
         }
+    }
+
+    /// The session this process claims from now on, its transcript `text`.
+    fn session(&self, id: &str, text: &str) {
+        let pid = std::process::id();
+        let session = json!({
+            "pid": pid, "sessionId": id, "cwd": CWD, "startedAt": collied::now_ms(),
+        });
+        std::fs::write(
+            self.claude.join(format!("sessions/{pid}.json")),
+            session.to_string(),
+        )
+        .unwrap();
+        std::fs::write(self.transcript.with_file_name(format!("{id}.jsonl")), text).unwrap();
     }
 
     fn transcript(&self, text: &str) {
@@ -2190,7 +2208,7 @@ async fn a_question_form_is_answered_only_as_its_transcript_asks_it() {
     show(&rig, (ASKED_ONE.0, &asked));
     let a = rig.needed().await;
     let result = json!({"type": "user", "message": {"content": [
-        {"type": "tool_result", "tool_use_id": "toolu_scrubbed"},
+        {"type": "tool_result", "tool_use_id": "toolu_scrubbed_1"},
     ]}});
     rig.transcript(&format!("{asked}{result}\n"));
     assert_eq!(
@@ -2202,8 +2220,8 @@ async fn a_question_form_is_answered_only_as_its_transcript_asks_it() {
     let b = rig.needed().await;
     // That call ended and another asks the same question, the screen the same: the approval
     // was for the first call.
-    assert_ne!(asked, asked.replace("toolu_scrubbed", "toolu_next"));
-    rig.transcript(&asked.replace("toolu_scrubbed", "toolu_next"));
+    assert_ne!(asked, asked.replace("toolu_scrubbed_1", "toolu_next"));
+    rig.transcript(&asked.replace("toolu_scrubbed_1", "toolu_next"));
     assert_eq!(
         resolved(rig.choose(&b, 1, &b.nonce).await),
         ApprovalOutcome::Superseded
@@ -2239,14 +2257,16 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
     };
     // Hand-built from the 2.1.289 capture: a question whose options read as decisions and
     // approve nothing. Not known what the session waits on, then known to wait on nothing,
-    // then on that question.
+    // on a Bash call, then on that question.
     let deferred = QUESTION_LIVE
         .replace("1. SQLite", "1. No, defer")
         .replace("2. Redis", "2. Later");
     let (question, options) = ASKS_LIVE[0];
     let asked = [("No, defer", options[0].1), ("Later", options[1].1)];
     let asked = asking(&[(question, &asked[..])]);
-    for (transcript, choices) in [(CUT, 0), ("", 0), (&*asked, 4)] {
+    // Nor does a call that is no question make it another dialog: it is drawn as a question.
+    let bash = fresh(ASKED_BASH.1);
+    for (transcript, choices) in [(CUT, 0), ("", 0), (&*bash, 0), (&*asked, 4)] {
         show(&rig, "live_blocked_form", &deferred, transcript);
         let a = rig.needed().await;
         assert_eq!(a.choices.len(), choices, "{transcript}");
@@ -2270,6 +2290,82 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
     show(&rig, "bash_permission_prompt", ASKED_BASH.0, CUT);
     assert_eq!(rig.needed().await.options.len(), 3);
     assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
+async fn a_question_approval_is_bound_to_its_session() {
+    let mut rig = Rig::start(TTL).await;
+    let asked = fresh(ASKED_ONE.1);
+    rig.transcript(&asked);
+    rig.herdr.with(|h| {
+        h.rule = "live_blocked_form".into();
+        h.text = ASKED_ONE.0.into();
+    });
+    let a = rig.needed().await;
+    assert_eq!(a.choices.len(), 5);
+    // The terminal's process moves to another session whose transcript holds the same call
+    // under the same id, as a copy of the first would: the screen, the question and the call
+    // id are the same, and the approval was for the first session.
+    let other = "11111111-0000-4000-8000-000000000000";
+    rig.session(other, &asked.replace(SESSION, other));
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+    let b = rig.needed().await;
+    assert!(matches!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Chosen { choice: 1, .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_note_is_typed_when_yes_is_the_only_approval() {
+    // Tab turns `Yes` into its amend field and the note into `Yes, <note>`: no option reads as
+    // an approval any more, on the same permission prompt. Whatever the transcript says of
+    // the session: what it waits on not known, nothing, or the Edit call.
+    let edit = json!({"type": "assistant", "sessionId": SESSION, "message": {"content": [
+        {"type": "tool_use", "id": "toolu_1", "name": "Edit", "input": {}},
+    ]}});
+    let note = "keep the old name";
+    for transcript in [CUT, "", &fresh(&edit.to_string())] {
+        let mut rig = Rig::start(TTL).await;
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = "generic_permission_prompt".into();
+            h.text = EDIT.into();
+        });
+        let a = rig.needed().await;
+        assert_eq!(a.options, [Decision::Approve, Decision::Deny]);
+        let outcome = resolved(
+            rig.decide_with_note(&a, Decision::Approve, note, yes())
+                .await,
+        );
+        assert_eq!(
+            outcome,
+            ApprovalOutcome::Applied {
+                decision: Decision::Approve,
+                by: LABEL.into()
+            },
+            "{transcript}"
+        );
+        assert_eq!(
+            rig.herdr.params("pane.send_text"),
+            [json!({"pane_id": "w7:p1", "text": note})]
+        );
+    }
+    // The same prompt left in its amend state, as after Tab on the Mac (hand-built from the
+    // capture): its options are listed, with no decision, as a permission prompt's are.
+    let mut rig = Rig::start(TTL).await;
+    let amended = EDIT.replace("1. Yes\n", "1. Yes, and tell Claude what to do next\n");
+    assert_ne!(amended, EDIT);
+    rig.herdr.with(|h| {
+        h.rule = "generic_permission_prompt".into();
+        h.text = amended;
+    });
+    let a = rig.needed().await;
+    assert!(a.options.is_empty() && a.choices.len() == 3);
 }
 
 #[derive(Clone, Default)]
@@ -2315,10 +2411,13 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     assert!(refusals().is_empty(), "a permission prompt is no question");
 
     show(&rig, "live_blocked_form", ASKED_ONE.0, CUT);
-    rig.needed().await;
+    let first = rig.needed().await;
+    // The cursor moves in the refused form: another approval for the same dialog, no line.
+    rig.herdr.with(|h| h.text = move_cursor(&h.text, 1));
     for _ in 0..3 {
         rig.observe().await;
     }
+    assert_ne!(rig.approvals.pending()[0].approval_id, first.approval_id);
     show(&rig, "live_blocked_form", ASKED_MULTI.0, ASKED_MULTI.1);
     rig.needed().await;
     show(
@@ -2328,9 +2427,10 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
         &fresh(ASKED_ONE.1),
     );
     rig.needed().await;
-    // The question from under its top rule, as a terminal too short for it would show it
-    // (hand-built from the capture), its call pending.
-    let (_, tall) = ASKED_ONE.0.split_once(" ☐ Cache\n").unwrap();
+    // The question from under its top rule, as a terminal one row too short for it would
+    // show it (hand-built from the capture), its call pending: it draws the call whole and
+    // has no top.
+    let tall = &ASKED_ONE.0[ASKED_ONE.0.find(" ☐ Cache\n").unwrap()..];
     show(&rig, "live_blocked_form", tall, &fresh(ASKED_ONE.1));
     assert!(rig.needed().await.choices.is_empty());
     let lines = refusals();
@@ -2954,6 +3054,31 @@ async fn a_note_is_typed_into_the_amend_field_then_enter() {
     assert_eq!(
         rig.audit()[1]["result"],
         format!("deny with note: applied terminal={TERMINAL} keys=down,down,down,tab,enter")
+    );
+
+    // The Edit prompt has no Always allow option to keep reading as an approval once `Yes`
+    // is the note.
+    rig.herdr.with(|h| {
+        h.rule = "generic_permission_prompt".into();
+        h.text = EDIT.into();
+        set_status(h, "blocked");
+    });
+    let c = rig.needed().await;
+    assert_eq!(c.options, [Decision::Approve, Decision::Deny]);
+    let outcome = resolved(
+        rig.decide_with_note(&c, Decision::Approve, note, yes())
+            .await,
+    );
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied {
+            decision: Decision::Approve,
+            ..
+        }
+    ));
+    assert_eq!(
+        rig.audit()[2]["result"],
+        format!("approve with note: applied terminal={TERMINAL} keys=tab,enter")
     );
 }
 

@@ -56,6 +56,10 @@ struct Screen {
     blocked: bool,
     settings_picker: bool,
     menu: Option<Menu>,
+    /// The menu on screen whether or not the question rule lets the phone answer it: what a
+    /// decision under way compares with the menu it claimed ([`Menu::only_changed`]). The
+    /// note it types turns `Yes` into text that reads as no approval, on the same prompt.
+    drawn: Option<Menu>,
     offered: Vec<(Decision, usize)>,
     accepts_input: bool,
     has_text_field: bool,
@@ -114,8 +118,9 @@ struct Inner {
     notified: HashMap<String, ApprovalId>,
     /// A blocked Rex agent's report and the reconciles that read its screen.
     rex_reads: HashMap<String, (u64, u8)>,
-    /// The dialog whose refusal was last logged per terminal, so each is logged once.
-    refused: HashMap<String, [u8; 32]>,
+    /// The blocked episode and reason of the refusal last logged per terminal, so a dialog is
+    /// logged once, whatever its cursor or its approval's expiry reissue.
+    refused: HashMap<String, (u64, Refused)>,
 }
 
 impl Inner {
@@ -515,7 +520,8 @@ impl Approvals {
         let headless = |m: &&Menu| !m.on_screen() && m.is_question(false);
         let refused =
             refused.or_else(|| (parsed.as_ref().filter(headless)).map(|_| Refused::NotWhole));
-        let menu = parsed.filter(|m| m.on_screen() && refused.is_none());
+        let drawn = parsed.filter(Menu::on_screen);
+        let menu = drawn.clone().filter(|_| refused.is_none());
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
@@ -561,6 +567,7 @@ impl Approvals {
             has_text_field,
             supports_note,
             menu,
+            drawn,
             offered,
             snippet,
             reason,
@@ -633,8 +640,8 @@ impl Approvals {
             }
             // Never the question's text, its labels or a path: the reason and the terminal.
             if let Some(why) = screen.refused
-                && (inner.refused).insert(a.terminal_id.clone(), screen.fingerprint)
-                    != Some(screen.fingerprint)
+                && (inner.refused).insert(a.terminal_id.clone(), (screen.seq, why))
+                    != Some((screen.seq, why))
             {
                 tracing::info!(
                     terminal = %a.terminal_id,
@@ -743,7 +750,7 @@ impl Approvals {
                         && s.pane_id == screen.pane_id
                         && s.reason == screen.reason =>
                 {
-                    if s.menu.as_ref().is_some_and(&done) {
+                    if s.drawn.as_ref().is_some_and(&done) {
                         return true;
                     }
                 }

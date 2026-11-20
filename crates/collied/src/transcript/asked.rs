@@ -78,6 +78,7 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
         return unknown;
     }
     let mut results = Vec::new();
+    let mut made = Vec::new();
     let mut calls = Vec::new();
     let mut message = None;
     let mut bounded = whole;
@@ -99,12 +100,12 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
                     bounded = true;
                     break;
                 }
-                results.extend(
-                    blocks
-                        .iter()
-                        .filter(result)
-                        .map(|b| b["tool_use_id"].clone()),
-                );
+                let ids = blocks.iter().filter(result).map(|b| &b["tool_use_id"]);
+                // A result above its own call says the file is not what Claude Code wrote.
+                if ids.clone().any(|id| made.contains(id)) {
+                    return unknown;
+                }
+                results.extend(ids.cloned());
             }
             Some("assistant") => {
                 let id = &v["message"]["id"];
@@ -113,6 +114,7 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
                     break;
                 }
                 for call in blocks.iter().filter(|b| b["type"] == "tool_use") {
+                    made.push(call["id"].clone());
                     if !results.contains(&call["id"]) {
                         calls.push((call.clone(), v["sessionId"].clone(), v["timestamp"].clone()));
                     }
@@ -502,6 +504,16 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         );
         assert_eq!(
             reads(&[&read[..], &[ask("a", "m1")]].concat(), true),
+            "1 asked"
+        );
+
+        // A result above the call it answers: not a pending call.
+        assert_eq!(
+            reads(&[prompt(), result("a"), ask("a", "m1")], true),
+            unknown
+        );
+        assert_eq!(
+            reads(&[prompt(), result("b"), ask("a", "m1")], true),
             "1 asked"
         );
 
