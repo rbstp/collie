@@ -2598,6 +2598,11 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     rig.needed().await;
     show(&rig, "live_blocked_form", ASKED_ONE.0, &fresh(SCRIPTED.1));
     rig.needed().await;
+    // The same script with an apostrophe in a comment: the read may have lost a literal.
+    let stray = fresh(SCRIPTED.1).replace("await tools", "/* don't */ await tools");
+    assert_ne!(stray, fresh(SCRIPTED.1));
+    show(&rig, "live_blocked_form", SCRIPTED.0, &stray);
+    assert!(rig.needed().await.choices.is_empty());
     let lines = refusals();
     let reasons = [
         "transcript unreadable or incomplete",
@@ -2606,6 +2611,7 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
         "question not drawn whole",
         "another call pending",
         "question not found in the pending script",
+        "pending script not read whole",
     ];
     assert_eq!(lines.len(), reasons.len(), "{lines:?}");
     for (line, reason) in lines.iter().zip(reasons) {

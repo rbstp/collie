@@ -27,11 +27,12 @@ pub enum Waits {
         questions: Vec<Question>,
     },
     /// One call, a Code Mode script that names AskUserQuestion: its whole string literals,
-    /// which a question form is matched against ([`crate::prompt::Menu::scripted`]).
+    /// which a question form is matched against ([`crate::prompt::Menu::scripted`]), or none
+    /// when the script was not read whole.
     Script {
         session: String,
         call: String,
-        literals: Vec<String>,
+        literals: Option<Vec<String>>,
     },
     /// One call that is no question.
     Other,
@@ -185,49 +186,44 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
 
 /// The string literals of a script, each the text between two matching quote characters
 /// (`'`, `"` or a backtick) with `\n`, an escaped quote or backslash and `\u` escapes
-/// undone. The script is not parsed: a quote in a comment or a regular expression opens a
-/// literal like any other, and what follows can be read out of step, which loses literals
-/// and adds none that a script could not hold outright. A literal with any other escape, a
-/// template that holds `${`, and one a line break ends (which also brings the read back in
-/// step after a stray apostrophe) are left out: none can be compared as it is written.
-fn literals(code: &str) -> Vec<String> {
+/// undone; none when the script was not read whole. The script is not parsed, so a quote in
+/// a comment or a regular expression opens a literal like any other and the read goes on out
+/// of step, past literals it then never sees. A form is matched against every literal
+/// ([`crate::prompt::Menu::scripted`] refuses one that a longer literal ends in), so a read
+/// that may have lost one answers nothing: a literal a line break or the script's end leaves
+/// open, which is where a stray quote shows, a template that holds `${`, whose text is not
+/// what it gives and which can hold literals of its own, and an escape that is not undone.
+fn literals(code: &str) -> Option<Vec<String>> {
     let mut out = Vec::new();
     let mut chars = code.chars().peekable();
     while let Some(quote) = chars.next() {
         if !matches!(quote, '\'' | '"' | '`') {
             continue;
         }
-        let mut text = Some(String::new());
-        let closed = loop {
-            let undone = match chars.next() {
-                None => break false,
-                Some('\n') if quote != '`' => break false,
-                Some(c) if c == quote => break true,
-                Some('$') if quote == '`' && chars.peek() == Some(&'{') => None,
-                Some('\\') => match chars.next() {
-                    Some('n') => Some('\n'),
-                    Some(c @ ('\'' | '"' | '`' | '\\')) => Some(c),
-                    Some('u') => {
+        let mut text = String::new();
+        loop {
+            text.push(match chars.next()? {
+                '\n' | '\r' if quote != '`' => return None,
+                '$' if quote == '`' && chars.peek() == Some(&'{') => return None,
+                c if c == quote => break,
+                '\\' => match chars.next()? {
+                    'n' => '\n',
+                    c @ ('\'' | '"' | '`' | '\\') => c,
+                    'u' => {
                         let digits: String = match chars.next_if_eq(&'{') {
                             Some(_) => chars.by_ref().take_while(|c| *c != '}').collect(),
                             None => chars.by_ref().take(4).collect(),
                         };
-                        u32::from_str_radix(&digits, 16)
-                            .ok()
-                            .and_then(char::from_u32)
+                        char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?
                     }
-                    _ => None,
+                    _ => return None,
                 },
                 c => c,
-            };
-            match (undone, &mut text) {
-                (Some(c), Some(text)) => text.push(c),
-                _ => text = None,
-            }
-        };
-        out.extend(text.filter(|_| closed));
+            });
+        }
+        out.push(text);
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -295,7 +291,7 @@ mod tests {
     fn says(waits: Waits) -> String {
         match waits {
             Waits::Question { questions, .. } => format!("{} asked", questions.len()),
-            Waits::Script { literals, .. } => format!("a script, {} literals", literals.len()),
+            Waits::Script { .. } => "a script".to_owned(),
             Waits::Other => "another call".to_owned(),
             Waits::Nothing => "nothing".to_owned(),
             Waits::Unknown(why) => why.as_str().to_owned(),
@@ -611,14 +607,28 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     fn scripts(screen: &str, code: &str) -> Result<Vec<String>, Refused> {
         let menu = Menu::parse(screen).filter(Menu::on_screen);
         let menu = menu.ok_or(Refused::NotWhole)?;
-        menu.scripted(&literals(code)).map(|_| menu.heads)
+        let literals = literals(code).ok_or(Refused::ScriptNotRead)?;
+        menu.scripted(&literals).map(|_| menu.heads)
     }
 
     #[test]
     fn a_scripts_literals_are_read_whole_or_not_at_all() {
-        let code = r#"f('x', "y\n\"z", `t`, `u${v}`, 'w\q', 'it\'s', '\u00e9\u{1F600}') // don't
-'k' + 'un"#;
-        assert_eq!(literals(code), ["x", "y\n\"z", "t", "it's", "é😀", "k"]);
+        let code = r#"f('x', "y\n\"z", `t`, 'it\'s', '\u00e9\u{1F600}')"#;
+        let read = ["x", "y\n\"z", "t", "it's", "é😀"].map(str::to_owned);
+        assert_eq!(literals(code), Some(read.to_vec()));
+        // What may have lost a literal: a substitution, an escape that is not undone (a tab, a
+        // surrogate), a quote a line break, a carriage return or the script's end leaves open.
+        for lost in [
+            "`u${v}`",
+            "'w\\tq'",
+            "'\\uD83D\\uDE00'",
+            "// don't\n'k'",
+            "'a\rb'",
+            "'un",
+            "`un",
+        ] {
+            assert_eq!(literals(&format!("{code}; {lost}")), None, "{lost}");
+        }
     }
 
     #[test]
@@ -657,11 +667,28 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         let asks = "'Which option do you want to pick for this test?'";
         for written in [
             "'Which option do you want ' + 'to pick for this test?'",
-            "`Which option do you want to pick for this ${'test'}?`",
-            "'Which option do you want to pick for this\\x20test?'",
+            "'Which option do you want to pick for this test? Think it over.'",
+            "'Say: Which option do you want to pick for this test? Now.'",
         ] {
             assert_ne!(code.replace(asks, written), code);
             assert_eq!(scripts(screen, &code.replace(asks, written)), not_found);
+        }
+        // A literal that cannot be compared as written is none: a template's text is not what
+        // its substitution gives, nor an escape's letter what the escape gives. Each of these
+        // screens shows the literal's own characters.
+        let shown = "Which option do you want to pick for this test?";
+        for (drawn, written, quoted) in [
+            (
+                "Pay ${amount} now?",
+                "`Pay ${amount} now?`",
+                "'Pay ${amount} now?'",
+            ),
+            ("Use atb mode?", "'Use a\\tb mode?'", "'Use atb mode?'"),
+        ] {
+            let screen = screen.replacen(&format!("\n{shown}\n"), &format!("\n{drawn}\n"), 1);
+            let unread = Err(Refused::ScriptNotRead);
+            assert_eq!(scripts(&screen, &code.replace(asks, written)), unread);
+            assert!(scripts(&screen, &code.replace(asks, quoted)).is_ok());
         }
         let built = code.replace("'Option A'", "'Option ' + 'A'");
         assert_ne!(built, code);
@@ -682,7 +709,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         let short = code(transcript);
         let long = short.replace(shown, &text.replace('\n', "\\n"));
         assert_ne!(long, short);
-        assert!(literals(&long).contains(&text));
+        assert!(literals(&long).unwrap().contains(&text));
         // A script that asks only the short question: the screen is its whole form.
         assert!(scripts(&drawn, &short).is_ok());
         // The script asks the long one: what shows is the end of a literal and none itself.
@@ -700,5 +727,66 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
             scripts(screen, &both).is_err(),
             "the short one drawn whole too"
         );
+
+        // The same script with the long literal where a read that does not parse loses it:
+        // after an apostrophe or an open quote in a comment on its line, behind an escape that
+        // is not undone, and inside a template's substitution. The short literal is still
+        // read, and without the long one nothing says the form is cut: a script not read
+        // whole answers nothing.
+        let quoted = text.replace('\n', "\\n");
+        let tabbed = long.replace("Drop the", "Drop\\tthe");
+        assert_ne!(tabbed, long);
+        for unread in [
+            format!("/* don't translate */ {long}\n{short}"),
+            format!("/* say \"hi */ {long}\n{short}"),
+            format!("{tabbed}\n{short}"),
+            format!("const asked = `${{'{quoted}'}}`;\n{short}"),
+        ] {
+            assert_eq!(
+                scripts(&drawn, &unread),
+                Err(Refused::ScriptNotRead),
+                "{unread}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_question_made_of_pieces_is_refused_by_the_screen_when_cut() {
+        // Hand-built from the capture, not captured: a script that makes its question of a
+        // warning, a rule and `Continue?`, the last a whole literal. A terminal that showed
+        // only that last row would match it. What refuses it is the screen: cut under the
+        // rule the dialog has no top, and whole, the rows under the rule are less than a
+        // header and a text; behind the gutter, as 2.1.329 draws a question of several rows,
+        // that rule is no top at all.
+        let (screen, transcript) = SCRIPTED;
+        let asks = "'Which option do you want to pick for this test?'";
+        let pieces = "'Warning: this deletes the cache.\\n' + '─'.repeat(30) + '\\nContinue?'";
+        let code = code(transcript).replace(asks, pieces);
+        assert!(literals(&code).unwrap().contains(&"\nContinue?".to_owned()));
+        let shown = "\nWhich option do you want to pick for this test?\n";
+        let rule = "─".repeat(30);
+        for gutter in ["", "│ "] {
+            let rows = ["Warning: this deletes the cache.", &rule, "Continue?"];
+            let rows: Vec<String> = rows.iter().map(|r| format!("{gutter}{r}")).collect();
+            let drawn = screen.replacen(shown, &format!("\n{}\n", rows.join("\n")), 1);
+            assert_ne!(drawn, screen);
+            let all: Vec<&str> = drawn.lines().collect();
+            for from in 0..all.len() {
+                let cut = all[from..].join("\n");
+                assert!(scripts(&cut, &code).is_err(), "{gutter}from row {from}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_script_of_one_literal_many_times_is_matched_in_one_pass() {
+        // A megabyte of `'a',` and an option that starts with it: each copy would start a
+        // search of all the others for the rest of the option.
+        let (screen, transcript) = SCRIPTED;
+        let code = format!("[{}];\n{}", "'a',".repeat(200_000), code(transcript));
+        let drawn = screen.replacen("1. Option A", "1. a Option A", 1);
+        assert_ne!(drawn, screen);
+        assert_eq!(scripts(&drawn, &code), Err(Refused::NotInScript));
+        assert!(scripts(screen, &code).is_ok());
     }
 }

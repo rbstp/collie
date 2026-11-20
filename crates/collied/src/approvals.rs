@@ -513,7 +513,10 @@ impl Approvals {
                 call,
                 literals,
             } if m.is_question() => {
-                (m.scripted(literals)).map(|asked| Some(format!("{session} {call:?} {asked}")))
+                let literals = literals.as_deref().ok_or(Refused::ScriptNotRead);
+                literals
+                    .and_then(|literals| m.scripted(literals))
+                    .map(|asked| Some(format!("{session} {call:?} {asked}")))
             }
             Waits::Other if m.is_question() => Err(Refused::OtherCall),
             Waits::Nothing if m.is_question() => Err(Refused::NoCall),

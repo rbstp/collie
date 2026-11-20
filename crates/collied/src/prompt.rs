@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use protocol::limits::{MAX_CHOICE_LABEL_CHARS, MAX_SNIPPET_CHARS};
 use protocol::{ApprovalChoice, Decision, PendingTool, is_format};
 
@@ -274,6 +276,7 @@ pub enum Refused {
     NotWhole,
     Ambiguous,
     NotInScript,
+    ScriptNotRead,
 }
 
 impl Refused {
@@ -290,6 +293,7 @@ impl Refused {
             Self::NotWhole => "question not drawn whole",
             Self::Ambiguous => "ambiguous",
             Self::NotInScript => "question not found in the pending script",
+            Self::ScriptNotRead => "pending script not read whole",
         }
     }
 }
@@ -801,8 +805,10 @@ impl Menu {
         if !self.after.is_empty() {
             return Err(Refused::NotWhole);
         }
-        let whole: Vec<String> = literals.iter().map(|l| unspaced(l)).collect();
-        let is = |text: &str| !text.is_empty() && whole.iter().any(|l| l == text);
+        // A set, and one pass over it for each question: a script of a megabyte can hold a
+        // literal a few hundred thousand times.
+        let whole: HashSet<String> = literals.iter().map(|l| unspaced(l)).collect();
+        let is = |text: &str| !text.is_empty() && whole.contains(text);
         let ends = |text: &String| {
             whole
                 .iter()
@@ -839,8 +845,8 @@ impl Menu {
                 false => Some(shown.as_str()),
             };
             shown.is_some_and(|shown| {
-                let described = |label: &String| shown.strip_prefix(label.as_str()).is_some_and(is);
-                is(shown) || whole.iter().filter(|l| !l.is_empty()).any(described)
+                let described = |(at, _)| is(&shown[..at]) && is(&shown[at..]);
+                is(shown) || shown.char_indices().any(described)
             })
         };
         let asked = self.asked_text().ok_or(Refused::NotWhole)?;
