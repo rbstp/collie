@@ -151,8 +151,10 @@ final class NewTaskSheetTests: XCTestCase {
     func testCloneTakesARepositoryAndShowsProgressWhileCloning() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        core.state.withLock { $0.options.codeMode = true }
         let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
         await model.loadOptions()
+        model.agent = "claude"
         model.prompt = "set it up"
         model.location = .clone
         let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
@@ -179,7 +181,7 @@ final class NewTaskSheetTests: XCTestCase {
             let route = await start.value
             XCTAssertNil(model.cloning)
             XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
-            XCTAssertEqual(core.snapshot.taskNews, ["/Users/me clone=owner/app.git"])
+            XCTAssertEqual(core.snapshot.taskNews, ["/Users/me clone=owner/app.git codeMode=true"])
         }
     }
 
@@ -310,8 +312,10 @@ final class NewTaskSheetTests: XCTestCase {
     func testPullRequestTakesANumberAndStartsOnItsBranch() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        core.state.withLock { $0.options.codeMode = true }
         let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
         await model.loadOptions()
+        model.agent = "claude"
         model.prompt = "fix it"
         model.location = .worktree
         model.worktreeAction = .pullRequest
@@ -334,7 +338,7 @@ final class NewTaskSheetTests: XCTestCase {
             core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
             let route = await model.start()
             XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
-            XCTAssertEqual(core.snapshot.worktreeCalls, ["list /Users/me/app", "pull_request /Users/me/app 282 codex"])
+            XCTAssertEqual(core.snapshot.worktreeCalls, ["list /Users/me/app", "pull_request /Users/me/app 282 claude codeMode=true"])
             XCTAssertEqual(core.snapshot.taskPrompts, ["fix it"])
         }
     }
