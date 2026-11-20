@@ -263,6 +263,17 @@ final class WatchLink: NSObject, WCSessionDelegate {
         return nil
     }
 
+    /// collied ended an approval it answered `superseded`, and the last state sent still lists it: that state without
+    /// it, for the reply and the context, so the watch stops offering it and the phone refuses it. Nil for any other outcome.
+    nonisolated static func afterDecision(
+        _ outcome: BackgroundOutcome, _ request: WatchDecisionRequest, allowed: Bool, shown: WatchState?
+    ) -> WatchState? {
+        guard case .superseded = outcome, var state = shown else { return nil }
+        state.approvals.removeAll { $0.nodeId == request.nodeId && $0.approvalId == request.approvalId }
+        state.decisionsAllowed = allowed
+        return state
+    }
+
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         let data = message[WatchMessage.decide] as? Data
         let refreshing = message[WatchMessage.refresh] as? Bool == true
@@ -282,7 +293,12 @@ final class WatchLink: NSObject, WCSessionDelegate {
             }
             let (followUp, answered, state) = await decide(request)
             var message: [String: Any] = [WatchMessage.title: followUp.title, WatchMessage.body: followUp.body, WatchMessage.answered: answered]
-            if let state, let data = try? JSONEncoder().encode(state) { message[WatchMessage.state] = data }
+            if let state, let data = try? JSONEncoder().encode(state) {
+                message[WatchMessage.state] = data
+            } else if Self.shown() == nil {
+                // With no context sent, every decision is refused and there is no state to carry: the watch asks for one.
+                message[WatchMessage.refresh] = true
+            }
             reply.send(message)
         }
     }

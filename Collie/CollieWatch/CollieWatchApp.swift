@@ -270,14 +270,15 @@ final class WatchModel: NSObject, WCSessionDelegate {
         let request = WatchDecisionRequest(nodeId: approval.nodeId, approvalId: approval.approvalId, decision: decision)
         guard let data = try? JSONEncoder().encode(request) else { return false }
         let agent = approval.agent
-        let reply: (title: String, body: String, answered: Bool, state: Data?)? = await withCheckedContinuation { continuation in
+        let reply: (title: String, body: String, answered: Bool, state: Data?, refresh: Bool)? = await withCheckedContinuation { continuation in
             WCSession.default.sendMessage(
                 [WatchMessage.decide: data],
                 replyHandler: { @Sendable reply in
                     continuation.resume(
                         returning: (
                             reply[WatchMessage.title] as? String ?? agent, reply[WatchMessage.body] as? String ?? "",
-                            reply[WatchMessage.answered] as? Bool ?? false, reply[WatchMessage.state] as? Data
+                            reply[WatchMessage.answered] as? Bool ?? false, reply[WatchMessage.state] as? Data,
+                            reply[WatchMessage.refresh] as? Bool ?? false
                         )
                     )
                 },
@@ -297,6 +298,8 @@ final class WatchModel: NSObject, WCSessionDelegate {
                 if !next.approvals.contains(where: { $0.nodeId == approval.nodeId && $0.approvalId == approval.approvalId }) { dropped = true }
             }
             if dropped, opened == WatchApprovalKey(nodeId: approval.nodeId, approvalId: approval.approvalId) { opened = nil }
+            // In its own task: this decision holds `sending` until it returns.
+            if reply.refresh { Task { await refresh() } }
         } else {
             notice = (agent, "No answer from the iPhone. The decision may have been sent; check collie on the iPhone.")
         }

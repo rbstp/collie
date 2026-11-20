@@ -368,6 +368,18 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(!carried.approvals[0].canDecide(.approve, allowed: carried.decisionsAllowed, answered: [], now: now))
 }
 
+@Test func aSupersededWatchDecisionCarriesTheStateWithoutItsApproval() throws {
+    let state = shown([WatchApproval(item: item(approval("ap_old"))), WatchApproval(item: item(approval("ap_other")))])
+    let request = WatchDecisionRequest(nodeId: "nMAC", approvalId: "ap_old", decision: .approve)
+    let carried = try #require(WatchLink.afterDecision(.superseded, request, allowed: true, shown: state))
+    #expect(carried.approvals.map(\.approvalId) == ["ap_other"], "collied ended the approval, so the watch stops offering it")
+    #expect(WatchLink.refusal(request, allowed: true, shown: carried, now: now) != nil, "sent as the context, it is what the phone then refuses")
+    #expect(WatchLink.afterDecision(.superseded, request, allowed: false, shown: state)?.decisionsAllowed == false)
+    // Nothing reached collied: the approval may still be decided, and the watch keeps it.
+    #expect(WatchLink.afterDecision(.unreachable(stage: .connect, message: ""), request, allowed: true, shown: state) == nil)
+    #expect(WatchLink.afterDecision(.superseded, request, allowed: true, shown: nil) == nil)
+}
+
 @Test func watchDecisionNeedsAnApprovalAndAnswerThePhoneShowed() {
     let items = [
         item(approval("ap_1", expiresAtMs: nowMs + 60_000)),

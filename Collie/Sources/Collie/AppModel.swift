@@ -644,7 +644,10 @@ final class AppModel {
             machineNodeId: request.nodeId, approvalId: request.approvalId, decision: decision, budgetMs: 20_000
         )
         log.notice("watch decide: outcome=\(String(describing: report.outcome), privacy: .public) total=\(report.totalMs, privacy: .public)ms")
-        return (FollowUp.after(report.outcome, decision: decision, agent: agent), report.outcome.watchAnswered, nil)
+        // Read again: the decision can take 20 s, and a newer state may have gone out since.
+        let state = WatchLink.afterDecision(report.outcome, request, allowed: allowed, shown: WatchLink.shown())
+        if let state { watch.send(state) }
+        return (FollowUp.after(report.outcome, decision: decision, agent: agent), report.outcome.watchAnswered, state)
     }
 
     private func logColdStart() async {

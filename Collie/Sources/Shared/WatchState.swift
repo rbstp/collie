@@ -219,6 +219,7 @@ enum WatchMessage {
     static let state = "state"
     static let decide = "decide"
     /// From the watch: answer with the current state, listed from each Mac when the app is not in the foreground.
+    /// In a decision's reply: the phone has sent no state, and the watch asks for one.
     static let refresh = "refresh"
     static let title = "title"
     static let body = "body"
