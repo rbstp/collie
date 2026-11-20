@@ -1279,7 +1279,11 @@ async fn a_numbered_form_that_reads_as_no_menu_takes_no_keys() {
         "     File-based database",
         "     Embedded\n     One file\n     No server\n     File-based database",
     );
-    for form in [question, rate_limit, &long] {
+    // And the cut question with a row of rule characters under its last option, as that
+    // option's own text can draw one.
+    let ruled = question.replace("Chat about this\n", "Chat about this\n     ──────\n");
+    assert_ne!(ruled, question);
+    for form in [question, rate_limit, &long, &ruled] {
         rig.herdr.with(|h| {
             h.text = form.into();
             set_status(h, "blocked");

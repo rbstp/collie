@@ -49,14 +49,16 @@ pub fn open_to_keys(kind: &str, rule: Option<&str>, text: &str) -> bool {
         })
 }
 
-/// Whether the dialog on screen draws numbered options: a numbered row in the dialog
-/// ([`after_last_rule`]) with no `▔` border under it. Such a form that does not parse as a
-/// menu has lost rows (option 1 off screen) or holds more than a menu reads, and takes no
-/// keys from the phone. A numbered list above the border of an unnumbered form (`/memory`,
-/// `/ide`, usage credits) is old output. Claude Code draws that border at column 0, and under
-/// a numbered form's last option an agent writes only that option's rows, which are indented.
+/// Whether the screen draws numbered options under the dialog's top: a numbered row with no
+/// `▔` border under it. Such a form that does not parse as a menu has lost rows (option 1
+/// off screen) or holds more than a menu reads, and takes no keys from the phone. A numbered
+/// list above the border of an unnumbered form (`/memory`, `/ide`, usage credits) is old
+/// output. Claude Code draws that border at column 0, and under a numbered form's last
+/// option an agent writes only that option's rows, which are indented. A rule under the
+/// options hides nothing: an option's own text can draw one, so the whole screen is read
+/// and not the rows under its last rule.
 pub fn numbered(text: &str) -> bool {
-    let rows = after_last_rule(text);
+    let rows: Vec<&str> = text.lines().collect();
     rows.iter()
         .rposition(|l| option_line(l).is_some())
         .is_some_and(|last| !rows[last + 1..].iter().any(|l| l.starts_with('▔')))
@@ -3211,7 +3213,12 @@ mod tests {
             "     File-based database",
             "     Embedded\n     One file\n     No server\n     File-based database",
         );
-        for screen in [tall, question, chat, &long] {
+        // A row of rule characters an option's text draws under the last option, on the cut
+        // question and on the whole one: the numbered rows above it still count.
+        let rule = |s: &str| s.replace("Chat about this\n", "Chat about this\n     ──────\n");
+        let (ruled, whole) = (rule(question), rule(QUESTION_LIVE));
+        assert_ne!(ruled, question);
+        for screen in [tall, question, chat, &long, &ruled, &whole] {
             assert!(
                 numbered(screen) && Menu::parse(screen).is_none(),
                 "{screen}"
