@@ -259,7 +259,7 @@ pub struct State {
     tracker: Mutex<StatusTracker>,
     flock_outage: AtomicBool,
     stars: Mutex<Stars>,
-    transcripts: Mutex<Transcripts>,
+    transcripts: Arc<Mutex<Transcripts>>,
     costs: Arc<Costs>,
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
@@ -656,6 +656,9 @@ pub async fn start_with(
     };
     push.retain_paired(&lock(&peers))?;
     let events = broadcast::channel(256).0;
+    let transcripts = Arc::new(Mutex::new(
+        Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE)),
+    ));
     let approvals = Arc::new(
         Approvals::new(
             herdr_socket.clone(),
@@ -665,6 +668,7 @@ pub async fn start_with(
             Some(push.clone()),
         )
         .with_timing(cfg.approval_ttl, approvals::SETTLE)
+        .with_transcripts(transcripts.clone())
         .with_core(core.clone())
         .with_rex(rex.clone()),
     );
@@ -684,11 +688,9 @@ pub async fn start_with(
     let tls_pin = collie_tls::pin(tls.cert[0].as_ref());
     let control = control::bind(&cfg.data_dir.join(config::CONTROL_SOCKET)).await?;
     let listener = node.listen("tcp", &format!(":{}", cfg.port))?;
-    let transcripts =
-        Transcripts::from_env().with_usage(cfg.data_dir.join(crate::usage::USAGE_FILE));
     let costs = Arc::new(Costs::new(
         cfg.data_dir.join(crate::costs::INDEX_FILE),
-        transcripts.cost_roots(),
+        lock(&transcripts).cost_roots(),
     ));
     let tracker = StatusTracker::load(cfg.data_dir.join(config::STATUS_FILE));
     let stars = Stars::load(cfg.data_dir.join(config::STARS_FILE));
@@ -721,7 +723,7 @@ pub async fn start_with(
         tracker: Mutex::new(tracker),
         flock_outage: AtomicBool::new(false),
         stars: Mutex::new(stars),
-        transcripts: Mutex::new(transcripts),
+        transcripts,
         costs,
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),

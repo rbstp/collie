@@ -22,6 +22,7 @@ use crate::runtime::herdr_core::{self, Core};
 use crate::runtime::rex::Rex;
 use crate::runtime::{self, AgentInfo, Owner, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
+use crate::transcript::Transcripts;
 
 pub const TTL: Duration = Duration::from_secs(600);
 pub const SETTLE: Duration = Duration::from_secs(3);
@@ -151,6 +152,7 @@ impl Inner {
 
 pub struct Approvals {
     runtime: Runtime,
+    transcripts: Option<Arc<Mutex<Transcripts>>>,
     node_id: String,
     events: broadcast::Sender<Event>,
     audit: Arc<Audit>,
@@ -173,6 +175,7 @@ pub fn fingerprint(
     session: Option<&str>,
     region: &str,
     reason: Option<&str>,
+    question: Option<&str>,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -182,6 +185,7 @@ pub fn fingerprint(
         session.unwrap_or(""),
         region,
         reason.unwrap_or(""),
+        question.unwrap_or(""),
     ] {
         h.update((part.len() as u64).to_be_bytes());
         h.update(part.as_bytes());
@@ -255,6 +259,7 @@ impl Approvals {
     ) -> Self {
         Self {
             runtime: Runtime::new(herdr),
+            transcripts: None,
             node_id,
             events,
             audit,
@@ -275,6 +280,11 @@ impl Approvals {
 
     pub fn with_budget(mut self, budget: Duration) -> Self {
         self.budget = budget;
+        self
+    }
+
+    pub fn with_transcripts(mut self, transcripts: Arc<Mutex<Transcripts>>) -> Self {
+        self.transcripts = Some(transcripts);
         self
     }
 
@@ -469,7 +479,18 @@ impl Approvals {
             .then(|| Menu::parse(&text))
             .flatten();
         let unnumbered = parsed.is_none() && !prompt::numbered(&text);
-        let menu = parsed.filter(Menu::on_screen);
+        // The screen cannot say a question form is whole, so it is answered only when it draws
+        // the session's one pending AskUserQuestion call whole, as the transcript records it.
+        // While such a call is pending, any other menu gets no answer either: a question whose
+        // labels read as decisions is drawn like a permission prompt.
+        let asked = parsed.as_ref().and_then(|_| {
+            let asking = crate::lock(self.transcripts.as_ref()?).asking(a)?;
+            asking.questions()
+        });
+        let question = parsed.as_ref().and_then(|m| m.asks(asked.as_deref()?));
+        let menu = parsed.filter(|m| {
+            m.on_screen() && (question.is_some() || asked.is_none() && !m.is_question())
+        });
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
@@ -497,6 +518,7 @@ impl Approvals {
                 session,
                 region,
                 reason.as_deref(),
+                question.as_deref(),
             )
         };
         Ok(Screen {
@@ -1037,21 +1059,95 @@ mod tests {
 
     #[test]
     fn fingerprint_covers_every_field() {
-        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"));
+        let base = fingerprint(
+            "claude",
+            Some("r"),
+            "t",
+            Some("s"),
+            "q",
+            Some("y"),
+            Some("a"),
+        );
         assert_eq!(
             base,
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"))
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a")
+            )
         );
         for other in [
-            fingerprint("codex", Some("r"), "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r2"), "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", None, "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t2", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", None, "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q2", Some("y")),
-            fingerprint("claude", Some("rt"), "", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", None),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y2")),
+            fingerprint(
+                "codex",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint(
+                "claude",
+                Some("r2"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", None, "t", Some("s"), "q", Some("y"), Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t2",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", None, "q", Some("y"), Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q2",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint(
+                "claude",
+                Some("rt"),
+                "",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", None, Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y2"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"), None),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a2"),
+            ),
         ] {
             assert_ne!(base, other);
         }

@@ -14,6 +14,8 @@ use collied::audit::Audit;
 use collied::drive::{Authorized, Reply};
 use collied::flock::StatusTracker;
 use collied::push::{Alert, Delivery, Device, Push, Rejection, Sender};
+use collied::runtime::PaneProcesses;
+use collied::transcript::Transcripts;
 use futures_util::future::BoxFuture;
 use protocol::{
     ActivityId, ApnsEnvironment, Approval, ApprovalDecideParams, ApprovalOutcome, Decision,
@@ -72,6 +74,94 @@ const RENAMED_QUESTION: &str =
     include_str!("fixtures/claude-2.1.300/renamed-question-tasks.detection.txt");
 const RENAMED_TIME_FORMAT: &str =
     include_str!("fixtures/claude-2.1.300/renamed-config-time-format-tasks.detection.txt");
+
+// Claude Code 2.1.329 (100 columns), each screen with the last lines of its session's
+// transcript at that moment, the pending call last; see `transcript::asked`'s tests.
+macro_rules! capture {
+    ($name:literal) => {
+        (
+            include_str!(concat!("fixtures/claude-2.1.329/", $name, ".txt")),
+            include_str!(concat!(
+                "fixtures/claude-2.1.329/",
+                $name,
+                ".transcript.min.jsonl"
+            )),
+        )
+    };
+}
+const ASKED_ONE: (&str, &str) = capture!("question-one");
+const ASKED_MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
+const ASKED_REVIEW: (&str, &str) = capture!("two-questions-after-tab");
+const ASKED_TALL: (&str, &str) = capture!("question-tall-12-rows");
+const ASKED_BASH: (&str, &str) = capture!("bash");
+const ASKED_PLAN: (&str, &str) = capture!("plan");
+// The session and folder of those transcripts, which the rig's own process stands for.
+const SESSION: &str = "00000000-0000-4000-8000-000000000000";
+const CWD: &str = "/private/tmp/planlab";
+
+/// A transcript whose last line is written after this process started, as a pending call's
+/// is. A capture as it is stands for a call an earlier process left.
+fn fresh(transcript: &str) -> String {
+    let mut rows: Vec<String> = transcript.lines().map(str::to_owned).collect();
+    let last = rows.last_mut().unwrap();
+    let mut line: Value = serde_json::from_str(last).unwrap();
+    line["timestamp"] = json!("2999-01-01T00:00:00.000Z");
+    *last = line.to_string();
+    rows.join("\n") + "\n"
+}
+
+/// The transcript of a session that waits on one AskUserQuestion call. The older question
+/// captures have no transcript: their calls are written by hand from their screens.
+fn asking(questions: &[(&str, &[(&str, &str)])]) -> String {
+    let questions: Vec<Value> = questions
+        .iter()
+        .map(|(question, options)| {
+            let options: Vec<Value> = options
+                .iter()
+                .map(|(label, description)| json!({"label": label, "description": description}))
+                .collect();
+            json!({"question": question, "options": options, "multiSelect": false})
+        })
+        .collect();
+    fresh(
+        &json!({"type": "assistant", "sessionId": SESSION, "message": {"content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion",
+             "input": {"questions": questions}},
+        ]}})
+        .to_string(),
+    )
+}
+
+const STORAGE: &str = "Which storage backend should the cache use?";
+// QUESTION's call, QUESTION_LIVE's and RENAMED_QUESTION's.
+const ASKS: &[(&str, &[(&str, &str)])] = &[(
+    STORAGE,
+    &[
+        ("SQLite", "Embedded, no server"),
+        ("Redis", "Shared across processes"),
+    ],
+)];
+const ASKS_LIVE: &[(&str, &[(&str, &str)])] = &[(
+    STORAGE,
+    &[
+        (
+            "SQLite",
+            "File-based database, good for single-instance deployments with local persistence",
+        ),
+        (
+            "Redis",
+            "In-memory data store, better for distributed systems and high-performance scenarios",
+        ),
+    ],
+)];
+const ASKS_RENAMED: &[(&str, &[(&str, &str)])] = &[(
+    "Which color do you prefer?",
+    &[
+        ("Red", "Pick red"),
+        ("Green", "Pick green"),
+        ("Blue", "Pick blue"),
+    ],
+)];
 
 // Codex CLI and Copilot CLI prompts as herdr rules them; see `prompt::fixtures`.
 const OTHER_KINDS: [(&str, &str, &str); 6] = [
@@ -142,7 +232,7 @@ impl Mock {
                 "terminal_id": TERMINAL, "workspace_id": "w7", "pane_id": "w7:p1",
                 "tab_id": "w7:t1", "focused": false, "revision": 0,
                 "agent": "claude", "name": "api-fixer", "agent_status": "blocked",
-                "state_change_seq": 4,
+                "state_change_seq": 4, "cwd": CWD,
                 "agent_session": {"source": "herdr:claude", "agent": "claude", "kind": "id", "value": "sess-1"},
             }),
             rule: "bash_permission_prompt".into(),
@@ -354,6 +444,7 @@ struct Rig {
     events: Option<broadcast::Receiver<Event>>,
     audit: PathBuf,
     audit_log: Arc<Audit>,
+    transcript: PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -414,6 +505,27 @@ impl Rig {
         let audit = dir.path().join("audit.log");
         let audit_log = Arc::new(Audit::open(&audit).unwrap());
         let (tx, events) = broadcast::channel(64);
+        // A Claude Code session of this process's own in a scratch folder, with no transcript
+        // until a test writes one: the pane's one process, as herdr would list it.
+        let claude = dir.path().join("claude");
+        let transcript = claude.join(format!("projects/-private-tmp-planlab/{SESSION}.jsonl"));
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(claude.join("sessions")).unwrap();
+        let pid = std::process::id();
+        let session = json!({
+            "pid": pid, "sessionId": SESSION, "cwd": CWD, "startedAt": collied::now_ms(),
+        });
+        std::fs::write(
+            claude.join(format!("sessions/{pid}.json")),
+            session.to_string(),
+        )
+        .unwrap();
+        let mut transcripts = Transcripts::new(Some(claude.join("projects")), None);
+        let procs = PaneProcesses {
+            pids: vec![pid],
+            attach: None,
+        };
+        transcripts.set_pane(TERMINAL.into(), "w7:p1".into(), Some(procs));
         let mut approvals = Approvals::new(
             herdr.socket.clone(),
             "nMAC".into(),
@@ -421,7 +533,8 @@ impl Rig {
             audit_log.clone(),
             Some(push.clone()),
         )
-        .with_timing(ttl, SETTLE);
+        .with_timing(ttl, SETTLE)
+        .with_transcripts(Arc::new(Mutex::new(transcripts)));
         if let Some(budget) = budget {
             approvals = approvals.with_budget(budget);
         }
@@ -436,8 +549,13 @@ impl Rig {
             events: Some(events),
             audit,
             audit_log,
+            transcript,
             _dir: dir,
         }
+    }
+
+    fn transcript(&self, text: &str) {
+        std::fs::write(&self.transcript, text).unwrap();
     }
 
     fn follow(&self) {
@@ -1246,6 +1364,7 @@ async fn a_form_taller_than_the_screen_is_answered_in_the_terminal() {
     );
     // Hand-built from the captures, not captured: each form from under its first rows, as a
     // terminal too short for it would show it.
+    rig.transcript(&asking(ASKS_LIVE));
     let (_, rate_limit) = RATE_LIMIT.split_once("What do you want to do?\n").unwrap();
     let (_, question) = QUESTION_LIVE.split_once(" ☐ Cache Backend\n\n").unwrap();
     for tall in [rate_limit, question] {
@@ -1270,6 +1389,7 @@ async fn a_form_taller_than_the_screen_is_answered_in_the_terminal() {
 async fn a_numbered_form_that_reads_as_no_menu_takes_no_keys() {
     let mut rig = Rig::start(TTL).await;
     rig.herdr.with(|h| h.rule = "live_blocked_form".into());
+    rig.transcript(&asking(ASKS_LIVE));
     // Hand-built from the captures, not captured: the question and the rate limit form from
     // under their option 1, as a terminal too short for them would show them, and the question
     // with four rows under its option 1, one more than a menu reads.
@@ -1934,6 +2054,7 @@ fn choice_labels(a: &Approval) -> Vec<(u8, String, bool)> {
 #[tokio::test]
 async fn a_question_is_answered_by_choosing_an_option() {
     let mut rig = Rig::start(TTL).await;
+    rig.transcript(&asking(ASKS));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form".into();
         h.text = QUESTION.into();
@@ -2005,8 +2126,167 @@ async fn a_question_is_answered_by_choosing_an_option() {
 }
 
 #[tokio::test]
+async fn a_question_form_is_answered_only_as_its_transcript_asks_it() {
+    let mut rig = Rig::start(TTL).await;
+    rig.herdr.with(|h| h.rule = "live_blocked_form".into());
+    let show = |rig: &Rig, (screen, transcript): (&str, &str)| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    let one = [
+        "SQLite",
+        "Redis",
+        "Memory",
+        "Type something.",
+        "Chat about this",
+    ];
+    let multi = [
+        "[ ] Lint",
+        "[ ] Tests",
+        "[ ] Schema",
+        "[ ] Type something",
+        "Chat about this",
+    ];
+    for ((screen, transcript), labels) in [
+        (ASKED_ONE, &one[..]),
+        (ASKED_MULTI, &multi[..]),
+        (ASKED_REVIEW, &["Submit answers", "Cancel"][..]),
+        // It scrolls: nothing, whatever the transcript says.
+        (ASKED_TALL, &[][..]),
+    ] {
+        // No transcript, the capture's own, whose call is older than this process, then that
+        // call made since.
+        let made = fresh(transcript);
+        for (transcript, labels) in [("", &[][..]), (transcript, &[][..]), (&made, labels)] {
+            show(&rig, (screen, transcript));
+            let a = rig.needed().await;
+            let shown: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+            assert_eq!(shown, labels, "{screen}");
+            assert_eq!(a.accepts_input, !labels.is_empty(), "{screen}");
+            assert!(a.options.is_empty() && !a.snippet.is_empty(), "{screen}");
+        }
+    }
+    // Another call's form: one question on screen, the call with two in the transcript.
+    show(&rig, (ASKED_ONE.0, &fresh(ASKED_REVIEW.1)));
+    let a = rig.needed().await;
+    assert!(a.choices.is_empty() && !a.accepts_input && !a.has_text_field);
+    assert_eq!(
+        code(rig.choose(&a, 0, &a.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(rig.mutations().is_empty());
+
+    // The call got its result since the approval, as when the question is answered on the
+    // Mac: the decision reads the transcript again and sends no key.
+    let asked = fresh(ASKED_ONE.1);
+    show(&rig, (ASKED_ONE.0, &asked));
+    let a = rig.needed().await;
+    let result = json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_scrubbed"},
+    ]}});
+    rig.transcript(&format!("{asked}{result}\n"));
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+    rig.transcript(&asked);
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 1,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn permission_and_plan_prompts_read_the_same_beside_their_transcripts() {
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, (screen, transcript): (&str, &str)| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    for (rule, (screen, transcript)) in [
+        ("bash_permission_prompt", ASKED_BASH),
+        ("legacy_no_prompt_blocker", ASKED_PLAN),
+    ] {
+        let mut read = Vec::new();
+        for transcript in ["", &fresh(transcript)] {
+            show(&rig, rule, (screen, transcript));
+            let a = rig.needed().await;
+            let labels: Vec<String> = a.choices.iter().map(|c| c.label.clone()).collect();
+            read.push((
+                a.options,
+                labels,
+                a.tool.map(|t| t.name),
+                a.snippet,
+                (a.accepts_input, a.has_text_field, a.supports_note),
+            ));
+        }
+        assert_eq!(read[0], read[1], "{rule}");
+        let (options, labels, tool, _, flags) = &read[0];
+        if rule == "bash_permission_prompt" {
+            assert_eq!(
+                options[..],
+                [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+            );
+            assert_eq!(
+                labels[1],
+                "Yes, and always allow access to /private/tmp/planlab from this project"
+            );
+            assert_eq!(
+                (tool.as_deref(), *flags),
+                (Some("Bash"), (false, false, true))
+            );
+        } else {
+            assert!(options.is_empty());
+            assert_eq!(
+                labels[..],
+                [
+                    "Yes, and use auto mode",
+                    "Yes, manually approve edits",
+                    "Tell Claude what to change"
+                ]
+            );
+            assert_eq!(*flags, (false, true, false));
+        }
+    }
+    // While the session waits on a question, a dialog that does not draw it gets no answer: a
+    // question whose labels read as decisions is drawn like a permission prompt.
+    show(
+        &rig,
+        "bash_permission_prompt",
+        (ASKED_BASH.0, &asking(ASKS)),
+    );
+    let a = rig.needed().await;
+    assert!(a.options.is_empty() && a.choices.is_empty());
+    assert_eq!(
+        code(rig.decide(&a, Decision::Approve, &a.nonce).await),
+        ErrorCode::InvalidParams
+    );
+    assert!(rig.mutations().is_empty());
+}
+
+#[tokio::test]
 async fn a_question_in_a_renamed_session_is_answered_by_choosing_an_option() {
     let mut rig = Rig::start(TTL).await;
+    rig.transcript(&asking(ASKS_RENAMED));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form_named_session".into();
         h.text = RENAMED_QUESTION.into();
@@ -2175,27 +2455,45 @@ async fn approvals_say_whether_keys_and_text_are_taken() {
         "",
     );
     let two = two.replace("3. No", "2. No").replace(" · Tab to amend", "");
-    for (rule, text, input, field, note) in [
-        ("live_blocked_form", QUESTION_LIVE, true, true, false),
-        ("live_blocked_form", QUESTION, true, true, false),
-        ("live_blocked_form", PLAN, false, false, false),
-        ("live_blocked_form", TRUST_LIVE, false, false, false),
-        ("live_blocked_form", TRUST_292, false, false, false),
-        ("bash_permission_prompt", BASH, false, false, true),
-        ("bash_permission_prompt", &two, false, false, false),
-        ("live_blocked_form", BASH, false, false, true),
-        ("bash_permission_prompt", BASH_LIVE, false, false, true),
-        ("legacy_no_prompt_blocker", PLAN_LIVE, false, true, false),
-        ("live_blocked_form", PLAN_LIVE, false, false, false),
-        ("mcp_elicitation_prompt", BASH_LIVE, false, false, false),
+    let (asked_live, asked, asked_multi) = (asking(ASKS_LIVE), asking(ASKS), fresh(ASKED_MULTI.1));
+    for (rule, text, transcript, input, field, note) in [
         (
             "live_blocked_form",
-            &QUESTION.replace("   3. Type something.\n", ""),
+            QUESTION_LIVE,
+            &*asked_live,
+            true,
+            true,
+            false,
+        ),
+        ("live_blocked_form", QUESTION, &*asked, true, true, false),
+        ("live_blocked_form", PLAN, "", false, false, false),
+        ("live_blocked_form", TRUST_LIVE, "", false, false, false),
+        ("live_blocked_form", TRUST_292, "", false, false, false),
+        ("bash_permission_prompt", BASH, "", false, false, true),
+        ("bash_permission_prompt", &two, "", false, false, false),
+        ("live_blocked_form", BASH, "", false, false, true),
+        ("bash_permission_prompt", BASH_LIVE, "", false, false, true),
+        (
+            "legacy_no_prompt_blocker",
+            PLAN_LIVE,
+            "",
+            false,
+            true,
+            false,
+        ),
+        ("live_blocked_form", PLAN_LIVE, "", false, false, false),
+        ("mcp_elicitation_prompt", BASH_LIVE, "", false, false, false),
+        // A multi-select question has no `Type something.` field.
+        (
+            "live_blocked_form",
+            ASKED_MULTI.0,
+            &*asked_multi,
             true,
             false,
             false,
         ),
     ] {
+        rig.transcript(transcript);
         rig.herdr.with(|h| {
             h.rule = rule.into();
             h.text = text.into();
@@ -2228,12 +2526,14 @@ async fn choices_are_refused_where_a_decision_is_offered_or_out_of_range() {
         }
     ));
 
+    rig.transcript(&asking(ASKS));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form".into();
         h.text = QUESTION.into();
         set_status(h, "blocked");
     });
     let b = rig.needed().await;
+    assert_eq!(b.choices.len(), 3);
     assert_eq!(
         code(rig.choose(&b, 3, &b.nonce).await),
         ErrorCode::InvalidParams
@@ -2259,11 +2559,15 @@ async fn choices_are_refused_where_a_decision_is_offered_or_out_of_range() {
 #[tokio::test]
 async fn a_changed_question_supersedes_the_choice() {
     let mut rig = Rig::start(TTL).await;
+    rig.transcript(&asking(ASKS));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form".into();
         h.text = QUESTION.into();
     });
     let a = rig.needed().await;
+    let (question, options) = ASKS[0];
+    let changed = [options[0], ("Postgres", options[1].1)];
+    rig.transcript(&asking(&[(question, &changed[..])]));
     rig.herdr
         .with(|h| h.text = QUESTION.replace("2. Redis", "2. Postgres"));
     assert_eq!(
@@ -2381,9 +2685,10 @@ async fn a_granting_option_is_never_chosen_by_index_beside_an_approval() {
 #[tokio::test]
 async fn a_screen_that_drifts_under_a_blocked_agent_reissues_quietly() {
     let mut rig = Rig::start(TTL).await;
+    rig.transcript(&fresh(ASKED_MULTI.1));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form".into();
-        h.text = QUESTION.replace("   3. Type something.\n", "");
+        h.text = ASKED_MULTI.0.into();
     });
     let a = rig.needed().await;
     assert_eq!((a.accepts_input, a.has_text_field), (true, false));
@@ -2393,6 +2698,7 @@ async fn a_screen_that_drifts_under_a_blocked_agent_reissues_quietly() {
     rig.no_event();
     assert_eq!(rig.approvals.pending(), std::slice::from_ref(&a));
 
+    rig.transcript(&asking(ASKS));
     rig.herdr.with(|h| h.text = QUESTION.into());
     rig.observe().await;
     assert!(matches!(
@@ -2680,12 +2986,14 @@ async fn a_note_is_refused_where_it_is_not_offered() {
         ),
         ErrorCode::InvalidParams
     );
+    rig.transcript(&asking(ASKS));
     rig.herdr.with(|h| {
         h.rule = "live_blocked_form".into();
         h.text = QUESTION.into();
         set_status(h, "blocked");
     });
     let c = rig.needed().await;
+    assert_eq!(c.choices.len(), 3);
     assert_eq!(
         code(rig.decide_with_note(&c, Decision::Deny, "x", yes()).await),
         ErrorCode::InvalidParams

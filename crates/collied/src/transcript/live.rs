@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use super::subagents::alive;
 use super::{Kind, MAX_LISTED, Transcripts, is_file, is_session_id, open, project_dir, session_id};
-use crate::runtime::{AgentInfo, PaneProcesses};
+use crate::runtime::{AgentInfo, Owner, PaneProcesses};
 
 const SESSION_BYTES: u64 = 64 * 1024;
 const POINTER_BYTES: u64 = 64 * 1024;
@@ -57,6 +57,7 @@ pub(super) struct Resolved {
 
 struct Claim {
     session: String,
+    started_at: u64,
     cwd: String,
     kind: Option<String>,
     job: Option<String>,
@@ -216,6 +217,37 @@ impl Transcripts {
             .map(|c| c.session);
         let first = found.next()?;
         found.all(|s| s == first).then_some(first)
+    }
+
+    /// The session of the Claude Code process the terminal runs and when that process says it
+    /// started, for [`Transcripts::asking`]. By process only: the pane's own processes for a
+    /// herdr pane, never herdr's id or an attach target, and for a herdr-core or Rex terminal
+    /// the id the runtime read from its foreground process. Refused unless exactly one live
+    /// process claims that session: two would write one transcript.
+    pub(super) fn holder(&self, a: &AgentInfo) -> Option<(String, u64)> {
+        let sessions = self.sessions_dir()?;
+        let session = match Owner::of(&a.terminal_id) {
+            Owner::Herdr => self.pane_session(&sessions, a)?,
+            Owner::Core | Owner::Rex => session_id(a)?.to_owned(),
+        };
+        let pids: Vec<i32> = std::fs::read_dir(&sessions)
+            .ok()?
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.strip_suffix(".json")?.parse().ok())
+            .take(MAX_SESSION_FILES + 1)
+            .collect();
+        if pids.len() > MAX_SESSION_FILES {
+            return None;
+        }
+        let mut claims = pids
+            .into_iter()
+            .filter_map(|pid| claim(&sessions, pid))
+            .filter(|c| c.session == session);
+        let held = claims.next()?;
+        claims
+            .next()
+            .is_none()
+            .then_some((session, held.started_at))
     }
 
     /// Claude Code matches up to 8 hex as a job id prefix and anything else as a name; here a
@@ -526,6 +558,7 @@ fn claim(sessions: &Path, pid: i32) -> Option<Claim> {
     let started_at = v["startedAt"].as_u64()?;
     let claim = Claim {
         session: session.to_owned(),
+        started_at,
         cwd: v["cwd"].as_str()?.to_owned(),
         kind: v["kind"].as_str().map(str::to_owned),
         job: v["jobId"].as_str().map(str::to_owned),
@@ -978,6 +1011,63 @@ mod tests {
             &text.replace("Previous conversation", "Another conversation"),
         );
         assert_eq!(t.resolve(&a, false).as_deref(), Some(COPILOT_CURRENT));
+    }
+
+    #[test]
+    fn a_question_is_asked_only_by_the_terminals_own_process() {
+        let (_dir, mut t, project, sessions) = setup();
+        let ((pid, started), (other, other_started)) = (own(), parent());
+        let ask = |session: &str, question: &str, at: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"{at}","sessionId":"{session}","message":{{"content":[{{"type":"tool_use","id":"toolu_1","name":"AskUserQuestion","input":{{"questions":[{{"question":"{question}","options":[{{"label":"A"}},{{"label":"B"}}]}}]}}}}]}}}}"#
+            ) + "\n"
+        };
+        let later = "2999-01-01T00:00:00.000Z";
+        transcript(&project, LIVE, &ask(LIVE, "Mine?", later));
+        transcript(&project, OLD, &ask(OLD, "Theirs?", later));
+        pid_file(&sessions, pid, LIVE, CWD, started, "");
+        let asked = |t: &Transcripts, a: &AgentInfo| {
+            let questions = t.asking(a)?.questions()?;
+            Some(questions[0].text.clone())
+        };
+        assert_eq!(asked(&t, &agent(LIVE)), None, "herdr's id ties nothing");
+        pane(&mut t, &[pid]);
+        assert_eq!(asked(&t, &agent(LIVE)).as_deref(), Some("Mine?"));
+
+        // Two sessions in one folder: the other's question is never this terminal's, whatever
+        // herdr names, and a pane that runs both is tied to neither.
+        pid_file(&sessions, other, OLD, CWD, other_started, "");
+        assert_eq!(asked(&t, &agent(OLD)).as_deref(), Some("Mine?"));
+        pane(&mut t, &[pid, other]);
+        assert_eq!(asked(&t, &agent(LIVE)), None);
+        pane(&mut t, &[pid]);
+        pid_file(&sessions, other, LIVE, CWD, other_started, "");
+        assert_eq!(
+            asked(&t, &agent(LIVE)),
+            None,
+            "two processes on one session"
+        );
+        std::fs::remove_file(sessions.join(format!("{other}.json"))).unwrap();
+
+        // herdr-core and Rex name the session of the terminal's foreground process.
+        let mut hosted = agent(LIVE);
+        hosted.terminal_id = "hc:local/t1".into();
+        assert_eq!(asked(&t, &hosted).as_deref(), Some("Mine?"));
+        hosted.agent_session = Some(AgentSession { value: OLD.into() });
+        assert_eq!(asked(&t, &hosted), None, "no live process holds it");
+
+        transcript(
+            &project,
+            LIVE,
+            &ask(LIVE, "Mine?", "2020-01-01T00:00:00.000Z"),
+        );
+        assert_eq!(
+            asked(&t, &agent(LIVE)),
+            None,
+            "a call older than the process"
+        );
+        std::fs::remove_file(project.join(format!("{LIVE}.jsonl"))).unwrap();
+        assert_eq!(asked(&t, &agent(LIVE)), None, "no transcript");
     }
 
     #[test]

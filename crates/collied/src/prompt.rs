@@ -260,6 +260,15 @@ fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
 
+/// One question of an AskUserQuestion call, as the session transcript records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Question {
+    pub text: String,
+    /// Each option's label and description.
+    pub options: Vec<(String, String)>,
+    pub multi: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu {
     pub body: Vec<String>,
@@ -559,6 +568,118 @@ impl Menu {
     /// rule and keep the border.
     pub fn on_screen(&self) -> bool {
         self.topped || self.bordered && !self.grants()
+    }
+
+    /// Whether this is a question form: a menu that grants nothing and has no `▔` border over
+    /// it, as Claude Code draws AskUserQuestion's form and its review page. Its top cannot be
+    /// told from the screen ([`Menu::asks`]).
+    pub fn is_question(&self) -> bool {
+        !self.grants() && !self.bordered
+    }
+
+    /// What this menu draws of `asked`, the questions of the session's one pending
+    /// AskUserQuestion call, when it draws it whole: the one question whose options these are,
+    /// or all of them on the review page. `None` for anything else, a form cut or scrolled
+    /// included, which then gets no answer from the phone.
+    ///
+    /// The screen alone cannot say a question form is whole: its text starts at the top
+    /// rule's column, so a row of `─` in it passes for that rule, and a form taller than the
+    /// terminal scrolls its options. Against the transcript it can. Every option of the
+    /// question is on screen in order, each reading its label and description, followed only
+    /// by the entries Claude Code 2.1.329 adds (`Type something.` then `Chat about this`; for
+    /// a multi-select question a `[ ]` or `[✔]` box before each label, `[ ] Type something`
+    /// over `Submit`, then `Chat about this`), with no row under the last one, and the rows
+    /// between the dialog's first row (the header or the tabs) and option 1 read the question's
+    /// whole text: all behind the `│` gutter Claude Code draws a long or multi-line question
+    /// behind, or none of them. A row hidden above a rule the text draws leaves less than the
+    /// whole text, and an option hidden or marked `↓` leaves the options short. Two questions
+    /// with the same labels are refused, since a cut first one can draw the second's tabs and
+    /// text. Only whitespace is set aside, as wrapping moves it: a text Claude Code rewrites on
+    /// screen (format characters, a cut at 2000 columns) offers nothing.
+    pub fn asks(&self, asked: &[Question]) -> Option<String> {
+        if !self.after.is_empty() {
+            return None;
+        }
+        if self.reviews(asked) {
+            return Some(format!("{asked:?}"));
+        }
+        let labels = |q: &Question| -> Vec<String> {
+            q.options.iter().map(|(label, _)| unspaced(label)).collect()
+        };
+        let mut drawn = asked.iter().filter(|q| self.draws(q));
+        let q = drawn.next()?;
+        (drawn.next().is_none() && asked.iter().filter(|o| labels(o) == labels(q)).count() == 1)
+            .then(|| format!("{q:?}"))
+    }
+
+    fn draws(&self, q: &Question) -> bool {
+        if self.options.len() <= q.options.len() {
+            return false;
+        }
+        let (options, added) = self.options.split_at(q.options.len());
+        let added: Vec<String> = added.iter().map(|o| unspaced(o)).collect();
+        let added: Vec<&str> = added.iter().map(String::as_str).collect();
+        let added = match added[..] {
+            // The inner rule follows `Submit`, which is no option row, so it reads as one
+            // more row of that entry.
+            [typed, "Chataboutthis"] if q.multi => {
+                typed.trim_end_matches('─') == "[]TypesomethingSubmit"
+            }
+            ["Typesomething."] | ["Typesomething.", "Chataboutthis"] => !q.multi,
+            _ => false,
+        };
+        let reads = |shown: &String, (label, description): &(String, String)| {
+            let shown = unspaced(shown);
+            let shown = match q.multi {
+                true => shown
+                    .strip_prefix("[]")
+                    .or_else(|| shown.strip_prefix("[✔]")),
+                false => Some(shown.as_str()),
+            };
+            shown == Some(unspaced(&format!("{label}{description}")).as_str())
+        };
+        let rows = self.raw_body.get(1..).unwrap_or_default();
+        let gutter = rows.iter().all(|r| r.starts_with('│'));
+        let text: String = rows
+            .iter()
+            .map(|r| r.strip_prefix('│').filter(|_| gutter).unwrap_or(r.as_str()))
+            .collect();
+        added
+            && options.iter().zip(&q.options).all(|(s, o)| reads(s, o))
+            && !rows.is_empty()
+            && unspaced(&text) == unspaced(&q.text)
+    }
+
+    /// The review page of a call (2.1.329): under the tabs, `Review your answers`, then every
+    /// question in order, its whole text behind `●` and its answer behind `→`, over `Submit
+    /// answers` and `Cancel`. A row hidden above a rule that a question or an answer draws
+    /// leaves a question out or short.
+    fn reviews(&self, asked: &[Question]) -> bool {
+        let rows: Vec<String> = self.raw_body.iter().skip(1).map(|r| unspaced(r)).collect();
+        let Some((title, rows)) = rows.split_first() else {
+            return false;
+        };
+        let mut at = 0;
+        let whole = asked.iter().all(|q| {
+            let Some(text) = rows.get(at).and_then(|r| r.strip_prefix('●')) else {
+                return false;
+            };
+            let mut text = text.to_owned();
+            at += 1;
+            while let Some(row) = rows.get(at).filter(|r| !r.starts_with(['●', '→'])) {
+                text.push_str(row);
+                at += 1;
+            }
+            let answered = rows.get(at).is_some_and(|r| r.starts_with('→'));
+            while rows.get(at).is_some_and(|r| !r.starts_with('●')) {
+                at += 1;
+            }
+            answered && text == unspaced(&q.text)
+        });
+        self.options == ["Submit answers", "Cancel"]
+            && title == "Reviewyouranswers"
+            && whole
+            && at == rows.len()
     }
 
     /// The rows under option `i`'s first line. For the last option they are the rows of
