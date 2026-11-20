@@ -62,6 +62,7 @@ final class AppModel {
     private let log = Logger(subsystem: "dev.rbstp.collie", category: "app")
 
     init() {
+        KeychainItem.moveSharedItems()
         do {
             #if DEBUG && targetEnvironment(simulator)
             if SimulatorVM.enabled { try SimulatorVM.verifyCore() }

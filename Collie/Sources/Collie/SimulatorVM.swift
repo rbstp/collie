@@ -26,6 +26,7 @@ enum SimulatorVM {
                     kSecClass as String: kSecClassGenericPassword,
                     kSecAttrService as String: service,
                     kSecAttrAccount as String: account,
+                    kSecAttrAccessGroup as String: KeychainItem.accessGroup,
                     kSecUseDataProtectionKeychain as String: true,
                     kSecMatchLimit as String: kSecMatchLimitAll,
                     kSecReturnAttributes as String: true,

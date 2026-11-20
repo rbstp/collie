@@ -183,7 +183,7 @@ Per installation, the schema allows eight active machines and eight active activ
 On the phone:
 
 - Challenge, App Attest and commit run under an explicit FIFO gate, because Swift actors can reenter during awaits.
-- A ThisDeviceOnly Keychain record holds the installation and key ID, exact grants and minimal pending revocations; a backup-excluded installation marker stops a new install from reusing it.
+- A ThisDeviceOnly Keychain record in the app's own access group, which no extension holds, holds the installation and key ID, exact grants and minimal pending revocations; a backup-excluded installation marker stops a new install from reusing it.
 - The transport pins `https://collie-push.rbstp.dev`, disables cookies, cache and redirects, bounds responses and never takes a relay URL from a machine. Without App Attest support there is no enrollment fallback; tailnet sessions are unaffected.
 - Before posting a route proof, the phone durably records the challenge expiry plus 30 days as the latest possible grant expiry, so the bound survives a paused App Attest or a lost response.
 - Removing a pairing keeps its revocation authority before discarding grants. An offline revocation stays pending, and the machine can send until it succeeds or the last grant expires.
