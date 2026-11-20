@@ -270,7 +270,11 @@ fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
                 .to_owned(),
         );
     };
-    let sessions = recorded.windows.len();
+    let sessions = recorded
+        .windows
+        .values()
+        .filter(|w| w.size.is_some())
+        .count();
     if recorded.plan.is_none()
         && let Some(codex) = recorded.codex
     {
@@ -1069,6 +1073,8 @@ mod tests {
         assert!(s == Status::Warn && d.contains("collied statusline"));
         let input = include_str!("../tests/fixtures/statusline.json");
         crate::usage::record(&data, input.as_bytes(), 60_000).unwrap();
+        let sizeless = br#"{"session_id":"0000000a-0000-4000-8000-000000000000","rate_limits":{}}"#;
+        crate::usage::record(&data, sizeless, 60_000).unwrap();
         let (s, d) = check_usage(&data, 240_000);
         assert!(s == Status::Ok);
         assert_eq!(d, "recorded 3 min ago (5h, 7d), windows for 1 session(s)");

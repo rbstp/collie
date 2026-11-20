@@ -35,15 +35,39 @@ pub struct Recorded {
     pub codex: Option<CodexUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub copilot: Option<CopilotUsage>,
-    /// Context window size per Claude Code session id.
+    /// Context window size and last reported limits per Claude Code session id.
     #[serde(default)]
     pub windows: BTreeMap<String, SessionWindow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionWindow {
-    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
     pub seen_ms: u64,
+    /// None until the session reports limits: an entry from before they were kept, or a
+    /// session before its first reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<SessionLimits>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionLimits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_hour: Option<UsageWindow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seven_day: Option<UsageWindow>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Report {
+    /// No session id.
+    Unnamed,
+    /// A session with no limits on record: not told from a quiet session's old figures.
+    First,
+    Repeat,
+    /// Differs from the session's last report: the session received a reply.
+    New,
 }
 
 /// The status line command's stdin; an input with nothing to record is not an error.
@@ -58,43 +82,60 @@ pub fn record_stdin(data_dir: &Path) -> anyhow::Result<()> {
 
 pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> {
     let v: Value = serde_json::from_slice(input)?;
-    let plan = v
+    let limits = v
         .get("rate_limits")
         .filter(|r| r.is_object())
-        .map(|r| PlanUsage {
+        .map(|r| SessionLimits {
             five_hour: window(&r["five_hour"]),
             seven_day: window(&r["seven_day"]),
-            recorded_ms: now_ms,
-            codex: None,
-            copilot: None,
         });
-    let session = v["session_id"]
+    let id = v["session_id"]
         .as_str()
-        .filter(|id| crate::transcript::is_session_id(id))
-        .zip(
-            v["context_window"]["context_window_size"]
-                .as_u64()
-                .filter(|n| WINDOW_RANGE.contains(n)),
-        );
-    if plan.is_none() && session.is_none() {
+        .filter(|id| crate::transcript::is_session_id(id));
+    let size = v["context_window"]["context_window_size"]
+        .as_u64()
+        .filter(|n| WINDOW_RANGE.contains(n));
+    if limits.is_none() && (id.is_none() || size.is_none()) {
         return Ok(());
     }
     update(data_dir, |recorded| {
         let before = recorded.clone();
-        if let Some(plan) = plan {
-            recorded.plan = Some(merge_plan(recorded.plan.take(), plan, now_ms));
+        let session = id.and_then(|id| recorded.windows.get(id));
+        if let Some(new) = &limits {
+            let report = match (id, session.and_then(|s| s.limits.as_ref())) {
+                (None, _) => Report::Unnamed,
+                (_, None) => Report::First,
+                // A window the report leaves out or that is past its reset is no change:
+                // every session's status line drops a window when it resets.
+                (_, Some(last))
+                    if [
+                        (&new.five_hour, &last.five_hour),
+                        (&new.seven_day, &last.seven_day),
+                    ]
+                    .iter()
+                    .any(|(n, l)| {
+                        n != l && n.as_ref().is_some_and(|w| w.resets_at_ms > now_ms)
+                    }) =>
+                {
+                    Report::New
+                }
+                _ => Report::Repeat,
+            };
+            recorded.plan = Some(merge_plan(recorded.plan.take(), new, report, now_ms));
         }
-        if let Some((id, size)) = session
-            && !recorded
-                .windows
-                .get(id)
-                .is_some_and(|w| w.size == size && now_ms < w.seen_ms + RESTAMP_MS)
+        let size = size.or(session.and_then(|s| s.size));
+        let limits = limits.or_else(|| session.and_then(|s| s.limits.clone()));
+        if let Some(id) = id
+            && !session.is_some_and(|s| {
+                s.size == size && s.limits == limits && now_ms < s.seen_ms + RESTAMP_MS
+            })
         {
             recorded.windows.insert(
                 id.to_owned(),
                 SessionWindow {
                     size,
                     seen_ms: now_ms,
+                    limits,
                 },
             );
             while recorded.windows.len() > MAX_SESSIONS {
@@ -114,18 +155,34 @@ pub fn record(data_dir: &Path, input: &[u8], now_ms: u64) -> anyhow::Result<()> 
 }
 
 /// Each session reports the limits from its own last reply, so a quiet session's older
-/// figures must not replace a newer one's: within a window usage only grows, and a later
-/// reset is a later window.
-fn merge_plan(old: Option<PlanUsage>, new: PlanUsage, now_ms: u64) -> PlanUsage {
-    let Some(old) = old else { return new };
-    let five_hour = merge_window(old.five_hour.clone(), new.five_hour.clone(), now_ms);
-    let seven_day = merge_window(old.seven_day.clone(), new.seven_day.clone(), now_ms);
+/// figures must not replace a newer one's. A plan's usage can be reset before its window
+/// ends, so a lower figure or an earlier reset is not older: only a change in a session's
+/// own report is a new reading.
+fn merge_plan(
+    old: Option<PlanUsage>,
+    new: &SessionLimits,
+    report: Report,
+    now_ms: u64,
+) -> PlanUsage {
+    let Some(old) = old else {
+        return PlanUsage {
+            five_hour: new.five_hour.clone(),
+            seven_day: new.seven_day.clone(),
+            recorded_ms: now_ms,
+            codex: None,
+            copilot: None,
+        };
+    };
+    let five_hour = merge_window(old.five_hour.clone(), new.five_hour.clone(), report, now_ms);
+    let seven_day = merge_window(old.seven_day.clone(), new.seven_day.clone(), report, now_ms);
     let current = (new.five_hour.is_some() || new.seven_day.is_some())
         && [(&new.five_hour, &five_hour), (&new.seven_day, &seven_day)]
             .iter()
             .all(|(n, m)| n.is_none() || n == m);
     let changed = five_hour != old.five_hour || seven_day != old.seven_day;
-    let recorded_ms = if current && (changed || now_ms >= old.recorded_ms + RESTAMP_MS) {
+    let recorded_ms = if report == Report::New
+        || current && (changed || now_ms >= old.recorded_ms + RESTAMP_MS)
+    {
         now_ms
     } else {
         old.recorded_ms
@@ -402,17 +459,20 @@ pub fn parse_copilot_usage(
 fn merge_window(
     old: Option<UsageWindow>,
     new: Option<UsageWindow>,
+    report: Report,
     now_ms: u64,
 ) -> Option<UsageWindow> {
     let live = |w: &UsageWindow| w.resets_at_ms > now_ms;
-    match (old.filter(live), new.filter(live)) {
-        (Some(o), Some(n)) => Some(match o.resets_at_ms.cmp(&n.resets_at_ms) {
+    match (report, old.filter(live), new.filter(live)) {
+        (Report::Repeat, o, _) => o,
+        (Report::First, o, n) => o.or(n),
+        (Report::Unnamed, Some(o), Some(n)) => Some(match o.resets_at_ms.cmp(&n.resets_at_ms) {
             std::cmp::Ordering::Less => n,
             std::cmp::Ordering::Greater => o,
             std::cmp::Ordering::Equal if n.used_percent >= o.used_percent => n,
             std::cmp::Ordering::Equal => o,
         }),
-        (o, n) => n.or(o),
+        (_, o, n) => n.or(o),
     }
 }
 
@@ -523,7 +583,7 @@ impl Usage {
         self.recorded
             .windows
             .get(session_id)
-            .map(|w| w.size)
+            .and_then(|w| w.size)
             .filter(|n| WINDOW_RANGE.contains(n))
     }
 }
@@ -575,7 +635,7 @@ mod tests {
                 copilot: None,
             })
         );
-        assert_eq!(r.windows[SESSION].size, 1_000_000);
+        assert_eq!(r.windows[SESSION].size, Some(1_000_000));
         let meta = std::fs::metadata(data.join(USAGE_FILE)).unwrap();
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
         let text = std::fs::read_to_string(data.join(USAGE_FILE)).unwrap();
@@ -738,7 +798,7 @@ mod tests {
         record(&data, v.to_string().as_bytes(), 1_738_425_600_000).unwrap();
         let plan = read(&data).plan.unwrap();
         assert_eq!(plan.five_hour, None);
-        assert_eq!(plan.seven_day.unwrap().used_percent, 0);
+        assert_eq!(plan.seven_day.unwrap().used_percent, 41);
     }
 
     fn limits(five: f64, five_resets: u64, seven: f64) -> Vec<u8> {
@@ -770,6 +830,130 @@ mod tests {
         assert_eq!(plan(), (3, 46, 170_000));
         record(&data, &limits(92.0, 1738425600, 46.0), 400_000).unwrap();
         assert_eq!(plan(), (3, 46, 170_000));
+    }
+
+    const A: &str = "0000000a-0000-4000-8000-000000000000";
+    const B: &str = "0000000b-0000-4000-8000-000000000000";
+    const FIVE: u64 = 1_738_425_600;
+    const WEEK: u64 = 1_738_857_600;
+
+    fn report(session: &str, five: (f64, u64), seven: (f64, u64)) -> Vec<u8> {
+        serde_json::json!({"session_id": session, "rate_limits": {
+            "five_hour": {"used_percentage": five.0, "resets_at": five.1},
+            "seven_day": {"used_percentage": seven.0, "resets_at": seven.1},
+        }})
+        .to_string()
+        .into_bytes()
+    }
+
+    fn figures(data: &Path) -> (Option<UsageWindow>, Option<UsageWindow>, u64) {
+        let p = read(data).plan.unwrap();
+        (p.five_hour, p.seven_day, p.recorded_ms)
+    }
+
+    fn at(used_percent: u8, resets: u64) -> Option<UsageWindow> {
+        Some(UsageWindow {
+            used_percent,
+            resets_at_ms: resets * 1000,
+        })
+    }
+
+    /// Two sessions known and the weekly at 99, then B's reply after the plan's usage was
+    /// reset, with the weekly resetting at `resets`.
+    fn a_reply_after_a_reset(resets: u64) {
+        let (_dir, data) = data();
+        record(&data, &report(A, (50.0, FIVE), (98.0, WEEK)), 100_000).unwrap();
+        record(&data, &report(B, (50.0, FIVE), (98.0, WEEK)), 110_000).unwrap();
+        record(&data, &report(A, (60.0, FIVE), (99.0, WEEK)), 120_000).unwrap();
+        assert_eq!(figures(&data), (at(60, FIVE), at(99, WEEK), 120_000));
+        record(&data, &report(B, (2.0, FIVE), (1.0, resets)), 150_000).unwrap();
+        let reset = (at(2, FIVE), at(1, resets), 150_000);
+        assert_eq!(figures(&data), reset);
+        // While the reply streams, the same report is no new reading.
+        record(&data, &report(B, (2.0, FIVE), (1.0, resets)), 150_001).unwrap();
+        assert_eq!(figures(&data), reset);
+        // A is quiet and repeats the figures of its last reply.
+        record(&data, &report(A, (60.0, FIVE), (99.0, WEEK)), 300_000).unwrap();
+        assert_eq!(figures(&data), reset);
+        // The five-hour window resets and Claude Code drops it from A's input.
+        let weekly = serde_json::json!({"session_id": A, "rate_limits": {
+            "seven_day": {"used_percentage": 99.0, "resets_at": WEEK},
+        }});
+        record(&data, weekly.to_string().as_bytes(), FIVE * 1000).unwrap();
+        assert_eq!(figures(&data), (None, at(1, resets), 150_000));
+    }
+
+    #[test]
+    fn a_reply_after_an_early_reset_replaces_the_figures() {
+        a_reply_after_a_reset(WEEK);
+    }
+
+    #[test]
+    fn a_reply_after_an_early_reset_replaces_a_later_reset_time() {
+        a_reply_after_a_reset(WEEK - 86_400);
+    }
+
+    #[test]
+    fn a_first_report_fills_only_a_window_with_no_live_value() {
+        let (_dir, data) = data();
+        record(&data, &report(A, (60.0, FIVE), (99.0, WEEK)), 100_000).unwrap();
+        assert_eq!(figures(&data), (at(60, FIVE), at(99, WEEK), 100_000));
+        // Not told from a quiet session's old figures, later reset times or not.
+        let later = report(B, (10.0, FIVE + 18_000), (5.0, WEEK + 604_800));
+        record(&data, &later, 110_000).unwrap();
+        assert_eq!(figures(&data), (at(60, FIVE), at(99, WEEK), 100_000));
+        let unseen = report(SESSION, (10.0, FIVE + 18_000), (5.0, WEEK + 604_800));
+        record(&data, &unseen, FIVE * 1000).unwrap();
+        assert_eq!(
+            figures(&data),
+            (at(10, FIVE + 18_000), at(99, WEEK), 100_000)
+        );
+    }
+
+    #[test]
+    fn a_repeat_of_the_recorded_figures_restamps_once_a_minute() {
+        let (_dir, data) = data();
+        record(&data, &report(A, (60.0, FIVE), (99.0, WEEK)), 100_000).unwrap();
+        record(&data, &report(B, (60.0, FIVE), (99.0, WEEK)), 110_000).unwrap();
+        let reset = report(B, (2.0, FIVE), (1.0, WEEK));
+        record(&data, &reset, 200_000).unwrap();
+        // A's reply agrees: a new reading is fresh even when no figure moves.
+        record(&data, &report(A, (2.0, FIVE), (1.0, WEEK)), 201_000).unwrap();
+        assert_eq!(figures(&data), (at(2, FIVE), at(1, WEEK), 201_000));
+        record(&data, &reset, 201_000 + RESTAMP_MS - 1).unwrap();
+        assert_eq!(figures(&data), (at(2, FIVE), at(1, WEEK), 201_000));
+        record(&data, &reset, 201_000 + RESTAMP_MS).unwrap();
+        assert_eq!(
+            figures(&data),
+            (at(2, FIVE), at(1, WEEK), 201_000 + RESTAMP_MS)
+        );
+    }
+
+    #[test]
+    fn a_file_without_session_limits_loads_and_heals_at_a_new_reading() {
+        let (_dir, data) = data();
+        crate::ensure_private_dir(&data).unwrap();
+        let path = data.join(USAGE_FILE);
+        let old = serde_json::json!({
+            "plan": {
+                "five_hour": {"used_percent": 50, "resets_at_ms": FIVE * 1000},
+                "seven_day": {"used_percent": 99, "resets_at_ms": WEEK * 1000},
+                "recorded_ms": 100_000,
+            },
+            "windows": {A: {"size": 200_000, "seen_ms": 100_000}},
+        });
+        std::fs::write(&path, old.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut usage = Usage::new(path);
+        usage.refresh();
+        assert_eq!(usage.window(A), Some(200_000));
+        assert_eq!(usage.plan().unwrap().seven_day, at(99, WEEK));
+        record(&data, &report(A, (2.0, FIVE), (1.0, WEEK)), 200_000).unwrap();
+        assert_eq!(figures(&data), (at(50, FIVE), at(99, WEEK), 100_000));
+        record(&data, &report(A, (3.0, FIVE), (1.0, WEEK)), 210_000).unwrap();
+        assert_eq!(figures(&data), (at(3, FIVE), at(1, WEEK), 210_000));
+        usage.refresh();
+        assert_eq!(usage.window(A), Some(200_000));
     }
 
     #[test]
@@ -819,10 +1003,14 @@ mod tests {
         let (_dir, data) = data();
         for i in 0..(MAX_SESSIONS as u64 + 3) {
             let input = format!(
-                r#"{{"session_id":"00000000-0000-4000-8000-{i:012}","context_window":{{"context_window_size":200000}}}}"#
+                r#"{{"session_id":"00000000-0000-4000-8000-{i:012}","context_window":{{"context_window_size":100000000}},"rate_limits":{{"five_hour":{{"used_percentage":100,"resets_at":99999999999}},"seven_day":{{"used_percentage":100,"resets_at":99999999999}}}}}}"#
             );
-            record(&data, input.as_bytes(), i).unwrap();
+            record(&data, input.as_bytes(), 1_700_000_000_000 + i).unwrap();
         }
+        // Full, the file stays within what the daemon reads.
+        let mut usage = Usage::new(data.join(USAGE_FILE));
+        usage.refresh();
+        assert!(usage.plan().is_some());
         let r = read(&data);
         assert_eq!(r.windows.len(), MAX_SESSIONS);
         assert!(
