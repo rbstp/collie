@@ -346,6 +346,18 @@ fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
         .filter(|w| w.size.is_some())
         .count();
     if recorded.plan.is_none()
+        && let Some(agy) = recorded.agy
+    {
+        let minutes = now_ms.saturating_sub(agy.recorded_ms) / 60_000;
+        return (
+            Status::Ok,
+            format!(
+                "Antigravity quota recorded {minutes} min ago ({} bucket(s)), windows for {sessions} session(s)",
+                agy.buckets.len()
+            ),
+        );
+    }
+    if recorded.plan.is_none()
         && let Some(codex) = recorded.codex
     {
         let minutes = now_ms.saturating_sub(codex.recorded_ms) / 60_000;

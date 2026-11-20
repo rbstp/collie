@@ -7,6 +7,7 @@ To see plan usage and token cost, switch the Agents tab to **Usage**, or swipe l
 | Claude Code | 5-hour and weekly limits | The [status line tap](../install/claude-code.md#plan-usage) |
 | Codex | Monthly credits and reset date, for a credit-metered workspace | The local [Codex](../agents/codex.md#plan-usage) app-server |
 | Copilot | Monthly premium usage and reset date, or "Unlimited" | GitHub, with the machine's `gh` login ([Copilot CLI](../agents/copilot.md#plan-usage)) |
+| Antigravity | 5-hour and weekly quota buckets across Gemini and partner models | The [status line tap](../agents/antigravity.md#plan-usage) |
 
 <div class="screenshots">
 <img class="screenshot-light" src="../images/usage-light.png" width="300" height="652" loading="lazy" alt="The Usage view: Claude Code's 5-hour and weekly usage limits, each with a bar and its reset time">

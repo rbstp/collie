@@ -150,6 +150,8 @@ gh secret set DOCS_SCREENSHOTS_TOKEN --repo rbstp/collie --env docs-screenshots
 
 Only **propose** sees the token, and it never builds or runs the captured revision. Without the secret, **propose** fails with a message pointing here, after **capture** has kept the images.
 
+`.github/workflows/prices.yml` shares the `docs-screenshots` environment and `DOCS_SCREENSHOTS_TOKEN` on a weekly Monday schedule (and manual dispatch) to move `litellm_commit` to LiteLLM's latest `main` commit, run `just prices` and open or update the `refresh-prices` pull request when `crates/collied/data/prices.json` changes, without auto-merge so third-party price changes are reviewed first.
+
 Only the iPhone screenshots refresh, since the runner's watchOS simulator runtime loses its files minutes after it is mounted ([#539](https://github.com/rbstp/collie/issues/539)). When the watch app changes, the owner refreshes `watch-usage.png` and `watch-widget.png` with a local `just ios-screenshots` and commits them.
 
 To refresh without a release, run the workflow by hand (Actions, docs screenshots, Run workflow, on `master`), optionally with a `master` commit to capture instead of the head. Usage reset times and the watch's clock follow the capture time, so `usage-light.png` and `usage-dark.png` change on every run and every release opens a refresh pull request; a local run also changes the watch images.

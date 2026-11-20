@@ -35,7 +35,7 @@ const RESCAN: std::time::Duration = std::time::Duration::from_secs(15);
 /// OpenAI prices a call with more input than this, cached input included, at its long context rates.
 const LONG_INPUT: u64 = 272_000;
 
-/// LiteLLM's Claude and OpenAI chat prices, from `just prices`.
+/// LiteLLM's Claude, OpenAI and Gemini chat prices, from `just prices`.
 static PRICES: LazyLock<HashMap<String, Price>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("../data/prices.json")).expect("bundled prices parse")
 });
@@ -1531,6 +1531,7 @@ mod tests {
         assert_eq!(c.models[0].agent, "agy");
         assert_eq!(c.models[0].model, "gemini-4-neon-high");
         assert_eq!(c.models[0].tokens, tokens(16_500, 470, 12_000, 0));
+        assert!(c.models[0].cost_usd.is_some_and(|usd| usd > 0.0));
     }
 
     #[test]
@@ -1550,6 +1551,20 @@ mod tests {
         ));
         assert!(price("claude-haiku-4-5-20251001").is_some());
         assert!(price("gpt-6.1-sol").is_some());
+        for model in [
+            "claude-fable-5-2",
+            "claude-mythos-5-2",
+            "gemini-4-neon",
+            "gemini-4-neon-high",
+            "gemini-4-argon",
+            "gemini-4-carbon",
+            "gemini-4-hydrogen",
+            "gemini-3.8-flash-high",
+            "gemini-3.5-flash-lite",
+            "gpt-oss-120b-maas",
+        ] {
+            assert!(price(model).is_some(), "{model}");
+        }
         for unpriced in ["opus", "codex-auto-review", "unknown", "<synthetic>", ""] {
             assert!(price(unpriced).is_none(), "{unpriced}");
         }
