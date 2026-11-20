@@ -28,6 +28,8 @@
 	</array>
 	<key>CollieKeychainGroup</key>
 	<string>$(AppIdentifierPrefix)dev.rbstp.collie.shared</string>
+	<key>ColliePrivateKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)dev.rbstp.collie</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>

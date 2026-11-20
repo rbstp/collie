@@ -132,13 +132,16 @@ struct PublisherRelayTransport: RelayControlTransport {
 }
 
 struct RelayCredentialStore: Sendable {
+    static let service = "dev.rbstp.collie.relay"
+    static let account = "installation"
     let marker: URL
 
-    private var query: [String: Any] {
+    var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "dev.rbstp.collie.relay",
-            kSecAttrAccount as String: "installation",
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: Self.account,
+            kSecAttrAccessGroup as String: KeychainItem.accessGroup,
             kSecUseDataProtectionKeychain as String: true,
             kSecAttrSynchronizable as String: false,
         ]
@@ -151,7 +154,12 @@ struct RelayCredentialStore: Sendable {
         read[kSecReturnData as String] = true
         read[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(read as CFDictionary, &result)
+        var status = SecItemCopyMatching(read as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            // Read again whatever the move answered: another reader may have moved the item first.
+            _ = KeychainItem.moveShared(service: Self.service, account: Self.account)
+            status = SecItemCopyMatching(read as CFDictionary, &result)
+        }
         guard status == errSecSuccess, let data = result as? Data else { throw RelayEnrollmentError.storage }
         let state = try JSONDecoder().decode(RelayEnrollmentState.self, from: data)
         guard state.installationId == markerId else { throw RelayEnrollmentError.storage }
@@ -166,6 +174,7 @@ struct RelayCredentialStore: Sendable {
         let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         guard updated == errSecSuccess || (updated == errSecItemNotFound && SecItemAdd(item as CFDictionary, nil) == errSecSuccess)
         else { throw RelayEnrollmentError.storage }
+        SecItemDelete(KeychainItem.sharedQuery(service: Self.service, account: Self.account) as CFDictionary)
         try Data(state.installationId.utf8).write(to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         var target = marker
         var values = URLResourceValues()
