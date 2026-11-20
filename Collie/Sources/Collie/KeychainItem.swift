@@ -175,9 +175,11 @@ enum EnclaveBlob {
     /// machine refuses the new key until the phone is revoked there and paired again. The error
     /// on that screen is as old as the process, which may have started while the phone was
     /// locked, so the keys are deleted only when the rebuild still fails now.
-    static func reset(_ items: [KeychainItem] = keys, rebuild: () throws -> Void) {
+    static func reset(
+        _ items: [KeychainItem] = keys, delete: (CFDictionary) -> OSStatus = SecItemDelete, rebuild: () throws -> Void
+    ) {
         do { try rebuild() } catch is Kept {
-            for query in items.flatMap(\.deleteQueries) { SecItemDelete(query as CFDictionary) }
+            for query in items.flatMap(\.deleteQueries) { _ = delete(query as CFDictionary) }
         } catch {}
     }
 }

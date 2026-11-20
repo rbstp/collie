@@ -118,6 +118,34 @@ struct KeychainGroupQueryTests {
         }
     }
 
+    /// #876: the reset a shell's card offers costs the terminal pairings alone. With the TLS key
+    /// among its deletes, every machine would refuse the phone.
+    @Test func terminalResetDeletesTheTerminalKeyAloneAndOnlyWhenTheRebuildStillFails() throws {
+        let shared = try #require(NotificationKey.accessGroup)
+        var deleted: [[String: Any]] = []
+        let delete: (CFDictionary) -> OSStatus = {
+            deleted.append($0 as! [String: Any])
+            return errSecSuccess
+        }
+        TerminalKey.reset(delete: delete) {}
+        TerminalKey.reset(delete: delete) { throw KeychainError(status: errSecInteractionNotAllowed) }
+        #expect(deleted.isEmpty)
+
+        TerminalKey.reset(delete: delete) { throw EnclaveBlob.Kept(cause: TKError(.communicationError)) }
+        #expect(deleted.count == 2)
+        for (query, group) in zip(deleted, [KeychainItem.accessGroup, shared]) {
+            expectSame(
+                query,
+                [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: "dev.rbstp.collie.identity",
+                    kSecAttrAccount as String: "terminal",
+                    kSecAttrAccessGroup as String: group,
+                    kSecUseDataProtectionKeychain as String: true,
+                ])
+        }
+    }
+
     /// A move or a delete without the shared group would match the app's own copy.
     @Test func moveNamesTheSharedGroupAndOneItem() throws {
         let shared = try #require(NotificationKey.accessGroup)

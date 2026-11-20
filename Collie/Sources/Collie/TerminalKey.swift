@@ -16,20 +16,20 @@ enum TerminalKey {
         service: "dev.rbstp.collie.identity", account: "terminal", accessible: kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly)
     #endif
 
-    /// nil when this phone cannot hold one (no passcode, or the phone is locked) or the enclave
-    /// would not rebuild the stored one: terminals then ask to pair again. On a device there is
-    /// no software fallback.
-    static func publicKey(unlocked: Bool) -> Data? {
+    /// nil when this phone cannot hold one (no passcode, or the phone is locked): terminals then
+    /// ask to pair again. Throws when the enclave would not rebuild the stored one, which
+    /// pairing again would not replace. On a device there is no software fallback.
+    static func publicKey(unlocked: Bool) throws(EnclaveBlob.Kept) -> Data? {
         #if targetEnvironment(simulator)
         return try? softKey().publicKey.derRepresentation
         #else
-        return try? enclaveKey(context: nil, unlocked: unlocked).publicKey.derRepresentation
+        return try enclaveKey(context: nil, unlocked: unlocked)?.publicKey.derRepresentation
         #endif
     }
 
     /// A fresh context per grant, never another's evaluated one, so one unlock never covers a
     /// later grant. nil when cancelled or refused: nothing is signed.
-    static func sign(_ message: Data, reason: String) async -> Data? {
+    static func sign(_ message: Data, reason: String) async throws(EnclaveBlob.Kept) -> Data? {
         #if targetEnvironment(simulator)
         let context = LAContext()
         guard (try? await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) == true
@@ -38,12 +38,24 @@ enum TerminalKey {
         #else
         let unlocked = await MainActor.run { UIApplication.shared.isProtectedDataAvailable }
         // The signature waits for Face ID: off the main actor.
-        return await Task.detached {
+        let signed = await Task.detached { () -> Result<Data?, EnclaveBlob.Kept> in
             let context = LAContext()
             context.localizedReason = reason
-            return try? enclaveKey(context: context, unlocked: unlocked).signature(for: message).derRepresentation
+            do throws(EnclaveBlob.Kept) {
+                let key = try enclaveKey(context: context, unlocked: unlocked)
+                return .success(try? key?.signature(for: message).derRepresentation)
+            } catch {
+                return .failure(error)
+            }
         }.value
+        return try signed.get()
         #endif
+    }
+
+    /// The reset a shell's card offers, only ever after the owner's confirmation: the terminal
+    /// key's item alone, so the TLS key and the machines' trust in this phone stay.
+    static func reset(delete: (CFDictionary) -> OSStatus = SecItemDelete, rebuild: () throws -> Void) {
+        EnclaveBlob.reset([keychain], delete: delete, rebuild: rebuild)
     }
 
     #if targetEnvironment(simulator)
@@ -54,19 +66,27 @@ enum TerminalKey {
         return key
     }
     #else
-    private static func enclaveKey(context: LAContext?, unlocked: Bool) throws -> SecureEnclave.P256.Signing.PrivateKey {
-        guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
-        return try EnclaveBlob.key(stored: keychain.read(), unlocked: unlocked) {
-            try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0, authenticationContext: context)
-        } make: {
-            var error: Unmanaged<CFError>?
-            guard let access = SecAccessControlCreateWithFlags(
-                nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
-            else { throw error!.takeRetainedValue() as Error }
-            let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
-            return (key, key.dataRepresentation)
-        } write: {
-            try keychain.write($0)
+    private static func enclaveKey(
+        context: LAContext?, unlocked: Bool
+    ) throws(EnclaveBlob.Kept) -> SecureEnclave.P256.Signing.PrivateKey? {
+        do {
+            guard SecureEnclave.isAvailable else { return nil }
+            return try EnclaveBlob.key(stored: keychain.read(), unlocked: unlocked) {
+                try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0, authenticationContext: context)
+            } make: {
+                var error: Unmanaged<CFError>?
+                guard let access = SecAccessControlCreateWithFlags(
+                    nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, [.privateKeyUsage, .userPresence], &error)
+                else { throw error!.takeRetainedValue() as Error }
+                let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access, authenticationContext: context)
+                return (key, key.dataRepresentation)
+            } write: {
+                try keychain.write($0)
+            }
+        } catch let kept as EnclaveBlob.Kept {
+            throw kept
+        } catch {
+            return nil
         }
     }
     #endif
@@ -76,13 +96,27 @@ enum TerminalKey {
 protocol TerminalUnlocker: Sendable {
     /// Without a passcode the phone has no terminal key, and pairing again cannot give it one.
     var passcodeSet: Bool { get }
-    func sign(_ message: Data, reason: String) async -> Data?
+    /// As `TerminalKey.publicKey`, rebuilt now.
+    @MainActor func publicKey() throws(EnclaveBlob.Kept) -> Data?
+    func sign(_ message: Data, reason: String) async throws(EnclaveBlob.Kept) -> Data?
+    /// `TerminalKey.reset`, then the key in use: the stored one when the enclave rebuilds it by
+    /// now, a new one otherwise.
+    @MainActor func replaceKey() -> Data?
 }
 
 struct SecureEnclaveUnlocker: TerminalUnlocker {
     var passcodeSet: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
 
-    func sign(_ message: Data, reason: String) async -> Data? {
-        await TerminalKey.sign(message, reason: reason)
+    @MainActor func publicKey() throws(EnclaveBlob.Kept) -> Data? {
+        try TerminalKey.publicKey(unlocked: UIApplication.shared.isProtectedDataAvailable)
+    }
+
+    func sign(_ message: Data, reason: String) async throws(EnclaveBlob.Kept) -> Data? {
+        try await TerminalKey.sign(message, reason: reason)
+    }
+
+    @MainActor func replaceKey() -> Data? {
+        TerminalKey.reset { _ = try publicKey() }
+        return try? publicKey()
     }
 }

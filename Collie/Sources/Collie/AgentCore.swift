@@ -44,6 +44,7 @@ protocol AgentCore: AnyObject, Sendable {
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String
     func maxAttachmentBytes() -> UInt64
     func cancelUploads(machineId: String)
+    func setTerminalKey(publicKey: Data) throws
     func terminalChallenge(machineId: String, terminalId: String) async throws -> Data
     func terminalGrant(machineId: String, terminalId: String, signature: Data) async throws
     func watchTerminal(machineId: String, terminalId: String, lines: UInt16) async throws

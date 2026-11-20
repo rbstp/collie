@@ -527,6 +527,8 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
 
     func cancelUploads(machineId: String) {}
 
+    func setTerminalKey(publicKey: Data) {}
+
     func terminalChallenge(machineId: String, terminalId: String) async throws -> Data {
         throw CoreError.TerminalsDisabled
     }

@@ -305,7 +305,7 @@ final class AppModel {
     /// The key is in the Keychain only while the phone is unlocked, so a launch in the background
     /// (a lock-screen decision) loads it on the next foreground.
     private func loadTerminalKey() {
-        guard let core, !terminalKeySet, let key = TerminalKey.publicKey(unlocked: UIApplication.shared.isProtectedDataAvailable)
+        guard let core, !terminalKeySet, let key = try? TerminalKey.publicKey(unlocked: UIApplication.shared.isProtectedDataAvailable)
         else { return }
         do {
             try core.setTerminalKey(publicKey: key)
