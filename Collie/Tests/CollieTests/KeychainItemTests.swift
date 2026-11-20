@@ -9,7 +9,7 @@ import Testing
 
 /// The query builders as they were before KeychainItem (6267cc0). Any drift would lose an
 /// existing pairing or terminal key, so these fixtures must never be edited. #805 added the
-/// app's own access group to every query (`grouped`) and moves the items an older build wrote.
+/// app's own access group to every query (`grouped`).
 private enum Before {
     static func identityBase() -> [String: Any] {
         [
@@ -94,34 +94,27 @@ struct KeychainGroupQueryTests {
         #expect(query[kSecAttrAccount as String] as? String == "installation")
     }
 
-    /// #871: the reset deletes the TLS key and the terminal key, each copy by its exact group,
-    /// service and account, and no other item.
-    @Test func resetNamesTheTwoKeysAndBothGroups() throws {
-        let shared = try #require(NotificationKey.accessGroup)
-        let keys = EnclaveBlob.keys
-        #expect(keys.map(\.service) == ["dev.rbstp.collie.identity", "dev.rbstp.collie.identity"])
-        #expect(keys.map(\.account) == ["tls", "terminal"])
-        for key in keys {
-            let queries = key.deleteQueries
-            #expect(queries.count == 2)
-            for (query, group) in zip(queries, [KeychainItem.accessGroup, shared]) {
-                expectSame(
-                    query,
-                    [
-                        kSecClass as String: kSecClassGenericPassword,
-                        kSecAttrService as String: key.storedService,
-                        kSecAttrAccount as String: key.account,
-                        kSecAttrAccessGroup as String: group,
-                        kSecUseDataProtectionKeychain as String: true,
-                    ])
-            }
+    /// A query naming the shared group would put the item where the extensions read.
+    @Test func theAppsOwnGroupIsNotTheSharedOne() throws {
+        #expect(try #require(NotificationKey.accessGroup) != KeychainItem.accessGroup)
+    }
+
+    /// #871: the startup screen's reset deletes the TLS key and the terminal key, each by its
+    /// exact group, service and account, and no other item.
+    @Test func resetDeletesTheTwoKeysByTheirExactQueries() {
+        var deleted: [[String: Any]] = []
+        let delete: (CFDictionary) -> OSStatus = {
+            deleted.append($0 as! [String: Any])
+            return errSecSuccess
         }
+        EnclaveBlob.reset(delete: delete) { throw EnclaveBlob.Kept(cause: TKError(.communicationError)) }
+        #expect(deleted.count == 2)
+        for (query, key) in zip(deleted, [Before.identityBase(), Before.terminalBase()]) { expectSame(query, grouped(key)) }
     }
 
     /// #876: the reset a shell's card offers costs the terminal pairings alone. With the TLS key
     /// among its deletes, every machine would refuse the phone.
-    @Test func terminalResetDeletesTheTerminalKeyAloneAndOnlyWhenTheRebuildStillFails() throws {
-        let shared = try #require(NotificationKey.accessGroup)
+    @Test func terminalResetDeletesTheTerminalKeyAloneAndOnlyWhenTheRebuildStillFails() {
         var deleted: [[String: Any]] = []
         let delete: (CFDictionary) -> OSStatus = {
             deleted.append($0 as! [String: Any])
@@ -132,39 +125,8 @@ struct KeychainGroupQueryTests {
         #expect(deleted.isEmpty)
 
         TerminalKey.reset(delete: delete) { throw EnclaveBlob.Kept(cause: TKError(.communicationError)) }
-        #expect(deleted.count == 2)
-        for (query, group) in zip(deleted, [KeychainItem.accessGroup, shared]) {
-            expectSame(
-                query,
-                [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: "dev.rbstp.collie.identity",
-                    kSecAttrAccount as String: "terminal",
-                    kSecAttrAccessGroup as String: group,
-                    kSecUseDataProtectionKeychain as String: true,
-                ])
-        }
-    }
-
-    /// A move or a delete without the shared group would match the app's own copy.
-    @Test func moveNamesTheSharedGroupAndOneItem() throws {
-        let shared = try #require(NotificationKey.accessGroup)
-        #expect(shared != KeychainItem.accessGroup)
-        let items = KeychainItem.movedItems
-        #expect(items.map(\.service) == ["dev.rbstp.collie.identity", "dev.rbstp.collie.identity", "dev.rbstp.collie.relay"])
-        #expect(items.map(\.account) == ["tls", "terminal", "installation"])
-        for (service, account) in items {
-            expectSame(
-                KeychainItem.sharedQuery(service: service, account: account),
-                [
-                    kSecClass as String: kSecClassGenericPassword,
-                    kSecAttrService as String: service,
-                    kSecAttrAccount as String: account,
-                    kSecAttrAccessGroup as String: shared,
-                    kSecUseDataProtectionKeychain as String: true,
-                ])
-        }
-        expectSame(KeychainItem.moveAttributes, [kSecAttrAccessGroup as String: KeychainItem.accessGroup])
+        #expect(deleted.count == 1)
+        for query in deleted { expectSame(query, grouped(Before.terminalBase())) }
     }
 }
 
@@ -294,13 +256,12 @@ private func copies(_ service: String, _ account: String) -> [String: Data] {
 }
 
 /// #805: the extensions hold the shared group, so the TLS key, the terminal key and the relay
-/// state are kept out of it and moved out of it, and the notification keys stay in it.
+/// state are kept out of it, and the notification keys stay in it.
 @Suite(.serialized, .enabled(if: keychainTestable))
 struct KeychainGroupTests {
     let own = KeychainItem.accessGroup
     let shared: String
     let old = Data([0x01]), new = Data([0x02])
-    let locked: (String, String) -> OSStatus = { _, _ in errSecInteractionNotAllowed }
 
     init() throws {
         shared = try #require(NotificationKey.accessGroup)
@@ -349,84 +310,25 @@ struct KeychainGroupTests {
         #expect(accessible(item.service, item.account) == kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
     }
 
-    @Test func writeRemovesTheSharedCopy() throws {
-        let item = item()
-        defer { remove(item.service, item.account) }
-        try add(item.service, item.account, in: shared, old)
-        try item.write(new)
-        #expect(copies(item.service, item.account) == [own: new])
+    /// A throw here would stop the first launch, which has no key yet.
+    @Test func readFindsNoItem() throws {
+        #expect(try item().read() == nil)
     }
 
-    @Test(arguments: [kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String, kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String])
-    func readMovesTheSharedCopy(accessible: String) throws {
-        let item = item(accessible as CFString)
-        defer { remove(item.service, item.account) }
-        try add(item.service, item.account, in: shared, old, accessible as CFString)
-        #expect(try item.read() == old)
-        #expect(copies(item.service, item.account) == [own: old])
-        #expect(self.accessible(item.service, item.account) == accessible)
-    }
-
-    @Test func readFindsNothingToMove() throws {
-        let item = item()
-        #expect(try item.read() == nil)
-        #expect(copies(item.service, item.account).isEmpty)
-    }
-
-    /// A nil here would have Identity and TerminalKey make a new key over the old one.
-    @Test func readThrowsWhileTheSharedCopyCannotBeMoved() throws {
-        let item = item()
-        defer { remove(item.service, item.account) }
-        try add(item.service, item.account, in: shared, old)
-        let error = #expect(throws: KeychainError.self) { try item.read(move: locked) }
-        #expect(error?.status == errSecInteractionNotAllowed)
-        #expect(copies(item.service, item.account) == [shared: old])
-        #expect(try item.read() == old)
-    }
-
-    /// Another reader, or the launch move, moved the item after this read first looked: its own
-    /// move then finds none, or finds both. A nil here would make a new key over the moved one.
-    @Test(arguments: [errSecItemNotFound, errSecDuplicateItem])
-    func readReturnsAnItemMovedMeanwhile(answer: OSStatus) throws {
-        let item = item()
-        defer { remove(item.service, item.account) }
-        try add(item.service, item.account, in: shared, old)
-        let data = try item.read { service, account in
-            _ = KeychainItem.moveShared(service: service, account: account)
-            return answer
-        }
-        #expect(data == old)
-        #expect(copies(item.service, item.account) == [own: old])
-    }
-
-    @Test func readThrowsWhenAMoveLeftNoItem() throws {
-        let item = item()
-        let error = #expect(throws: KeychainError.self) { try item.read { _, _ in errSecSuccess } }
-        #expect(error?.status == errSecItemNotFound)
-        #expect(copies(item.service, item.account).isEmpty)
-    }
-
-    @Test func relayStateIsMovedAndLoadedUnderItsMarker() throws {
+    @Test func relayStateIsSavedToTheAppsOwnGroupAndLoadedUnderItsMarker() throws {
         let (service, account) = (RelayCredentialStore.service, RelayCredentialStore.account)
         defer { remove(service, account) }
         remove(service, account)
         let state = RelayEnrollmentState()
-        let data = try JSONEncoder().encode(state)
         let store = RelayCredentialStore(marker: try makeTemporaryDirectory().appending(path: "relay-installation"))
-        try Data(state.installationId.utf8).write(to: store.marker)
-        try add(service, account, in: shared, data)
 
-        #expect(try store.load().installationId == state.installationId)
-        #expect(copies(service, account) == [own: data])
-
-        try add(service, account, in: shared, old)
         try store.save(state)
         #expect(Array(copies(service, account).keys) == [own])
+        #expect(try store.load().installationId == state.installationId)
     }
 
-    /// #871: the reset behind the startup screen's confirmation. A shared copy left behind would
-    /// be moved back by the next read, and the dead blob with it.
-    @Test func resetDeletesBothCopiesOfItsKeysAndNothingElse() throws {
+    /// #871: the reset behind the startup screen's confirmation.
+    @Test func resetDeletesItsKeysAndNothingElse() throws {
         let keys = [item(), item()]
         let sibling = KeychainItem(service: keys[0].service, account: "sibling", accessible: keys[0].accessible)
         let nodeId = "nTEST" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
@@ -437,10 +339,8 @@ struct KeychainGroupTests {
             remove(relayService, relayAccount)
         }
         remove(relayService, relayAccount)
-        for item in keys + [sibling] {
-            try add(item.service, item.account, in: own, new)
-            try add(item.service, item.account, in: shared, old)
-        }
+        for item in keys + [sibling] { try add(item.service, item.account, in: own, new) }
+        try add(sibling.service, sibling.account, in: shared, old)
         try add(relayService, relayAccount, in: own, old)
         try NotificationKey.store(SymmetricKey(size: .bits256), nodeId: nodeId)
         let key = copies(NotificationKey.service, nodeId)
@@ -462,39 +362,9 @@ struct KeychainGroupTests {
         let item = item()
         defer { remove(item.service, item.account) }
         try add(item.service, item.account, in: own, new)
-        try add(item.service, item.account, in: shared, old)
 
         EnclaveBlob.reset([item]) {}
         EnclaveBlob.reset([item]) { throw KeychainError(status: errSecInteractionNotAllowed) }
-
-        #expect(copies(item.service, item.account) == [own: new, shared: old])
-    }
-
-    @Test func sweepMovesEachItemAndLeavesNotificationKeys() throws {
-        let items = [item(), item(), item()]
-        let nodeId = "nTEST" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        defer {
-            items.forEach { remove($0.service, $0.account) }
-            NotificationKey.delete(nodeId: nodeId)
-        }
-        for item in items { try add(item.service, item.account, in: shared, old) }
-        try NotificationKey.store(SymmetricKey(size: .bits256), nodeId: nodeId)
-        let key = copies(NotificationKey.service, nodeId)
-        #expect(Array(key.keys) == [shared])
-
-        KeychainItem.moveSharedItems(items.map { ($0.service, $0.account) })
-
-        for item in items { #expect(copies(item.service, item.account) == [own: old]) }
-        #expect(copies(NotificationKey.service, nodeId) == key)
-    }
-
-    @Test func sweepKeepsTheAppsOwnCopyOfTwo() throws {
-        let item = item()
-        defer { remove(item.service, item.account) }
-        try add(item.service, item.account, in: own, new)
-        try add(item.service, item.account, in: shared, old)
-
-        KeychainItem.moveSharedItems([(item.service, item.account)])
 
         #expect(copies(item.service, item.account) == [own: new])
     }

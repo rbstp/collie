@@ -67,7 +67,6 @@ final class AppModel {
             #if DEBUG && targetEnvironment(simulator)
             if SimulatorVM.enabled { try SimulatorVM.verifyCore() }
             #endif
-            KeychainItem.moveSharedItems()
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
             let identity = try Identity.load(unlocked: UIApplication.shared.isProtectedDataAvailable)
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
