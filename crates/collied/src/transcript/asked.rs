@@ -26,6 +26,13 @@ pub enum Waits {
         call: String,
         questions: Vec<Question>,
     },
+    /// One call, a Code Mode script that names AskUserQuestion: its whole string literals,
+    /// which a question form is matched against ([`crate::prompt::Menu::scripted`]).
+    Script {
+        session: String,
+        call: String,
+        literals: Vec<String>,
+    },
     /// One call that is no question.
     Other,
     Nothing,
@@ -136,6 +143,19 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     if by != session || !fresh {
         return Waits::Unknown(Refused::Stale);
     }
+    // In Code Mode (2.1.329) the model's one tool is a script runner, and the question is a
+    // function the script calls: the pending call is the script, and the transcript holds
+    // nothing of the question but the script's text.
+    if let (Some(id), Some(code)) = (call["id"].as_str(), call["input"]["code"].as_str())
+        && call["name"] == "REPL"
+        && code.contains("AskUserQuestion")
+    {
+        return Waits::Script {
+            session: session.to_owned(),
+            call: id.to_owned(),
+            literals: literals(code),
+        };
+    }
     if call["name"] != "AskUserQuestion" {
         return Waits::Other;
     }
@@ -161,6 +181,53 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
         },
         _ => unknown,
     }
+}
+
+/// The string literals of a script, each the text between two matching quote characters
+/// (`'`, `"` or a backtick) with `\n`, an escaped quote or backslash and `\u` escapes
+/// undone. The script is not parsed: a quote in a comment or a regular expression opens a
+/// literal like any other, and what follows can be read out of step, which loses literals
+/// and adds none that a script could not hold outright. A literal with any other escape, a
+/// template that holds `${`, and one a line break ends (which also brings the read back in
+/// step after a stray apostrophe) are left out: none can be compared as it is written.
+fn literals(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = code.chars().peekable();
+    while let Some(quote) = chars.next() {
+        if !matches!(quote, '\'' | '"' | '`') {
+            continue;
+        }
+        let mut text = Some(String::new());
+        let closed = loop {
+            let undone = match chars.next() {
+                None => break false,
+                Some('\n') if quote != '`' => break false,
+                Some(c) if c == quote => break true,
+                Some('$') if quote == '`' && chars.peek() == Some(&'{') => None,
+                Some('\\') => match chars.next() {
+                    Some('n') => Some('\n'),
+                    Some(c @ ('\'' | '"' | '`' | '\\')) => Some(c),
+                    Some('u') => {
+                        let digits: String = match chars.next_if_eq(&'{') {
+                            Some(_) => chars.by_ref().take_while(|c| *c != '}').collect(),
+                            None => chars.by_ref().take(4).collect(),
+                        };
+                        u32::from_str_radix(&digits, 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                    }
+                    _ => None,
+                },
+                c => c,
+            };
+            match (undone, &mut text) {
+                (Some(c), Some(text)) => text.push(c),
+                _ => text = None,
+            }
+        };
+        out.extend(text.filter(|_| closed));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -205,6 +272,12 @@ mod tests {
     const BASH: (&str, &str) = capture!("bash");
     const PLAN: (&str, &str) = capture!("plan");
     const FORMS: [(&str, &str); 6] = [ONE, FIRST, MULTI, CHECKED, REVIEW, MULTILINE];
+    // The same Claude Code with Code Mode on (`CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1`): the
+    // model's one tool is `REPL`, and the question is a function its script calls. The form
+    // is drawn as outside Code Mode. A question written in the call, and one whose text and
+    // labels the script puts in variables first.
+    const SCRIPTED: (&str, &str) = capture!("codemode-question-one");
+    const SCRIPTED_BUILT: (&str, &str) = capture!("codemode-question-built");
     const SESSION: &str = "00000000-0000-4000-8000-000000000000";
 
     /// A transcript read whole, each of `rows` a complete line.
@@ -222,6 +295,7 @@ mod tests {
     fn says(waits: Waits) -> String {
         match waits {
             Waits::Question { questions, .. } => format!("{} asked", questions.len()),
+            Waits::Script { literals, .. } => format!("a script, {} literals", literals.len()),
             Waits::Other => "another call".to_owned(),
             Waits::Nothing => "nothing".to_owned(),
             Waits::Unknown(why) => why.as_str().to_owned(),
@@ -525,5 +599,106 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
             assert_eq!(read(format!("{asked}\n{cut}\n")), unknown);
             assert_eq!(read(format!("{asked}\n{next}")), unknown);
         }
+    }
+    fn code(transcript: &str) -> String {
+        let last: Value = serde_json::from_str(transcript.lines().last().unwrap()).unwrap();
+        let call = &last["message"]["content"][0];
+        assert_eq!(call["name"], "REPL");
+        call["input"]["code"].as_str().unwrap().to_owned()
+    }
+
+    /// The options of a screen that `Approvals::screen` answers beside a pending script.
+    fn scripts(screen: &str, code: &str) -> Result<Vec<String>, Refused> {
+        let menu = Menu::parse(screen).filter(Menu::on_screen);
+        let menu = menu.ok_or(Refused::NotWhole)?;
+        menu.scripted(&literals(code)).map(|_| menu.heads)
+    }
+
+    #[test]
+    fn a_scripts_literals_are_read_whole_or_not_at_all() {
+        let code = r#"f('x', "y\n\"z", `t`, `u${v}`, 'w\q', 'it\'s', '\u00e9\u{1F600}') // don't
+'k' + 'un"#;
+        assert_eq!(literals(code), ["x", "y\n\"z", "t", "it's", "é😀", "k"]);
+    }
+
+    #[test]
+    fn a_code_mode_question_is_matched_to_the_pending_scripts_literals() {
+        let asked = ["Type something.", "Chat about this"];
+        for ((screen, transcript), labels) in [
+            (SCRIPTED, ["Option A", "Option B"]),
+            (SCRIPTED_BUILT, ["Red", "Blue"]),
+        ] {
+            assert!(says(waits(transcript, true, 0)).starts_with("a script"));
+            let heads = scripts(screen, &code(transcript)).unwrap();
+            assert_eq!(heads, [&labels[..], &asked[..]].concat(), "{screen}");
+            // From any row down, as a terminal too short would show it.
+            let rows: Vec<&str> = screen.lines().collect();
+            let header = rows.iter().position(|r| r.contains('☐')).unwrap();
+            for from in 0..rows.len() {
+                let cut = rows[from..].join("\n");
+                assert_eq!(
+                    scripts(&cut, &code(transcript)).is_ok(),
+                    from < header,
+                    "from row {from} of {screen}"
+                );
+            }
+        }
+        let (screen, transcript) = SCRIPTED;
+        let code = code(transcript);
+        let not_found = Err(Refused::NotInScript);
+        assert_eq!(scripts(screen, &self::code(SCRIPTED_BUILT.1)), not_found);
+        // A pending script that names no question is another call.
+        let silent = transcript.replace("AskUserQuestion", "Bash");
+        assert_eq!(says(waits(&silent, true, 0)), "another call");
+
+        // What the form draws must each be a whole literal: not the question split in two, in
+        // a template that holds a substitution, or behind an escape that is not undone, and
+        // not a label built from pieces.
+        let asks = "'Which option do you want to pick for this test?'";
+        for written in [
+            "'Which option do you want ' + 'to pick for this test?'",
+            "`Which option do you want to pick for this ${'test'}?`",
+            "'Which option do you want to pick for this\\x20test?'",
+        ] {
+            assert_ne!(code.replace(asks, written), code);
+            assert_eq!(scripts(screen, &code.replace(asks, written)), not_found);
+        }
+        let built = code.replace("'Option A'", "'Option ' + 'A'");
+        assert_ne!(built, code);
+        assert_eq!(scripts(screen, &built), not_found);
+    }
+
+    #[test]
+    fn a_cut_form_in_code_mode_is_no_whole_literal() {
+        // Hand-built from the capture, not captured: the question over rows at column 0, as
+        // Claude Code drew one before the gutter, one of them a row of `─` and the next a
+        // copy of the header, so the rows under that row read as a whole, shorter form.
+        let (screen, transcript) = SCRIPTED;
+        let shown = "Which option do you want to pick for this test?";
+        let rule = "─".repeat(30);
+        let text = format!("Drop the production database first.\n{rule}\n ☐ Test\n{shown}");
+        let drawn = screen.replacen(&format!("\n{shown}\n"), &format!("\n{text}\n"), 1);
+        assert_ne!(drawn, screen);
+        let short = code(transcript);
+        let long = short.replace(shown, &text.replace('\n', "\\n"));
+        assert_ne!(long, short);
+        assert!(literals(&long).contains(&text));
+        // A script that asks only the short question: the screen is its whole form.
+        assert!(scripts(&drawn, &short).is_ok());
+        // The script asks the long one: what shows is the end of a literal and none itself.
+        let rows: Vec<&str> = drawn.lines().collect();
+        for from in 0..rows.len() {
+            let cut = rows[from..].join("\n");
+            assert!(scripts(&cut, &long).is_err(), "from row {from}");
+        }
+        assert_eq!(scripts(&drawn, &long), Err(Refused::NotWhole));
+        // It holds that end as a literal of its own too, as a second question would: refused
+        // all the same, since a longer literal ends in it.
+        let both = format!("{long}\n{short}");
+        assert_eq!(scripts(&drawn, &both), Err(Refused::NotWhole));
+        assert!(
+            scripts(screen, &both).is_err(),
+            "the short one drawn whole too"
+        );
     }
 }

@@ -492,10 +492,12 @@ impl Approvals {
         let unnumbered = parsed.is_none() && !prompt::numbered(&text);
         // The screen cannot say a question form is whole, so it is answered only when it draws
         // the session's one pending AskUserQuestion call whole, as the transcript records it.
-        // While such a call is pending, no other menu gets an answer either. With no such call
-        // known, whatever else the transcript says or fails to say, only a menu the screen
-        // alone makes another dialog is answered ([`Menu::is_question`]), so that approvals
-        // work without the transcript.
+        // While such a call is pending, no other menu gets an answer either. A Code Mode
+        // script is pending through every call it makes, so beside one a question form is
+        // matched to its literals and any other dialog is read as the screen says. With no
+        // such call known, whatever else the transcript says or fails to say, only a menu the
+        // screen alone makes another dialog is answered ([`Menu::is_question`]), so that
+        // approvals work without the transcript.
         let waits = match &parsed {
             Some(_) => self.waits(a),
             None => Waits::Nothing,
@@ -506,7 +508,15 @@ impl Approvals {
                 call,
                 questions,
             } => (m.asks(questions)).map(|asked| Some(format!("{session} {call:?} {asked}"))),
-            Waits::Other | Waits::Nothing if m.is_question() => Err(Refused::NoCall),
+            Waits::Script {
+                session,
+                call,
+                literals,
+            } if m.is_question() => {
+                (m.scripted(literals)).map(|asked| Some(format!("{session} {call:?} {asked}")))
+            }
+            Waits::Other if m.is_question() => Err(Refused::OtherCall),
+            Waits::Nothing if m.is_question() => Err(Refused::NoCall),
             Waits::Unknown(why) if m.is_question() => Err(*why),
             _ => Ok(None),
         });

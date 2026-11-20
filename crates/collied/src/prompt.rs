@@ -265,12 +265,15 @@ fn grants(label: &str) -> bool {
 pub enum Refused {
     NoSession,
     Truncated,
+    ManySessions,
     Transcript,
     NoCall,
+    OtherCall,
     Several,
     Stale,
     NotWhole,
     Ambiguous,
+    NotInScript,
 }
 
 impl Refused {
@@ -278,12 +281,15 @@ impl Refused {
         match self {
             Self::NoSession => "no session tied",
             Self::Truncated => "truncated process list",
+            Self::ManySessions => "too many session files",
             Self::Transcript => "transcript unreadable or incomplete",
             Self::NoCall => "no pending call",
+            Self::OtherCall => "another call pending",
             Self::Several => "several pending calls",
             Self::Stale => "stale call",
             Self::NotWhole => "question not drawn whole",
             Self::Ambiguous => "ambiguous",
+            Self::NotInScript => "question not found in the pending script",
         }
     }
 }
@@ -726,13 +732,20 @@ impl Menu {
     }
 
     fn words(&self, q: &Question) -> bool {
+        self.asked_text()
+            .is_some_and(|text| text == unspaced(&q.text))
+    }
+
+    /// The question as drawn between the dialog's first row and option 1, whitespace aside:
+    /// its rows without their `│` gutter when every one has it.
+    fn asked_text(&self) -> Option<String> {
         let rows = self.raw_body.get(1..).unwrap_or_default();
         let gutter = rows.iter().all(|r| r.starts_with('│'));
         let text: String = rows
             .iter()
             .map(|r| r.strip_prefix('│').filter(|_| gutter).unwrap_or(r.as_str()))
             .collect();
-        !rows.is_empty() && unspaced(&text) == unspaced(&q.text)
+        (!rows.is_empty()).then(|| unspaced(&text))
     }
 
     /// The review page of a call (2.1.329): under the tabs, `Review your answers`, then every
@@ -740,31 +753,102 @@ impl Menu {
     /// answers` and `Cancel`. A row hidden above a rule that a question or an answer draws
     /// leaves a question out or short.
     fn reviews(&self, asked: &[Question]) -> bool {
+        let asked: Vec<String> = asked.iter().map(|q| unspaced(&q.text)).collect();
+        self.reviewed() == Some(asked)
+    }
+
+    /// The questions a review page lists, whitespace aside; none unless every row of it is
+    /// one of a question or of its answer.
+    fn reviewed(&self) -> Option<Vec<String>> {
         let rows: Vec<String> = self.raw_body.iter().skip(1).map(|r| unspaced(r)).collect();
-        let Some((title, rows)) = rows.split_first() else {
-            return false;
-        };
+        let (title, rows) = rows.split_first()?;
+        if self.options != ["Submit answers", "Cancel"] || title != "Reviewyouranswers" {
+            return None;
+        }
+        let mut asked = Vec::new();
         let mut at = 0;
-        let whole = asked.iter().all(|q| {
-            let Some(text) = rows.get(at).and_then(|r| r.strip_prefix('●')) else {
-                return false;
-            };
-            let mut text = text.to_owned();
+        while at < rows.len() {
+            let mut text = rows[at].strip_prefix('●')?.to_owned();
             at += 1;
             while let Some(row) = rows.get(at).filter(|r| !r.starts_with(['●', '→'])) {
                 text.push_str(row);
                 at += 1;
             }
-            let answered = rows.get(at).is_some_and(|r| r.starts_with('→'));
+            rows.get(at).filter(|r| r.starts_with('→'))?;
             while rows.get(at).is_some_and(|r| !r.starts_with('●')) {
                 at += 1;
             }
-            answered && text == unspaced(&q.text)
-        });
-        self.options == ["Submit answers", "Cancel"]
-            && title == "Reviewyouranswers"
-            && whole
-            && at == rows.len()
+            asked.push(text);
+        }
+        Some(asked)
+    }
+
+    /// [`Menu::asks`] for a session in Code Mode, whose pending call is a script that calls
+    /// AskUserQuestion: `literals` are that script's whole string literals. The script is
+    /// not parsed, so nothing says which call or question of it is drawn. What is drawn must
+    /// each be the whole content of a literal, whitespace aside: the question's text, and
+    /// every option, as a label or as a label followed by its description; on the review
+    /// page, every question. The rest is as in [`Menu::asks`]: Claude Code's own entries
+    /// after the options, no row under the last one.
+    ///
+    /// A whole literal is what defeats a cut form: the rows left under a rule the question
+    /// draws are the end of its text, and no literal of their own. A script that holds such
+    /// an end as a literal too is refused: the text on screen must not be the end of a longer
+    /// literal. Claude Code draws no question's options under another's text, so text and
+    /// options that are each whole are one question's. A script written to hold a decoy
+    /// literal is not defended against: it can as well ask the short question outright.
+    pub fn scripted(&self, literals: &[String]) -> Result<String, Refused> {
+        if !self.after.is_empty() {
+            return Err(Refused::NotWhole);
+        }
+        let whole: Vec<String> = literals.iter().map(|l| unspaced(l)).collect();
+        let is = |text: &str| !text.is_empty() && whole.iter().any(|l| l == text);
+        let ends = |text: &String| {
+            whole
+                .iter()
+                .any(|l| l.len() > text.len() && l.ends_with(text))
+        };
+        let found = |asked: &[String]| match asked {
+            [] => Err(Refused::NotWhole),
+            _ if asked.iter().any(ends) => Err(Refused::NotWhole),
+            _ if asked.iter().all(|text| is(text)) => Ok(()),
+            _ => Err(Refused::NotInScript),
+        };
+        if let Some(asked) = self.reviewed() {
+            return found(&asked).map(|()| format!("{asked:?}"));
+        }
+        let options: Vec<String> = self.options.iter().map(|o| unspaced(o)).collect();
+        let (options, multi) = match &options[..] {
+            [options @ .., typed, chat]
+                if chat == "Chataboutthis"
+                    && typed.trim_end_matches('─') == "[]TypesomethingSubmit" =>
+            {
+                (options, true)
+            }
+            [options @ .., typed, chat] if typed == "Typesomething." && chat == "Chataboutthis" => {
+                (options, false)
+            }
+            [options @ .., typed] if typed == "Typesomething." => (options, false),
+            _ => return Err(Refused::NotWhole),
+        };
+        let reads = |shown: &String| {
+            let shown = match multi {
+                true => shown
+                    .strip_prefix("[]")
+                    .or_else(|| shown.strip_prefix("[✔]")),
+                false => Some(shown.as_str()),
+            };
+            shown.is_some_and(|shown| {
+                let described = |label: &String| shown.strip_prefix(label.as_str()).is_some_and(is);
+                is(shown) || whole.iter().filter(|l| !l.is_empty()).any(described)
+            })
+        };
+        let asked = self.asked_text().ok_or(Refused::NotWhole)?;
+        found(std::slice::from_ref(&asked))?;
+        if options.is_empty() || !options.iter().all(reads) {
+            return Err(Refused::NotInScript);
+        }
+        Ok(format!("{:?}", (asked, options)))
     }
 
     /// The rows under option `i`'s first line. For the last option they are the rows of

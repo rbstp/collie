@@ -94,6 +94,9 @@ const ASKED_MULTI: (&str, &str) = capture!("two-questions-second-multiselect");
 const ASKED_REVIEW: (&str, &str) = capture!("two-questions-after-tab");
 const ASKED_TALL: (&str, &str) = capture!("question-tall-12-rows");
 const ASKED_BASH: (&str, &str) = capture!("bash");
+// The same with Code Mode on: the pending call is a `REPL` script that calls the question.
+const SCRIPTED: (&str, &str) = capture!("codemode-question-one");
+const SCRIPTED_BUILT: (&str, &str) = capture!("codemode-question-built");
 // Claude Code 2.1.328's Edit prompt: `Yes` is its only option that reads as an approval.
 const EDIT: &str = include_str!("fixtures/claude-2.1.328/edit.tmux.txt");
 // Claude Code 2.1.300's dynamic workflow prompt: `Yes, run it`, `View raw script`, `No`.
@@ -2385,6 +2388,71 @@ async fn a_menu_drawn_as_a_question_is_one_whatever_its_labels_read() {
 }
 
 #[tokio::test]
+async fn a_question_in_code_mode_is_matched_to_the_pending_script() {
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    for ((screen, transcript), labels) in [
+        (SCRIPTED, ["Option A", "Option B"]),
+        (SCRIPTED_BUILT, ["Red", "Blue"]),
+    ] {
+        show(&rig, "live_blocked_form", screen, &fresh(transcript));
+        let a = rig.needed().await;
+        let shown: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+        let own = ["Type something.", "Chat about this"];
+        assert_eq!(shown, [&labels[..], &own[..]].concat());
+        assert!(a.options.is_empty() && a.accepts_input && a.has_text_field);
+    }
+    // A question the script does not hold, and a script that asks none.
+    let script = fresh(SCRIPTED.1);
+    show(&rig, "live_blocked_form", SCRIPTED_BUILT.0, &script);
+    assert!(rig.needed().await.choices.is_empty());
+    let silent = script.replace("AskUserQuestion", "Bash");
+    show(&rig, "live_blocked_form", SCRIPTED.0, &silent);
+    assert!(rig.needed().await.choices.is_empty());
+    // The script is pending through every call it makes: a permission prompt beside it is
+    // decided as ever.
+    show(&rig, "bash_permission_prompt", ASKED_BASH.0, &script);
+    let a = rig.needed().await;
+    assert_eq!(
+        a.options,
+        [Decision::Approve, Decision::ApproveAlways, Decision::Deny]
+    );
+
+    // The approval is for that script's call: another call with the same code is another.
+    show(&rig, "live_blocked_form", SCRIPTED.0, &script);
+    let a = rig.needed().await;
+    assert_ne!(script, script.replace("toolu_scrubbed_0", "toolu_next"));
+    rig.transcript(&script.replace("toolu_scrubbed_0", "toolu_next"));
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 1,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_question_approval_is_bound_to_its_session() {
     let mut rig = Rig::start(TTL).await;
     let asked = fresh(ASKED_ONE.1);
@@ -2525,12 +2593,19 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     let tall = &ASKED_ONE.0[ASKED_ONE.0.find(" ☐ Cache\n").unwrap()..];
     show(&rig, "live_blocked_form", tall, &fresh(ASKED_ONE.1));
     assert!(rig.needed().await.choices.is_empty());
+    // A call that is no question, and a Code Mode script that asks another question.
+    show(&rig, "live_blocked_form", ASKED_ONE.0, &fresh(ASKED_BASH.1));
+    rig.needed().await;
+    show(&rig, "live_blocked_form", ASKED_ONE.0, &fresh(SCRIPTED.1));
+    rig.needed().await;
     let lines = refusals();
     let reasons = [
         "transcript unreadable or incomplete",
         "stale call",
         "question not drawn whole",
         "question not drawn whole",
+        "another call pending",
+        "question not found in the pending script",
     ];
     assert_eq!(lines.len(), reasons.len(), "{lines:?}");
     for (line, reason) in lines.iter().zip(reasons) {

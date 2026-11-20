@@ -1,0 +1,25 @@
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Sonnet 5.5 · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+
+❯ Ask me one question with two options using your question tool, nothing else: 'Which option do you
+  want to pick for this test?' header 'Test', options 'Option A' (description 'First test
+  choice.') and 'Option B' (description 'Second test choice.').
+
+⏺ Working… (ctrl+o to expand)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Test
+
+Which option do you want to pick for this test?
+
+❯ 1. Option A
+     First test choice.
+  2. Option B
+     Second test choice.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

@@ -250,7 +250,8 @@ impl Transcripts {
             .filter_map(|pid| claim(&sessions, *pid))
             .filter(|c| c.session == session);
         match (claims.next(), claims.next()) {
-            (Some(held), None) if pids.len() <= MAX_SESSION_FILES => Ok((session, held.started_at)),
+            _ if pids.len() > MAX_SESSION_FILES => Err(Refused::ManySessions),
+            (Some(held), None) => Ok((session, held.started_at)),
             _ => Err(Refused::NoSession),
         }
     }
@@ -1062,6 +1063,19 @@ mod tests {
             "two processes on one session"
         );
         std::fs::remove_file(sessions.join(format!("{other}.json"))).unwrap();
+
+        // The sessions folder is listed up to its cap, and not judged past it.
+        let spare = |n: usize| sessions.join(format!("{}.json", 900_000_000 + n));
+        for n in 1..MAX_SESSION_FILES {
+            write(&spare(n), "{}");
+        }
+        assert_eq!(asked(&t, &agent(LIVE)), mine);
+        write(&spare(0), "{}");
+        assert_eq!(asked(&t, &agent(LIVE)), Err(Refused::ManySessions));
+        for n in 0..MAX_SESSION_FILES {
+            std::fs::rename(spare(n), sessions.join(format!("spare-{n}"))).unwrap();
+        }
+        assert_eq!(asked(&t, &agent(LIVE)), mine);
 
         // herdr-core and Rex name the session of the terminal's foreground process.
         let mut hosted = agent(LIVE);
