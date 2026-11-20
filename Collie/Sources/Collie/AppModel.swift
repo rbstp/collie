@@ -150,13 +150,18 @@ final class AppModel {
             return
         }
         #endif
-        if core.tailnetConfigured() || ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {
+            await start(authKey: nil)
+            await refreshNode()
+            await logColdStart()
+            return
+        }
+        #endif
+        if core.tailnetConfigured() {
             await start(authKey: nil)
         }
         await refreshNode()
-        if ProcessInfo.processInfo.arguments.contains("--measure-cold-start") {
-            await logColdStart()
-        }
     }
 
     func refreshNode() async {
