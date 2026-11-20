@@ -3515,6 +3515,8 @@ mod tests {
             PLAN_TYPED_LIVE,
             include_str!("../tests/fixtures/claude-2.1.329/bash.txt"),
             include_str!("../tests/fixtures/claude-2.1.329/plan.txt"),
+            // Claude Code 2.1.325's Bash prompt as Rex 0.1.0-preview.19 renders it.
+            include_str!("../tests/fixtures/rex-0.1.0-preview.19/claude-2.1.325-permission.txt"),
         ];
         let dialogs = (dialogs.into_iter().chain(BASH_327)).chain(OTHER_TOOLS_328);
         for screen in dialogs.chain(RENAMED_BASH) {
