@@ -1,0 +1,83 @@
+name: prices
+run-name: "[prices] - refreshing LiteLLM prices on ${{ github.ref_name }}"
+
+on:
+  schedule:
+    - cron: '17 13 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: prices
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    environment: docs-screenshots
+    if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+
+      # jq releases print numbers such as 2E-7 differently, so this is the jq that wrote prices.json.
+      - name: install just and jq
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -sSfL -o "$RUNNER_TEMP/just.tar.gz" \
+            https://github.com/casey/just/releases/download/1.59.0/just-1.59.0-x86_64-unknown-linux-musl.tar.gz
+          echo "409044617b6f06517c1035e55ca38c8c856ff8b650e41bc2aa1ef82d5903a23e  $RUNNER_TEMP/just.tar.gz" | sha256sum -c
+          tar -xzf "$RUNNER_TEMP/just.tar.gz" -C "$bin" just
+          curl -sSfL -o "$bin/jq" https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-linux-amd64
+          echo "b1c22172dd303f3be49e935aa56aa48a8b7a46e0bc838b4997d3bb451495870f  $bin/jq" | sha256sum -c
+          chmod +x "$bin/jq"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # jq only filters the fetched table; nothing from it runs.
+      - name: refresh the prices
+        id: refresh
+        run: |
+          sha="$(git ls-remote https://github.com/BerriAI/litellm.git refs/heads/main | cut -f1)"
+          [[ $sha =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected LiteLLM main commit: $sha"; exit 1; }
+          sed -i -E "s/^litellm_commit := \"[0-9a-f]{40}\"$/litellm_commit := \"$sha\"/" justfile
+          grep -qx "litellm_commit := \"$sha\"" justfile || { echo "the justfile has no litellm_commit line to move"; exit 1; }
+          just prices
+          jq -e 'length > 0' crates/collied/data/prices.json > /dev/null
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      # A pull request opened with GITHUB_TOKEN starts no workflow, so the required checks would never run.
+      - name: open the pull request
+        run: |
+          if [ -z "$(git status --porcelain -- crates/collied/data/prices.json)" ]; then
+            echo "The prices are unchanged at LiteLLM $LITELLM_SHA." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          [ -n "$GH_TOKEN" ] || { echo "DOCS_SCREENSHOTS_TOKEN is not set in the docs-screenshots environment; see docs/release.md"; exit 1; }
+          git diff --stat
+          user="$(gh api user --jq '"\(.login) \(.id)"')"
+          read -r login id <<< "$user"
+          gh auth setup-git
+          git switch -c refresh-prices
+          git add -- justfile crates/collied/data/prices.json crates/collied/data/prices-LICENSE.txt
+          git -c user.name="$login" -c user.email="$id+$login@users.noreply.github.com" \
+            commit -q -m "Refresh LiteLLM prices"
+          git push -q --force origin refresh-prices
+          body="Prices from LiteLLM $LITELLM_SHA, by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Review the changed models and rates before merging: merging ships a release."
+          pr="$(gh pr list --head refresh-prices --base master --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            pr="$(gh pr create --base master --head refresh-prices --title "Refresh LiteLLM prices" --body "$body")"
+          else
+            gh pr edit "$pr" --body "$body"
+          fi
+          echo "Prices proposed in $pr" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SCREENSHOTS_TOKEN }}
+          LITELLM_SHA: ${{ steps.refresh.outputs.sha }}

@@ -148,11 +148,17 @@ Pull requests, pushes and merges made with `GITHUB_TOKEN` start no workflow, and
 gh secret set DOCS_SCREENSHOTS_TOKEN --repo rbstp/collie --env docs-screenshots
 ```
 
-Only **propose** sees the token, and it never builds or runs the captured revision. Without the secret, **propose** fails with a message pointing here, after **capture** has kept the images.
+In this workflow only **propose** sees the token, and it never builds or runs the captured revision. Without the secret, **propose** fails with a message pointing here, after **capture** has kept the images.
 
 Only the iPhone screenshots refresh, since the runner's watchOS simulator runtime loses its files minutes after it is mounted ([#539](https://github.com/rbstp/collie/issues/539)). When the watch app changes, the owner refreshes `watch-usage.png` and `watch-widget.png` with a local `just ios-screenshots` and commits them.
 
 To refresh without a release, run the workflow by hand (Actions, docs screenshots, Run workflow, on `master`), optionally with a `master` commit to capture instead of the head. Usage reset times and the watch's clock follow the capture time, so `usage-light.png` and `usage-dark.png` change on every run and every release opens a refresh pull request; a local run also changes the watch images.
+
+## Prices
+
+Every Monday, `.github/workflows/prices.yml` moves `litellm_commit` in the `justfile` to LiteLLM's latest `main` commit and runs `just prices` with the jq release that wrote `crates/collied/data/prices.json`, downloaded and checked against its SHA-256, so an unchanged price keeps its formatting. jq only filters the fetched table; the job runs nothing from it. When `prices.json` changes, the job force-pushes the `refresh-prices` branch and opens or updates the pull request "Refresh LiteLLM prices". It never enables auto-merge: the diff is third-party data and merging it ships a release, so review the changed models and rates first.
+
+The job shares the `docs-screenshots` environment and its `DOCS_SCREENSHOTS_TOKEN` (above), for the same reason: a pull request opened with `GITHUB_TOKEN` starts no workflow. Without the secret, it fails with a message pointing here. To refresh between Mondays, run the workflow by hand (Actions, prices, Run workflow, on `master`).
 
 ## App Store screenshots
 

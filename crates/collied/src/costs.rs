@@ -1459,6 +1459,7 @@ mod tests {
         ));
         assert!(price("claude-haiku-4-5-20251001").is_some());
         assert!(price("gpt-6.1-sol").is_some());
+        assert!(price("claude-fable-5-2").is_some());
         for unpriced in ["opus", "codex-auto-review", "unknown", "<synthetic>", ""] {
             assert!(price(unpriced).is_none(), "{unpriced}");
         }
