@@ -14,7 +14,6 @@ on:
       - 'docs/deploy-pages.md'
       - 'docs/site/**'
 
-# A pull request cancels its older run. A push to master never does: each run covers only its own push's commits.
 concurrency:
   group: test-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
@@ -23,8 +22,6 @@ permissions:
   contents: read
 
 jobs:
-  # rust and ios are required checks, so a pull request skips them, and linux, with if
-  # (a skipped job passes) rather than with paths-ignore (which would leave them pending).
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -33,7 +30,6 @@ jobs:
       collied: ${{ steps.diff.outputs.collied }}
 
     steps:
-      # The whole history's commits and trees, no blobs: a push's before can be any number of commits back.
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,26 +52,21 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             range="$BASE_SHA...$HEAD_SHA"
           else
-            # Every commit of the push, as when a stack merges. A first push (all zeros), a rewritten
-            # branch or a missing commit has no usable range: fail open.
             git merge-base --is-ancestor "$BEFORE" "$GITHUB_SHA" || run_all "no range from $BEFORE to $GITHUB_SHA"
             range="$BEFORE..$GITHUB_SHA"
           fi
           files="$(git diff --no-renames --name-only "$range")" || run_all "git diff $range failed"
           printf '%s\n' "$files"
-          # Only paths no test reads: tests read docs/protocol/ and docs/tailnet.md.
           if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -qvE '^(docs/site/|docs/deploy-pages\.md$|README\.md$|AGENTS\.md$|CLAUDE\.md$)'; then
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
-          # What the app builds from or its tests read (PreviewTests reads collied's fixtures).
           if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^(Collie/|crates/(collie-core|protocol|tailnet|tls|tailscale-sys|uniffi-bindgen)/|crates/collied/tests/fixtures/|docs/protocol/|scripts/ghostty/|scripts/notices\.py$|scripts/(test-)?ios-test-budget\.py$|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|about\.toml$|justfile$)'; then
             echo "ios=true" >> "$GITHUB_OUTPUT"
           else
             echo "ios=false" >> "$GITHUB_OUTPUT"
           fi
-          # What collied builds from.
           if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE '^(crates/(collied|ghostty-vt-sys|protocol|tailnet|tls|tailscale-sys)/|scripts/ghostty/|\.github/workflows/ci\.yml$|\.gitmodules$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
             echo "collied=true" >> "$GITHUB_OUTPUT"
           else
@@ -132,7 +123,6 @@ jobs:
           key: rust-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch', 'crates/tailnet/testcontrol/go.sum') }}
           restore-keys: rust-
 
-      # crates/ghostty-vt-sys builds it on a miss, Zig included (about 90 s).
       - name: cache libghostty-vt
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -179,7 +169,6 @@ jobs:
           persist-credentials: false
           submodules: true
 
-      # Every input of the simulator xcframework and the acknowledgements, libtailscale's pin included: a hit skips Go and Rust.
       - name: key the native build
         id: native
         run: |
@@ -190,7 +179,6 @@ jobs:
             HEAD:Collie/Resources/herdr-LICENSE.txt; } | shasum -a 256)"
           echo "key=ios-native-${key%% *}" >> "$GITHUB_OUTPUT"
 
-      # Before the boot below, which slows every restore for minutes.
       - name: cache the native build
         id: native-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -201,7 +189,6 @@ jobs:
             Collie/Resources/Acknowledgements.json
           key: ${{ steps.native.outputs.key }}
 
-      # Keyed on content, unlike DerivedData's timestamps; master builds without it and saves, so an entry holds one build.
       - name: restore Xcode's compilation cache
         if: ${{ github.event_name == 'pull_request' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -210,7 +197,6 @@ jobs:
           key: ios-cas-${{ github.sha }}
           restore-keys: ios-cas-
 
-      # setup-go otherwise unpacks Go from scratch on every macOS runner.
       - name: cache the Go toolchain
         if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -246,9 +232,6 @@ jobs:
           key: ios-sim-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
           restore-keys: ios-sim-
 
-      # Overlaps the simulator's first boot on a fresh runner with the builds below. The boot saturates the runner for
-      # minutes, so it starts after the native build's restores: twice SimLaunchHost crashed with SIGBUS while the cargo
-      # cache restored during the boot, and xcodebuild then ran the UI suite inside a second boot.
       - name: boot the simulator
         run: |
           xcrun simctl bootstatus 'iPhone 18 Pro' -b > "$RUNNER_TEMP/simulator-boot.log" 2>&1 &
@@ -284,7 +267,6 @@ jobs:
         if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         run: just ios-framework sim
 
-      # The ios-project recipe's two halves, so a hit runs only XcodeGen.
       - name: write the acknowledgements
         if: ${{ steps.native-cache.outputs.cache-hit != 'true' }}
         run: python3 scripts/notices.py ios Collie/Resources/Acknowledgements.json
@@ -292,16 +274,12 @@ jobs:
       - name: generate the project
         run: xcodegen generate --spec Collie/project.yml
 
-      # The iOS app embeds the watch app, so every iOS build also builds for watchOS.
       - name: install the watchOS platform
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
       - name: test the budget script
         run: python3 scripts/test-ios-test-budget.py
 
-      # A boot in progress is waited for here: only runs whose xcodebuild started inside it had the UI suite's first launch
-      # hang (#753). A simulator that died is booted again before the tests rather than during them; the job goes on if that
-      # boot does not finish, since xcodebuild boots it too.
       - name: check the simulator
         timeout-minutes: 10
         continue-on-error: true
@@ -323,13 +301,10 @@ jobs:
           path: target/ios/DerivedData/CompilationCache.noindex
           key: ios-cas-${{ github.sha }}
 
-      # Fails over a ceiling in Collie/Tests/budget.json, and reports after failed tests too.
-      # On master a passed ceiling only warns: pull requests enforce it, and a slow runner there leaves nothing to act on.
       - name: check the test budget
         if: ${{ !cancelled() }}
         run: python3 scripts/ios-test-budget.py measure ${{ github.event_name == 'push' && '--warn-only' || '' }} Collie/Tests/budget.json target/ios/DerivedData/Logs/Test "$RUNNER_TEMP/ios-test-metrics.json"
 
-      # ios-test-budget.yml compares a pull request's metrics with master's.
       - name: keep the test metrics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -338,7 +313,6 @@ jobs:
           path: ${{ runner.temp }}/ios-test-metrics.json
           if-no-files-found: ignore
 
-  # Only master's newest compilation cache is read; older ones would push rarely read entries such as ios-sim out.
   prune-compilation-cache:
     if: ${{ github.event_name == 'push' }}
     needs: ios
@@ -349,7 +323,6 @@ jobs:
     steps:
       - name: delete superseded compilation caches
         run: |
-          # Only entries older than this run's: master's runs end in any order.
           gh cache list --repo "$GITHUB_REPOSITORY" --ref refs/heads/master --key ios-cas- --limit 100 --json id,key,createdAt \
             --jq 'sort_by(.createdAt) | .[:(map(.key) | index(env.KEEP)) // 0][] | .id' |
             while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
@@ -357,8 +330,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           KEEP: ios-cas-${{ github.sha }}
 
-  # The Linux release is the first build of collied for Linux otherwise; this links libghostty-vt
-  # and libtailscale there on the pull request.
   linux:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.collied != 'false') }}

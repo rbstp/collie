@@ -23,7 +23,6 @@ CARGO_ABOUT_SHA256 = {
 }
 GO_LICENSES = "v2.0.1"
 
-# Written by scripts/ghostty/build-xcframework.sh and build-collied.sh from the pinned sources.
 GHOSTTY = {
     "libghostty-vt": "MIT",
     "simdutf": "MIT AND BSD-3-Clause",
@@ -111,7 +110,6 @@ def go(platforms, tags=""):
     env = dict(os.environ, GOTOOLCHAIN="local")
     tool = TOOLS / f"go-licenses-{GO_LICENSES}" / "go-licenses"
     if not tool.exists():
-        # go install verifies the module against the Go checksum database.
         subprocess.check_call([go, "install", f"github.com/google/go-licenses/v2@{GO_LICENSES}"],
                               env=dict(env, GOBIN=str(tool.parent), GOFLAGS=""))
     allowed = accepted()
@@ -147,7 +145,6 @@ def go(platforms, tags=""):
         sys.exit("go-licenses did not report libtailscale")
     goroot = subprocess.check_output([go, "env", "GOROOT"], env=env, text=True).strip()
     version = subprocess.check_output([go, "env", "GOVERSION"], env=env, text=True).strip()
-    # Homebrew keeps the license beside GOROOT.
     license = next(path for path in (Path(goroot) / "LICENSE", Path(goroot).parent / "LICENSE") if path.exists())
     runtime = component("Go", version, "BSD-3-Clause", license.read_text())
     return [first, runtime] + sorted(modules, key=lambda c: c["name"].lower())
@@ -168,12 +165,10 @@ def main():
     if kind == "ios":
         items = go([("ios", "arm64")], "ios,ts_omit_portmapper") + ghostty(GHOSTTY_LICENSES, "just ios-ghostty")
         items += [component(name, None, license, (ROOT / path).read_text()) for name, license, path in IOS_FILES]
-        # Material Design Icons' license only links Apache-2.0; section 4(a) asks for the full text.
         next(c for c in items if c["name"] == "Symbols Nerd Font")["text"] += "\n" + (licenses / "Apache-2.0.txt").read_text()
         items += [std] + rust("crates/collie-core/Cargo.toml", ["aarch64-apple-ios"])
         content = json.dumps(items, indent=1, ensure_ascii=False) + "\n"
     else:
-        # The library of the host's own target: the release jobs build collied for the runner they run on.
         host = re.search(r"^host: (\S+)$", subprocess.check_output(["rustc", "-vV"], text=True), re.M)[1]
         items = go([("darwin", "arm64"), ("linux", "amd64")])
         items += ghostty(COLLIED_GHOSTTY / host / "licenses", "cargo build -p collied")

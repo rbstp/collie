@@ -54,7 +54,6 @@ ShellRoot {
   }
   Timer { id: cancelDrop; interval: 1500; onTriggered: { harness.note("cancelPhase", svc.phase); svc.pairCancel(); harness.note("afterCancel", svc.phase) } }
 
-  // Times from the first running state: collied starts after the widget.
   property int tick: 0
   Timer {
     id: scenario

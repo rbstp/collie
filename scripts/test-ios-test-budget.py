@@ -25,7 +25,6 @@ def data(**changes):
 
 
 def case(identifier, seconds, result='Passed', runs=(), arguments=()):
-    """A test case as xcresulttool reports it: a retried or parameterized test's own duration is the mean of its runs."""
     children = [{'nodeType': 'Repetition', 'name': f'Run {i}', 'result': r, 'durationInSeconds': seconds} for i, r in enumerate(runs)]
     children += [{'nodeType': 'Arguments', 'name': name, 'durationInSeconds': t, 'children': c} for name, t, c in arguments]
     return {
@@ -56,8 +55,6 @@ class MeasureTests(unittest.TestCase):
         retried_ui = case('Suite/testRetried()', 35.25)
         retried_ui['children'] = [{'nodeType': 'Repetition', 'name': 'First Run', 'result': 'Failed', 'durationInSeconds': 40},
                                   {'nodeType': 'Repetition', 'name': 'Retry 1', 'result': 'Passed', 'durationInSeconds': 30.5}]
-        # What Xcode 27.2 writes when argument "1" of a parameterized test fails once: the argument and its test stay marked
-        # failed, the argument has no duration of its own, and the passing argument has no attempts.
         retried_argument = case('retriedArgument(x:)', 1.67, result='Failed', arguments=[('1', None, retried), ('2', 3, [])])
         retried_argument['children'][0]['result'] = 'Failed'
         retried_argument['children'][1]['result'] = 'Passed'
@@ -170,7 +167,6 @@ class RenderTests(unittest.TestCase):
 
 class MeasureCommandTests(unittest.TestCase):
     def measure(self, *flags, results='Test.xcresult'):
-        """Runs `measure` on a run whose UI suite took 41 s against a 40.5 s ceiling, as ci.yml does."""
         tests = tree(ui=[case('Suite/testOne()', 41)])
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)

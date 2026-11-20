@@ -1,4 +1,3 @@
-// Writes Linux/CollieTray/Printable.js: Quickshell's JS has no \p{} classes.
 import { writeFileSync } from "node:fs";
 
 const escaped =

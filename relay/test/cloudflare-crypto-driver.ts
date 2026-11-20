@@ -38,7 +38,6 @@ export async function run(directory: string, origin: string, upstream: typeof fe
   }
   async function post(label: string, path: string, body: unknown, expected: number, mutation = false,
     extra: Record<string, string> = {}, guard: string | null = secrets.BENCHMARK_SECRET) {
-    // The fixed one-phone/one-route fixture bounds each mutation to 64 writes, including indexes and triggers.
     if (mutation) reservedWrites += 64;
     if (reservedWrites > 1000) throw new Error('D1 experiment budget exhausted');
     const start = new Date().toISOString();

@@ -1,6 +1,3 @@
-// collied's control socket as CollieBar speaks it: one JSON line per message, a new
-// connection per request. collied refuses unknown keys, so the lines are exact.
-
 var WATCH = '{"cmd":"watch"}\n'
 var PAIR = '{"cmd":"pair"}\n'
 var PEERS = '{"cmd":"peers_list"}\n'
@@ -47,8 +44,6 @@ function unitPath(configHome, home) {
   return (absolute(configHome) || home + "/.config") + "/systemd/user/collied.service"
 }
 
-// Undoes the quoting `collied service install` writes: \" \\ %% and, with `dollar`, the $$ of
-// arguments (the executable keeps its $ as written).
 function unquote(q, dollar) {
   var out = ""
   for (var i = 0; i < q.length; i++) {
@@ -64,7 +59,6 @@ function unquote(q, dollar) {
   return out
 }
 
-// The first quoted word of a unit line, still quoted inside.
 function firstQuoted(s) {
   if (s.charAt(0) !== '"') return null
   for (var i = 1; i < s.length; i++) {
@@ -74,7 +68,6 @@ function firstQuoted(s) {
   return null
 }
 
-// The executable and the pinned XDG_DATA_HOME of the unit, as collied stop and start use them.
 function unitInfo(text) {
   var info = { exe: "", dataHome: "" }
   var lines = String(text || "").split("\n")
@@ -95,7 +88,6 @@ function dataDir(unitDataHome, envDataHome, home) {
   return (absolute(unitDataHome) || absolute(envDataHome) || home + "/.local/share") + "/collie"
 }
 
-// `qrencode -t ASCII` draws a module as "##" or two spaces: rows of "1" and "0".
 function qrRows(text) {
   var rows = []
   var lines = String(text || "").split("\n")

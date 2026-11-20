@@ -100,7 +100,7 @@ export async function commitControl(env: ControlEnv, op: Exclude<Operation, { op
     if ((!recovered && (prior ? prior.generation : 0) !== op.expected_generation) || (prior && prior.pairing_id !== op.pairing_id)) throw new Error('invalid_route');
     if (!pairing) statements.push(db.prepare('INSERT INTO pairings (id, installation_id, epoch) VALUES (?, ?, 0)').bind(op.pairing_id, op.installation_id));
     const expiresAt = recovered ? prior.expires_at : now + 30 * 86400;
-    // Delete and insert occur in the same guarded D1 transaction, so quota triggers check the replacement too.
+    // ADR-0008
     if (prior && !recovered) statements.push(db.prepare('DELETE FROM routes WHERE id = ? AND pairing_id = ? AND generation = ?').bind(op.route_id, op.pairing_id, op.expected_generation));
     if (!recovered) statements.push(db.prepare(`INSERT INTO routes (id, pairing_id, generation, destination, destination_digest, kind, environment, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -200,7 +200,6 @@ export async function control(request: Request, env: ControlEnv, now: number,
 export async function cleanup(db: D1Database, now: number): Promise<void> {
   await db.batch([
     db.prepare('DELETE FROM routes WHERE id IN (SELECT id FROM routes WHERE expires_at < ? ORDER BY expires_at LIMIT 64)').bind(now - 7 * 86400),
-    // 64 installations' worth of the 64 pairing tombstones each may hold; oldest retention first bounds deletion delay.
     db.prepare(`DELETE FROM pairings WHERE id IN (SELECT p.id FROM pairings p JOIN attestations a ON a.installation_id = p.installation_id
       WHERE a.retain_until < ? AND NOT EXISTS (SELECT 1 FROM routes WHERE pairing_id = p.id) ORDER BY a.retain_until LIMIT 4096)`).bind(now),
     db.prepare(`DELETE FROM installation_usage WHERE installation_id IN (SELECT a.installation_id FROM attestations a

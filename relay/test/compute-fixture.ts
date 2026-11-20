@@ -3,14 +3,12 @@ import { bytes, ProviderToken } from '../src/crypto.ts';
 import { verifyAttestation } from '../src/attestation.ts';
 export { RelayCrypto } from '../src/compute.ts';
 
-// Yield in this test bundle so overlapping admissions are deterministic even when WebCrypto completes immediately.
 const sign = ProviderToken.prototype.token;
 ProviderToken.prototype.token = async function(now: number) {
   await new Promise(resolve => setTimeout(resolve, 20));
   return sign.call(this, now);
 };
 
-// Apple's historical sample has a different publisher and raw client challenge.
 export class HistoricalFixture extends DurableObject {
   async attest(encoded: string, invalid: boolean) {
     return verifyAttestation(encoded, 'zgSY9YSD-7TaDXssY6WlOPVS1K3Lmk-pFhlcSWE-ZV0',

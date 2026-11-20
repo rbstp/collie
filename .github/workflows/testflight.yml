@@ -60,7 +60,6 @@ jobs:
             latest="$(git tag --list 'v*' --sort=-v:refname | head -1)"
             IFS=. read -r major minor patch <<< "${latest:-v0.0.0}"
             major="${major#v}"
-            # Every commit since the last tag counts, so a cancelled pending run cannot lose a feat bump.
             range="${latest:+$latest..}HEAD"
             if { git log --format='%s%n%b' "$range"; printf '%s\n' "$TITLE"; } | grep -qiE '^(\[[A-Z]+-[0-9]+\] )?feat[(!:]'; then
               minor=$((minor + 1)); patch=0
@@ -101,7 +100,6 @@ jobs:
           APPLE_KEY_ID: ${{ secrets.APPLE_KEY_ID }}
           APPLE_ISSUER_ID: ${{ secrets.APPLE_ISSUER_ID }}
 
-      # setup-go otherwise unpacks Go from scratch on every macOS runner.
       - name: cache the Go toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -151,11 +149,9 @@ jobs:
       - name: generate the project
         run: just --no-deps ios-project
 
-      # The iOS app embeds the watch app, so every iOS build also builds for watchOS.
       - name: install the watchOS platform
         run: xcrun simctl list runtimes | grep -q watchOS || xcodebuild -downloadPlatform watchOS
 
-      # ci.yml tests the pull request, not the revision shipped. Unit tests only: a UI regression shows on master's ci run and holds back no build.
       - name: test the revision being shipped
         run: just --no-deps test_iterations=2 ios-test on-failure CollieUITests
 
@@ -182,7 +178,6 @@ jobs:
           security unlock-keychain -p "$password" "$keychain"
           security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_DIST_CERT_PASSWORD" \
             -T /usr/bin/codesign -f pkcs12
-          # Without a partition list, codesign's first use of the key blocks on a UI prompt.
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" \
             "$keychain" > /dev/null
           security list-keychains -d user | tr -d '"' \
@@ -192,7 +187,6 @@ jobs:
 
           profiles="$HOME/Library/MobileDevice/Provisioning Profiles"
           mkdir -p "$profiles"
-          # Installs every APPLE_PROVISIONING_PROFILE* variable: a new signed target adds its secret here and to the check above.
           for name in ${!APPLE_PROVISIONING_PROFILE@}; do
             decode "$name" "${!name}" "$RUNNER_TEMP/profile.mobileprovision"
             plist="$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")" || {
@@ -213,7 +207,7 @@ jobs:
           APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS: ${{ secrets.APPLE_PROVISIONING_PROFILE_WATCH_WIDGETS }}
           APPLE_KEY_P8: ${{ secrets.APPLE_KEY_P8 }}
 
-      # No PROVISIONING_PROFILE_SPECIFIER here: a command-line setting applies to every target, so each target names its profile in project.yml.
+      # ADR-0004
       - name: archive
         run: |
           xcodebuild archive -project Collie/Collie.xcodeproj -scheme Collie -configuration Release \

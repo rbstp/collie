@@ -1,8 +1,6 @@
 import AppKit
 
 enum MenuIcon {
-    /// A template image, so the menu bar tints it: full alpha while collied runs, dim when
-    /// off, and a dot at the top right while an approval is pending.
     static func image(running: Bool, pending: Bool) -> NSImage {
         let size = NSSize(width: 22, height: 18)
         let glyph = NSImage(named: "MenuIcon")

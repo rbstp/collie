@@ -4,8 +4,7 @@ import Quickshell.Io
 import "Model.js" as Model
 import "Printable.js" as Printable
 
-// One collied connection for every bar: the watch stream, the commands and a pairing.
-// Never log a pairing line: the invite carries the one-time code.
+// ADR-0006
 Item {
   id: root
 
@@ -29,7 +28,6 @@ Item {
   property var peers: []
   property bool auditLogExists: false
 
-  // "" | "connecting" | "invite" | "confirm" | "finished"
   property string phase: ""
   property var qr: []
   property double deadline: 0
@@ -96,7 +94,6 @@ Item {
     })
   }
 
-  // The shell stays up: Quit stops collied and takes the icon off the bar.
   function quit() {
     collied("stop", function() {
       Quickshell.execDetached(["omarchy-plugin-disable", "rbstp.collie"])
@@ -178,7 +175,6 @@ Item {
     phase = "finished"
   }
 
-  // collied takes the closed connection as a cancel, or as Don't Pair.
   function pairCancel() {
     dropPairConn()
     qr = []
@@ -208,7 +204,6 @@ Item {
     onFileChanged: reload()
   }
 
-  // A Socket never connects again after a failed attempt, so each attempt gets a new one.
   property var watchConn: null
 
   function watch() {
@@ -256,15 +251,13 @@ Item {
     onTriggered: root.watch()
   }
 
-  // The tailnet can take up to a minute to come up.
   Timer {
     id: startingTimer
     interval: 90000
     onTriggered: root.starting = false
   }
 
-  // Pair goes live a second after the candidate shows, so a click meant for something
-  // else cannot confirm it.
+  // ADR-0006
   Timer {
     id: armTimer
     interval: 1000
@@ -329,7 +322,7 @@ Item {
     }
   }
 
-  // The URI goes to qrencode on stdin only: argv shows in ps.
+  // ADR-0006
   Process {
     id: qrProc
     property string uri: ""

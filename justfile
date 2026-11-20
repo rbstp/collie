@@ -43,7 +43,6 @@ collied-install:
     codesign --verify --strict --verbose=2 "$bin"
     dest="$HOME/.cargo/bin/collied"
     mkdir -p "$(dirname "$dest")"
-    # A fresh inode: rewriting a signed binary in place can get the running copy killed.
     tmp="$(mktemp "$(dirname "$dest")/.collied.XXXXXX")"
     trap 'rm -f "$tmp"' EXIT
     cp "$bin" "$tmp"
@@ -66,7 +65,6 @@ collied-install:
     bin=target/release/collied
     dest="$HOME/.cargo/bin/collied"
     mkdir -p "$(dirname "$dest")"
-    # A fresh inode, so the running daemon keeps its own copy until it restarts.
     tmp="$(mktemp "$(dirname "$dest")/.collied.XXXXXX")"
     trap 'rm -f "$tmp"' EXIT
     cp "$bin" "$tmp"
@@ -114,7 +112,6 @@ ios-framework target="all" profile="release":
     if [ "{{ target }}" = all ]; then
         lib=target/aarch64-apple-ios/release/libcollie_core.a
     fi
-    # Rewriting unchanged outputs makes Xcode recompile CollieCore and the app.
     stamp="$pkg/CollieCore.xcframework/.collie-build"
     want="$(printf '%s\n' '{{ target }}' '{{ profile }}'; shasum -a 256 "$lib" "$sim_lib" target/release/uniffi-bindgen)"
     if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ] && [ -f "$pkg/Sources/CollieCore/collie_core.swift" ]; then
@@ -144,14 +141,12 @@ ios-project: ios-ghostty
 ios-build-sim: ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' CODE_SIGNING_ALLOWED=NO build
 
-# The GhosttyTerminal package's tests, then the app's unit and UI tests. `skip` leaves some out as xcodebuild's -skip-testing
-# does: CollieUITests, or CollieUITests/KeyStripTests.
+# The GhosttyTerminal package's tests, then the app's unit and UI tests; `skip` takes -skip-testing values such as CollieUITests/KeyStripTests.
 ios-test diagnostics="on-failure" skip="": ios-framework ios-project
     {{ xcodebuild }} -destination 'platform=iOS Simulator,name={{ sim }}' -collect-test-diagnostics '{{ diagnostics }}' \
         {{ if skip == "" { "" } else { "-skip-testing " + skip } }} \
         {{ if test_iterations == "1" { "" } else { "-retry-tests-on-failure -test-iterations " + test_iterations } }} CODE_SIGNING_ALLOWED=NO test
 
-# The documentation screenshots, light and dark, from the demo on one fixed simulator and its paired watch, plus the App Store set in target/ios/app-store.
 # With screenshot_device, only the App Store set from that simulator, in target/ios/app-store/<width>x<height>.
 ios-screenshots: ios-framework ios-project
     #!/usr/bin/env bash
@@ -176,7 +171,6 @@ ios-screenshots: ios-framework ios-project
     appearance="$(xcrun simctl ui "$udid" appearance)"
     trap 'xcrun simctl status_bar "$udid" clear || true; xcrun simctl ui "$udid" appearance "$appearance"; if [ "$watch_state" = Shutdown ]; then xcrun simctl shutdown "$watch" || true; fi' EXIT
     {{ xcodebuild }} -destination "id=$udid" CODE_SIGNING_ALLOWED=NO build-for-testing
-    # A fresh install drops drafts left by other UI tests; the demo takes its accent from the prefs file.
     xcrun simctl uninstall "$udid" dev.rbstp.collie
     xcrun simctl install "$udid" target/ios/DerivedData/Build/Products/Debug-iphonesimulator/Collie.app
     state="$(xcrun simctl get_app_container "$udid" dev.rbstp.collie data)/Library/Application Support/collie"
@@ -188,7 +182,6 @@ ios-screenshots: ios-framework ios-project
     rm -rf "$raw"
     mkdir -p "$raw"
     for look in dark light; do
-        # The iOS 27.2 simulator applies an appearance change at its next boot only.
         xcrun simctl ui "$udid" appearance "$look"
         xcrun simctl shutdown "$udid"
         xcrun simctl bootstatus "$udid" -b
@@ -205,14 +198,12 @@ ios-screenshots: ios-framework ios-project
         done
     fi
     if [ "$watch_shots" = true ]; then
-        # bootstatus exits 0 even when a new watch shuts down during its first-boot data migration; booting it again completes.
         for _ in 1 2 3; do
             xcrun simctl bootstatus "$watch" -b
             watch_now="$(xcrun simctl list devices -j | jq -r --arg id "$watch" '.devices[][] | select(.udid == $id) | .state')"
             [ "$watch_now" != Booted ] || break
         done
         [ "$watch_now" = Booted ] || { echo "the watch simulator did not stay booted ($watch_now)"; exit 1; }
-        # watchOS has no light mode and no status bar override, so one copy each, with the current time.
         xcrun simctl install "$watch" target/ios/DerivedData/Build/Products/Debug-watchsimulator/CollieWatch.app
         for mode in widget usage; do
             SIMCTL_CHILD_COLLIE_DEMO_SCREENSHOTS="$mode" xcrun simctl launch --terminate-running-process "$watch" dev.rbstp.collie.watchkitapp >/dev/null
@@ -228,7 +219,6 @@ ios-screenshots: ios-framework ios-project
     fi
     rm -rf "$store"
     mkdir -p "$store"
-    # App Store Connect refuses alpha; a PPM round trip drops it without loss.
     for f in "$raw"/*.png; do
         sips -s format pbm "$f" --out "$store/tmp.ppm" >/dev/null
         sips -s format png "$store/tmp.ppm" --out "$store/$(basename "$f")" >/dev/null
@@ -239,9 +229,7 @@ ios-screenshots: ios-framework ios-project
         exit 0
     fi
     if command -v pngquant >/dev/null; then
-        # Only this run's captures: compressing a committed image again can still change it.
         for f in "$raw"/*.png; do
-            # 98 and 99: kept as is, the result would be larger or below the quality floor.
             pngquant --quality 70-90 --strip --skip-if-larger --force --ext .png "$out/$(basename "$f")" || [ $? -ge 98 ]
         done
     else
@@ -302,7 +290,6 @@ mac-install: mac-build
     osascript -e 'quit app id "dev.rbstp.colliebar"' >/dev/null 2>&1 || true
     dest="$HOME/Applications/CollieBar.app"
     mkdir -p "$HOME/Applications"
-    # A fresh copy beside the old one, then swapped in: the path stays stable for the login item.
     tmp="$(mktemp -d "$HOME/Applications/.CollieBar.XXXXXX")"
     trap 'rm -rf "$tmp"' EXIT
     ditto "$app" "$tmp/CollieBar.app"
@@ -324,7 +311,6 @@ mac-notarize profile="collie":
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     ditto -c -k --keepParent "$app" "$tmp/CollieBar.zip"
-    # On failure: xcrun notarytool log <submission id> --keychain-profile "{{ profile }}"
     xcrun notarytool submit "$tmp/CollieBar.zip" --keychain-profile "{{ profile }}" --wait
     xcrun stapler staple "$app"
     dest="$HOME/Applications/CollieBar.app"
@@ -348,7 +334,6 @@ tray-install:
     plugins="$HOME/.config/omarchy/plugins"
     dest="$plugins/rbstp.collie"
     mkdir -p "$plugins"
-    # A dot directory: the shell's watcher ignores it, so the copy reloads plugins once, at the swap.
     tmp="$(mktemp -d "$plugins/.rbstp.collie.XXXXXX")"
     trap 'rm -rf "$tmp"' EXIT
     cp Linux/CollieTray/{manifest.json,Service.qml,Panel.qml,Model.js,Printable.js,MenuIcon.svg} "$tmp"
@@ -357,9 +342,7 @@ tray-install:
     [ -d "$dest" ] && updating=true
     rm -rf "$dest"
     mv "$tmp" "$dest"
-    # The shell's hot reload can keep a changed widget's old component cached.
     if $updating; then omarchy restart shell >/dev/null; else omarchy-shell shell rescanPlugins >/dev/null; fi
-    # The shell answers "not ready" until it has found the plugin; on the bar already is ok.
     r=""
     for _ in $(seq 100); do
         r="$(omarchy-shell shell putBarWidget rbstp.collie '{"section":"right"}' 2>&1 || true)"
