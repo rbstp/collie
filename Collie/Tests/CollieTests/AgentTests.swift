@@ -2428,6 +2428,27 @@ private func terminalModel(_ core: FakeCore, _ unlocker: FakeUnlocker) -> AgentM
 }
 
 @MainActor
+@Test func aSavedPromptQueuedBehindASendIsNotTypedIntoADialogThatAppearedMeanwhile() async {
+    let core = FakeCore()
+    core.state.withLock { $0.kind = "claude" }
+    let model = agentModel(core)
+    model.poll()
+    core.set(hold: true)
+    let sending = model.tap(.up)
+    await core.waitHeld(1)
+    model.typeShortcut(PromptShortcut(text: "run the tests\n1\n"))
+    core.state.withLock { $0.status = .blocked }
+    model.poll()
+    #expect(model.answering)
+    model.tap(.down)
+    core.release()
+    await sending?.value
+    #expect(core.snapshot.input == [.keys([.up]), .keys([.down])], "a key the owner typed still answers; a digit or a Return of the prompt would too")
+    #expect(model.draft == "run the tests\n1\n")
+    #expect(model.notice?.contains("Chat’s draft") == true)
+}
+
+@MainActor
 @Test func aLockedSendUnlocksFirstAndACancelledFaceIDSendsNothing() async {
     let core = FakeCore()
     core.state.withLock { $0.shell = shellPane }

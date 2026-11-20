@@ -88,9 +88,10 @@ final class AgentModel {
     /// Shift or Control waiting for the next key; at most one, so a combination is never more than two keys.
     var modifier: KeyModifier?
     private(set) var quotes = 0
+    /// `handed`: from a paste, a path, dictation or a saved prompt, not a key the owner typed.
     private enum Input {
-        case key(AgentKey)
-        case text(String)
+        case key(AgentKey, handed: Bool)
+        case text(String, handed: Bool)
         case answer(String, CheckedContinuation<Void, any Error>)
     }
     private var queuedInput: [Input] = []
@@ -898,10 +899,10 @@ final class AgentModel {
     }
 
     @discardableResult
-    func tap(_ key: AgentKey) -> Task<Void, Never>? {
+    func tap(_ key: AgentKey, handed: Bool = false) -> Task<Void, Never>? {
         guard canTap(key) else { return nil }
         keyTaps += 1
-        return enqueue(.key(key))
+        return enqueue(.key(key, handed: handed))
     }
 
     /// The cursor's position in an agent's input box is not on the wire: Control-A, then Left and
@@ -932,7 +933,7 @@ final class AgentModel {
     /// keys: Return and Tab go as keys, and text queued behind a send goes out in one call. With
     /// Control selected, a listed letter goes out as Control and that letter.
     @discardableResult
-    func type(_ text: String) -> Task<Void, Never>? {
+    func type(_ text: String, handed: Bool = false) -> Task<Void, Never>? {
         guard acceptsKeys else { return nil }
         if let selected = modifier {
             modifier = nil
@@ -944,14 +945,14 @@ final class AgentModel {
         var run = ""
         for character in text {
             if character.isNewline || character == "\t" {
-                if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+                if !run.isEmpty { task = enqueue(.text(run, handed: handed)) ?? task }
                 run = ""
-                task = tap(character == "\t" ? .tab : .enter) ?? task
+                task = tap(character == "\t" ? .tab : .enter, handed: handed) ?? task
             } else if !character.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) {
                 run.append(character)
             }
         }
-        if !run.isEmpty { task = enqueue(.text(run)) ?? task }
+        if !run.isEmpty { task = enqueue(.text(run, handed: handed)) ?? task }
         return task
     }
 
@@ -960,7 +961,7 @@ final class AgentModel {
     @discardableResult
     func pasteIntoTerminal(_ text: String) -> Task<Void, Never>? {
         guard !answering else { return nil }
-        return type(text.split(whereSeparator: \.isNewline).joined(separator: " "))
+        return type(text.split(whereSeparator: \.isNewline).joined(separator: " "), handed: true)
     }
 
     /// The terminal view types an uploaded file's path instead of holding it for a prompt. On a dialog
@@ -970,7 +971,7 @@ final class AgentModel {
             notice = "The agent is waiting for an answer. The file is attached in Chat, not typed."
             return
         }
-        type(file.path + " ")
+        type(file.path + " ", handed: true)
         remove(file)
     }
 
@@ -980,7 +981,7 @@ final class AgentModel {
         let said = draft
         guard answering, !said.isEmpty else {
             draft = kept
-            type(said)
+            type(said, handed: true)
             return
         }
         draft = kept.isEmpty ? said : kept + " " + said
@@ -992,7 +993,7 @@ final class AgentModel {
     /// the draft instead.
     func typeShortcut(_ shortcut: PromptShortcut) {
         guard answering else {
-            type(shortcut.text)
+            type(shortcut.text, handed: true)
             return
         }
         draft = shortcut.appending(to: draft)
@@ -1004,7 +1005,7 @@ final class AgentModel {
     func press(_ key: AgentKey) -> Task<Void, Never>? {
         guard let modifier else { return tap(key) }
         self.modifier = nil
-        return key.with(modifier).flatMap(tap)
+        return key.with(modifier).flatMap { tap($0) }
     }
 
     /// A selected modifier applies to the next edit only. With Control, a listed letter typed on the
@@ -1066,6 +1067,7 @@ final class AgentModel {
 
     private func drainInput() async {
         defer { sendingInput = false }
+        var moved = false
         while let input = queuedInput.first {
             if case let .answer(text, continuation) = input {
                 queuedInput.removeFirst()
@@ -1085,9 +1087,28 @@ final class AgentModel {
             if !isTerminal {
                 await flushMirror()
             }
+            // A dialog can open while text waits here behind another send, and a digit or a Return of it could be the
+            // answer: as when it is handed over, what the owner did not type joins Chat's draft. After the awaits above.
+            if answering {
+                var rest = ""
+                queuedInput.removeAll {
+                    switch $0 {
+                    case .text(let text, true): rest += text
+                    case .key(let key, true): rest += key == .tab ? "\t" : "\n"
+                    default: return false
+                    }
+                    return true
+                }
+                if !rest.isEmpty {
+                    draft = PromptShortcut(text: rest).appending(to: draft)
+                    notice = "The agent is waiting for an answer. What was left to type is in Chat’s draft, not typed."
+                    moved = true
+                    continue
+                }
+            }
             if case .text? = queuedInput.first {
                 var text = ""
-                while case let .text(more)? = queuedInput.first {
+                while case let .text(more, _)? = queuedInput.first {
                     text += more
                     queuedInput.removeFirst()
                 }
@@ -1097,7 +1118,7 @@ final class AgentModel {
                     } else {
                         try await core.sendText(machineId: route.machineId, terminalId: route.terminalId, text: text)
                     }
-                    notice = nil
+                    if !moved { notice = nil }
                 } catch {
                     if case .TerminalLocked = error as? CoreError { terminalLocked = true }
                     cancelInput(error)
@@ -1108,7 +1129,7 @@ final class AgentModel {
             guard case .key? = queuedInput.first else { continue }
             let command = commandShown
             var batch: [AgentKey] = []
-            while batch.count < (codexQuestionOpen ? 1 : 16), case let .key(key)? = queuedInput.first {
+            while batch.count < (codexQuestionOpen ? 1 : 16), case let .key(key, _)? = queuedInput.first {
                 batch.append(key)
                 queuedInput.removeFirst()
             }
@@ -1120,7 +1141,7 @@ final class AgentModel {
                 } else {
                     try await core.sendKeys(machineId: route.machineId, terminalId: route.terminalId, keys: batch)
                 }
-                notice = nil
+                if !moved { notice = nil }
                 if command, let last = batch.last(where: { $0 == .up || $0 == .down || $0 == .tab }) {
                     menuMoved = last != .tab
                 }
