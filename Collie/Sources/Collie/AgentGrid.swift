@@ -293,7 +293,7 @@ struct AgentCard: View {
                         }
                     }
                     .frame(width: typeSize.isAccessibilitySize ? nil : 16)
-                    .modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil, reservesOverhang: false))
+                    .modifier(RuntimeBadge(runtime: agent.runtime, grouped: workspace != nil && agent.folder == nil, reservesOverhang: false))
                     HStack(spacing: 3) {
                         if followed {
                             Image(systemName: "pin.fill")
@@ -301,7 +301,7 @@ struct AgentCard: View {
                                 .accessibilityLabel("Followed")
                         }
                         if let workspace {
-                            Text(RuntimeBadge.groupLabel(workspace, runtime: agent.runtime, badged: runtimeMarks && agent.kind != nil))
+                            Text(RuntimeBadge.groupLabel(workspace, agent: agent, badged: runtimeMarks && agent.kind != nil))
                                 .layoutPriority(1)
                             Text(verbatim: "·").fixedSize()
                         }

@@ -3504,9 +3504,18 @@ func gitFeedbackBindingsSurviveRemoval(removedIndex: Int) throws {
 }
 
 @MainActor
-@Test func herdrCoreGroupReadsCoreBesideTheBadgeOnly() {
-    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: true) == "Core")
-    #expect(RuntimeBadge.groupLabel("Herdr Core", runtime: .herdrCore, badged: false) == "Herdr Core")
-    #expect(RuntimeBadge.groupLabel("api", runtime: .rex, badged: true) == "api")
-    #expect(RuntimeBadge.groupLabel("collie", runtime: .herdr, badged: true) == "collie")
+@Test func herdrCoreGroupReadsCoreBesideTheBadgeOnlyWithoutAFolder() {
+    func agent(_ runtime: TaskRuntime, cwd: String? = nil) -> AgentSummary {
+        AgentSummary(
+            terminalId: "t", workspaceId: "w", kind: "claude", name: nil, title: nil,
+            status: .idle, statusSinceMs: 0, cwd: cwd, lastLine: nil, runtime: runtime
+        )
+    }
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore), badged: true) == "Core")
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore, cwd: "/"), badged: true) == "Core")
+    #expect(RuntimeBadge.groupLabel("Herdr Core", agent: agent(.herdrCore), badged: false) == "Herdr Core")
+    #expect(RuntimeBadge.groupLabel("herd", agent: agent(.herdrCore, cwd: "/Users/me/git/herd"), badged: true) == "herd")
+    #expect(RuntimeBadge.groupLabel("herd", agent: agent(.herdrCore, cwd: "/Users/me/git/herd"), badged: false) == "herd")
+    #expect(RuntimeBadge.groupLabel("api", agent: agent(.rex), badged: true) == "api")
+    #expect(RuntimeBadge.groupLabel("collie", agent: agent(.herdr), badged: true) == "collie")
 }
