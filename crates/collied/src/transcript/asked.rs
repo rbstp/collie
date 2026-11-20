@@ -214,8 +214,7 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     for script in running.iter().filter(|c| c.asks().is_some()) {
         match script.at {
             Some(at) if at < since => {}
-            _ if alive(script) => scripts.push(script),
-            _ => return stale,
+            _ => scripts.push(script),
         }
     }
     scripts.extend(calls.iter().filter(|c| c.asks().is_some()));
@@ -955,6 +954,28 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         };
         let menu = Menu::parse(screen).filter(Menu::on_screen)?;
         menu.scripted(&literals?).ok().map(|_| (menu.heads, call))
+    }
+
+    #[test]
+    fn a_read_that_starts_inside_a_line_drops_that_line() {
+        // A transcript longer than the read: the read's first line is cut and is no line.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        let line = |content: String| json!({"type": "user", "message": {"content": content}});
+        let long = line("x".repeat(TAIL_BYTES as usize));
+        let prompt = line("go".to_owned());
+        let asked = DISPATCHED.1.trim_end();
+        std::fs::write(&path, format!("{long}\n{prompt}\n{asked}\n")).unwrap();
+        let asking = Asking {
+            path: path.clone(),
+            session: SESSION.to_owned(),
+            started_at: 0,
+        };
+        assert_eq!(says(asking.waits()), "a script");
+        // With no line above the script's message that says where it starts, the read does
+        // not reach far enough to know.
+        std::fs::write(&path, format!("{long}\n{asked}\n")).unwrap();
+        assert_eq!(says(asking.waits()), "transcript unreadable or incomplete");
     }
 
     #[test]
