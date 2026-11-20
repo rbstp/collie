@@ -97,6 +97,12 @@ const ASKED_BASH: (&str, &str) = capture!("bash");
 // The same with Code Mode on: the pending call is a `REPL` script that calls the question.
 const SCRIPTED: (&str, &str) = capture!("codemode-question-one");
 const SCRIPTED_BUILT: (&str, &str) = capture!("codemode-question-built");
+// Code Mode in auto mode: the script's call is answered at once with `(dispatched #N)` and
+// the script runs on. Two questions on screen, and the transcript once the first was answered.
+const DISPATCHED: (&str, &str) = capture!("dispatched-question-one");
+const DISPATCHED_LATER: (&str, &str) = capture!("dispatched-question-after-work");
+const DISPATCHED_ANSWERED: &str =
+    include_str!("fixtures/claude-2.1.329/dispatched-question-answered.transcript.min.jsonl");
 // Claude Code 2.1.328's Edit prompt: `Yes` is its only option that reads as an approval.
 const EDIT: &str = include_str!("fixtures/claude-2.1.328/edit.tmux.txt");
 // Claude Code 2.1.300's dynamic workflow prompt: `Yes, run it`, `View raw script`, `No`.
@@ -109,15 +115,15 @@ const ASKED_PLAN: (&str, &str) = capture!("plan");
 const SESSION: &str = "00000000-0000-4000-8000-000000000000";
 const CWD: &str = "/private/tmp/planlab";
 
-/// A transcript whose last line is written after this process started, as a pending call's
-/// is. A capture as it is stands for a call an earlier process left.
+/// A transcript whose lines are written after this process started, as a pending call's is.
+/// A capture as it is stands for calls an earlier process left.
 fn fresh(transcript: &str) -> String {
-    let mut rows: Vec<String> = transcript.lines().map(str::to_owned).collect();
-    let last = rows.last_mut().unwrap();
-    let mut line: Value = serde_json::from_str(last).unwrap();
-    line["timestamp"] = json!("2999-01-01T00:00:00.000Z");
-    *last = line.to_string();
-    rows.join("\n") + "\n"
+    let stamp = |row: &str| {
+        let mut line: Value = serde_json::from_str(row).unwrap();
+        line["timestamp"] = json!("2999-01-01T00:00:00.000Z");
+        line.to_string() + "\n"
+    };
+    transcript.lines().map(stamp).collect()
 }
 
 /// The transcript of a session that waits on one AskUserQuestion call. The older question
@@ -2447,6 +2453,79 @@ async fn a_question_in_code_mode_is_matched_to_the_pending_script() {
         rig.herdr.params("agent.send_keys"),
         [
             json!({"target": "w7:p1", "keys": ["down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_question_from_a_dispatched_script_is_answered_while_the_script_runs() {
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = "live_blocked_form".into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    let own = ["Type something.", "Chat about this"];
+    // A form with an option that starts with `Yes` takes no keys typed by hand, as ever
+    // (`open_to_keys`); its choices are offered all the same.
+    for ((screen, transcript), labels, keys) in [
+        (
+            DISPATCHED,
+            &["Jupiter", "Saturn", "Neptune", "Earth"][..],
+            true,
+        ),
+        (DISPATCHED_LATER, &["Yes please", "Stop here"][..], false),
+    ] {
+        show(&rig, screen, &fresh(transcript));
+        let a = rig.needed().await;
+        let shown: Vec<&str> = a.choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(shown, [labels, &own[..]].concat());
+        assert!(a.options.is_empty());
+        assert_eq!((a.accepts_input, a.has_text_field), (keys, keys));
+        // The capture's own lines are older than this process: its script died with its own.
+        show(&rig, screen, transcript);
+        assert!(rig.needed().await.choices.is_empty());
+    }
+    // The script ended: its question is asked no more, whatever the screen still shows.
+    show(&rig, DISPATCHED.0, &fresh(DISPATCHED_ANSWERED));
+    let a = rig.needed().await;
+    assert!(a.choices.is_empty() && !a.accepts_input);
+
+    // An approval is for that script's call. It ends between the approval and the choice;
+    // then another call runs the same script.
+    let running = fresh(DISPATCHED.1);
+    show(&rig, DISPATCHED.0, &running);
+    let a = rig.needed().await;
+    rig.transcript(&fresh(DISPATCHED_ANSWERED));
+    assert_eq!(
+        resolved(rig.choose(&a, 1, &a.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    rig.transcript(&running);
+    let b = rig.needed().await;
+    assert_ne!(running, running.replace("toolu_scrubbed_1", "toolu_next"));
+    rig.transcript(&running.replace("toolu_scrubbed_1", "toolu_next"));
+    assert_eq!(
+        resolved(rig.choose(&b, 1, &b.nonce).await),
+        ApprovalOutcome::Superseded
+    );
+    assert!(rig.mutations().is_empty());
+    let c = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&c, 2, &c.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 2,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down", "down"]}),
             json!({"target": "w7:p1", "keys": ["enter"]}),
         ]
     );

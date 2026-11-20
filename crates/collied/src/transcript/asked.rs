@@ -26,9 +26,9 @@ pub enum Waits {
         call: String,
         questions: Vec<Question>,
     },
-    /// One call, a Code Mode script that names AskUserQuestion: its whole string literals,
-    /// which a question form is matched against ([`crate::prompt::Menu::scripted`]), or none
-    /// when the script was not read whole.
+    /// One Code Mode script that names AskUserQuestion, running or waiting to: its whole
+    /// string literals, which a question form is matched against
+    /// ([`crate::prompt::Menu::scripted`]), or none when the script was not read whole.
     Script {
         session: String,
         call: String,
@@ -66,20 +66,65 @@ impl Asking {
     }
 }
 
-/// Read from the transcript's end up to the last assistant message's start: an assistant line
-/// of another message, or, when the lines carry no message id, a `user` line that is not only
-/// tool results. Claude Code writes one line per content block, so parallel calls are
-/// several lines of one message, and a result or another line can come between them. With
-/// more than one call without a result, the screen does not say which dialog is drawn. A
-/// `user` line that is no result under the last call ends the turn: nothing is pending.
+/// A tool call of the transcript: its block, and of its line the session, the time and how
+/// the message ended.
+struct Call {
+    call: Value,
+    by: Value,
+    at: Option<u64>,
+    stop: Value,
+}
+
+impl Call {
+    fn of(call: &Value, line: &Value) -> Self {
+        Self {
+            call: call.clone(),
+            by: line["sessionId"].clone(),
+            at: line["timestamp"].as_str().and_then(timestamp_ms),
+            stop: line["message"]["stop_reason"].clone(),
+        }
+    }
+
+    /// A Code Mode script that names AskUserQuestion, and its text.
+    fn asks(&self) -> Option<&str> {
+        let code = self.call["input"]["code"].as_str()?;
+        (self.call["name"] == "REPL" && code.contains("AskUserQuestion")).then_some(code)
+    }
+}
+
+/// What the read says the session waits on, from two things read backward from its end.
+///
+/// The calls of the last assistant message that have no result. That message starts at an
+/// assistant line of another message, or, when the lines carry no message id, at a `user`
+/// line that is not only tool results. Claude Code writes one line per content block, so
+/// parallel calls are several lines of one message, and a result or another line can come
+/// between them. A `user` line that is no result under the last call ends the turn: none is
+/// pending.
+///
+/// The scripts still running, over the whole read. In Code Mode (2.1.329) the model's one
+/// tool is a script runner, `REPL`, and a question is a function its script calls: the
+/// transcript holds nothing of the question but the script's text. Where Claude Code asks
+/// before it runs a tool, that call has no result until its script ends. In auto mode it
+/// answers the call at once with a receipt, `(dispatched #N)`, lets the script run, and
+/// writes a `poll_events` attachment that names script N in a `repl-eval` event when it
+/// ended. So a call with a receipt and no such event under it is still running; the numbers
+/// start again in a new context, so an event counts for the nearest receipt above it. A
+/// script whose line is older than the process (`since`) died with the process that ran it.
+///
+/// One script that names AskUserQuestion, running or without a result, is what a question
+/// form is matched against, whatever else waits beside it: Claude Code's own wait for its
+/// scripts (`Poll`), or another call, whose permission prompt is no question form. One
+/// AskUserQuestion call with no result and nothing else pending is the question outside Code
+/// Mode. With more than one of either, the screen does not say which form is drawn.
 ///
 /// Nothing is concluded from a read that is not whole. A last line without its newline is
 /// one Claude Code is still writing, and a line that does not parse may be cut: either can
 /// be the result of the call above it, or a second call. `whole` says the text starts at the
-/// file's start; otherwise a read that ends before the message's start says nothing of the
-/// calls above it. The one call must be the session's and no older than its process
-/// (`since`), so one that a killed session left in a transcript another process resumed is
-/// not this terminal's.
+/// file's start; otherwise a read that ends before the last message's start says nothing of
+/// the calls above it, nor one that holds a receipt and not its call. A script that started
+/// before the read's first line is not seen: its question is refused as no pending call. The
+/// one call must be the session's and no older than its process, so one that a killed
+/// session left in a transcript another process resumed is not this terminal's.
 fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     let unknown = Waits::Unknown(Refused::Transcript);
     if !text.is_empty() && !text.ends_with('\n') {
@@ -89,7 +134,11 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     let mut made = Vec::new();
     let mut calls = Vec::new();
     let mut message = None;
+    let mut last = true;
     let mut bounded = whole;
+    let mut ended = Vec::new();
+    let mut receipts = Vec::new();
+    let mut running = Vec::new();
     for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             return unknown;
@@ -100,88 +149,159 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
         let blocks = v["message"]["content"].as_array();
         let blocks = blocks.map(Vec::as_slice).unwrap_or_default();
         match v["type"].as_str() {
+            Some("attachment") if v["attachment"]["type"] == "poll_events" => {
+                let envelopes = v["attachment"]["envelopes"].as_array();
+                for envelope in envelopes.into_iter().flatten() {
+                    match envelope.as_str().and_then(settled) {
+                        Some(Some(n)) if !ended.contains(&n) => ended.push(n),
+                        // A script ended, and the event does not say which.
+                        Some(None) => return unknown,
+                        _ => {}
+                    }
+                }
+            }
             Some("user") => {
                 let result = |b: &&Value| b["type"] == "tool_result";
-                if (blocks.is_empty() || !blocks.iter().all(|b| result(&b)))
+                if last
+                    && (blocks.is_empty() || !blocks.iter().all(|b| result(&b)))
                     && !matches!(message, Some(Value::String(_)))
                 {
-                    bounded = true;
-                    break;
+                    (bounded, last) = (true, false);
                 }
-                let ids = blocks.iter().filter(result).map(|b| &b["tool_use_id"]);
-                // A result above its own call says the file is not what Claude Code wrote.
-                if ids.clone().any(|id| made.contains(id)) {
-                    return unknown;
+                for block in blocks.iter().filter(result) {
+                    let id = &block["tool_use_id"];
+                    // A result above its own call says the file is not what Claude Code wrote.
+                    if last && made.contains(id) {
+                        return unknown;
+                    }
+                    if last {
+                        results.push(id.clone());
+                    }
+                    match receipt(&block["content"]) {
+                        Some(n) if ended.contains(&n) => ended.retain(|e| *e != n),
+                        Some(_) => receipts.push(id.clone()),
+                        None => {}
+                    }
                 }
-                results.extend(ids.cloned());
             }
             Some("assistant") => {
                 let id = &v["message"]["id"];
-                if *message.get_or_insert_with(|| id.clone()) != *id {
-                    bounded = true;
-                    break;
+                if last && *message.get_or_insert_with(|| id.clone()) != *id {
+                    (bounded, last) = (true, false);
                 }
                 for call in blocks.iter().filter(|b| b["type"] == "tool_use") {
-                    made.push(call["id"].clone());
-                    if !results.contains(&call["id"]) {
-                        calls.push((call.clone(), v["sessionId"].clone(), v["timestamp"].clone()));
+                    if last {
+                        made.push(call["id"].clone());
+                    }
+                    if last && !results.contains(&call["id"]) {
+                        calls.push(Call::of(call, &v));
+                    }
+                    if receipts.contains(&call["id"]) {
+                        receipts.retain(|r| *r != call["id"]);
+                        running.push(Call::of(call, &v));
                     }
                 }
             }
             _ => {}
         }
     }
-    let (call, by, at) = match &calls[..] {
-        _ if !bounded => return unknown,
-        [] => return Waits::Nothing,
-        [one] => one,
+    if !bounded || !receipts.is_empty() {
+        return unknown;
+    }
+    let alive = |c: &Call| c.by == session && c.at.is_some_and(|at| at >= since);
+    let stale = Waits::Unknown(Refused::Stale);
+    let mut scripts: Vec<&Call> = Vec::new();
+    for script in running.iter().filter(|c| c.asks().is_some()) {
+        match script.at {
+            Some(at) if at < since => {}
+            _ if alive(script) => scripts.push(script),
+            _ => return stale,
+        }
+    }
+    scripts.extend(calls.iter().filter(|c| c.asks().is_some()));
+    let questions = || calls.iter().filter(|c| c.call["name"] == "AskUserQuestion");
+    let call = match (&scripts[..], questions().count(), &calls[..]) {
+        ([], 0, []) => return Waits::Nothing,
+        ([], 0, [one]) if alive(one) => return Waits::Other,
+        ([script], 0, _) => *script,
+        ([], 1, [one]) => one,
+        ([], 0, [_]) => return stale,
         _ => return Waits::Unknown(Refused::Several),
     };
-    let fresh = at
-        .as_str()
-        .and_then(timestamp_ms)
-        .is_some_and(|at| at >= since);
-    if by != session || !fresh {
-        return Waits::Unknown(Refused::Stale);
+    if !alive(call) {
+        return stale;
     }
-    // In Code Mode (2.1.329) the model's one tool is a script runner, and the question is a
-    // function the script calls: the pending call is the script, and the transcript holds
-    // nothing of the question but the script's text.
-    if let (Some(id), Some(code)) = (call["id"].as_str(), call["input"]["code"].as_str())
-        && call["name"] == "REPL"
-        && code.contains("AskUserQuestion")
-    {
+    let Some(id) = call.call["id"].as_str() else {
+        return unknown;
+    };
+    if let Some(code) = call.asks() {
         return Waits::Script {
             session: session.to_owned(),
             call: id.to_owned(),
             literals: literals(code),
         };
     }
-    if call["name"] != "AskUserQuestion" {
-        return Waits::Other;
+    // When a dispatched script's question is answered, Claude Code writes the question as
+    // an AskUserQuestion call of its own and then that call's result (2.1.329 ends that
+    // message with `stop_sequence`). A read between the two lines sees a question with no
+    // result that nobody is asked any more.
+    if call.stop == "stop_sequence" {
+        return unknown;
     }
-    let questions = call["input"]["questions"].as_array().and_then(|questions| {
-        let questions = questions.iter().map(|q| {
-            let options = q["options"].as_array()?.iter().map(|o| {
-                let description = o["description"].as_str().unwrap_or_default();
-                Some((o["label"].as_str()?.to_owned(), description.to_owned()))
+    let questions = call.call["input"]["questions"]
+        .as_array()
+        .and_then(|questions| {
+            let questions = questions.iter().map(|q| {
+                let options = q["options"].as_array()?.iter().map(|o| {
+                    let description = o["description"].as_str().unwrap_or_default();
+                    Some((o["label"].as_str()?.to_owned(), description.to_owned()))
+                });
+                Some(Question {
+                    text: q["question"].as_str()?.to_owned(),
+                    options: options.collect::<Option<_>>()?,
+                    multi: q["multiSelect"] == true,
+                })
             });
-            Some(Question {
-                text: q["question"].as_str()?.to_owned(),
-                options: options.collect::<Option<_>>()?,
-                multi: q["multiSelect"] == true,
-            })
+            questions.collect::<Option<Vec<_>>>()
         });
-        questions.collect::<Option<Vec<_>>>()
-    });
-    match (call["id"].as_str(), questions) {
-        (Some(id), Some(questions)) if !questions.is_empty() => Waits::Question {
+    match questions {
+        Some(questions) if !questions.is_empty() => Waits::Question {
             session: session.to_owned(),
             call: id.to_owned(),
             questions,
         },
         _ => unknown,
     }
+}
+
+/// The script number of a dispatch receipt: a tool result that reads `(dispatched #N)` and
+/// nothing else, as a string or as its one text block.
+fn receipt(content: &Value) -> Option<u64> {
+    let text = match content {
+        Value::String(text) => text,
+        Value::Array(blocks) => match &blocks[..] {
+            [block] if block["type"] == "text" => block["text"].as_str()?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let n = text.strip_prefix("(dispatched #")?.strip_suffix(')')?;
+    n.bytes()
+        .all(|b| b.is_ascii_digit())
+        .then(|| n.parse().ok())?
+}
+
+/// The script a `poll_events` envelope says ended: an event whose opening tag reads
+/// `kind="repl-eval"` and `eval="N"`. Only that tag is read: the event's body is the
+/// script's output. `Some(None)` for such an event with no number.
+fn settled(envelope: &str) -> Option<Option<u64>> {
+    let tag = envelope.strip_prefix("<event")?;
+    let tag = &tag[..tag.find(['>', '\n']).unwrap_or(tag.len())];
+    let value = |name: &str| {
+        let (_, rest) = tag.split_once(&format!(" {name}=\""))?;
+        rest.split_once('"').map(|(value, _)| value)
+    };
+    (value("kind")? == "repl-eval").then(|| value("eval")?.parse().ok())
 }
 
 /// The string literals of a script, each the text between two matching quote characters
@@ -274,6 +394,20 @@ mod tests {
     // labels the script puts in variables first.
     const SCRIPTED: (&str, &str) = capture!("codemode-question-one");
     const SCRIPTED_BUILT: (&str, &str) = capture!("codemode-question-built");
+    // Code Mode in auto mode (`--permission-mode auto`): Claude Code answers a `REPL` call
+    // at once with `(dispatched #N)` and the script runs on. A question on screen, and one a
+    // script asks after it computed and logged, each with its transcript at that moment;
+    // then the transcript after the first was answered, and after the second was declined.
+    // An attachment line keeps its type, and a `poll_events` one the first line of each
+    // event, its nonce replaced.
+    const DISPATCHED: (&str, &str) = capture!("dispatched-question-one");
+    const DISPATCHED_LATER: (&str, &str) = capture!("dispatched-question-after-work");
+    const ANSWERED: &str = include_str!(
+        "../../tests/fixtures/claude-2.1.329/dispatched-question-answered.transcript.min.jsonl"
+    );
+    const DECLINED: &str = include_str!(
+        "../../tests/fixtures/claude-2.1.329/dispatched-question-declined.transcript.min.jsonl"
+    );
     const SESSION: &str = "00000000-0000-4000-8000-000000000000";
 
     /// A transcript read whole, each of `rows` a complete line.
@@ -788,5 +922,163 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         assert_ne!(drawn, screen);
         assert_eq!(scripts(&drawn, &code), Err(Refused::NotInScript));
         assert!(scripts(screen, &code).is_ok());
+    }
+
+    fn repl(id: &str, code: &str) -> String {
+        json!({"type": "assistant", "timestamp": "2026-11-20T17:25:01.028Z", "sessionId": SESSION,
+        "message": {"content": [
+            {"type": "tool_use", "id": id, "name": "REPL", "input": {"code": code}},
+        ]}})
+        .to_string()
+    }
+
+    fn answer(id: &str, content: Value) -> String {
+        let block = json!({"type": "tool_result", "tool_use_id": id, "content": content});
+        json!({"type": "user", "message": {"content": [block]}}).to_string()
+    }
+
+    fn events(envelopes: &[&str]) -> String {
+        let attachment = json!({"type": "poll_events", "envelopes": envelopes});
+        json!({"type": "attachment", "attachment": attachment}).to_string()
+    }
+
+    fn ended(eval: u32) -> String {
+        events(&[&format!(
+            r#"<event nonce="n" kind="repl-eval" at="t" eval="{eval}" ms="1" status="settled">"#
+        )])
+    }
+
+    /// The options a screen is answered with beside a transcript, and the call it is bound to.
+    fn runs(screen: &str, transcript: &str) -> Option<(Vec<String>, String)> {
+        let Waits::Script { call, literals, .. } = waits(transcript, true, 0) else {
+            return None;
+        };
+        let menu = Menu::parse(screen).filter(Menu::on_screen)?;
+        menu.scripted(&literals?).ok().map(|_| (menu.heads, call))
+    }
+
+    #[test]
+    fn a_dispatched_script_runs_until_an_event_names_it() {
+        let own = ["Type something.", "Chat about this"].map(str::to_owned);
+        let (heads, call) = runs(DISPATCHED.0, DISPATCHED.1).unwrap();
+        assert_eq!(heads[..4], ["Jupiter", "Saturn", "Neptune", "Earth"]);
+        assert_eq!((&heads[4..], &*call), (&own[..], "toolu_scrubbed_1"));
+        let (heads, call) = runs(DISPATCHED_LATER.0, DISPATCHED_LATER.1).unwrap();
+        assert_eq!(heads[..2], ["Yes please", "Stop here"]);
+        assert_eq!((&heads[2..], &*call), (&own[..], "toolu_scrubbed_3"));
+        assert_eq!(
+            runs(DISPATCHED.0, DISPATCHED_LATER.1),
+            None,
+            "the script before it ended"
+        );
+        for ended in [ANSWERED, DECLINED] {
+            assert_eq!(says(waits(ended, true, 0)), "nothing");
+        }
+
+        // The answered transcript, line by line: the call, its receipt, the event that ends
+        // the script, the question written as a call of its own, that call's result.
+        let unknown = "transcript unreadable or incomplete";
+        let rows: Vec<&str> = ANSWERED.lines().collect();
+        let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
+        assert!(rows[5].contains(r#""name":"REPL""#) && rows[8].contains("poll_events"));
+        assert_eq!(
+            [
+                upto(6),
+                upto(7),
+                upto(8),
+                upto(9),
+                upto(10),
+                upto(11),
+                upto(12)
+            ],
+            [
+                "a script", "a script", "a script", "nothing", unknown, "nothing", "nothing"
+            ],
+            "between the question's own call and its result nothing is asked any more"
+        );
+
+        let asks = "await tools.AskUserQuestion({questions: []})";
+        let receipt = |n: u32| json!(format!("(dispatched #{n})"));
+        let reads = |rows: &[String]| says(waits(&rows.join("\n"), true, 0));
+        let one = [repl("a", asks), answer("a", receipt(1))];
+        assert_eq!(reads(&one), "a script");
+        // Only an event for that script, under its receipt, ends it. The numbers start again
+        // in a new context: an event counts for the nearest receipt above it.
+        assert_eq!(reads(&[&one[..], &[ended(2)]].concat()), "a script");
+        assert_eq!(reads(&[&one[..], &[ended(1)]].concat()), "nothing");
+        assert_eq!(reads(&[&[ended(1)], &one[..]].concat()), "a script");
+        let again = [repl("b", "1 + 1"), answer("b", receipt(1)), ended(1)];
+        assert_eq!(reads(&[&one[..], &again[..]].concat()), "a script");
+        // An event is read from its opening tag: its body is the script's output.
+        let quoted = r#"<event nonce="n" kind="repl-eval" eval="7">\n kind="repl-eval" eval="1""#;
+        let status = r#"<event nonce="n">\n kind="repl-eval" eval="1""#;
+        assert_eq!(
+            reads(&[&one[..], &[events(&[quoted, status])]].concat()),
+            "a script"
+        );
+        let unnamed = r#"<event nonce="n" kind="repl-eval" status="settled">"#;
+        assert_eq!(reads(&[&one[..], &[events(&[unnamed])]].concat()), unknown);
+
+        // A receipt is that text and nothing else, as a string or as its one text block.
+        let block = json!([{"type": "text", "text": "(dispatched #1)"}]);
+        assert_eq!(reads(&[repl("a", asks), answer("a", block)]), "a script");
+        for other in [
+            json!("(dispatched #1) "),
+            json!("(dispatched #1)\n4"),
+            json!("dispatched #1"),
+            json!("(dispatched #one)"),
+            json!("(dispatched #)"),
+            json!([{"type": "text", "text": "(dispatched #1)"}, {"type": "text", "text": "4"}]),
+        ] {
+            assert_eq!(
+                reads(&[repl("a", asks), answer("a", other.clone())]),
+                "nothing",
+                "{other}"
+            );
+        }
+        // A receipt whose call the read does not hold.
+        assert_eq!(reads(&one[1..]), unknown);
+
+        // One asking script, whatever else runs or waits beside it; two are one too many.
+        let quiet = [repl("b", "await build()"), answer("b", receipt(2))];
+        let second = [repl("b", asks), answer("b", receipt(2))];
+        let waiting = |name: &str| {
+            let call = json!({"type": "tool_use", "id": "c", "name": name, "input": {}});
+            json!({"type": "assistant", "timestamp": "2026-11-20T17:25:02.000Z",
+                "sessionId": SESSION, "message": {"content": [call]}})
+            .to_string()
+        };
+        let several = "several pending calls";
+        assert_eq!(reads(&[&one[..], &quiet[..]].concat()), "a script");
+        assert_eq!(reads(&[&one[..], &second[..]].concat()), several);
+        assert_eq!(reads(&[&one[..], &[repl("b", asks)]].concat()), several);
+        for name in ["Poll", "Bash"] {
+            assert_eq!(reads(&[&one[..], &[waiting(name)]].concat()), "a script");
+            assert_eq!(
+                reads(&[&quiet[..], &[waiting(name)]].concat()),
+                "another call"
+            );
+        }
+        assert_eq!(
+            reads(&[&one[..], &[waiting("AskUserQuestion")]].concat()),
+            several
+        );
+
+        // A script older than the process died with the one that ran it; one of another
+        // session is not known to have.
+        let at = timestamp_ms("2026-11-20T17:25:01.028Z").unwrap();
+        let read = |since: u64| {
+            says(pending(
+                &format!("{}\n", one.join("\n")),
+                true,
+                SESSION,
+                since,
+            ))
+        };
+        assert_eq!([read(at), read(at + 1)], ["a script", "nothing"]);
+        let other = one
+            .join("\n")
+            .replace(SESSION, "11111111-0000-4000-8000-000000000000");
+        assert_eq!(says(waits(&other, true, 0)), "stale call");
     }
 }
