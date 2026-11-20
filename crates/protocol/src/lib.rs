@@ -7,7 +7,7 @@ mod output;
 #[cfg(feature = "schema")]
 mod schema;
 
-pub use banner::{NoticeOption, jump_banner, notice};
+pub use banner::{NoticeOption, SURVEYS, jump_banner, notice};
 pub use compatibility::*;
 pub use ids::*;
 pub use invite::*;
