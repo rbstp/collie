@@ -270,7 +270,11 @@ fn check_usage(data_dir: &Path, now_ms: u64) -> (Status, String) {
                 .to_owned(),
         );
     };
-    let sessions = recorded.windows.len();
+    let sessions = recorded
+        .windows
+        .values()
+        .filter(|w| w.size.is_some())
+        .count();
     if recorded.plan.is_none()
         && let Some(codex) = recorded.codex
     {
