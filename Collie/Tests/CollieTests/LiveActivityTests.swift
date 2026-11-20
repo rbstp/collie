@@ -68,6 +68,9 @@ private func displayVectors() throws -> [[String: Any]] {
 
 @Test func kindsMatchCollied() throws {
     #expect(try fixture()["kinds"] as? [String] == AgentActivityAttributes.ContentState.kinds)
+    #expect(AgentActivityAttributes.ContentState.display(for: "agy")?.title == "Antigravity")
+    #expect(AgentActivityAttributes.ContentState.display(for: "agy")?.image == "Antigravity")
+    #expect(AgentKindLabel.display("agy")?.title == "Antigravity")
 }
 
 @Test func everyStatusDecodesAndUnknownOnesFallBack() throws {

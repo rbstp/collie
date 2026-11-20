@@ -1,0 +1,57 @@
+{
+  "agent_state": "idle",
+  "context_window": {
+    "context_window_size": 1048576,
+    "current_usage": {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 0,
+      "output_tokens": 0
+    },
+    "remaining_percentage": 65.84,
+    "total_input_tokens": 358147,
+    "total_output_tokens": 160383,
+    "used_percentage": 34.16
+  },
+  "conversation_id": "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "cwd": "/Users/example/src/demo",
+  "email": "user@example.com",
+  "exceeds_200k_tokens": true,
+  "model": {
+    "display_name": "Gemini 4 Neon (High)",
+    "effort": "high",
+    "id": "Gemini 4 Neon (High)"
+  },
+  "plan_tier": "Google AI Pro",
+  "product": "antigravity",
+  "quota": {
+    "3p-5h": {
+      "remaining_fraction": 1.0,
+      "reset_in_seconds": 17959,
+      "reset_time": "2026-11-21T02:16:51Z"
+    },
+    "3p-weekly": {
+      "remaining_fraction": 1.0,
+      "reset_in_seconds": 604759,
+      "reset_time": "2026-11-27T21:16:51Z"
+    },
+    "gemini-5h": {
+      "remaining_fraction": 0.35078245,
+      "reset_in_seconds": 12550,
+      "reset_time": "2026-11-21T00:46:42Z"
+    },
+    "gemini-argon-wtu-weekly": {
+      "remaining_fraction": 1.0,
+      "reset_in_seconds": 604759,
+      "reset_time": "2026-11-27T21:16:51Z"
+    },
+    "gemini-weekly": {
+      "remaining_fraction": 0.8145093,
+      "reset_in_seconds": 599350,
+      "reset_time": "2026-11-27T19:46:42Z"
+    }
+  },
+  "session_id": "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "transcript_path": "/Users/example/.gemini/antigravity-cli/brain/3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d/.system_generated/logs/transcript.jsonl",
+  "version": "1.5.13"
+}

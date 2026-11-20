@@ -1,6 +1,6 @@
 # Chat and Terminal
 
-A Claude Code, Codex or Copilot CLI session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch with the toggle at the top of the session. **Settings > Sessions > Default view** picks the view that opens first (Chat by default) and what [grid cards](agents-tab.md#grid) preview. Plain terminals have only Terminal.
+A Claude Code, Codex, Copilot CLI or Antigravity CLI session has two views: **Chat** shows the conversation, and **Terminal** shows the agent's screen. Switch with the toggle at the top of the session. **Settings > Sessions > Default view** picks the view that opens first (Chat by default) and what [grid cards](agents-tab.md#grid) preview. Plain terminals have only Terminal.
 
 The session header shows the agent's state and how long it has been in it, then its machine. The state shows as its icon alone, as on the [Agents](agents-tab.md) tab. While an approval waits, the header leaves out the time, as the approval counts down its own.
 
@@ -24,7 +24,7 @@ With the largest text sizes (**Settings > Accessibility > Display & Text Size > 
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]
-> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core and Rex also [collied's](../agents/codex.md#herdr-core-and-rex). In Herdr Core and Rex, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI has Chat in herdr only, where it needs no hook, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
+> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core and Rex also [collied's](../agents/codex.md#herdr-core-and-rex). Antigravity CLI needs [herdr's hook](../agents/antigravity.md#set-up), and in Herdr Core and Rex also [collied's](../agents/antigravity.md#herdr-core-and-rex). In Herdr Core and Rex, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI has Chat in herdr only, where it needs no hook, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
 
 ### Open a file
 

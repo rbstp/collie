@@ -67,6 +67,7 @@ extension ModelCost {
         case "claude": "Claude Code"
         case "codex": "Codex"
         case "copilot": "Copilot CLI"
+        case "agy": "Antigravity"
         default: agent
         }
     }

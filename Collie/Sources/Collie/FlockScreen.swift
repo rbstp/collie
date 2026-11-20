@@ -579,15 +579,12 @@ struct AgentKindLabel: View {
         }
     }
 
-    private var logo: (String, String)? {
-        switch kind {
-        case "claude": ("Claude", "Claude")
-        case "codex": ("Codex", "Codex")
-        case "copilot": ("Copilot", "Copilot")
-        case "terminal": ("Terminal", "Ghostty")
-        default: nil
-        }
+    static func display(_ kind: String) -> (title: String, image: String)? {
+        if kind == "terminal" { return ("Terminal", "Ghostty") }
+        return AgentActivityAttributes.ContentState.display(for: kind)
     }
+
+    private var logo: (String, String)? { Self.display(kind) }
 }
 
 /// The runtime a session runs in: its project's mark on the corner of the agent's mark. Herdr Core shares herdr's.
