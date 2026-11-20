@@ -269,6 +269,11 @@ pub struct Menu {
     pub cursor: usize,
     /// The lines right under the last option: where its label wraps, and hints.
     pub after: Vec<String>,
+    /// How many of the first rows of `after` continue the last option: those indented at least
+    /// as deep as its label, where Claude Code draws a wrapped label, a description or a hint
+    /// about that option. A row left of that is the dialog's own, such as a footer drawn with
+    /// no blank row above it: bound like the others, and not shown as the option's.
+    continued: usize,
     /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
     /// its first rows, a command's first lines among them: no read shows or binds them.
     pub topped: bool,
@@ -296,11 +301,19 @@ impl Menu {
         if last < lines.len() - after_last_rule(text).len() {
             return None;
         }
-        let after = lines[last + 1..]
+        let under: Vec<&str> = lines[last + 1..]
             .iter()
+            .copied()
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
-            .map(|l| l.trim().to_owned())
             .collect();
+        let indent = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
+        let column = option_line(lines[last]).map_or(0, |(_, _, label)| {
+            lines[last][..lines[last].len() - label.len()]
+                .chars()
+                .count()
+        });
+        let continued = under.iter().take_while(|l| indent(l) >= column).count();
+        let after = under.iter().map(|l| l.trim().to_owned()).collect();
         let mut options: Vec<(bool, String, String)> = Vec::new();
         let mut continuation: Vec<&str> = Vec::new();
         let mut expect = None;
@@ -369,6 +382,7 @@ impl Menu {
             heads,
             cursor,
             after,
+            continued,
             topped: rule.is_some(),
             bordered,
         })
@@ -441,6 +455,7 @@ impl Menu {
             options,
             cursor: at - first,
             after: Vec::new(),
+            continued: 0,
             topped: true,
             bordered: false,
         })
@@ -497,13 +512,13 @@ impl Menu {
         self.topped || self.bordered && !self.grants()
     }
 
-    /// The rows under option `i`'s first line. For the last option they include
-    /// [`Menu::after`]: nothing tells a hint there from the label wrapped onto those rows, so
-    /// they are shown and counted as its own.
+    /// The rows under option `i`'s first line. For the last option they are the rows of
+    /// [`Menu::after`] that continue it: nothing tells a hint at its label's column from the
+    /// label wrapped onto those rows, so they are shown and counted as its own.
     fn detail(&self, i: usize) -> String {
         let mut rows = vec![self.options[i][self.heads[i].len()..].trim()];
         if i + 1 == self.options.len() {
-            rows.extend(self.after.iter().map(String::as_str));
+            rows.extend(self.after[..self.continued].iter().map(String::as_str));
         }
         rows.retain(|r| !r.is_empty());
         rows.join(" ")
@@ -2515,6 +2530,17 @@ mod tests {
             ),
             "the row under the last option is its detail"
         );
+        // The 2.1.294 `/config` picker draws its footer right under the options, left of their
+        // numbers: bound, and not the last option's.
+        let config = Menu::parse(ALERTING_DIALOGS[2]).unwrap();
+        assert_eq!(config.after, ["Enter to confirm · Esc to cancel"]);
+        assert!(
+            config
+                .region()
+                .ends_with("\nEnter to confirm · Esc to cancel")
+        );
+        let last = config.choices().pop().unwrap();
+        assert_eq!((last.label.as_str(), last.detail), ("refuse", None));
         let hostile = QUESTION.replace(
             "2. Redis",
             &format!(
@@ -3227,6 +3253,12 @@ mod tests {
             offered(&last(&dir)),
             [Decision::Approve],
             "a scope cut under the last option"
+        );
+        let footer = last(&dir).replace(&format!("      {dir}"), &format!(" {dir}"));
+        assert_eq!(
+            offered(&footer),
+            [Decision::Approve, Decision::ApproveAlways],
+            "a row left of the label is the dialog's, not the option's"
         );
         let amended =
             BASH_AMEND_TYPED_LIVE.replace("access to /tmp/planlab", &format!("access to {dir}"));

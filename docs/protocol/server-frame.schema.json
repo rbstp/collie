@@ -240,7 +240,7 @@
           "type": "boolean"
         },
         "detail": {
-          "description": "The lines under the option's first line: a question option's description, or the\nrest of a label that wrapped. Absent from a collied that predates the field, which\njoins them into `label`.",
+          "description": "The lines under the option's first line: a question option's description, the rest\nof a label that wrapped, or a hint drawn at the label's column under the last option\n(a plan's \"shift+tab to approve with this feedback\"). Absent from a collied that\npredates the field, which joins them into `label`.",
           "type": [
             "string",
             "null"
