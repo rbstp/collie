@@ -147,17 +147,23 @@ struct RelayCredentialStore: Sendable {
         ]
     }
 
-    func load() throws -> RelayEnrollmentState {
+    func load(copy: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemCopyMatching) throws -> RelayEnrollmentState {
         guard FileManager.default.fileExists(atPath: marker.path) else { return RelayEnrollmentState() }
         let markerId = try String(contentsOf: marker, encoding: .utf8)
         var read = query
         read[kSecReturnData as String] = true
         read[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(read as CFDictionary, &result)
+        let status = copy(read as CFDictionary, &result)
+        // Nothing else removes the marker, so a throw for a lost item would repeat at every launch.
+        // Every other failure (the Keychain is locked) throws: a fresh state would be saved over
+        // credentials this read could not reach.
+        if status == errSecItemNotFound { return RelayEnrollmentState() }
         guard status == errSecSuccess, let data = result as? Data else { throw RelayEnrollmentError.storage }
         let state = try JSONDecoder().decode(RelayEnrollmentState.self, from: data)
-        guard state.installationId == markerId else { throw RelayEnrollmentError.storage }
+        // save() writes the item, then the marker: a process that ends in between leaves a new
+        // installation under the old marker, which would fail every later launch the same way.
+        guard state.installationId == markerId else { return RelayEnrollmentState() }
         return state
     }
 

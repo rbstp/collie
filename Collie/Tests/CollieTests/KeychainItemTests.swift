@@ -130,6 +130,55 @@ struct KeychainGroupQueryTests {
     }
 }
 
+/// #880: the relay store's Keychain read is injected, so these run on an unsigned host too.
+struct RelayCredentialStoreTests {
+    let store: RelayCredentialStore
+
+    init() throws {
+        store = RelayCredentialStore(marker: try makeTemporaryDirectory().appending(path: "relay-installation"))
+    }
+
+    private func load(_ status: OSStatus, _ stored: RelayEnrollmentState? = nil) throws -> RelayEnrollmentState {
+        let data = try stored.map { try JSONEncoder().encode($0) }
+        return try store.load { _, result in
+            result?.pointee = data.map { $0 as CFData }
+            return status
+        }
+    }
+
+    /// Nothing else removes the marker: a throw here repeated at every launch, pairing again
+    /// did not help, and only a reinstall brought relay notifications back.
+    @Test func lostItemUnderItsMarkerStartsAFreshInstallation() throws {
+        try Data("lost".utf8).write(to: store.marker)
+        let state = try load(errSecItemNotFound)
+        #expect(state.installationId != "lost")
+        #expect(!state.enrolled)
+        #expect(state.keyId == nil)
+    }
+
+    /// A locked Keychain must never read as no credentials: the next save would replace them.
+    @Test func unreadableItemThrowsAndKeepsItsMarker() throws {
+        try Data("kept".utf8).write(to: store.marker)
+        #expect(throws: RelayEnrollmentError.storage) { try load(errSecInteractionNotAllowed) }
+        #expect(try String(contentsOf: store.marker, encoding: .utf8) == "kept")
+    }
+
+    /// A save that ended between the item and the marker strands the phone as a lost item did.
+    @Test func itemIsLoadedUnderItsOwnMarkerAlone() throws {
+        var stored = RelayEnrollmentState()
+        stored.enrolled = true
+        try Data(stored.installationId.utf8).write(to: store.marker)
+        let loaded = try load(errSecSuccess, stored)
+        #expect(loaded.installationId == stored.installationId)
+        #expect(loaded.enrolled)
+
+        try Data("other".utf8).write(to: store.marker)
+        let fresh = try load(errSecSuccess, stored)
+        #expect(fresh.installationId != stored.installationId)
+        #expect(!fresh.enrolled)
+    }
+}
+
 /// #871: the decision the device branches of Identity and TerminalKey share. A new key makes
 /// every machine refuse the phone, so a failure that may pass must never make one.
 struct EnclaveBlobTests {
@@ -325,6 +374,23 @@ struct KeychainGroupTests {
         try store.save(state)
         #expect(Array(copies(service, account).keys) == [own])
         #expect(try store.load().installationId == state.installationId)
+    }
+
+    /// #880: save() rewrites the marker, so the installation that replaces a lost item is the
+    /// one the next launch loads.
+    @Test func relayStateStartsFreshWhenItsItemIsGoneAndIsSavedUnderItsOwnMarker() throws {
+        let (service, account) = (RelayCredentialStore.service, RelayCredentialStore.account)
+        defer { remove(service, account) }
+        remove(service, account)
+        let lost = RelayEnrollmentState()
+        let store = RelayCredentialStore(marker: try makeTemporaryDirectory().appending(path: "relay-installation"))
+        try store.save(lost)
+        remove(service, account)
+
+        let fresh = try store.load()
+        #expect(fresh.installationId != lost.installationId)
+        try store.save(fresh)
+        #expect(try store.load().installationId == fresh.installationId)
     }
 
     /// #871: the reset behind the startup screen's confirmation.
