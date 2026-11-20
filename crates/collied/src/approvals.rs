@@ -72,11 +72,13 @@ impl Screen {
     /// Whether both tell the phone the same, the cursor aside: arrows alone do not
     /// reissue an approval.
     fn shows_same(&self, other: &Screen) -> bool {
+        fn menu(s: &Screen) -> Option<(&[String], &[String], usize)> {
+            (s.menu.as_ref()).map(|m| (&m.options[..], &m.after[..], m.continued))
+        }
         self.snippet == other.snippet
             && self.reason == other.reason
             && self.offered == other.offered
-            && self.menu.as_ref().map(|m| (&m.options, &m.after))
-                == other.menu.as_ref().map(|m| (&m.options, &m.after))
+            && menu(self) == menu(other)
             && self.accepts_input == other.accepts_input
             && self.has_text_field == other.has_text_field
             && self.supports_note == other.supports_note
@@ -788,12 +790,16 @@ impl Approvals {
             );
         }
         // A choice is only offered where no decision is: picking a permission prompt's
-        // option by index would bypass the decision it maps to (Deny sent as Esc).
+        // option by index would bypass the decision it maps to (Deny sent as Esc). Nor is a
+        // granting option of a menu that holds an approval ever chosen by index: a menu whose
+        // only decision was withheld offers none, and the index would press it all the same.
         let choice = p.choice.filter(|_| p.decision == Decision::Choose);
         let target = match choice {
             Some(i) => {
-                let options = screen.menu.as_ref().map_or(0, |m| m.options.len());
-                if !screen.offered.is_empty() || usize::from(i) >= options {
+                let chosen = (screen.menu.as_ref())
+                    .filter(|m| usize::from(i) < m.options.len())
+                    .filter(|m| m.takes_choice(usize::from(i)));
+                if !screen.offered.is_empty() || chosen.is_none() {
                     return reject(
                         ApprovalOutcome::Superseded,
                         ErrorCode::InvalidParams,

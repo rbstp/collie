@@ -271,9 +271,9 @@ pub struct Menu {
     pub after: Vec<String>,
     /// How many of the first rows of `after` continue the last option: those indented at least
     /// as deep as its label, where Claude Code draws a wrapped label, a description or a hint
-    /// about that option. A row left of that is the dialog's own, such as a footer drawn with
-    /// no blank row above it: bound like the others, and not shown as the option's.
-    continued: usize,
+    /// about that option. A row left of that is not shown as the option's text: it stays
+    /// bound, and under an option that reads as Always allow it withholds that decision.
+    pub continued: usize,
     /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
     /// its first rows, a command's first lines among them: no read shows or binds them.
     pub topped: bool,
@@ -484,15 +484,35 @@ impl Menu {
             return Vec::new();
         }
         // The app shows this option's wording as what Always allow grants: cut by
-        // [`Menu::choices`], it would hide the rule's scope. Taken out only once the menu
-        // counts as a permission prompt, so that its options are never chosen by index.
+        // [`Menu::choices`], it would hide the rule's scope. So would a row under it that is
+        // not shown as its text, whatever put it left of the label: spaces inside the label
+        // move the label's column, and one row set left ends what [`Menu::detail`] reads.
+        // Taken out only once the menu counts as a permission prompt; [`Menu::takes_choice`]
+        // keeps the option from being chosen by index when no decision is left.
         let whole = |s: &str| clean(s).chars().count() <= MAX_CHOICE_LABEL_CHARS;
+        let shown = |i: usize| i + 1 < self.options.len() || self.continued == self.after.len();
         offered
             .into_iter()
             .filter(|&(d, i)| {
-                d != Decision::ApproveAlways || whole(&self.heads[i]) && whole(&self.detail(i))
+                d != Decision::ApproveAlways
+                    || whole(&self.heads[i]) && whole(&self.detail(i)) && shown(i)
             })
             .collect()
+    }
+
+    /// Whether `choose` may press option `i`. Not a granting option ([`grants`]) of a menu
+    /// that holds an option reading as an approval ([`classify`]): that menu is a permission
+    /// prompt even when [`Menu::decisions`] withheld its every decision, and its granting
+    /// options are pressed as a decision or not at all. A plan holds no such option, so its
+    /// `Yes, and ...` options stay chosen by index.
+    pub fn takes_choice(&self, i: usize) -> bool {
+        let approval = |l: &String| {
+            matches!(
+                classify(l),
+                Some(Decision::Approve | Decision::ApproveAlways)
+            )
+        };
+        !(grants(&self.options[i]) && self.options.iter().any(approval))
     }
 
     /// Whether an option reads as a decision ([`classify`], a `No` included) or starts with
@@ -572,7 +592,8 @@ impl Menu {
             && now.body == self.body
             && now.options.len() == self.options.len()
             && (0..now.options.len()).all(|j| j == i || now.options[j] == self.options[j])
-            && (i + 1 == now.options.len() || now.after == self.after)
+            && (i + 1 == now.options.len()
+                || now.after == self.after && now.continued == self.continued)
     }
 
     pub fn tail(&self) -> &[String] {
@@ -632,8 +653,10 @@ impl Menu {
             let mark = if i == cursor { '>' } else { ' ' };
             out.push_str(&format!("\n{mark}{}. {label}", i + 1));
         }
-        for row in &self.after {
-            out.push('\n');
+        // A row that continues the last option is set in by a space and any other is not, so
+        // which rows the phone shows as that option's text is bound with them.
+        for (n, row) in self.after.iter().enumerate() {
+            out.push_str(if n < self.continued { "\n " } else { "\n" });
             out.push_str(row);
         }
         out
@@ -2531,7 +2554,7 @@ mod tests {
             "the row under the last option is its detail"
         );
         // The 2.1.294 `/config` picker draws its footer right under the options, left of their
-        // numbers: bound, and not the last option's.
+        // numbers: bound, and not shown as the last option's text.
         let config = Menu::parse(ALERTING_DIALOGS[2]).unwrap();
         assert_eq!(config.after, ["Enter to confirm · Esc to cancel"]);
         assert!(
@@ -3254,12 +3277,43 @@ mod tests {
             [Decision::Approve],
             "a scope cut under the last option"
         );
-        let footer = last(&dir).replace(&format!("      {dir}"), &format!(" {dir}"));
-        assert_eq!(
-            offered(&footer),
-            [Decision::Approve, Decision::ApproveAlways],
-            "a row left of the label is the dialog's, not the option's"
-        );
+        // A row under the option that the phone would not show as its text: one a column left
+        // of the label, and one at its usual column under a label that two spaces inside it
+        // move right.
+        let short = last("/private/tmp/planlab");
+        let dedented = short.replace("      /private", "     /private");
+        let shifted = short.replace("   2. Yes", "   2.   Yes");
+        for screen in [&dedented, &shifted] {
+            assert_ne!(screen, &short);
+            let m = Menu::parse(screen).unwrap();
+            assert_eq!((m.after.len(), m.choices()[1].detail.as_ref()), (1, None));
+            assert!((0..2).all(|i| !m.takes_choice(i)));
+            assert_eq!(offered(screen), [Decision::Approve], "{screen}");
+        }
+        // Every captured or reconstructed dialog that offers the rule ends on `No`: none has
+        // a row under that option, and each still offers it.
+        let captured = [
+            BASH,
+            BASH_LIVE,
+            BASH_AMEND_LIVE,
+            BASH_TIP_WRAPPED,
+            OTHER_TOOLS_328[2],
+        ];
+        for screen in captured.into_iter().chain(BASH_327) {
+            let m = Menu::parse(screen).unwrap();
+            let decisions = m.decisions();
+            let always = decisions
+                .iter()
+                .find(|(d, _)| *d == Decision::ApproveAlways);
+            assert!(always.is_some_and(|&(_, i)| i + 1 < m.options.len() && !m.takes_choice(i)));
+        }
+        // A plan's options and a question's are chosen by index: neither menu holds an option
+        // that reads as an approval, though a plan's start with `Yes`.
+        for screen in [PLAN, PLAN_LIVE, QUESTION, QUESTION_LIVE] {
+            let m = Menu::parse(screen).unwrap();
+            assert!(m.decisions().is_empty() && (0..m.options.len()).all(|i| m.takes_choice(i)));
+        }
+        assert!(Menu::parse(PLAN_LIVE).unwrap().grants());
         let amended =
             BASH_AMEND_TYPED_LIVE.replace("access to /tmp/planlab", &format!("access to {dir}"));
         assert_eq!(
@@ -3539,6 +3593,23 @@ mod tests {
             !shown.only_changed(0, &other),
             "a note typed into another option leaves these rows as they were"
         );
+        // The same row a column left of the label is not shown as the option's text, which
+        // the region binds.
+        let left = Menu::parse(&BASH.replace(
+            "   3. No, and tell Claude what to do differently (esc)\n",
+            "   3. No, and tell Claude what to do\n     differently (esc)\n",
+        ))
+        .unwrap();
+        assert_eq!(left.after, shown.after);
+        assert_eq!(
+            (
+                shown.choices()[2].detail.is_some(),
+                &left.choices()[2].detail
+            ),
+            (true, &None)
+        );
+        assert!((0..3).all(|i| left.region_at(i) != shown.region_at(i)));
+        assert!(!shown.only_changed(0, &left));
         let tall = |rest: &str| {
             let rows: String = (1..=5).map(|i| format!("row {i}\n      ")).collect();
             wrapped(&format!("{rows}{rest}"))

@@ -2309,6 +2309,60 @@ async fn rows_under_the_last_option_are_shown_and_reissue_when_they_change() {
         panic!("expected approval.needed");
     };
     assert_eq!(b.choices[2].detail.as_deref(), Some(other));
+
+    // The same row a column left of the label is no longer shown as the option's text.
+    rig.herdr
+        .with(|h| h.text = wrapped(other).replace("      differently", "     differently"));
+    rig.observe().await;
+    assert!(matches!(
+        rig.event().await,
+        Event::ApprovalResolved { approval_id, outcome: ApprovalOutcome::Superseded }
+            if approval_id == b.approval_id
+    ));
+    let Event::ApprovalNeeded { approval: c } = rig.event().await else {
+        panic!("expected approval.needed");
+    };
+    assert_eq!(c.choices[2].detail, None);
+    assert_ne!(c.approval_id, b.approval_id);
+}
+
+#[tokio::test]
+async fn a_granting_option_is_never_chosen_by_index_beside_an_approval() {
+    let mut rig = Rig::start(TTL).await;
+    // Hand-built from the reconstructed Bash dialog, not captured: one option that reads as
+    // no decision, one that saves a rule, its scope longer than a choice holds, and one that
+    // starts with `Yes` and reads as no decision either. The menu offers no decision and
+    // lists its options as choices.
+    let (head, _) = BASH.split_once(" ❯ 1. Yes\n").unwrap();
+    let scope = format!("/Users/me/src/{}", "d".repeat(300));
+    let text = format!(
+        "{head} ❯ 1. Review the command first\n   2. Yes, and don't ask again for rm commands in {scope}\n   3. Yes, and switch to auto mode\n\n Esc to cancel\n"
+    );
+    rig.herdr.with(|h| h.text = text);
+    for granting in [1, 2] {
+        let a = rig.needed().await;
+        assert!(a.options.is_empty());
+        assert_eq!(a.choices.len(), 3);
+        assert!(a.choices[1].label.ends_with('…'));
+        assert_eq!(
+            code(rig.choose(&a, granting, &a.nonce).await),
+            ErrorCode::InvalidParams
+        );
+        assert!(rig.mutations().is_empty());
+    }
+
+    let b = rig.needed().await;
+    assert_eq!(
+        resolved(rig.choose(&b, 0, &b.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 0,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [json!({"target": "w7:p1", "keys": ["enter"]})]
+    );
 }
 
 #[tokio::test]
