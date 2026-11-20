@@ -4,7 +4,7 @@ use protocol::limits::MAX_LABEL_CHARS;
 
 use super::{AgentInfo, PaneInfo};
 
-const AGENT_CLIS: [&str; 3] = ["claude", "codex", "copilot"];
+const AGENT_CLIS: [&str; 4] = ["claude", "codex", "copilot", "agy"];
 const SHELLS: [&str; 9] = [
     "sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu",
 ];
@@ -34,6 +34,7 @@ pub(super) fn kind(app: Option<&str>, cli: Option<&str>) -> Option<String> {
         .collect();
     match app.as_str() {
         "claude-code" => Some("claude".to_owned()),
+        "antigravity" | "antigravity-cli" => Some("agy".to_owned()),
         "" => cli.map(str::to_owned),
         _ => Some(app),
     }
@@ -54,11 +55,11 @@ pub(super) fn title(raw: &str) -> &str {
         .trim_end()
 }
 
-/// `reported` is the kind a status's `app` names. Claude Code's and Codex's reports were
-/// checked: they report `blocked` at their permission and question dialogs. Copilot CLI
-/// 1.0.106 and later reports `idle` at its folder trust prompt and pickers (#741), and other
-/// programs were never checked. A report naming another CLI than the one leading the
-/// terminal is a previous program's.
+/// `reported` is the kind a status's `app` names. Claude Code's, Codex's and Antigravity's
+/// reports were checked: they report `blocked` at their permission and question dialogs.
+/// Copilot CLI 1.0.106 and later reports `idle` at its folder trust prompt and pickers
+/// (#741), and other programs were never checked. A report naming another CLI than the one
+/// leading the terminal is a previous program's.
 pub(super) fn read_only(reported: Option<&str>, cli: Option<&str>) -> bool {
     !reported.is_some_and(|k| TASK_KINDS.contains(&k) && cli.is_none_or(|c| c == k))
 }
@@ -93,12 +94,13 @@ pub fn pane(a: &AgentInfo) -> PaneInfo {
     }
 }
 
-/// The hook runs under the Codex process that started the session, which must lead the
-/// terminal. Codex without `--no-daemon` runs it under its shared app-server, a second
-/// `codex` whose environment names whichever terminal started it, so that report is refused.
+/// The hook runs under the process that leads the terminal. Codex without `--no-daemon`
+/// runs it under its shared app-server, a second `codex` whose environment names whichever
+/// terminal started it, so that report is refused.
 pub(super) fn reported_by(
     foreground: u32,
     reporter: u32,
+    kind: &str,
     process: impl Fn(u32) -> Option<(u32, String)>,
 ) -> bool {
     let mut pid = reporter;
@@ -109,7 +111,11 @@ pub(super) fn reported_by(
         };
         codex += usize::from(name == "codex");
         if pid == foreground {
-            return codex == 1;
+            return match kind {
+                "codex" => codex == 1,
+                "agy" => true,
+                _ => false,
+            };
         }
         if parent <= 1 {
             return false;
@@ -162,7 +168,7 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
 /// session against the starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION`
 /// saves no transcript. Named, not matched by pattern, so variables the user chose
 /// (`CLAUDE_CONFIG_DIR`) stay.
-pub const STRIPPED: [&str; 16] = [
+pub const STRIPPED: [&str; 17] = [
     "HERDR_ENV",
     "HERDR_PANE_ID",
     "HERDR_SOCKET_PATH",
@@ -179,10 +185,11 @@ pub const STRIPPED: [&str; 16] = [
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_EFFORT",
     "CLAUDE_PID",
+    "ANTIGRAVITY_SOURCE_METADATA",
 ];
 /// The kinds a task starts in herdr-core or Rex: those that report OSC 7501, without which
 /// nothing says the agent is ready or what dialog it shows.
-pub const TASK_KINDS: [&str; 2] = ["claude", "codex"];
+pub const TASK_KINDS: [&str; 3] = ["claude", "codex", "agy"];
 
 /// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
 /// matches one. A path holding `=` would be read as a variable by `env`.
@@ -218,6 +225,8 @@ mod tests {
     fn a_reported_kind_loses_what_would_disguise_it_and_is_cut() {
         let kind = |app: &str, cli| kind(Some(app), cli);
         assert_eq!(kind("claude-code", None).as_deref(), Some("claude"));
+        assert_eq!(kind("antigravity", None).as_deref(), Some("agy"));
+        assert_eq!(kind("antigravity-cli", None).as_deref(), Some("agy"));
         assert_eq!(kind("pi", Some("codex")).as_deref(), Some("pi"));
         assert_eq!(
             kind("\u{202E}ev\u{7}il\u{200B}\n", None).as_deref(),
@@ -250,7 +259,7 @@ mod tests {
             (10, 5, "codex"),
             (5, 1, "hc"),
         ]);
-        assert!(reported_by(10, 30, own));
+        assert!(reported_by(10, 30, "codex", own));
         // Under the shared app-server that terminal 10's Codex started.
         let shared = table(&[
             (30, 25, "collied"),
@@ -258,7 +267,7 @@ mod tests {
             (10, 5, "codex"),
             (5, 1, "hc"),
         ]);
-        assert!(!reported_by(10, 30, shared));
+        assert!(!reported_by(10, 30, "codex", shared));
         // An npm install leads with node, which runs the native codex.
         let npm = table(&[
             (30, 15, "collied"),
@@ -266,10 +275,20 @@ mod tests {
             (10, 5, "node"),
             (5, 1, "hc"),
         ]);
-        assert!(reported_by(10, 30, npm));
+        assert!(reported_by(10, 30, "codex", npm));
+        // collied hook under sh under the terminal's agy.
+        let agy = table(&[
+            (30, 20, "collied"),
+            (20, 10, "sh"),
+            (10, 5, "agy"),
+            (5, 1, "hc"),
+        ]);
+        assert!(reported_by(10, 30, "agy", agy));
+        assert!(!reported_by(10, 30, "claude", agy));
         // From another terminal, or a vanished process.
         let other = table(&[(30, 40, "collied"), (40, 1, "codex")]);
-        assert!(!reported_by(10, 30, other));
-        assert!(!reported_by(10, 30, table(&[])));
+        assert!(!reported_by(10, 30, "codex", other));
+        assert!(!reported_by(10, 30, "agy", other));
+        assert!(!reported_by(10, 30, "codex", table(&[])));
     }
 }

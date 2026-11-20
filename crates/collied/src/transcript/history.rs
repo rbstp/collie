@@ -22,6 +22,7 @@ impl Transcripts {
         Self {
             panes: self.panes.clone(),
             copilot_sessions: self.copilot_sessions.clone(),
+            agy_brain: self.agy_brain.clone(),
             ..Self::new(self.claude_projects.clone(), self.codex_sessions.clone())
         }
     }
@@ -36,12 +37,14 @@ impl Transcripts {
                 match agent.agent.as_deref() {
                     Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, Herdr Core was started inside Claude Code: start the core from a plain terminal.",
                     Some("codex") => "Codex has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Codex SessionStart hook, run Codex with --no-daemon, then resume the session.",
+                    Some("agy") => "Antigravity has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
                     _ => "Chat is not available for this Herdr Core agent.",
                 }
             } else if rex::owns(&agent.terminal_id) {
                 match agent.agent.as_deref() {
                     Some("claude") => "Claude Code in Rex has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Rex server was started inside Claude Code: restart the server outside Claude Code.",
                     Some("codex") => "Codex in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Codex reports it with its first prompt through collied’s SessionStart hook: check the hook with collied doctor, run Codex with --no-daemon, then resume the session.",
+                    Some("agy") => "Antigravity in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
                     _ => "Chat is not available for this Rex agent.",
                 }
             } else if agent.agent.as_deref() == Some("copilot") {
@@ -78,6 +81,7 @@ impl Transcripts {
             "claude" => Kind::Claude,
             "codex" => Kind::Codex,
             "copilot" => Kind::Copilot,
+            "agy" => Kind::Agy,
             _ => return None,
         };
         let id = self.live_id(agent)?;
@@ -698,12 +702,16 @@ fn normalize(
     parent: Option<&str>,
 ) -> Vec<HistoryMessage> {
     let mut out = Vec::new();
+    let agy_step = matches!(kind, Kind::Agy)
+        .then(|| v["step_index"].as_u64().map(|n| n.to_string()))
+        .flatten();
     let base = match kind {
         Kind::Claude => v["uuid"].as_str(),
         Kind::Codex => v["payload"]["item"]["id"]
             .as_str()
             .or(v["payload"]["id"].as_str()),
         Kind::Copilot => v["id"].as_str(),
+        Kind::Agy => agy_step.as_deref(),
     }
     .filter(|s| s.len() <= 128)
     .map(str::to_owned)
@@ -894,6 +902,29 @@ fn normalize(
                 _ => (),
             }
         }
+        Kind::Agy => match v["type"].as_str() {
+            Some("USER_INPUT") if v["source"] == "USER_EXPLICIT" => {
+                if let Some(raw) = v["content"].as_str() {
+                    let body = super::agy_user_text(raw);
+                    add("user", text(&Value::String(body.to_owned())), None, None);
+                }
+            }
+            Some("PLANNER_RESPONSE") => {
+                add("assistant", text(&v["content"]), None, None);
+                for call in v["tool_calls"].as_array().into_iter().flatten() {
+                    add(
+                        "assistant",
+                        text(&call["args"]),
+                        Some(call["name"].as_str().unwrap_or("Tool")),
+                        call["id"].as_str(),
+                    );
+                }
+            }
+            Some("GENERIC") => {
+                add("tool", text(&v["content"]), Some("Result"), None);
+            }
+            _ => (),
+        },
     }
     if !query.is_empty() {
         out.retain(|m| {
@@ -2615,5 +2646,71 @@ mod tests {
         assert!(!unavailable.available);
         assert!(c.t.history_current(&now, &unavailable));
         assert!(c.t.history_current(&read, &page));
+    }
+
+    #[test]
+    fn agy_history_reads_prompts_tools_and_replies_and_skips_system_messages() {
+        const AGY: &str = include_str!("../../tests/fixtures/transcripts/agy.jsonl");
+        let dir = tempfile::tempdir().unwrap();
+        let id = "fe70ebd6-1592-44a6-9aca-8ae830e7b181";
+        let path = dir
+            .path()
+            .join("brain")
+            .join(id)
+            .join(".system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, AGY).unwrap();
+        let t = Transcripts::new(None, None).with_agy_brain(Some(dir.path().join("brain")));
+        let mk = |session: Option<&str>| AgentInfo {
+            terminal_id: "rex:block:019a7d2e-0000-7000-8000-0000000000c1".into(),
+            workspace_id: "rex:session:019a7d2e-0000-7000-8000-0000000000a1".into(),
+            pane_id: "rex:block:019a7d2e-0000-7000-8000-0000000000c1".into(),
+            agent: Some("agy".into()),
+            name: None,
+            title: None,
+            terminal_title_stripped: None,
+            agent_status: "done".into(),
+            state_change_seq: 1,
+            cwd: Some("/work/app".into()),
+            foreground_cwd: None,
+            agent_session: session.map(|s| AgentSession { value: s.into() }),
+            interactive_ready: true,
+            launch_pending: false,
+            read_only: false,
+        };
+        let a = mk(Some(id));
+        let page = t.history(&a, &params(None, None, None));
+        assert!(page.available);
+        let summary: Vec<(&str, Option<&str>, &str)> = page
+            .messages
+            .iter()
+            .map(|m| (m.role.as_str(), m.tool.as_deref(), m.text.as_str()))
+            .collect();
+        assert_eq!(summary.len(), 4);
+        assert_eq!(summary[0], ("user", None, "fix the flaky approval test"));
+        assert_eq!(summary[1].0, "assistant");
+        assert_eq!(summary[1].1, Some("read_file"));
+        assert_eq!(
+            summary[2],
+            ("tool", Some("Result"), "fn flaky_test() { assert!(true); }")
+        );
+        assert_eq!(
+            summary[3],
+            (
+                "assistant",
+                None,
+                "Fixed the flaky approval test.\nAll checks pass."
+            )
+        );
+
+        let rex_missing = mk(None);
+        let unavail = t.history(&rex_missing, &params(None, None, None));
+        assert!(!unavail.available);
+        assert!(
+            unavail
+                .unavailable_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("hooks.json"))
+        );
     }
 }

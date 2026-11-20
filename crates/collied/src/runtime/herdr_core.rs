@@ -613,7 +613,7 @@ impl Core {
     fn session(&self, inner: &Inner, kind: &str, address: &str, pid: u32) -> Option<String> {
         match kind {
             "claude" => crate::transcript::claude_session(self.claude_sessions.as_deref()?, pid),
-            "codex" => inner
+            "codex" | "agy" => inner
                 .codex
                 .get(address)
                 .filter(|(bound, _)| *bound == pid)
@@ -622,9 +622,9 @@ impl Core {
         }
     }
 
-    /// A Codex session reported by collied's SessionStart hook from `reporter` (the hook's
-    /// pid, from the control socket) for the terminal named by its `HC_TERMINAL_ID`. Kept
-    /// only when the hook runs under the Codex process that leads that terminal.
+    /// A session reported by collied's hook from `reporter` (the hook's pid, from the control
+    /// socket) for the terminal named by its `HC_TERMINAL_ID`. Kept only when the hook runs
+    /// under the Codex or Antigravity process that leads that terminal.
     pub fn bind(&self, address: &str, session: &str, reporter: u32) -> bool {
         if !local(address) || !crate::transcript::is_session_id(session) {
             return false;
@@ -633,14 +633,23 @@ impl Core {
         let Some(live) = inner.live.as_ref() else {
             return false;
         };
-        let Some(pid) = live
-            .terminals
-            .get(address)
-            .and_then(|h| h.terminal.foreground.as_ref()?.pid)
-        else {
+        let Some(h) = live.terminals.get(address) else {
             return false;
         };
-        if !agents::reported_by(pid, reporter, agents::process) {
+        let Some(fg) = h.terminal.foreground.as_ref() else {
+            return false;
+        };
+        let Some(pid) = fg.pid else {
+            return false;
+        };
+        let kind = match &h.terminal.status {
+            Some(s) => agents::kind(s.app.as_deref(), fg.cli.as_deref()),
+            None => fg.cli.clone(),
+        };
+        let Some(kind) = kind.as_deref().filter(|k| matches!(*k, "codex" | "agy")) else {
+            return false;
+        };
+        if !agents::reported_by(pid, reporter, kind, agents::process) {
             return false;
         }
         let held: Vec<String> = live.terminals.keys().cloned().collect();
@@ -2236,7 +2245,7 @@ pub(crate) mod tests {
         }
         expected.extend(["/opt/bin/codex", "resume", SESSION, "--no-daemon"]);
         assert_eq!(argv, expected);
-        assert_eq!(agents::STRIPPED.len(), 16);
+        assert_eq!(agents::STRIPPED.len(), 17);
         assert_eq!(
             (
                 &params["cwd"],

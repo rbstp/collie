@@ -201,9 +201,9 @@ private struct KindIcon: View {
     }
 
     var body: some View {
-        if let kind, Self.known(kind) {
-            Image(kind.capitalized).resizable().scaledToFit().frame(width: size, height: size)
-                .accessibilityLabel(kind.capitalized)
+        if let kind, Self.known(kind), let display = AgentActivityAttributes.ContentState.display(for: kind) {
+            Image(display.image).resizable().scaledToFit().frame(width: size, height: size)
+                .accessibilityLabel(display.title)
         }
     }
 }

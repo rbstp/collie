@@ -94,6 +94,7 @@ private func costs(scanning: Bool, cost: Double = 1.5) -> UsageCosts {
 @Test func usageCostRowsNameTheAgentAndAModelWithoutAPrice() {
     let rows = costs(scanning: false).models
     #expect(rows.map(\.agentName) == ["Claude Code", "Copilot CLI"])
+    #expect(ModelCost(agent: "agy", model: "gemini-4-neon-high", tokens: CostTokens(input: 1, output: 1, cacheRead: 0, cacheWrite: 0), costUsd: nil, cacheSavingsUsd: nil).agentName == "Antigravity")
     #expect(rows[1].costText == "No price")
     #expect(rows[0].costText != "No price")
     #expect(rows[0].tokens.total == 53_200)

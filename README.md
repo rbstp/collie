@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/rbstp/collie/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/rbstp/collie/actions/workflows/ci.yml)
 
-collie is a remote control for coding agents in [herdr](https://github.com/herdrdev/herdr), herdr-core (Herdr Core) and Rex. A small daemon, `collied`, runs next to them on your Mac or Linux machine, and the Collie app on your iPhone reaches it over your own tailnet, with no open port on your network; the Apple Watch app works through the iPhone. From the phone, you follow every Claude Code, Codex and Copilot CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
+collie is a remote control for coding agents in [herdr](https://github.com/herdrdev/herdr), herdr-core (Herdr Core) and Rex. A small daemon, `collied`, runs next to them on your Mac or Linux machine, and the Collie app on your iPhone reaches it over your own tailnet, with no open port on your network; the Apple Watch app works through the iPhone. From the phone, you follow every Claude Code, Codex, Copilot CLI and Antigravity CLI agent, read its conversation or terminal, prompt it, start tasks and approve a blocked Claude Code agent from the lock screen.
 
 Documentation: <https://collie.rbstp.dev>
 
@@ -18,7 +18,7 @@ Documentation: <https://collie.rbstp.dev>
 - A personal Tailscale account
 - An Apple Developer account to build the app, and an APNs key for push notifications
 
-Collie is tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI, and on Linux only on Arch Linux with Omarchy. In Herdr Core and Rex, collie does what it does in herdr, except that it cannot bring an agent to the front on the desktop, it starts only Claude Code and Codex tasks there, and only when herdr is not running (for Rex, when Herdr Core is not running either) or when you [choose that runtime](https://collie.rbstp.dev/app/new-task.html#where-tasks-start), it does not archive those tasks by itself when their pull request merges, and only Claude Code and Codex take your input there: Copilot CLI and other agents are read-only, and Copilot CLI has no Chat. Codex's Chat in Herdr Core and Rex needs [`collied`'s own hook](https://collie.rbstp.dev/agents/codex.html#herdr-core-and-rex). [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
+Collie is tested only with Claude Code CLI, Codex CLI, GitHub Copilot CLI and Antigravity CLI (`agy`), and on Linux only on Arch Linux with Omarchy. In Herdr Core and Rex, collie does what it does in herdr, except that it cannot bring an agent to the front on the desktop, it starts only Claude Code, Codex and Antigravity CLI tasks there, and only when herdr is not running (for Rex, when Herdr Core is not running either) or when you [choose that runtime](https://collie.rbstp.dev/app/new-task.html#where-tasks-start), it does not archive those tasks by itself when their pull request merges, and only Claude Code, Codex and Antigravity CLI take your input there: Copilot CLI and other agents are read-only, and Copilot CLI has no Chat. Codex's and Antigravity CLI's Chat in Herdr Core and Rex need [`collied`'s own hook](https://collie.rbstp.dev/agents/codex.html#herdr-core-and-rex). [Requirements](https://collie.rbstp.dev/install/requirements.html) lists the build tools and the Apple identifiers to replace before you build.
 
 ## Quick start
 

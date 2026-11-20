@@ -46,6 +46,7 @@ enum Agent {
     Claude,
     Codex,
     Copilot,
+    Agy,
 }
 
 impl Agent {
@@ -54,6 +55,7 @@ impl Agent {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::Copilot => "copilot",
+            Self::Agy => "agy",
         }
     }
 }
@@ -153,10 +155,14 @@ fn price(model: &str) -> Option<&'static Price> {
         id = id.replace('.', "-");
     }
     PRICES.get(&id).or_else(|| {
-        let (base, date) = id.rsplit_once('-')?;
-        (date.len() == 8 && date.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| PRICES.get(base))
-            .flatten()
+        let (base, tail) = id.rsplit_once('-')?;
+        if (tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit()))
+            || matches!(tail, "low" | "medium" | "high" | "xhigh" | "max")
+        {
+            PRICES.get(base)
+        } else {
+            None
+        }
     })
 }
 
@@ -333,6 +339,7 @@ pub struct Roots {
     pub claude: Option<PathBuf>,
     pub codex: Option<PathBuf>,
     pub copilot: Option<PathBuf>,
+    pub agy: Option<PathBuf>,
 }
 
 impl Roots {
@@ -355,8 +362,40 @@ impl Roots {
             n.starts_with("rollout-") && (n.ends_with(".jsonl") || n.ends_with(".jsonl.zst"))
         });
         add(&self.copilot, Agent::Copilot, |n| n == "events.jsonl");
+        if let Some(root) = &self.agy {
+            let mut found = Vec::new();
+            agy_files(root, keep, &mut found);
+            complete &= found.len() < MAX_FILES;
+            out.extend(found.into_iter().map(|p| (p, Agent::Agy)));
+        }
         out.sort();
         (out, complete)
+    }
+}
+
+/// Antigravity CLI keeps each conversation's transcript under `<brain>/<uuid>/.system_generated/logs/transcript.jsonl`,
+/// so it is scanned directly instead of through `walk` (which skips hidden directories).
+fn agy_files(root: &Path, keep: u64, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        if out.len() >= MAX_FILES {
+            return;
+        }
+        let name = e.file_name();
+        if !name.to_str().is_some_and(crate::transcript::is_session_id)
+            || !e.file_type().is_ok_and(|t| t.is_dir())
+        {
+            continue;
+        }
+        let path = e.path().join(".system_generated/logs/transcript.jsonl");
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| {
+            m.is_file()
+                && m.modified().ok().is_some_and(|t| {
+                    t.duration_since(UNIX_EPOCH)
+                        .is_ok_and(|d| d.as_millis() as u64 >= keep)
+                })
+        }) {
+            out.push(path);
+        }
     }
 }
 
@@ -455,6 +494,7 @@ impl Parser {
                 self.codex(text)
             }
             Agent::Copilot if text.contains("\"session.usage_record\"") => copilot(text),
+            Agent::Agy if text.contains("\"PLANNER_RESPONSE\"") => agy(text),
             _ => None,
         };
         if let Some(r) = record.filter(|r| !r.tokens.is_empty()) {
@@ -580,6 +620,32 @@ fn copilot(text: &str) -> Option<Record> {
         tokens: Tokens {
             input: n("inputTokens").saturating_sub(read).saturating_sub(write),
             output: n("outputTokens"),
+            cache_read: read,
+            cache_write: write,
+            cache_write_1h: 0,
+        },
+        key: None,
+    })
+}
+
+/// One record per planner step; `input_tokens` excludes `cache_read_tokens`.
+fn agy(text: &str) -> Option<Record> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    if v["type"] != "PLANNER_RESPONSE" {
+        return None;
+    }
+    let n = |k: &str| v[k].as_u64().unwrap_or(0);
+    let input = n("input_tokens");
+    let read = n("cache_read_tokens");
+    let write = n("cache_write_tokens");
+    Some(Record {
+        ms: timestamp_ms(v["created_at"].as_str()?)?,
+        model: model_id(v["model"].as_str()),
+        fast: false,
+        long: input.saturating_add(read).saturating_add(write) > LONG_INPUT,
+        tokens: Tokens {
+            input,
+            output: n("output_tokens"),
             cache_read: read,
             cache_write: write,
             cache_write_1h: 0,
@@ -951,6 +1017,7 @@ mod tests {
             claude: Some(root.join("claude/projects")),
             codex: Some(root.join("codex/sessions")),
             copilot: Some(root.join("copilot/session-state")),
+            agy: None,
         };
         let index = data.join(INDEX_FILE);
         let setup = Setup {
@@ -1440,6 +1507,30 @@ mod tests {
         assert_eq!(c.models[0].tokens, tokens(6_638 + 6_700, 45, 0, 0));
         assert_eq!(c.models[0].cost_usd, None);
         assert_eq!(c.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn agy_transcripts_are_counted_from_brain_directories() {
+        const AGY: &str = include_str!("../tests/fixtures/transcripts/agy.jsonl");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(
+            "brain/fe70ebd6-1592-44a6-9aca-8ae830e7b181/.system_generated/logs/transcript.jsonl",
+        );
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, AGY).unwrap();
+        let costs = Costs::new(
+            dir.path().join(INDEX_FILE),
+            Roots {
+                agy: Some(dir.path().join("brain")),
+                ..Roots::default()
+            },
+        );
+        costs.scan(now());
+        let c = costs.summary(CostRange::Week, 0, now());
+        assert_eq!(c.models.len(), 1);
+        assert_eq!(c.models[0].agent, "agy");
+        assert_eq!(c.models[0].model, "gemini-4-neon-high");
+        assert_eq!(c.models[0].tokens, tokens(16_500, 470, 12_000, 0));
     }
 
     #[test]

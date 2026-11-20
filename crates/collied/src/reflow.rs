@@ -174,6 +174,7 @@ pub fn soft_wraps_for(kind: &str, ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32
     match kind {
         "claude" => soft_wraps(ansi, cols),
         "codex" | "copilot" => tui_wraps(kind, ansi, cols),
+        "agy" => agy_wraps(ansi, cols),
         _ => (Vec::new(), Vec::new()),
     }
 }
@@ -420,6 +421,102 @@ fn tui_prose(body: &str, kind: &str) -> bool {
 fn tui_structure(text: &str) -> bool {
     text.contains("  ")
         || text.starts_with(['+', '$', '>', '|', '`'])
+        || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
+}
+
+/// Antigravity draws assistant prose and expanded thinking blocks at indent 2 with no
+/// column-0 marker, wrapped to the terminal width; tool output sits at indent 4, and the
+/// input box sits between full-width `─` rules around a column-0 `>` prompt at the bottom.
+fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
+    let mut rows: Vec<String> = Vec::new();
+    let mut plain = String::new();
+    for row in ansi.split('\n') {
+        plain_text(row, &mut plain);
+        rows.push(plain.trim_end().to_owned());
+    }
+    let rules: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| (!r.is_empty() && r.chars().all(|c| c == '─')).then_some(i))
+        .collect();
+    let limit = rules
+        .windows(2)
+        .rev()
+        .find_map(|w| (w[1] > w[0] + 1 && rows[w[0] + 1].starts_with('>')).then_some(w[0]))
+        .unwrap_or(rows.len());
+
+    let (mut wraps, mut splits) = (Vec::new(), Vec::new());
+    let mut tail = String::new();
+    let mut prev = Prev::Start;
+    let mut in_code = false;
+    for (i, trimmed) in rows[..limit].iter().enumerate() {
+        let s = trimmed.trim_start_matches(' ');
+        let ind = trimmed.len() - s.len();
+        if s.starts_with("```") {
+            in_code = !in_code;
+            prev = Prev::Held;
+            continue;
+        }
+        if in_code {
+            prev = Prev::Held;
+            continue;
+        }
+        if s.is_empty() {
+            prev = Prev::Start;
+            continue;
+        }
+        if ind == 0 {
+            prev = if s.starts_with("▾ Thought") || s.starts_with("▸ Thought") {
+                Prev::Start
+            } else {
+                Prev::Held
+            };
+            continue;
+        }
+        if ind < 2 || agy_structure(s) || (ind == 2 && s.starts_with("• [")) {
+            prev = Prev::Held;
+            continue;
+        }
+        if let Some(len) = list_marker(s, false) {
+            if matches!(prev, Prev::Held) || (matches!(prev, Prev::Start) && ind != 2) {
+                prev = Prev::Held;
+            } else {
+                let rest = s[len..].trim_start_matches(' ');
+                prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
+            }
+            continue;
+        }
+        prev = match prev {
+            Prev::Start => {
+                if ind == 2 && s.chars().any(char::is_alphabetic) && !tool_header(s) {
+                    row_above(&mut tail, s, ind)
+                } else {
+                    Prev::Held
+                }
+            }
+            Prev::Row(hang) if ind == hang => {
+                let available = cols.saturating_sub(hang);
+                if tail.width() <= available {
+                    let at = u32::try_from(i).unwrap_or(u32::MAX);
+                    match separator(&tail, s, available) {
+                        " " if wide_cut(&tail, s, available) => splits.push(at),
+                        " " => wraps.push(at),
+                        "" => splits.push(at),
+                        _ => {}
+                    }
+                }
+                row_above(&mut tail, s, ind)
+            }
+            Prev::Row(_) | Prev::Held => Prev::Held,
+        };
+    }
+    (wraps, splits)
+}
+
+fn agy_structure(text: &str) -> bool {
+    text.contains("  ")
+        || text.starts_with(['+', '$', '>', '|', '▎', '⎿'])
+        || text.starts_with("```")
         || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
 }
 
@@ -1547,7 +1644,7 @@ mod tests {
         #[test]
         fn readers_never_panic(text in crate::prompt::fixtures::screen(), cols in 0..120usize) {
             let rows = text.split('\n').count();
-            for kind in ["claude", "codex", "copilot"] {
+            for kind in ["claude", "codex", "copilot", "agy"] {
                 let (wraps, splits) = soft_wraps_for(kind, &text, cols);
                 for at in [wraps, splits] {
                     prop_assert!(at.is_sorted() && at.iter().all(|&i| (i as usize) < rows));
@@ -1556,6 +1653,70 @@ mod tests {
             prop_assert_eq!(without_copilot_scrollbar(&text, cols).split('\n').count(), rows);
             copilot_scrollbar_columns(&text);
         }
+    }
+
+    #[test]
+    fn agy_prose_thinking_and_lists_join_while_chrome_and_tool_output_stay() {
+        let rule = "─".repeat(44);
+        let rows = [
+            "    tool output line that fills all the way",
+            "    across the pane must never join.",
+            "",
+            "▾ Thought for 5s, 267 tokens",
+            "  Observing the `/statusline` output, the",
+            "  JSON tags reveal quota buckets and",
+            "  credits.",
+            "",
+            "  Checking the Rust test results for the",
+            "  daemon now. Waiting for the current test",
+            "  to finish first.",
+            "",
+            "  - A bullet item that wraps onto the next",
+            "    row at the hang of its marker.",
+            "  1. A numbered item that wraps onto next",
+            "     rows past its number.",
+            "",
+            "  ```rust",
+            "  let a_very_long_identifier_name = value;",
+            "  let next_statement = a_very_long_name;",
+            "  ```",
+            "",
+            "  Short line.",
+            "  Next line.",
+            rule.as_str(),
+            "> a prompt typed into the input box that",
+            "  wraps onto a second row",
+            rule.as_str(),
+            "  • [15:09:03] cargo nextest run -p collied",
+            "    --no-fail-fast running",
+            rule.as_str(),
+            "? for shortcuts auto · Gemini 4 Neon · high",
+        ];
+        let screen = rows.join("\r\n");
+        assert_eq!(claude_rule_columns(&screen, 46), Some(44));
+        assert_eq!(
+            soft_wraps_for("agy", &screen, 44),
+            (vec![5, 6, 9, 10, 13, 15], vec![])
+        );
+        assert_eq!(soft_wraps_for("agy", &screen, 80), (vec![], vec![]));
+    }
+
+    #[test]
+    fn agy_splits_wide_characters_and_long_words() {
+        let long = format!("  {}", "x".repeat(38));
+        let rows = [long.as_str(), "  yyyy for the details."];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 40),
+            (vec![], vec![1])
+        );
+        let cjk = [
+            format!("  运行 cargo tests {}", "之".repeat(10)),
+            "  后检查结果。".to_owned(),
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &cjk.join("\r\n"), 40),
+            (vec![], vec![1])
+        );
     }
 
     #[test]
