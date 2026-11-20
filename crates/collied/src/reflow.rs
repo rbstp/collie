@@ -495,7 +495,8 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 }
             }
             Prev::Row(hang) if ind == hang => {
-                let available = cols.saturating_sub(hang);
+                // Antigravity pads markdown prose with two columns on both sides.
+                let available = cols.saturating_sub(hang + 2);
                 if tail.width() <= available {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
                     match separator(&tail, s, available) {
@@ -1657,7 +1658,7 @@ mod tests {
 
     #[test]
     fn agy_prose_thinking_and_lists_join_while_chrome_and_tool_output_stay() {
-        let rule = "─".repeat(44);
+        let rule = "─".repeat(46);
         let rows = [
             "    tool output line that fills all the way",
             "    across the pane must never join.",
@@ -1693,9 +1694,9 @@ mod tests {
             "? for shortcuts auto · Gemini 4 Neon · high",
         ];
         let screen = rows.join("\r\n");
-        assert_eq!(claude_rule_columns(&screen, 46), Some(44));
+        assert_eq!(claude_rule_columns(&screen, 48), Some(46));
         assert_eq!(
-            soft_wraps_for("agy", &screen, 44),
+            soft_wraps_for("agy", &screen, 46),
             (vec![5, 6, 9, 10, 13, 15], vec![])
         );
         assert_eq!(soft_wraps_for("agy", &screen, 80), (vec![], vec![]));
@@ -1706,7 +1707,7 @@ mod tests {
         let long = format!("  {}", "x".repeat(38));
         let rows = [long.as_str(), "  yyyy for the details."];
         assert_eq!(
-            soft_wraps_for("agy", &rows.join("\r\n"), 40),
+            soft_wraps_for("agy", &rows.join("\r\n"), 42),
             (vec![], vec![1])
         );
         let cjk = [
@@ -1714,7 +1715,7 @@ mod tests {
             "  后检查结果。".to_owned(),
         ];
         assert_eq!(
-            soft_wraps_for("agy", &cjk.join("\r\n"), 40),
+            soft_wraps_for("agy", &cjk.join("\r\n"), 42),
             (vec![], vec![1])
         );
     }
