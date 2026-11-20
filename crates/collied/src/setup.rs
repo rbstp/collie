@@ -218,7 +218,6 @@ pub fn typed_path(typed: &str) -> anyhow::Result<PathBuf> {
     })
 }
 
-/// The key ID in an `AuthKey_<KEY_ID>.p8` file name.
 pub fn key_id_of(path: &Path) -> Option<&str> {
     path.file_name()?
         .to_str()?

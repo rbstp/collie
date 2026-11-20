@@ -140,7 +140,6 @@ fn screen(ansi: &str) -> (Vec<Vec<(char, bool)>>, Vec<String>) {
     (rows, plain)
 }
 
-/// The rows of the input box's top and bottom rules.
 fn bounds(plain: &[String]) -> Option<(usize, usize)> {
     let rules: Vec<usize> = (0..plain.len())
         .filter(|&i| plain[i].starts_with('─') && prompt::is_rule(&plain[i]))

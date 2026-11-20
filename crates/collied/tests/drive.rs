@@ -512,7 +512,6 @@ fn prompt(terminal: &str) -> AgentPromptParams {
 const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
 const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
 
-/// Claude Code's screen with `rows` in its input box.
 fn screen(rows: &str) -> String {
     format!("⏺ Done.\r\n\r\n{RULE}\r\n{rows}\r\n{RULE}\r\n  Opus 5.5 high\r\n  ⏵⏵ auto mode on\r\n")
 }

@@ -1060,7 +1060,6 @@ private final class SelectionHandle: UIView {
         dot.backgroundColor = tintColor
     }
 
-    /// Puts the bar at `x` in the superview, along the row starting at `rowTop`.
     func place(x: CGFloat, rowTop: CGFloat, rowHeight: CGFloat, within content: CGRect) {
         let size: CGFloat = 44
         let middle = rowTop + rowHeight / 2

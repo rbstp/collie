@@ -500,7 +500,6 @@ impl Link {
 pub struct Shared {
     pub flock: Mutex<FlockState>,
     pub link: Mutex<Link>,
-    /// The machine's current name, kept up to date on rename.
     pub label: Mutex<String>,
 }
 

@@ -22,7 +22,6 @@ struct TerminalTheme: Equatable, Sendable {
         minimumContrast: 4.5
     )
 
-    /// The opaque color of text in `style` over `background`.
     func textColor(_ style: TerminalStyle, on background: TerminalRGB) -> TerminalRGB {
         // Text in its cell's own color is hidden on purpose.
         guard style.foreground != background else { return style.foreground }

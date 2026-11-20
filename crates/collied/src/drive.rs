@@ -3373,7 +3373,6 @@ fn skip_string(chars: &mut Peekable<Chars<'_>>) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// This call ran the operation.
     Ran,
     /// The outcome of an earlier call with the same `op_id`.
     Replayed,

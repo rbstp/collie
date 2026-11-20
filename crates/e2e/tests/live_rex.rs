@@ -307,7 +307,6 @@ impl Relay {
             .collect()
     }
 
-    /// Ends every open data connection without a close frame.
     fn cut(&self) {
         for (_, open, cut) in self.data.lock().unwrap().iter_mut().filter(|c| c.1) {
             cut.abort();

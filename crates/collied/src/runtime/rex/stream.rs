@@ -51,7 +51,6 @@ struct Hold {
 /// poll `format`, which covers any gap.
 type Slot = Arc<Mutex<Option<Streamed>>>;
 
-/// Watched terminals, by agent id.
 #[derive(Default)]
 pub(super) struct Streams {
     held: Mutex<HashMap<String, Weak<Hold>>>,
@@ -306,7 +305,6 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Why a stream ended.
 enum End {
     /// The last watch ended.
     Stopped,
@@ -502,7 +500,6 @@ async fn start(
     Ok((channel, streamed, messages))
 }
 
-/// Applies the stream until it ends.
 async fn live(
     ch: &mut Channel,
     slot: &Slot,

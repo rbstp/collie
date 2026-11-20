@@ -66,7 +66,6 @@ pub struct SessionLimits {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Report {
-    /// No session id.
     Unnamed,
     /// A session with no limits on record: not told from a quiet session's old figures.
     First,

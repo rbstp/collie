@@ -43,7 +43,6 @@ struct TerminalFrame: Equatable, Sendable {
     var background: TerminalRGB
     var foreground: TerminalRGB
     var runs: [TerminalRun]
-    /// Rows that continue the row above after a soft wrap.
     var wrapContinuations: Set<Int> = []
     /// True when content scrolled while wrapping, so a full row may continue a soft wrap that
     /// `wrapContinuations` does not list.
@@ -272,7 +271,6 @@ final class TerminalScreen {
         return filtered ?? snapshot
     }
 
-    /// Columns that fit `width` points of cells `cellWidth` wide, within 1...maxColumns.
     static func wrapColumns(width: Double, cellWidth: Double) -> Int {
         guard cellWidth > 0, width.isFinite, width > 0 else { return 1 }
         return Int(min(max((width / cellWidth).rounded(.down), 1), Double(maxColumns)))
