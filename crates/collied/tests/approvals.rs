@@ -2328,10 +2328,16 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
         &fresh(ASKED_ONE.1),
     );
     rig.needed().await;
+    // The question from under its top rule, as a terminal too short for it would show it
+    // (hand-built from the capture), its call pending.
+    let (_, tall) = ASKED_ONE.0.split_once(" ☐ Cache\n").unwrap();
+    show(&rig, "live_blocked_form", tall, &fresh(ASKED_ONE.1));
+    assert!(rig.needed().await.choices.is_empty());
     let lines = refusals();
     let reasons = [
         "transcript unreadable or incomplete",
         "stale call",
+        "question not drawn whole",
         "question not drawn whole",
     ];
     assert_eq!(lines.len(), reasons.len(), "{lines:?}");

@@ -511,7 +511,10 @@ impl Approvals {
             Some(Err(why)) => (None, Some(why)),
             None => (None, None),
         };
-        let refused = refused.filter(|_| parsed.as_ref().is_some_and(Menu::on_screen));
+        // A question-shaped menu with no top is refused before any match: logged as one too.
+        let headless = |m: &&Menu| !m.on_screen() && m.is_question(false);
+        let refused =
+            refused.or_else(|| (parsed.as_ref().filter(headless)).map(|_| Refused::NotWhole));
         let menu = parsed.filter(|m| m.on_screen() && refused.is_none());
         let (region, snippet, offered) = match &menu {
             Some(m) => (m.region(), m.snippet(), m.decisions()),
