@@ -10,7 +10,7 @@ enum Identity {
     static let keychain = KeychainItem(
         service: "dev.rbstp.collie.identity", account: "tls", accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
 
-    static func load() throws -> (publicKey: Data, signer: IdentitySigner) {
+    static func load(unlocked: Bool) throws -> (publicKey: Data, signer: IdentitySigner) {
         #if targetEnvironment(simulator)
         let key = try keychain.read().map { try P256.Signing.PrivateKey(rawRepresentation: $0) } ?? {
             let key = P256.Signing.PrivateKey()
@@ -20,17 +20,20 @@ enum Identity {
         return (key.publicKey.derRepresentation, Signer { try key.signature(for: $0).derRepresentation })
         #else
         guard SecureEnclave.isAvailable else { throw CocoaError(.featureUnsupported) }
-        // A blob this enclave can no longer use is replaced: machines then refuse the new key
-        // until the phone is revoked there and paired again.
-        let key = try keychain.read().flatMap { try? SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0) } ?? {
+        // A blob the enclave calls corrupt is replaced: machines then refuse the new key until
+        // the phone is revoked there and paired again.
+        let key = try EnclaveBlob.key(stored: keychain.read(), unlocked: unlocked) {
+            try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: $0)
+        } make: {
             var error: Unmanaged<CFError>?
             guard let access = SecAccessControlCreateWithFlags(
                 nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage, &error)
             else { throw error!.takeRetainedValue() as Error }
             let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
-            try keychain.write(key.dataRepresentation)
-            return key
-        }()
+            return (key, key.dataRepresentation)
+        } write: {
+            try keychain.write($0)
+        }
         return (key.publicKey.derRepresentation, Signer { try key.signature(for: $0).derRepresentation })
         #endif
     }

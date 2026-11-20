@@ -68,7 +68,7 @@ final class AppModel {
             #endif
             KeychainItem.moveSharedItems()
             let core = try CollieCore(stateDir: StateDirectory.prepare().path)
-            let identity = try Identity.load()
+            let identity = try Identity.load(unlocked: UIApplication.shared.isProtectedDataAvailable)
             try core.setIdentity(publicKey: identity.publicKey, signer: identity.signer)
             core.setLog(log: CoreLogRelay())
             if let on = DevicePrefs.load(from: DevicePrefs.file).archiveOnMerge {
@@ -300,7 +300,8 @@ final class AppModel {
     /// The key is in the Keychain only while the phone is unlocked, so a launch in the background
     /// (a lock-screen decision) loads it on the next foreground.
     private func loadTerminalKey() {
-        guard let core, !terminalKeySet, let key = TerminalKey.publicKey() else { return }
+        guard let core, !terminalKeySet, let key = TerminalKey.publicKey(unlocked: UIApplication.shared.isProtectedDataAvailable)
+        else { return }
         do {
             try core.setTerminalKey(publicKey: key)
             terminalKeySet = true

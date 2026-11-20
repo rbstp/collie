@@ -1,5 +1,7 @@
 import CryptoKit
+import CryptoTokenKit
 import Foundation
+import LocalAuthentication
 import Security
 import Testing
 
@@ -114,6 +116,73 @@ struct KeychainGroupQueryTests {
     }
 }
 
+/// #871: the decision the device branches of Identity and TerminalKey share. A new key makes
+/// every machine refuse the phone, so a failure that may pass must never make one.
+struct EnclaveBlobTests {
+    let stored = Data([0x01]), fresh = Data([0x02])
+    let corrupt = NSError(
+        domain: TKErrorDomain, code: TKError.Code.corruptedData.rawValue,
+        userInfo: [NSLocalizedDescriptionKey: "corrupted objectID detected"])
+
+    private func load(_ stored: Data?, unlocked: Bool = true, rebuild: (Data) throws -> String) -> (key: Result<String, any Error>, written: [Data]) {
+        var written: [Data] = []
+        let key = Result {
+            try EnclaveBlob.key(stored: stored, unlocked: unlocked, rebuild: rebuild, make: { ("new", fresh) }, write: { written.append($0) })
+        }
+        return (key, written)
+    }
+
+    /// Locked too: a lock-screen decision loads the TLS key.
+    @Test(arguments: [true, false])
+    func goodBlobIsUsed(unlocked: Bool) throws {
+        let (key, written) = load(stored, unlocked: unlocked) { $0 == stored ? "old" : "other" }
+        #expect(try key.get() == "old")
+        #expect(written.isEmpty)
+    }
+
+    @Test func deadBlobIsReplaced() throws {
+        let (key, written) = load(stored) { _ in throw corrupt }
+        #expect(try key.get() == "new")
+        #expect(written == [fresh])
+    }
+
+    @Test func keyIsMadeWhenNoBlobIsStored() throws {
+        let (key, written) = load(nil) { _ in "old" }
+        #expect(try key.get() == "new")
+        #expect(written == [fresh])
+    }
+
+    @Test func passingFailureThrowsAndWritesNothing() {
+        let locked = NSError(domain: TKErrorDomain, code: TKError.Code.corruptedData.rawValue, userInfo: ["AKSError": -536_363_001])
+        let failures: [(error: any Error, unlocked: Bool)] = [
+            (LAError(.notInteractive), true),
+            (LAError(.authenticationFailed), true),
+            (LAError(.systemCancel), true),
+            (NSError(domain: NSOSStatusErrorDomain, code: Int(errSecInteractionNotAllowed)), true),
+            (TKError(.communicationError), true),
+            (TKError(.authenticationNeeded), true),
+            (TKError(.objectNotFound), true),
+            (CryptoKitError.authenticationFailure, true),
+            (locked, true),
+            (corrupt, false),
+        ]
+        for (error, unlocked) in failures {
+            let (key, written) = load(stored, unlocked: unlocked) { _ in throw error }
+            #expect(throws: EnclaveBlob.Kept.self, "\(error)") { try key.get() }
+            #expect(written.isEmpty, "\(error)")
+        }
+    }
+
+    /// The owner reads the enclave's answer on the screen that reports a kept key.
+    @Test func keptKeyNamesItsCause() {
+        let (key, _) = load(stored, unlocked: false) { _ in throw corrupt }
+        let error = #expect(throws: EnclaveBlob.Kept.self) { try key.get() }
+        let text = error.map { describe($0) } ?? ""
+        #expect(text.contains("CryptoTokenKit"))
+        #expect(text.contains("-3"))
+    }
+}
+
 private func stored(_ service: String, _ account: String, in group: String? = nil) -> [String: Any] {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
@@ -195,6 +264,17 @@ struct KeychainGroupTests {
         defer { remove(item.service, item.account) }
         try item.write(new)
         #expect(copies(item.service, item.account) == [own: new])
+    }
+
+    /// #871: a delete and an add would lose the only copy when the add fails. The stored item's
+    /// accessibility tells the two apart: an update keeps it, an add sets the new item's.
+    @Test func writeUpdatesTheStoredItemInPlace() throws {
+        let item = item(kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly)
+        defer { remove(item.service, item.account) }
+        try add(item.service, item.account, in: own, old, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        try item.write(new)
+        #expect(copies(item.service, item.account) == [own: new])
+        #expect(accessible(item.service, item.account) == kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
     }
 
     @Test func writeRemovesTheSharedCopy() throws {
