@@ -180,7 +180,6 @@ final class NewTaskModel {
         return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not available on this computer right now"
     }
 
-    /// Claude Code only, and only from a collied that takes it: an older one refuses the field.
     var offersCodeMode: Bool {
         options?.codeMode == true && (location == .resume ? session?.agent : agent) == "claude"
     }

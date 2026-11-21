@@ -15,3 +15,5 @@ A record has a status, a date, Context, Decision, Consequences and the code it g
 | [0007](0007-documentation-screenshots-and-site.md) | Documentation screenshots come from the demo on a fixed simulator; the site is staged and checked |
 | [0008](0008-relay-storage-bounds-and-attestation.md) | The relay checks App Attest flags strictly and bounds its storage in guarded batches |
 | [0009](0009-antigravity-cli.md) | Antigravity CLI is read like the other agents, through its own hook, files and layout |
+| [0010](0010-startup-dialog-keys.md) | Keys reach a silent agent's startup dialog only while it shows |
+| [0011](0011-code-mode.md) | Code Mode is set on Claude Code's own command, or as a setting through herdr |

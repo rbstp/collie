@@ -2163,8 +2163,6 @@ async fn ultracode_tasks_prompt_only_once_it_shows() {
     }
 }
 
-// herdr's `agent.start` takes no environment and types the command into a shell whose start-up
-// files already ran, so Code Mode can only reach Claude Code as a setting.
 #[tokio::test]
 async fn code_mode_reaches_herdr_as_a_claude_code_setting_and_needs_claude_code() {
     let herdr = Mock::start();

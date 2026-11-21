@@ -225,8 +225,6 @@ pub struct Driver {
     /// another session's write.
     box_writes: tokio::sync::Mutex<()>,
     transcripts: Transcripts,
-    /// The startup dialog each agent showed when collied last sent a key that answers one,
-    /// and when.
     answered: std::sync::Mutex<HashMap<String, (String, tokio::time::Instant)>>,
 }
 
@@ -418,13 +416,7 @@ impl Driver {
         writable(current, ready)
     }
 
-    /// Keys and keystrokes, which add no Enter, also reach a Codex that has reported nothing
-    /// while its startup dialog fills the screen (0.171.0 reports nothing at its folder trust
-    /// prompt), and a Copilot CLI whose own report and foreground process are Copilot's while
-    /// its folder trust box is up (1.0.112 reports `idle` there), as keys to a blocked agent:
-    /// `true` when the agent counts as blocked, and the dialog's screen when only its own keys
-    /// may go. The screen read right after an answer can still show the dialog it answered, so
-    /// the same screen within `SCREEN_SETTLE` of an answer counts as no dialog.
+    // ADR-0010
     async fn keystroke_agent(
         &self,
         terminal_id: &TerminalId,
@@ -876,8 +868,6 @@ impl Driver {
         Ok(Response::Ok)
     }
 
-    /// Keystrokes typed as is, without Enter. Text to a blocked agent also returns its audit
-    /// target, which never names the text.
     pub async fn send_text(&self, p: SendTextParams, auth: &Authorized) -> (Reply, Option<String>) {
         let _box = self.box_writes.lock().await;
         let (a, blocked, startup) = match self.keystroke_agent(&p.terminal_id).await {
@@ -895,7 +885,6 @@ impl Driver {
         let sent = async {
             self.input_safeguards(&a).await?;
             authorized(auth)?;
-            // A digit goes as a key, as one pressed in the dialog would.
             if digit {
                 self.runtime.notice_digit(&a.pane_id, p.text.as_str()).await
             } else {
@@ -3035,13 +3024,10 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
     Ok(())
 }
 
-/// A startup dialog's own keys, by herdr name: arrows, Enter, Esc and one digit.
 fn startup_key(key: &str) -> bool {
     matches!(key, "up" | "down" | "left" | "right") || answers_startup(key)
 }
 
-/// A key that can close a startup dialog: Enter, Esc, or a digit, which can pick its option
-/// at once.
 fn answers_startup(key: &str) -> bool {
     matches!(key, "enter" | "esc") || (key.len() == 1 && (b'1'..=b'9').contains(&key.as_bytes()[0]))
 }
@@ -3716,10 +3702,6 @@ mod tests {
         );
     }
 
-    /// #895: only a startup dialog's own keys, no Enter of collied's, reach a Codex that has
-    /// reported nothing, and only while that dialog fills the screen and until a key answers
-    /// it; never a Codex label a retained report gives another CLI, nor a Claude Code with no
-    /// status.
     #[tokio::test]
     async fn a_codex_with_no_status_takes_keystrokes_only_at_a_startup_dialog() {
         fn codex() -> serde_json::Value {
@@ -3834,9 +3816,6 @@ mod tests {
         }
     }
 
-    /// #897: Copilot CLI stays read-only (#745) and takes its trust box's own keys only while
-    /// the box is up, only from a report and a foreground process that are both Copilot's, and
-    /// only at the terminal's own size.
     #[tokio::test]
     async fn a_read_only_copilot_takes_its_trust_boxs_keys_only() {
         const TRUST: &str = include_str!("../tests/fixtures/copilot-1.0.112/trust.detection.txt");
@@ -3954,7 +3933,6 @@ mod tests {
         }
     }
 
-    /// Antigravity CLI 1.5.13 reports `blocked` at its sign-in prompt, so the keys answer it.
     #[tokio::test]
     async fn an_antigravity_cli_blocked_at_sign_in_takes_keys() {
         fn agy() -> serde_json::Value {
