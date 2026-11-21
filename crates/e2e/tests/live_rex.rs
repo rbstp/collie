@@ -1620,7 +1620,10 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     let record = |name: &str| std::fs::read_to_string(bin.join("record").join(name)).ok();
     // What the user's login shell reads first: whichever shell the account has.
     let profiled = server.root.join("profiled");
-    let profile = format!("export PATH='{}':\"$PATH\"\n", profiled.display());
+    let profile = format!(
+        "export PATH='{}':\"$PATH\"\nexport CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0\n",
+        profiled.display()
+    );
     for file in [".zprofile", ".bash_profile", ".profile"] {
         std::fs::write(server.root.join("home").join(file), &profile).unwrap();
     }
@@ -1677,6 +1680,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     };
     let started = |reply| match reply {
@@ -1695,11 +1699,11 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         (session, block)
     };
 
-    let (group, claude) = started(
-        drive
-            .task_new(new("claude", "fix the test", None), &yes)
-            .await,
-    );
+    let code_mode = TaskNewParams {
+        code_mode: Some(true),
+        ..new("claude", "fix the test", None)
+    };
+    let (group, claude) = started(drive.task_new(code_mode, &yes).await);
     let (session, block) = ids(&group, &claude);
     assert!(session.starts_with("session:") && block.starts_with("block:"));
     until("the prompt in Claude Code", async || {
@@ -1726,6 +1730,11 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
         "the login profile's PATH: {path}"
     );
     assert!(env.contains(&format!("REX_BLOCK={block}")));
+    assert!(
+        env.lines()
+            .any(|l| l == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"),
+        "Code Mode wins over the login profile's"
+    );
     let blocks = blocks_of(server, &session);
     assert_eq!(blocks.len(), 1, "a session of its own: {blocks:?}");
     assert!(blocks[0]["owner"].is_null(), "given up: {}", blocks[0]);
@@ -1755,7 +1764,12 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     })
     .await;
     assert_eq!(record("args-codex").as_deref(), Some("--no-daemon\n"));
-    stripped(record("env-codex").unwrap());
+    let env = stripped(record("env-codex").unwrap());
+    assert!(
+        env.lines()
+            .any(|l| l == "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0"),
+        "no Code Mode asked, the login profile's stays"
+    );
     assert!(
         git(&work, &["worktree", "list", "--porcelain"])
             .contains(&format!("worktree {}\nHEAD", checkout.display()))
@@ -1802,7 +1816,8 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
             "claude",
             None,
             argv.to_str().unwrap(),
-            &hostile,
+            &hostile.map(String::from),
+            None,
         )
         .await
         .unwrap();

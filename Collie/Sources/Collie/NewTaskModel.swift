@@ -105,6 +105,12 @@ final class NewTaskModel {
             DevicePrefs.update(in: prefsFile) { $0.taskUltracode[machineId] = ultracode }
         }
     }
+    var codeMode = true {
+        didSet {
+            guard oldValue != codeMode, let machineId else { return }
+            DevicePrefs.update(in: prefsFile) { $0.taskCodeMode[machineId] = codeMode }
+        }
+    }
     var prompt = ""
     var label = ""
     private(set) var attachments: [AttachedFile] = []
@@ -172,6 +178,11 @@ final class NewTaskModel {
         guard let offered = options.runtimes else { return Self.collieTooOld }
         if offeredAgents?.isEmpty == true { return "\(runtimeChoice.label) cannot start any allowed agent on this computer" }
         return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not available on this computer right now"
+    }
+
+    /// Claude Code only, and only from a collied that takes it: an older one refuses the field.
+    var offersCodeMode: Bool {
+        options?.codeMode == true && (location == .resume ? session?.agent : agent) == "claude"
     }
 
     static let collieTooOld = "collied on this computer is too old to choose where tasks start. Update it, or set Start tasks in to Automatic in Settings."
@@ -244,6 +255,7 @@ final class NewTaskModel {
         let base = prefs.taskBases[machineId]
         self.base = base
         ultracode = prefs.taskUltracode[machineId] ?? false
+        codeMode = prefs.taskCodeMode[machineId] ?? true
         folders = nil
         foldersError = nil
         do {
@@ -310,6 +322,7 @@ final class NewTaskModel {
         guard canStart, !cancelled, let machineId else { return nil }
         let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
         let ultracode = agent == "claude" && self.ultracode
+        let codeMode = offersCodeMode ? self.codeMode : nil
         let runtime = runtimeChoice.runtime
         // An older collied refuses the field, and starting the task elsewhere would ignore the choice.
         if runtime != nil, options?.runtimes == nil { return nil }
@@ -323,25 +336,25 @@ final class NewTaskModel {
                 case .create:
                     started = try await core.taskWorktreeCreate(
                         machineId: machineId, cwd: sourceFolder, branch: createBranch,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, runtime: runtime
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                     )
                 case .open:
                     started = try await core.taskWorktreeOpen(
                         machineId: machineId, cwd: sourceFolder, path: checkoutPath,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, runtime: runtime
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                     )
                 case .pullRequest:
                     guard let number = pullRequest else { phase = .editing; return nil }
                     started = try await core.taskWorktreePullRequest(
                         machineId: machineId, cwd: sourceFolder, number: number,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, runtime: runtime
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                     )
                 }
             } else if location == .resume {
                 guard let cwd = folder, let session else { phase = .editing; return nil }
                 started = try await core.taskResume(
                     machineId: machineId, cwd: cwd, agent: session.agent, sessionId: session.sessionId,
-                    prompt: text, label: trimmed(label).nilIfEmpty, runtime: runtime
+                    prompt: text, label: trimmed(label).nilIfEmpty, codeMode: codeMode, runtime: runtime
                 )
             } else if location == .clone {
                 guard let cwd = newFolderParent else { phase = .editing; return nil }
@@ -349,14 +362,14 @@ final class NewTaskModel {
                 defer { cloning = nil }
                 started = try await core.taskClone(
                     machineId: machineId, cwd: cwd, repository: trimmed(repository),
-                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, runtime: runtime
+                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                 )
             } else {
                 guard let cwd = newFolder ? newFolderParent : folder else { phase = .editing; return nil }
                 started = try await core.taskNew(
                     machineId: machineId, cwd: cwd, agent: agent, prompt: text,
                     label: trimmed(label).nilIfEmpty, newFolder: newFolder ? trimmed(folderName) : nil,
-                    ultracode: ultracode, runtime: runtime
+                    ultracode: ultracode, codeMode: codeMode, runtime: runtime
                 )
             }
         } catch {

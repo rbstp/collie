@@ -2125,6 +2125,10 @@
           },
           "type": "array"
         },
+        "code_mode": {
+          "description": "Whether this collied takes `TaskNewParams::code_mode`; false from an older one.",
+          "type": "boolean"
+        },
         "default_agent": {
           "$ref": "#/$defs/AgentKind"
         },

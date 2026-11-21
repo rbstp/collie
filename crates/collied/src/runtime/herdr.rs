@@ -552,9 +552,10 @@ pub async fn agent_start(
     pane_id: &str,
     resume: Option<&str>,
     ultracode: bool,
+    code_mode: Option<bool>,
 ) -> Result<AgentInfo, Error> {
     let mut params = json!({ "name": name, "kind": kind, "pane_id": pane_id });
-    let args = agent_args(kind, resume, ultracode);
+    let args = agent_args(kind, resume, ultracode, code_mode);
     if !args.is_empty() {
         params["args"] = json!(args);
     }
@@ -563,17 +564,43 @@ pub async fn agent_start(
 }
 
 /// A task agent's arguments, in herdr and herdr-core alike. Codex always gets `--no-daemon`:
-/// under its shared app-server, its SessionStart hook reports the wrong terminal.
-pub fn agent_args<'a>(kind: &str, resume: Option<&'a str>, ultracode: bool) -> Vec<&'a str> {
-    let mut args = match (kind, resume) {
+/// under its shared app-server, its SessionStart hook reports the wrong terminal. Code Mode
+/// goes in Claude Code's `--settings` `env` because herdr's `agent.start` takes no environment
+/// and types the command into a shell whose start-up files already ran; herdr-core and Rex
+/// pass `None` and set it on the command (`task_argv`).
+pub fn agent_args(
+    kind: &str,
+    resume: Option<&str>,
+    ultracode: bool,
+    code_mode: Option<bool>,
+) -> Vec<String> {
+    let mut args: Vec<String> = match (kind, resume) {
         ("claude", Some(id)) => vec!["--resume", id],
         ("codex", Some(id)) => vec!["resume", id, "--no-daemon"],
         ("codex", None) => vec!["--no-daemon"],
         ("agy", Some(id)) => vec!["--conversation", id],
         _ => vec![],
-    };
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let mut settings = serde_json::Map::new();
     if kind == "claude" && ultracode {
-        args.extend(["--settings", r#"{"ultracode":true}"#]);
+        settings.insert("ultracode".to_owned(), json!(true));
+    }
+    if let (true, Some(on)) = (kind == "claude", code_mode) {
+        let value = json!(u8::from(on).to_string());
+        settings.insert(
+            "env".to_owned(),
+            Value::Object(
+                [(super::agents::CODE_MODE.to_owned(), value)]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+    }
+    if !settings.is_empty() {
+        args.extend(["--settings".to_owned(), Value::Object(settings).to_string()]);
     }
     args
 }

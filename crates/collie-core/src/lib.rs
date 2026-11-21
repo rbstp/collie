@@ -715,6 +715,8 @@ pub struct TaskOptions {
     pub runtimes: Option<Vec<TaskRuntime>>,
     /// Empty from a collied too old to say which kinds each runtime starts.
     pub runtime_agents: Vec<RuntimeAgents>,
+    /// False from a collied too old to take Code Mode.
+    pub code_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -990,6 +992,7 @@ async fn task_new_inner(
     clone: Option<String>,
     resume: Option<String>,
     ultracode: bool,
+    code_mode: Option<bool>,
     runtime: Option<TaskRuntime>,
 ) -> Result<TaskStarted, CoreError> {
     let timeout = if clone.is_some() || matches!(worktree, Some(TaskWorktree::PullRequest { .. })) {
@@ -1036,6 +1039,7 @@ async fn task_new_inner(
             .map(|id| SessionId::new(id).map_err(|_| invalid("resume", "invalid session")))
             .transpose()?,
         ultracode,
+        code_mode,
         runtime: runtime.map(Into::into),
     });
     match core.mutate(&machine_id, request, timeout).await? {
@@ -2044,6 +2048,7 @@ impl CollieCore {
                         })
                     })
                     .collect(),
+                code_mode: o.code_mode,
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -2086,11 +2091,12 @@ impl CollieCore {
         label: Option<String>,
         new_folder: Option<String>,
         ultracode: bool,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
             self, machine_id, cwd, agent, prompt, label, new_folder, None, None, None, ultracode,
-            runtime,
+            code_mode, runtime,
         )
         .await
     }
@@ -2105,6 +2111,7 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         ultracode: bool,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
@@ -2119,6 +2126,7 @@ impl CollieCore {
             Some(repository),
             None,
             ultracode,
+            code_mode,
             runtime,
         )
         .await
@@ -2361,6 +2369,7 @@ impl CollieCore {
         session_id: String,
         prompt: String,
         label: Option<String>,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
@@ -2375,6 +2384,7 @@ impl CollieCore {
             None,
             Some(session_id),
             false,
+            code_mode,
             runtime,
         )
         .await
@@ -2390,6 +2400,7 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         ultracode: bool,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         task_new_inner(
@@ -2404,6 +2415,7 @@ impl CollieCore {
             None,
             None,
             ultracode,
+            code_mode,
             runtime,
         )
         .await
@@ -2419,6 +2431,7 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         ultracode: bool,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         if !(1..=u64::from(u32::MAX)).contains(&number) {
@@ -2439,6 +2452,7 @@ impl CollieCore {
             None,
             None,
             ultracode,
+            code_mode,
             runtime,
         )
         .await
@@ -2454,6 +2468,7 @@ impl CollieCore {
         prompt: String,
         label: Option<String>,
         ultracode: bool,
+        code_mode: Option<bool>,
         runtime: Option<TaskRuntime>,
     ) -> Result<TaskStarted, CoreError> {
         let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
@@ -2469,6 +2484,7 @@ impl CollieCore {
             None,
             None,
             ultracode,
+            code_mode,
             runtime,
         )
         .await
@@ -5130,6 +5146,7 @@ mod tests {
                 None,
                 false,
                 None,
+                None,
             ))
             .map(|_| ())
         };
@@ -5144,6 +5161,7 @@ mod tests {
                         None,
                         Some(bad.into()),
                         false,
+                        None,
                         None,
                     ))
                     .map(|_| ())
@@ -5652,6 +5670,7 @@ mod tailnet_tests {
                                         agents: vec![AgentKind::new("claude").unwrap()],
                                     },
                                 ],
+                                code_mode: true,
                             }))
                         }
                         Request::TaskFolders(p) => {
@@ -5670,6 +5689,7 @@ mod tailnet_tests {
                             assert_eq!(p.label.unwrap().as_str(), "tests");
                             assert_eq!(p.new_folder.unwrap().as_str(), "new app");
                             assert_eq!(p.runtime, Some(protocol::TaskRuntime::Rex));
+                            assert_eq!(p.code_mode, Some(false));
                             lock(&seen).task_ops.push(p.op_id.as_str().into());
                             Ok(Response::TaskStarted {
                                 workspace_id: WorkspaceId::new("w2").unwrap(),
@@ -6117,6 +6137,7 @@ mod tailnet_tests {
         assert_eq!(options.recent_cwds, vec!["/src/collie".to_owned()]);
         assert_eq!(options.roots, vec!["/src".to_owned()]);
         assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
+        assert!(options.code_mode);
         assert_eq!(
             options.runtime_agents,
             [RuntimeAgents {
@@ -6142,6 +6163,7 @@ mod tailnet_tests {
                 Some(" tests ".into()),
                 Some("new app".into()),
                 false,
+                Some(false),
                 Some(TaskRuntime::Rex),
             ))
             .unwrap();

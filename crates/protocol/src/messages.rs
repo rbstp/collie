@@ -1041,6 +1041,11 @@ pub struct TaskNewParams {
     /// Claude Code only: start it with ultracode on, checked on screen before the prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ultracode: bool,
+    /// Claude Code only: start it with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` 1 or 0; absent,
+    /// its environment decides. Sent only to a collied whose `TaskOptions` says `code_mode`:
+    /// an older one refuses the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<bool>,
     /// Where the task must start; absent, collied chooses as it always has. Sent only to a
     /// collied whose `TaskOptions` lists `runtimes`: an older one refuses the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1861,6 +1866,9 @@ pub struct TaskOptions {
     /// from an older collied.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_agents: Vec<RuntimeAgents>,
+    /// Whether this collied takes `TaskNewParams::code_mode`; false from an older one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub code_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2650,6 +2658,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(older.runtimes, None);
+        assert!(!older.code_mode);
         let newer: TaskOptions = serde_json::from_str(
             r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"],"runtimes":["rex","tmux"]}"#,
         )

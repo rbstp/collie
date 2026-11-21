@@ -55,7 +55,7 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
     let dir = tempfile::tempdir().unwrap();
     let (rex, rt) = followed(&fake, dir.path()).await;
     let host = host(&rt).await;
-    let args = herdr::agent_args("claude", None, false);
+    let args = herdr::agent_args("claude", None, false, None);
     let started = host
         .start(
             "/w",
@@ -65,6 +65,7 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
             None,
             "/opt/bin/claude",
             &args,
+            None,
         )
         .await
         .unwrap();
@@ -121,7 +122,8 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
             "codex",
             None,
             "/opt/bin/codex",
-            &herdr::agent_args("codex", None, false),
+            &herdr::agent_args("codex", None, false, None),
+            None,
         )
         .await
         .unwrap();
@@ -156,8 +158,8 @@ async fn each_kind_and_resume_runs_as_one_argument_vector_whatever_its_values_ho
     ];
     for (n, (kind, resume, ultracode, expected)) in cases.into_iter().enumerate() {
         let cli = format!("/opt/my tools/{kind}");
-        let args = herdr::agent_args(kind, resume, ultracode);
-        host.start(hostile, NAME, None, kind, None, &cli, &args)
+        let args = herdr::agent_args(kind, resume, ultracode, None);
+        host.start(hostile, NAME, None, kind, None, &cli, &args, None)
             .await
             .unwrap();
         let options =
@@ -180,7 +182,8 @@ async fn each_kind_and_resume_runs_as_one_argument_vector_whatever_its_values_ho
         "claude",
         None,
         "/opt/bin/claude",
-        &[hostile, "-x"],
+        &[hostile.to_owned(), "-x".to_owned()],
+        None,
     )
     .await
     .unwrap();
@@ -191,6 +194,30 @@ async fn each_kind_and_resume_runs_as_one_argument_vector_whatever_its_values_ho
         command,
         json!(through_env("/opt/bin/claude", &[hostile, "-x"]))
     );
+    // Code Mode is set on the command, after the login profile ran, never in `--settings`.
+    for (n, on) in [(6, true), (7, false)] {
+        host.start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            Some(on),
+        )
+        .await
+        .unwrap();
+        let mut expected = through_env("/opt/bin/claude", &[]);
+        expected.insert(
+            expected.len() - 1,
+            format!("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE={}", u8::from(on)),
+        );
+        assert_eq!(
+            fake.state().created[n]["initial_windows"][0]["layout"]["block"]["options"]["command"],
+            json!(expected)
+        );
+    }
 }
 
 #[tokio::test]
@@ -399,6 +426,7 @@ async fn a_task_its_chosen_runtime_refuses_starts_nowhere_and_creates_no_folder(
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: Some(protocol::TaskRuntime::Rex),
     };
     let yes: Authorized = Arc::new(|| true);
@@ -530,6 +558,7 @@ async fn answer_from_a_followed_rex_while_herdr_does_not() {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     };
     let (reply, _) = busy_herdr.task_new(automatic.clone(), &yes).await;
@@ -582,7 +611,16 @@ async fn archive_closes_only_the_tasks_block_and_removes_its_recorded_worktree()
     let host = host(&rt).await;
     let at = checkout.to_str().unwrap();
     let task = host
-        .start(at, NAME, None, "codex", Some(at), "/opt/bin/codex", &[])
+        .start(
+            at,
+            NAME,
+            None,
+            "codex",
+            Some(at),
+            "/opt/bin/codex",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let block = block_of(&task).to_owned();
@@ -640,7 +678,16 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
     let host = host(&rt).await;
     let at = checkout.to_str().unwrap();
     let task = host
-        .start(at, NAME, None, "codex", Some(at), "/opt/bin/codex", &[])
+        .start(
+            at,
+            NAME,
+            None,
+            "codex",
+            Some(at),
+            "/opt/bin/codex",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     // A shell of the user's own, in a session of its own, now working in the checkout. The
@@ -723,6 +770,7 @@ async fn a_task_without_a_worktree_is_archived_with_the_session_collied_created_
             None,
             "/opt/bin/claude",
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -802,6 +850,7 @@ async fn a_tasks_session_with_a_detached_block_or_a_window_left_is_kept() {
                 None,
                 "/opt/bin/claude",
                 &[],
+                None,
             )
             .await
             .unwrap();
@@ -849,6 +898,7 @@ async fn records_are_kept_on_disk_and_forgotten_once_their_block_is_gone() {
             Some("/w/.worktree/x"),
             "/opt/bin/codex",
             &[],
+            None,
         )
         .await
         .unwrap();
@@ -890,7 +940,16 @@ async fn an_agent_that_exits_is_finished_and_a_block_kept_by_collied_fails_the_s
     let host = host(&rt).await;
     fake.state().start = None;
     let started = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let block = block_of(&started).to_owned();
@@ -916,7 +975,16 @@ async fn an_agent_that_exits_is_finished_and_a_block_kept_by_collied_fails_the_s
 
     // A block no client owns closes with its program, which ends the task as well.
     let closing = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let block = block_of(&closing).to_owned();
@@ -938,7 +1006,16 @@ async fn an_agent_that_exits_is_finished_and_a_block_kept_by_collied_fails_the_s
     // A server that keeps the block collied's: the start fails and names the agent it left.
     fake.state().keep_owner = true;
     let failed = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap_err();
     assert!(failed.to_string().contains("was left running"), "{failed}");
@@ -972,7 +1049,16 @@ async fn a_rex_agent_running_in_another_folder_takes_no_prompt() {
     // Rex starts a block whose folder is gone in the home folder.
     fake.state().runs_in = Some("/Users/me".to_owned());
     let home = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let failed = drive
@@ -983,7 +1069,16 @@ async fn a_rex_agent_running_in_another_folder_takes_no_prompt() {
 
     fake.state().runs_in = None;
     let there = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let pane = drive
@@ -1000,7 +1095,16 @@ async fn no_prompt_reaches_an_idle_rex_claude_code_that_shows_a_menu() {
     let (rex, rt) = followed(&fake, dir.path()).await;
     let task = host(&rt)
         .await
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let block = block_of(&task).to_owned();
@@ -1028,6 +1132,7 @@ async fn no_prompt_reaches_an_idle_rex_claude_code_that_shows_a_menu() {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     };
     let yes: Authorized = Arc::new(|| true);
@@ -1047,7 +1152,16 @@ async fn a_rex_agent_that_exits_early_fails_its_start_at_once() {
     let host = host(&rt).await;
     fake.state().start = None;
     let task = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     let block = block_of(&task).to_owned();
@@ -1114,7 +1228,16 @@ async fn a_herdr_core_terminal_in_the_checkout_refuses_a_rex_tasks_archive() {
     let at = checkout.to_str().unwrap();
     let task = host(&rt)
         .await
-        .start(at, NAME, None, "codex", Some(at), "/opt/bin/codex", &[])
+        .start(
+            at,
+            NAME,
+            None,
+            "codex",
+            Some(at),
+            "/opt/bin/codex",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     eventually("the task listed", || rex.get(&task).is_ok()).await;
@@ -1143,14 +1266,32 @@ async fn a_lost_create_answer_or_an_unnamed_client_fails_the_start_and_says_so()
         s.keep_owner = true;
     }
     let failed = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap_err();
     assert!(failed.to_string().contains("was left running"), "{failed}");
 
     fake.state().hang_up = Some("session.create");
     let failed = host
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1171,7 +1312,16 @@ async fn a_tasks_record_goes_when_its_block_closes() {
     let rt = Runtime::new(dir.path().join("no-herdr.sock")).with_rex(Some(rex.clone()));
     let started = host(&rt)
         .await
-        .start("/w", NAME, None, "claude", None, "/opt/bin/claude", &[])
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
         .await
         .unwrap();
     eventually("the task listed", || rex.get(&started).is_ok()).await;
@@ -1253,6 +1403,7 @@ async fn a_rex_block_in_the_checkout_refuses_herdrs_open_and_archive() {
         clone: None,
         resume: None,
         ultracode: false,
+        code_mode: None,
         runtime: None,
     };
     let (reply, _) = drive.task_new(p, &yes).await;

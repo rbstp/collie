@@ -44,7 +44,7 @@ final class FakeCore: AgentCore {
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
-        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil, runtimeAgents: [])
+        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil, runtimeAgents: [], codeMode: false)
         var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
         var folderPaths: [String] = []
         var taskNews: [String] = []
@@ -323,9 +323,9 @@ final class FakeCore: AgentCore {
         try await call { $0.folderPaths.append(path) }
         return state.withLock { $0.folders }
     }
-    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskNew(machineId: String, cwd: String, agent: String, prompt: String, label: String?, newFolder: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.taskNews.append("\(cwd) \(newFolder ?? "-")" + (ultracode ? " ultracode" : ""))
+            $0.taskNews.append("\(cwd) \(newFolder ?? "-")" + (ultracode ? " ultracode" : "") + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
@@ -336,36 +336,36 @@ final class FakeCore: AgentCore {
         try await call { $0.worktreeCalls.append("list \(cwd)") }
         return state.withLock { $0.worktreeListing }
     }
-    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskWorktreeCreate(machineId: String, cwd: String, branch: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)")
+            $0.worktreeCalls.append("create \(cwd) \(branch) \(agent)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskWorktreeOpen(machineId: String, cwd: String, path: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.worktreeCalls.append("open \(cwd) \(path) \(agent)")
+            $0.worktreeCalls.append("open \(cwd) \(path) \(agent)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.worktreeCalls.append("pull_request \(cwd) \(number) \(agent)")
+            $0.worktreeCalls.append("pull_request \(cwd) \(number) \(agent)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
     }
-    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.taskNews.append("\(cwd) clone=\(repository)")
+            $0.taskNews.append("\(cwd) clone=\(repository)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
@@ -377,9 +377,9 @@ final class FakeCore: AgentCore {
         try await call { $0.sessionCalls.append(cwd) }
         return state.withLock { $0.sessions }
     }
-    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?, runtime: TaskRuntime?) async throws -> TaskStarted {
+    func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
-            $0.taskNews.append("\(cwd) resume=\(agent):\(sessionId)")
+            $0.taskNews.append("\(cwd) resume=\(agent):\(sessionId)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }
@@ -1469,10 +1469,14 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 @MainActor
 @Test func newTaskCreatesAndOpensSelectedWorktrees() async {
     let core = FakeCore()
-    core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+    core.state.withLock {
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new")
+        $0.options.codeMode = true
+    }
     let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
     let create = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
     await create.loadOptions()
+    create.agent = "claude"
     create.location = .worktree
     create.source = "/Users/me/app"
     create.prompt = "build it"
@@ -1485,6 +1489,8 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 
     let open = NewTaskModel(core: core, machines: [mac], prefsFile: nil)
     await open.loadOptions()
+    open.agent = "claude"
+    open.codeMode = false
     open.location = .worktree
     open.source = "/Users/me/app"
     open.worktreeAction = .open
@@ -1494,8 +1500,8 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     #expect(open.canStart)
     #expect(await open.start() == AgentRoute(machineId: "m1", terminalId: "term_new"))
     #expect(core.snapshot.worktreeCalls == [
-        "list /Users/me/app", "create /Users/me/app feature codex",
-        "list /Users/me/app", "open /Users/me/app /Users/me/app-feature codex"
+        "list /Users/me/app", "create /Users/me/app feature claude codeMode=true",
+        "list /Users/me/app", "open /Users/me/app /Users/me/app-feature claude codeMode=false"
     ])
     #expect(core.snapshot.taskPrompts == ["build it", "continue"])
 }
@@ -1679,6 +1685,7 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     DevicePrefs.update(in: file) {
         $0.taskBases = ["m1": "/Users/me/git", "m2": "/Users/me"]
         $0.taskUltracode = ["m1": true, "m2": true]
+        $0.taskCodeMode = ["m2": false, "m3": true]
     }
     DevicePrefs.forgetTaskBase(machineId: "m1", in: file)
     #expect(DevicePrefs.load(from: file).taskBases == ["m2": "/Users/me"])
@@ -1686,6 +1693,9 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
     DevicePrefs.forgetMachine(machineId: "m2", in: file)
     #expect(DevicePrefs.load(from: file).taskBases.isEmpty)
     #expect(DevicePrefs.load(from: file).taskUltracode == ["m1": true])
+    #expect(DevicePrefs.load(from: file).taskCodeMode == ["m3": true])
+    DevicePrefs.forgetMachine(machineId: "m3", in: file)
+    #expect(DevicePrefs.load(from: file).taskCodeMode.isEmpty)
 }
 
 @MainActor
