@@ -224,8 +224,8 @@ fn agent_label(a: &AgentInfo) -> String {
         .unwrap_or_else(|| "agent".to_owned())
 }
 
-/// The APNs title goes through Apple, so it never comes from the terminal title or any
-/// title the pane's program reports: the herdr agent name, else the agent kind.
+/// An approval alert offers Approve under this title, so it never comes from the terminal title
+/// or any title the pane's program reports: the herdr agent name, else the agent kind.
 pub(crate) fn alert_title(a: &AgentInfo) -> String {
     [&a.name, &a.agent]
         .into_iter()
@@ -620,7 +620,7 @@ impl Approvals {
 
     async fn create(&self, a: &AgentInfo, workspaces: &[WorkspaceInfo]) -> anyhow::Result<()> {
         let terminal_id = TerminalId::new(a.terminal_id.clone())?;
-        let title = session_title(a);
+        let title = alert_title(a);
         let folder = folder_label(a, workspaces);
         let screen = self.screen(a).await?;
         self.read_done(a);
