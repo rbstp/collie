@@ -28,4 +28,4 @@ Chat works in herdr only; in Herdr Core and Rex, use Terminal. Chat follows `/ne
 
 ## Startup prompts
 
-When a new task meets Copilot's folder trust prompt, it stops without sending your prompt. Answer the trust prompt in Terminal.
+When a new task meets Copilot's folder trust prompt, it stops without sending your prompt. Answer the trust prompt in Terminal. In Herdr Core and Rex, where you only watch Copilot CLI, Terminal's arrow keys, Return, Esc and a digit still answer that prompt: move with the arrow keys and press Return, press a digit to pick its option at once, or press Esc.

@@ -321,6 +321,60 @@ pub fn codex_startup(text: &str) -> bool {
     })
 }
 
+/// Copilot CLI's folder trust prompt as Copilot 1.0.112 draws it: its tab bar on the first row,
+/// and a box as wide as the terminal from its first column, its bottom border on the
+/// terminal's last row, `Confirm folder trust` on its first row over a rule, one `❯` option
+/// and the key hint on its last rows. Widths are display cells, as the screen shows them.
+/// Copilot draws its input box and status under anything an agent or a tool writes, so their
+/// text never ends the screen.
+pub fn copilot_trust(text: &str, columns: u16, rows: u16) -> bool {
+    use unicode_width::UnicodeWidthStr;
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let width = usize::from(columns);
+    if lines.len() != usize::from(rows)
+        || lines.first() != Some(&"  Current   Sessions   Issues   Pull requests   Gists")
+        || width < 3
+    {
+        return false;
+    }
+    let edged = |l: &str, left: char, right: char| {
+        l.width() == width && l.starts_with(left) && l.ends_with(right)
+    };
+    let border = |l: &str, left: char, right: char| {
+        edged(l, left, right) && l.chars().skip(1).take(width - 2).all(|c| c == '─')
+    };
+    let last = lines.len() - 1;
+    if !border(lines[last], '╰', '╯') {
+        return false;
+    }
+    let Some(top) = lines[..last].iter().rposition(|l| border(l, '╭', '╮')) else {
+        return false;
+    };
+    let inner: Option<Vec<&str>> = (lines[top + 1..last].iter())
+        .map(|l| {
+            edged(l, '│', '│').then(|| {
+                l.strip_prefix('│')
+                    .and_then(|l| l.strip_suffix('│'))
+                    .unwrap_or_default()
+            })
+        })
+        .collect();
+    let Some(inner) = inner else {
+        return false;
+    };
+    let row = |i: usize| inner.get(i).map_or("", |r| r.trim());
+    let hint = |i: usize| row(i).starts_with("↑/↓ to navigate");
+    let n = inner.len();
+    n >= 4
+        && inner[0].starts_with(" Confirm folder trust ")
+        && row(0) == "Confirm folder trust"
+        && !row(1).is_empty()
+        && row(1).chars().all(|c| c == '─')
+        && row(n - 1).ends_with("esc to cancel")
+        && (hint(n - 1) || hint(n - 2))
+        && inner.iter().filter(|r| r.starts_with(" ❯ ")).count() == 1
+}
+
 /// Whether Claude Code shows ultracode on: the rule directly above its last `❯` row, the
 /// input box's top rule, carries the `ultracode` tag (`─── ultracode ─` in 2.1.299).
 pub fn ultracode_on(text: &str) -> bool {
@@ -2969,6 +3023,51 @@ mod tests {
         }
         for (_, screen) in CODEX[..2].iter().chain(&COPILOT) {
             assert!(!codex_startup(screen), "{screen}");
+        }
+    }
+
+    /// #897: only Copilot's own trust box, under its tab bar, at the bottom of the terminal and
+    /// as wide as it in display cells, lets keys reach a read-only Copilot.
+    #[test]
+    fn a_copilot_trust_prompt_is_its_box_at_the_bottom() {
+        let fixture = |name| {
+            let path = format!(
+                "{}/tests/fixtures/copilot-1.0.112/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            std::fs::read_to_string(path).unwrap()
+        };
+        for (name, columns, rows) in [
+            ("trust.detection.txt", 80, 24),
+            ("trust-wide-char.detection.txt", 80, 24),
+            ("trust-wide.detection.txt", 120, 50),
+            ("trust-narrow.detection.txt", 60, 20),
+            ("trust-core.detection.txt", 200, 120),
+        ] {
+            let screen = fixture(name);
+            assert!(copilot_trust(&screen, columns, rows), "{name}");
+            assert!(!copilot_trust(&screen, columns + 1, rows), "{name}");
+            assert!(
+                !copilot_trust(&screen, columns, rows + 6),
+                "{name}: blank rows under it"
+            );
+        }
+        let trust = fixture("trust.detection.txt");
+        let idle = fixture("idle.detection.txt");
+        let rows: Vec<&str> = trust.lines().collect();
+        let lines = |rows: &[&str]| rows.iter().map(|r| format!("{r}\n")).collect::<String>();
+        let footer = idle.lines().last().unwrap();
+        let above = lines(&[&rows[..2], &rows[3..], &[footer]].concat());
+        let indented: String = rows.iter().map(|r| format!(" {r}\n")).collect();
+        let titled = trust.replacen("Confirm folder trust", "Run shell command?  ", 1);
+        let untitled = trust.replacen(" Confirm folder trust ", &" ".repeat(22), 1);
+        let tabless = trust.replacen("Current ", "Results ", 1);
+        let two = trust.replace("   2. Yes, and", " ❯ 2. Yes, and");
+        for screen in [&idle, &above, &indented, &titled, &untitled, &tabless, &two] {
+            assert!(!copilot_trust(screen, 80, 24), "{screen}");
+        }
+        for (_, screen) in &COPILOT {
+            assert!(!copilot_trust(screen, 80, 24), "{screen}");
         }
     }
 

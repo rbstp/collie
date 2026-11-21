@@ -1,0 +1,20 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+                                                           ┃
+╭──────────────────────────────────────────────────────────╮
+│ Confirm folder trust                                     │
+│ ──────────────────────────────────────────────────────── │
+│ will remember your permissions for the rest of this      │
+│ session.                                                 │
+│                                                          │
+│ Git commands run in this folder may use configuration    │
+│ from the enclosing repository and execute programs       │
+│ configured by that repository.                           │
+│                                                          │
+│ Do you trust the files in this folder?                   │
+│                                                          │
+│ ❯ 1. Yes                                                 │
+│                                                          │
+│ ↑/↓ to navigate · pgup/pgdn to scroll · enter to select  │
+│ · esc to cancel                                          │
+╰──────────────────────────────────────────────────────────╯

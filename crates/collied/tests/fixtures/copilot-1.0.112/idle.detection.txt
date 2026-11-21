@@ -1,0 +1,24 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+│                                                                            │ ┃
+│  ╭──╮╭╮                             │  Getting started                     │ ┃
+│  ╰──╯╰╯  Copilot v1.0.112 uses AI.  │  Use the tabs above to explore your… │ ┃
+│  ██ ▘▝▐  Check for mistakes.        │  /init — Initialize Copilot instruc… │ ┃
+│    ▔▔▔                              │  /model — Switch models across prov… │ ┃
+│                                                                            │ ┃
+╰────────────────────────────────────────────────────────────────────────────╯ ┃
+                                                                               ┃
+ ● No Copilot instructions found for this repository. Run /init to generate    ┃
+   them.                                                                       ┃
+                                                                               ┃
+ ● Error auto updating: Failed to download package: Error: GitHub credential   ┃
+   owner did not provide a token                                               ┃
+                                                                               ┃
+ ● MCP Servers reloaded: 0 servers connected                                   ┃
+                                                                               ┃
+Please use /login to sign in to use Copilot
+ /private/.../app [⎇ master]    Run on: This computer ctrl+e change environment
+╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+┃
+╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ← open sidebar · Interactive · Manual Approval · / commands · tab next tab

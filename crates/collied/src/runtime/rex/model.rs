@@ -531,6 +531,8 @@ impl Block {
             launch_pending: false,
             read_only,
             unreported: record.is_none(),
+            cli: cli.map(str::to_owned),
+            reported,
         })
     }
 

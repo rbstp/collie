@@ -81,6 +81,12 @@ pub struct AgentInfo {
     /// A herdr-core or Rex agent with no status report, whose kind is its foreground CLI's.
     #[serde(skip)]
     pub unreported: bool,
+    /// The agent CLI a herdr-core or Rex agent's foreground process runs, when collied knows it.
+    #[serde(skip)]
+    pub cli: Option<String>,
+    /// The kind a herdr-core or Rex agent's own status report names.
+    #[serde(skip)]
+    pub reported: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -563,6 +569,15 @@ impl Runtime {
             Owner::Herdr => herdr::pane_columns(&self.herdr, pane_id).await,
             Owner::Core => self.followed()?.columns(pane_id),
             Owner::Rex => self.followed_rex()?.columns(pane_id),
+        }
+    }
+
+    /// Columns and rows of a herdr-core or Rex terminal; none for herdr's.
+    pub fn pane_size(&self, pane_id: &str) -> Result<Option<(u16, u16)>, Error> {
+        match Owner::of(pane_id) {
+            Owner::Herdr => Ok(None),
+            Owner::Core => self.followed()?.terminal_size(pane_id).map(Some),
+            Owner::Rex => self.followed_rex()?.terminal_size(pane_id).map(Some),
         }
     }
 
