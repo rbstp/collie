@@ -252,6 +252,8 @@ struct Herdr {
     text_lands: bool,
     tab_moves_on: bool,
     tab_rewords: Option<(&'static str, &'static str)>,
+    /// What each Enter answered, the option under the cursor, and `esc` for each Esc.
+    answered: Vec<String>,
 }
 
 struct Mock {
@@ -279,6 +281,7 @@ impl Mock {
             text_lands: true,
             tab_moves_on: false,
             tab_rewords: None,
+            answered: Vec::new(),
         }));
         let listener = UnixListener::bind(&socket).unwrap();
         let shared = state.clone();
@@ -352,7 +355,16 @@ fn answer(h: &mut Herdr, req: &Value) -> Value {
                 match key.as_str().unwrap() {
                     "down" if h.arrows_move => h.text = move_cursor(&h.text, 1),
                     "up" if h.arrows_move => h.text = move_cursor(&h.text, -1),
-                    "enter" | "esc" if h.unblock_on_keys => set_status(h, "working"),
+                    "enter" | "esc" => {
+                        let answer = match key.as_str() {
+                            Some("enter") => cursor_label(&h.text),
+                            _ => "esc".to_owned(),
+                        };
+                        h.answered.push(answer);
+                        if h.unblock_on_keys {
+                            set_status(h, "working");
+                        }
+                    }
                     "tab" if h.tab_moves_on => {
                         let seq = h.agent["state_change_seq"].as_u64().unwrap();
                         h.agent["state_change_seq"] = json!(seq + 1);
@@ -431,6 +443,21 @@ fn move_cursor(text: &str, by: isize) -> String {
         lines[options[to]].replacen("  ", "❯ ", 1)
     };
     lines.join("\n") + "\n"
+}
+
+/// The label of the option Claude Code's cursor is on: the `❯` row set in least, as an
+/// option's own text can draw a `❯` deeper.
+fn cursor_label(text: &str) -> String {
+    let label = |l: &'_ str| {
+        let label = l.trim_start().strip_prefix('❯')?.trim_start().to_owned();
+        match label.split_once(". ") {
+            Some((n, rest)) if n.bytes().all(|b| b.is_ascii_digit()) => Some(rest.to_owned()),
+            _ => TRUST_OPTIONS.contains(&&*label).then_some(label),
+        }
+    };
+    let rows = text.lines().filter(|l| label(l).is_some());
+    let row = rows.min_by_key(|l| l.len() - l.trim_start().len());
+    row.and_then(label).unwrap_or_default()
 }
 
 /// Replaces the label of the option under the cursor.
@@ -2165,6 +2192,7 @@ async fn a_question_is_answered_by_choosing_an_option() {
         rig.audit()[0]["result"],
         format!("choose 1: applied terminal={TERMINAL} keys=down,enter")
     );
+    assert_eq!(rig.herdr.with(|h| h.answered.clone()), ["Redis"]);
     assert_eq!(
         code(rig.choose(&a, 1, &a.nonce).await),
         ErrorCode::ApprovalAlreadyResolved
@@ -2188,6 +2216,7 @@ async fn a_question_is_answered_by_choosing_an_option() {
         rig.herdr.params("agent.send_keys")[2],
         json!({"target": "w7:p1", "keys": ["enter"]})
     );
+    assert_eq!(rig.herdr.with(|h| h.answered.clone()), ["Redis", "SQLite"]);
 }
 
 #[tokio::test]
@@ -2554,6 +2583,91 @@ async fn a_numbered_row_in_an_options_text_is_no_option_to_choose() {
             json!({"target": "w7:p1", "keys": ["enter"]}),
         ]
     );
+    assert_eq!(rig.herdr.with(|h| h.answered.clone()), ["Chat about this"]);
+}
+
+#[tokio::test]
+async fn the_report_says_which_dialog_a_menu_is() {
+    let mut rig = Rig::start(TTL).await;
+    let show = |rig: &Rig, rule: &str, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = rule.into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    // Hand-built: rows of an option's description as Claude Code 2.1.329 wraps one at the
+    // label's column, that option's row and Claude Code's own entries off screen, worded as
+    // the plan prompt and as a permission prompt. Read by their wording, they offered the
+    // agent's choices or decisions, its cursor where the agent put it.
+    let rule = "─".repeat(60);
+    let plan = format!(
+        "     {rule}\n     Would you like to proceed?\n       1. Yes, and use auto mode\n     ❯ 2. No, keep planning\n"
+    );
+    let permission = format!(
+        "     {rule}\n     Bash command\n       rm -rf build\n     Do you want to proceed?\n     ❯ 1. Yes\n       2. No\n"
+    );
+    // A fragment worded as the folder trust prompt, set in as an option's text is.
+    let trust = format!(
+        "     {rule}\n     Accessing workspace:\n\n     ❯ No, exit\n       Yes, I trust this folder\n\n     Enter to confirm · Esc to cancel\n"
+    );
+    for (report, screen) in [
+        ("legacy_no_prompt_blocker", &plan),
+        ("bash_permission_prompt", &permission),
+        ("permission", &trust),
+    ] {
+        show(&rig, report, screen, &fresh(LIVE.1));
+        let a = rig.needed().await;
+        assert!(!a.choices.is_empty(), "{report}");
+    }
+    for report in ["live_blocked_form", "question"] {
+        for screen in [&plan, &permission, &trust] {
+            show(&rig, report, screen, &fresh(LIVE.1));
+            let a = rig.needed().await;
+            assert!(a.options.is_empty() && a.choices.is_empty(), "{report}");
+        }
+    }
+    // The folder trust prompt as Claude Code draws it is decided where herdr reports it as a
+    // form, and not where Claude Code itself reports a question.
+    show(&rig, "live_blocked_form", TRUST_292, &fresh(LIVE.1));
+    assert_eq!(
+        rig.needed().await.options,
+        [Decision::Approve, Decision::Deny]
+    );
+    show(&rig, "question", TRUST_292, &fresh(LIVE.1));
+    assert!(rig.needed().await.choices.is_empty());
+    // A report of a permission prompt never takes a menu drawn as a question for one, with
+    // its call pending or its script running.
+    for report in ["permission", "bash_permission_prompt"] {
+        for (screen, transcript) in [
+            (ASKED_ONE.0, fresh(ASKED_ONE.1)),
+            (SCRIPTED.0, fresh(SCRIPTED.1)),
+        ] {
+            show(&rig, "live_blocked_form", screen, &transcript);
+            assert!(!rig.needed().await.choices.is_empty());
+            show(&rig, report, screen, &transcript);
+            let a = rig.needed().await;
+            assert!(a.options.is_empty() && a.choices.is_empty(), "{report}");
+        }
+    }
+    // A matched question is answered by choosing its option, whatever its labels read: no
+    // decision, and no Esc for an option labelled `(esc)`.
+    let labels = fresh(SCRIPTED.1)
+        .replace("Option A", "Yes, proceed")
+        .replace("Option B", "No, keep local")
+        .replace("Second test choice.", "Use local (esc)");
+    let screen = SCRIPTED
+        .0
+        .replace("Option A", "Yes, proceed")
+        .replace("Option B", "No, keep local")
+        .replace("Second test choice.", "Use local (esc)");
+    show(&rig, "live_blocked_form", &screen, &labels);
+    let a = rig.needed().await;
+    assert!(a.options.is_empty() && !a.supports_note);
+    assert_eq!(a.choices[1].label, "No, keep local");
+    resolved(rig.choose(&a, 1, &a.nonce).await);
+    assert_eq!(rig.herdr.with(|h| h.answered.clone()), ["No, keep local"]);
 }
 
 #[tokio::test]
@@ -2873,8 +2987,8 @@ async fn a_refused_question_form_is_logged_once_with_its_reason() {
     rig.needed().await;
     show(&rig, "live_blocked_form", ASKED_ONE.0, &fresh(SCRIPTED.1));
     rig.needed().await;
-    // The same script with an apostrophe in a comment: the read may have lost a literal.
-    let stray = fresh(SCRIPTED.1).replace("await tools", "/* don't */ await tools");
+    // The same script with a quote in a regular expression: the read may have lost a literal.
+    let stray = fresh(SCRIPTED.1).replace("await tools", "/'/.test(x);\\nawait tools");
     assert_ne!(stray, fresh(SCRIPTED.1));
     show(&rig, "live_blocked_form", SCRIPTED.0, &stray);
     assert!(rig.needed().await.choices.is_empty());
@@ -3046,7 +3160,7 @@ async fn a_menu_typed_into_a_renamed_session_box_is_answered_in_the_terminal() {
 async fn a_plan_is_chosen_with_arrows_never_esc() {
     let mut rig = Rig::start(TTL).await;
     rig.herdr.with(|h| {
-        h.rule = "live_blocked_form".into();
+        h.rule = "legacy_no_prompt_blocker".into();
         h.text = PLAN.into();
     });
     let a = rig.needed().await;
@@ -3168,7 +3282,8 @@ async fn approvals_say_whether_keys_and_text_are_taken() {
         ("live_blocked_form", TRUST_292, "", false, false, false),
         ("bash_permission_prompt", BASH, "", false, false, true),
         ("bash_permission_prompt", &two, "", false, false, false),
-        ("live_blocked_form", BASH, "", false, false, true),
+        // Reported as a form, a menu is a question whatever it reads.
+        ("live_blocked_form", BASH, "", false, false, false),
         ("bash_permission_prompt", BASH_LIVE, "", false, false, true),
         (
             "legacy_no_prompt_blocker",

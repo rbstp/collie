@@ -355,12 +355,17 @@ pub struct Menu {
     /// every row of the form under it indented, its options included, so no text of the form
     /// passes for it, and one above the form has the border under it. A question form, whose
     /// text starts at column 0 like its cursor row, never has one.
-    bordered: bool,
+    pub bordered: bool,
     /// Whether the cursor row starts at column 0, where Claude Code draws AskUserQuestion's
     /// form and its review page (2.1.289 to 2.1.329). It indents its permission prompts, the
     /// plan prompt and the workflow prompt, and no row of an option's text, which the agent
     /// writes, starts there: a question form is not answered without it ([`option_rows`]).
     flush: bool,
+    /// Whether it is the unnumbered folder trust prompt ([`Menu::parse_trust`]) with its cursor
+    /// at column 1, where Claude Code draws it and herdr reports it as a form. No row the agent
+    /// writes starts there: an option's text starts at its label's column, 5 or deeper, and a
+    /// question's at column 0 or behind the gutter.
+    pub trust: bool,
 }
 
 impl Menu {
@@ -483,6 +488,7 @@ impl Menu {
             span: rule.map_or(0, |r| lines[r].trim().chars().count()),
             bordered,
             flush,
+            trust: false,
         })
     }
 
@@ -560,6 +566,7 @@ impl Menu {
             span: 0,
             bordered: false,
             flush: false,
+            trust: indent == 1,
         })
     }
 
