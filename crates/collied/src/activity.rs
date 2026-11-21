@@ -539,7 +539,13 @@ mod tests {
             },
             terminal_id: approval.terminal_id.clone(),
             approval_id: approval.approval_id.clone(),
-            alert: push::approval_alert(approval, "api-fixer", "nMAC", "Bash: SECRET context"),
+            alert: push::approval_alert(
+                approval,
+                "api-fixer",
+                "api",
+                "nMAC",
+                "Bash: SECRET context",
+            ),
             due,
         }
     }

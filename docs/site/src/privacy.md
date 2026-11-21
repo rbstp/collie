@@ -54,7 +54,7 @@ Tailscale's coordination service learns about these devices as about any device 
 
 ## Push notifications
 
-If you set up notifications, `collied` sends them through Apple Push Notification service (APNs), via the push relay or directly. A key generated on your phone encrypts alert titles and bodies, agent and workspace names, pull request details, pending commands, and Live Activities' private attributes and every state they show. Only your paired machine and phone hold that key; Apple receives generic alert text and ciphertext.
+If you set up notifications, `collied` sends them through Apple Push Notification service (APNs), via the push relay or directly. A key generated on your phone encrypts alert titles and bodies, agent, session, folder and workspace names, pull request details, pending commands, and Live Activities' private attributes and every state they show. Only your paired machine and phone hold that key; Apple receives generic alert text and ciphertext.
 
 Apple still sees delivery destinations; opaque machine, thread, approval, event and activity identifiers; generic categories; notification priority, timing, frequency and ciphertext size; and Live Activity lifecycle. The generic text still tells Apple whether an agent finished or needs attention. Live Activity content the phone starts or updates itself is stored encrypted the same way. Your phone's notification extension and widget decrypt the content locally. Approval nonces and decisions travel only over your authenticated tailnet connection.
 

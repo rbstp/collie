@@ -235,6 +235,22 @@ pub(crate) fn alert_title(a: &AgentInfo) -> String {
         .unwrap_or_else(|| "agent".to_owned())
 }
 
+pub(crate) fn session_title(a: &AgentInfo) -> String {
+    [crate::flock::title(a), a.name.clone(), a.agent.clone()]
+        .into_iter()
+        .flatten()
+        .map(|s| label(&s))
+        .find(|s| !s.is_empty())
+        .unwrap_or_else(|| "agent".to_owned())
+}
+
+pub(crate) fn folder_label(a: &AgentInfo, workspaces: &[WorkspaceInfo]) -> String {
+    crate::flock::cwd(a)
+        .and_then(|cwd| cwd.split('/').rfind(|s| !s.is_empty()).map(label))
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| workspace_label(&a.workspace_id, workspaces))
+}
+
 pub(crate) fn workspace_label(workspace_id: &str, workspaces: &[WorkspaceInfo]) -> String {
     workspaces
         .iter()
@@ -604,7 +620,8 @@ impl Approvals {
 
     async fn create(&self, a: &AgentInfo, workspaces: &[WorkspaceInfo]) -> anyhow::Result<()> {
         let terminal_id = TerminalId::new(a.terminal_id.clone())?;
-        let title = alert_title(a);
+        let title = session_title(a);
+        let folder = folder_label(a, workspaces);
         let screen = self.screen(a).await?;
         self.read_done(a);
         if !screen.blocked || screen.settings_picker {
@@ -686,7 +703,7 @@ impl Approvals {
         if let Some(push) = &self.push {
             push.notify_approval(
                 &approval,
-                push::approval_alert(&approval, &title, &self.node_id, &context),
+                push::approval_alert(&approval, &title, &folder, &self.node_id, &context),
                 alert,
             );
         }
@@ -1255,5 +1272,43 @@ mod tests {
             ..a
         };
         assert_eq!(alert_title(&named), "api-fixer");
+    }
+
+    #[test]
+    fn alerts_name_the_session_and_folder_as_the_page_does() {
+        let workspaces: Vec<WorkspaceInfo> = serde_json::from_value(serde_json::json!([
+            {"workspace_id": "w1", "number": 1, "label": "claude", "agent_status": "done"},
+        ]))
+        .unwrap();
+        let a: AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "t", "workspace_id": "w1", "pane_id": "w1:p1", "agent_status": "done",
+            "agent": "claude", "name": "api-fixer", "title": "Reported title",
+            "terminal_title_stripped": "Fix the \u{202e}alert text",
+            "cwd": "/Users/me/src/collie", "foreground_cwd": "/Users/me/src/collie/crates/",
+        }))
+        .unwrap();
+        assert_eq!(session_title(&a), "Fix the alert text");
+        assert_eq!(folder_label(&a, &workspaces), "crates");
+        let reported = AgentInfo {
+            terminal_title_stripped: None,
+            foreground_cwd: None,
+            ..a.clone()
+        };
+        assert_eq!(session_title(&reported), "Reported title");
+        assert_eq!(folder_label(&reported, &workspaces), "collie");
+        let named = AgentInfo {
+            title: None,
+            cwd: Some("/".into()),
+            ..reported
+        };
+        assert_eq!(session_title(&named), "api-fixer");
+        assert_eq!(folder_label(&named, &workspaces), "claude");
+        let bare = AgentInfo {
+            name: None,
+            cwd: None,
+            ..named
+        };
+        assert_eq!(session_title(&bare), "claude");
+        assert_eq!(folder_label(&bare, &[]), "workspace");
     }
 }
