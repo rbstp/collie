@@ -448,10 +448,38 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut prev = Prev::Start;
     let mut list_item: Option<(usize, String)> = None;
     let mut in_code = false;
+    let mut sent = false;
     for (i, trimmed) in rows[..limit].iter().enumerate() {
         let item = list_item.take();
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
+        let first = s
+            .strip_prefix("> ")
+            .or_else(|| s.strip_prefix(">\u{a0}"))
+            .or((s == ">").then_some(""));
+        if ind == 0
+            && let Some(text) = first
+        {
+            sent = true;
+            tail = text.to_owned();
+            prev = Prev::Held;
+            continue;
+        }
+        if sent && ind >= 2 && !s.starts_with('▸') {
+            let width = cols.saturating_sub(3);
+            if ind == 2 && tail.width() <= width {
+                let at = u32::try_from(i).unwrap_or(u32::MAX);
+                match separator(&tail, s, width) {
+                    " " if wide_cut(&tail, s, width) => splits.push(at),
+                    " " => wraps.push(at),
+                    "" => splits.push(at),
+                    _ => {}
+                }
+            }
+            tail = trimmed[2..].to_owned();
+            continue;
+        }
+        sent = false;
         if s.starts_with("```") {
             in_code = !in_code;
             prev = Prev::Held;
@@ -1847,6 +1875,43 @@ mod tests {
         ]
         .join("\r\n");
         assert_eq!(soft_wraps_for("agy", &menu_below, 40), (vec![], vec![]));
+    }
+
+    #[test]
+    fn agy_sent_prompt_joins_its_wraps_and_keeps_newlines_attachments_and_actions() {
+        let rule = "─".repeat(40);
+        let rows = [
+            rule.as_str(),
+            "\u{1b}[1;38;2;99;168;248m> Could you improve the look of the\u{1b}[0m",
+            "  website? It is very plain, so feel",
+            "  free to change it as you like.",
+            "  Give me three options to choose",
+            "  between before you edit any files ok",
+            "  ▸ 📎 1 image(s) (164 KB)  (ctrl+o to expand)",
+            "",
+            "○ Thought for 3s",
+            "● Ran (cargo nextest run)",
+            "",
+            rule.as_str(),
+            "> a prompt typed in the input box that",
+            "  wraps onto a second row",
+            rule.as_str(),
+            "? for shortcuts auto · Gemini 4 Neon · high",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 40),
+            (vec![2, 3, 5, 13], vec![])
+        );
+
+        let split_word = [
+            rule.as_str(),
+            &format!("> {}", "a".repeat(37)),
+            "  bbbb tail",
+            "",
+            "● Ran (cargo nextest run)",
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &split_word, 40), (vec![], vec![2]));
     }
 
     #[test]
