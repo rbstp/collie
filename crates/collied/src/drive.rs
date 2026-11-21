@@ -3737,6 +3737,32 @@ mod tests {
         }
     }
 
+    /// Antigravity CLI 1.5.13 reports `blocked` at its sign-in prompt, so the keys answer it.
+    #[tokio::test]
+    async fn an_antigravity_cli_blocked_at_sign_in_takes_keys() {
+        fn agy() -> serde_json::Value {
+            let blocked = serde_json::json!({"state": "blocked", "app": "antigravity"});
+            core_tests::terminal("t1", blocked, "/usr/local/bin/agy")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        core_tests::fake_core(&root.join("core.sock"), |m| match m {
+            "terminal.keys" => serde_json::json!({}),
+            m => core_get(m, agy),
+        })
+        .await;
+        let core = core_tests::core_of(&root, serde_json::json!([agy()]));
+        let keys = AgentSendKeysParams {
+            op_id: OpId::new("P".repeat(22)).unwrap(),
+            terminal_id: TerminalId::new(core_id()).unwrap(),
+            keys: vec![Key::Down],
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let (sent, target) = core_driver(&root, core).send_keys(keys, &yes).await;
+        assert_eq!(sent, Ok(Response::Ok));
+        assert_eq!(target, Some(format!("{} blocked keys=down", core_id())));
+    }
+
     fn core_get(method: &str, terminal: fn() -> serde_json::Value) -> serde_json::Value {
         match method {
             "terminal.get" => terminal(),
