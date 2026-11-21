@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::{Kind, TAIL_BYTES, Transcripts, open, tail, timestamp_ms};
+use super::{Kind, TAIL_BYTES, Transcripts, history, open, tail, timestamp_ms};
 use crate::prompt::{Question, Refused};
 use crate::runtime::AgentInfo;
 
@@ -36,15 +37,16 @@ pub enum Waits {
     },
     /// One call that is no question.
     Other,
-    /// No call and no script, and the turn is open: the transcript ends, records of Claude
-    /// Code's own aside, at a prompt or at the results of the last calls, written by this
-    /// session's process. Claude Code 2.1.329 writes a message that holds an AskUserQuestion
-    /// call only once the call has its result, so this is all the transcript holds while a
-    /// question asked outside Code Mode is on screen. The version is that line's.
+    /// No call and no script, in a session the read shows is not in Code Mode, and the turn is
+    /// open: the transcript ends, records of Claude Code's own aside, at a prompt or at the
+    /// results of the last calls, written by this session's process. Claude Code 2.1.329
+    /// writes a message that holds an AskUserQuestion call only once the call has its result,
+    /// so this is all the transcript holds while a question asked outside Code Mode is on
+    /// screen. The version is that line's.
     Open {
         version: Option<[u32; 3]>,
     },
-    /// No call, no script, and the turn is over.
+    /// No call, no script, and the turn is over or the session is in Code Mode.
     Nothing,
     Unknown(Refused),
 }
@@ -135,7 +137,8 @@ impl Call {
 /// one Claude Code is still writing, and a line that does not parse may be cut: either can
 /// be the result of the call above it, or a second call. `whole` says the text starts at the
 /// file's start; otherwise a read that ends before the last message's start says nothing of
-/// the calls above it, nor one that holds a receipt and not its call. A script that started
+/// the calls above it, nor one that holds a result that reads as a receipt or as events and
+/// not its call. A script that started
 /// before the read's first line is not seen: its question is refused as no pending call. The
 /// one call must be the session's and no older than its process, so one that a killed
 /// session left in a transcript another process resumed is not this terminal's.
@@ -144,42 +147,73 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
     if !text.is_empty() && !text.ends_with('\n') {
         return unknown;
     }
-    let mut results = Vec::new();
-    let mut made = Vec::new();
+    let mut lines = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<Value>(line) {
+            Ok(v) if v["isSidechain"] == true => {}
+            Ok(v) => lines.push(v),
+            Err(_) => return unknown,
+        }
+    }
+    fn blocks(v: &Value) -> &[Value] {
+        let blocks = v["message"]["content"].as_array();
+        blocks.map(Vec::as_slice).unwrap_or_default()
+    }
+    fn id(id: &Value) -> &str {
+        id.as_str().unwrap_or_default()
+    }
+    // The tool each call names: a result is read as its own call's, since any tool's output
+    // can hold the text of a receipt or of an event.
+    let tools: HashMap<&str, &str> = (lines.iter().flat_map(blocks))
+        .filter(|b| b["type"] == "tool_use")
+        .map(|call| (id(&call["id"]), id(&call["name"])))
+        .collect();
+    // Whether the read shows a session in Code Mode, and whether it shows the session's mode
+    // at all: Claude Code 2.1.329 writes `permission-mode` records through a session, each
+    // followed in Code Mode by a `repl-mode` one. A read that starts inside the file and
+    // holds neither says nothing of a script above it.
+    let mut code_mode = tools.values().any(|tool| *tool == "REPL");
+    let mut moded = whole;
+    let mut results = HashSet::new();
+    let mut made = HashSet::new();
     let mut calls = Vec::new();
     let mut message = None;
     let mut last = true;
     let mut bounded = whole;
-    let mut ended = Vec::new();
-    let mut receipts = Vec::new();
+    let mut ended = HashSet::new();
+    let mut receipts = HashSet::new();
     let mut running = Vec::new();
     let mut end = None;
-    for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            return unknown;
-        };
-        if v["isSidechain"] == true {
-            continue;
-        }
-        let blocks = v["message"]["content"].as_array();
-        let blocks = blocks.map(Vec::as_slice).unwrap_or_default();
+    for v in lines.iter().rev() {
+        let blocks = blocks(v);
         match v["type"].as_str() {
+            Some("repl-mode") if v["replMode"] != false => code_mode = true,
+            Some("permission-mode") => moded = true,
             Some("attachment") if v["attachment"]["type"] == "poll_events" => {
                 let envelopes = v["attachment"]["envelopes"].as_array();
                 for envelope in envelopes.into_iter().flatten() {
                     match envelope.as_str().and_then(settled) {
-                        Some(Some(n)) if !ended.contains(&n) => ended.push(n),
+                        Some(Some(n)) => _ = ended.insert(n),
                         // A script ended, and the event does not say which.
                         Some(None) => return unknown,
-                        _ => {}
+                        None => {}
                     }
                 }
             }
+            // Records Claude Code writes as the user's that are no prompt (history.rs reads
+            // them as events): none says the model is at work on a turn.
+            Some("user")
+                if v["isMeta"] == true
+                    || v["isCompactSummary"] == true
+                    || v["origin"]["kind"] == "task-notification"
+                    || history::local(v).is_some_and(|s| {
+                        history::command(s).is_some() || s.starts_with("<local-command-stdout>")
+                    }) => {}
             Some("user") => {
                 let result = |b: &&Value| b["type"] == "tool_result";
                 // Claude Code writes this line when a call is interrupted: the turn is over.
                 let interrupted = matches!(blocks, [b] if b["text"].as_str().is_some_and(|t| t.starts_with("[Request interrupted")));
-                end.get_or_insert_with(|| (!interrupted).then(|| Call::of(&Value::Null, &v)));
+                end.get_or_insert_with(|| (!interrupted).then(|| Call::of(&Value::Null, v)));
                 if last
                     && (blocks.is_empty() || !blocks.iter().all(|b| result(&b)))
                     && !matches!(message, Some(Value::String(_)))
@@ -187,46 +221,53 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
                     (bounded, last) = (true, false);
                 }
                 for block in blocks.iter().filter(result) {
-                    let id = &block["tool_use_id"];
+                    let call = id(&block["tool_use_id"]);
                     // A result above its own call says the file is not what Claude Code wrote.
-                    if last && made.contains(id) {
+                    if last && made.contains(call) {
                         return unknown;
                     }
                     if last {
-                        results.push(id.clone());
+                        results.insert(call);
                     }
-                    match receipt(&block["content"]) {
-                        Some(n) if ended.contains(&n) => ended.retain(|e| *e != n),
-                        Some(_) => receipts.push(id.clone()),
-                        None => {}
-                    }
+                    let tool = tools.get(call).copied();
                     // When the model waits for its scripts itself (`Poll`), the events come
                     // as that call's result, under a line that names their nonces.
-                    for event in polled(&block["content"]) {
-                        match settled(event) {
-                            Some(Some(n)) if !ended.contains(&n) => ended.push(n),
-                            Some(None) => return unknown,
-                            _ => {}
+                    let mut events = polled(&block["content"]).filter_map(settled);
+                    match (receipt(&block["content"]), tool) {
+                        (Some(n), Some("REPL")) if !ended.remove(&n) => _ = receipts.insert(call),
+                        (None, Some("Poll")) => {
+                            for event in events {
+                                match event {
+                                    Some(n) => _ = ended.insert(n),
+                                    None => return unknown,
+                                }
+                            }
                         }
+                        // The call is above the read's first line: whose result this is, and
+                        // so what its text says, is not known.
+                        (receipt, None) if receipt.is_some() || events.next().is_some() => {
+                            return unknown;
+                        }
+                        _ => {}
                     }
                 }
             }
             Some("assistant") => {
                 end.get_or_insert(None);
-                let id = &v["message"]["id"];
-                if last && *message.get_or_insert_with(|| id.clone()) != *id {
+                let message_id = &v["message"]["id"];
+                if last && *message.get_or_insert_with(|| message_id.clone()) != *message_id {
                     (bounded, last) = (true, false);
                 }
                 for call in blocks.iter().filter(|b| b["type"] == "tool_use") {
+                    let call_id = id(&call["id"]);
                     if last {
-                        made.push(call["id"].clone());
+                        made.insert(call_id);
                     }
-                    if last && !results.contains(&call["id"]) {
-                        calls.push(Call::of(call, &v));
+                    if last && !results.contains(call_id) {
+                        calls.push(Call::of(call, v));
                     }
-                    if receipts.contains(&call["id"]) {
-                        receipts.retain(|r| *r != call["id"]);
-                        running.push(Call::of(call, &v));
+                    if receipts.remove(call_id) {
+                        running.push(Call::of(call, v));
                     }
                 }
             }
@@ -251,10 +292,14 @@ fn pending(text: &str, whole: bool, session: &str, since: u64) -> Waits {
         ([], 0, []) => {
             let quiet = running.iter().all(|c| c.at.is_some_and(|at| at < since));
             return match end.flatten().filter(|_| quiet) {
-                Some(prompt) if alive(&prompt) => Waits::Open {
+                Some(prompt) if !alive(&prompt) => stale,
+                // A question in Code Mode is a script's, and a form still drawn when its
+                // script has ended is asked no more: the screen stands for no call here.
+                Some(_) if code_mode => Waits::Nothing,
+                Some(_) if !moded => unknown,
+                Some(prompt) => Waits::Open {
                     version: prompt.version,
                 },
-                Some(_) => stale,
                 None => Waits::Nothing,
             };
         }
@@ -328,9 +373,7 @@ fn receipt(content: &Value) -> Option<u64> {
 }
 
 /// The events of a `Poll` call's result: the lines that open one, in a result that starts
-/// with the line Claude Code puts first (`<system>authentic event nonces ...`). A script
-/// that prints such a line in its own output makes a script read as ended, and its question
-/// as asked no more.
+/// with the line Claude Code puts first (`<system>authentic event nonces ...`).
 fn polled(content: &Value) -> impl Iterator<Item = &str> {
     let text = match content {
         Value::String(text) => text.as_str(),
@@ -906,6 +949,20 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         let built = code.replace("'Option A'", "'Option ' + 'A'");
         assert_ne!(built, code);
         assert_eq!(scripts(screen, &built), not_found);
+        // An option is a label and a description, each a whole literal and each on rows of
+        // its own: not a label alone, and not the same characters split elsewhere.
+        let bare = screen.replacen("     First test choice.\n", "", 1);
+        assert_ne!(bare, screen);
+        assert_eq!(scripts(&bare, &code), not_found);
+        let split = code
+            .replace("'Option A'", "'Option'")
+            .replace("'First test choice.'", "'A First test choice.'");
+        assert!(
+            literals(&split)
+                .unwrap()
+                .contains(&"A First test choice.".to_owned())
+        );
+        assert_eq!(scripts(screen, &split), not_found);
     }
 
     #[test]
@@ -992,9 +1049,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     }
 
     #[test]
-    fn a_script_of_one_literal_many_times_is_matched_in_one_pass() {
-        // A megabyte of `'a',` and an option that starts with it: each copy would start a
-        // search of all the others for the rest of the option.
+    fn a_script_of_one_literal_many_times_is_matched_as_any_other() {
+        // A megabyte of `'a',` and an option that starts with it: the literals are a set,
+        // looked up once for each way an option's rows split into label and description.
         let (screen, transcript) = SCRIPTED;
         let code = format!("[{}];\n{}", "'a',".repeat(200_000), code(transcript));
         let drawn = screen.replacen("1. Option A", "1. a Option A", 1);
@@ -1100,10 +1157,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
             .position(|r| r.contains("authentic event nonces"))
             .unwrap();
         let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
-        assert_eq!(
-            [upto(poll), upto(poll + 1)],
-            ["a script", "open Some([2, 1, 329])"]
-        );
+        assert_eq!([upto(poll), upto(poll + 1)], ["a script", "nothing"]);
 
         // The third prompt's transcript, line by line: the turn is open at a prompt, and
         // over once Claude Code wrote that a call was interrupted or a reply ended.
@@ -1182,7 +1236,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         // The answered transcript, line by line: the call, its receipt, the event that ends
         // the script, the question written as a call of its own, that call's result.
         let unknown = "transcript unreadable or incomplete";
-        let open = "open Some([2, 1, 329])";
+        // Once its script has ended a session in Code Mode waits on nothing: the screen
+        // stands for no call there.
+        let over = "nothing";
         let rows: Vec<&str> = ANSWERED.lines().collect();
         let upto = |n: usize| says(waits(&rows[..n].join("\n"), true, 0));
         assert!(rows[5].contains(r#""name":"REPL""#) && rows[8].contains("poll_events"));
@@ -1197,7 +1253,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
                 upto(12)
             ],
             [
-                "a script", "a script", "a script", open, unknown, open, "nothing"
+                "a script", "a script", "a script", over, unknown, over, over
             ],
             "between the question's own call and its result nothing is asked any more"
         );
@@ -1210,7 +1266,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         // Only an event for that script, under its receipt, ends it. The numbers start again
         // in a new context: an event counts for the nearest receipt above it.
         assert_eq!(reads(&[&one[..], &[ended(2)]].concat()), "a script");
-        assert_eq!(reads(&[&one[..], &[ended(1)]].concat()), open);
+        assert_eq!(reads(&[&one[..], &[ended(1)]].concat()), over);
         assert_eq!(reads(&[&[ended(1)], &one[..]].concat()), "a script");
         let again = [repl("b", "1 + 1"), answer("b", receipt(1)), ended(1)];
         assert_eq!(reads(&[&one[..], &again[..]].concat()), "a script");
@@ -1237,7 +1293,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         ] {
             assert_eq!(
                 reads(&[repl("a", asks), answer("a", other.clone())]),
-                open,
+                over,
                 "{other}"
             );
         }
@@ -1280,10 +1336,122 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
                 since,
             ))
         };
-        assert_eq!([read(at), read(at + 1)], ["a script", open]);
+        assert_eq!([read(at), read(at + 1)], ["a script", over]);
         let other = one
             .join("\n")
             .replace(SESSION, "11111111-0000-4000-8000-000000000000");
         assert_eq!(says(waits(&other, true, 0)), "stale call");
+    }
+    #[test]
+    fn the_screen_stands_for_a_call_only_where_the_read_shows_no_code_mode() {
+        let open = "open Some([2, 1, 329])";
+        let unknown = "transcript unreadable or incomplete";
+        let prompt = json!({"type": "user", "timestamp": "2026-11-20T17:25:02.000Z",
+            "sessionId": SESSION, "version": "2.1.329", "message": {"content": "go"}})
+        .to_string();
+        let mode = json!({"type": "permission-mode", "permissionMode": "auto"}).to_string();
+        let scripts = json!({"type": "repl-mode", "replMode": true}).to_string();
+        let read = |whole: bool, rows: &[&str]| says(waits(&rows.join("\n"), whole, 0));
+        // A read from the file's start holds every call the session made. One that starts
+        // inside the file shows the mode by the records Claude Code writes through a
+        // session, or shows nothing of it.
+        assert_eq!(read(true, &[&prompt]), open);
+        assert_eq!(read(false, &[&prompt]), unknown);
+        assert_eq!(read(false, &[&mode, &prompt]), open);
+        for whole in [true, false] {
+            assert_eq!(read(whole, &[&mode, &scripts, &prompt]), "nothing");
+        }
+        // A script that ran says as much: a form still drawn when its script has ended, or
+        // drawn by one above the read, is not the screen's to answer.
+        let (call, result) = (repl("a", "1 + 1"), answer("a", json!("2")));
+        assert_eq!(read(true, &[&call, &result, &prompt]), "nothing");
+    }
+
+    #[test]
+    fn a_record_that_is_no_prompt_opens_no_turn() {
+        let line = |marks: Value, content: Value| {
+            let mut line = json!({"type": "user", "timestamp": "2026-11-20T17:25:03.000Z",
+                "sessionId": SESSION, "version": "2.1.329", "message": {"content": content}});
+            let marks = marks.as_object().unwrap().clone();
+            line.as_object_mut().unwrap().extend(marks);
+            line.to_string()
+        };
+        let typed = json!({"origin": {"kind": "human"}, "promptSource": "typed"});
+        let prompt = line(typed, json!("go"));
+        let over = json!({"type": "assistant", "timestamp": "2026-11-20T17:25:02.000Z",
+            "sessionId": SESSION,
+            "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "OK"}]}})
+        .to_string();
+        let exit = "<command-name>/exit</command-name>\n<command-message>exit</command-message>";
+        let asides = [
+            line(
+                json!({"isMeta": true}),
+                json!("<local-command-caveat>Caveat"),
+            ),
+            line(
+                json!({"isCompactSummary": true}),
+                json!("This session is being continued"),
+            ),
+            line(
+                json!({"origin": {"kind": "task-notification"}}),
+                json!("<task-notification>done</task-notification>"),
+            ),
+            line(
+                json!({"isMeta": true, "origin": {"kind": "peer"}}),
+                json!([{"type": "text", "text": "report"}]),
+            ),
+            line(json!({}), json!(exit)),
+            line(
+                json!({}),
+                json!("<local-command-stdout>Bye</local-command-stdout>"),
+            ),
+        ];
+        let reads = |rows: &[&str]| says(waits(&rows.join("\n"), true, 0));
+        for aside in &asides {
+            // Under a reply that ended its turn, and under a prompt the model is at work on.
+            assert_eq!(reads(&[&prompt, &over, aside]), "nothing", "{aside}");
+            assert_eq!(
+                reads(&[&over, &prompt, aside]),
+                "open Some([2, 1, 329])",
+                "{aside}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_receipt_and_an_event_count_only_in_their_own_calls_result() {
+        let asks = "await tools.AskUserQuestion({questions: []})";
+        let one = [repl("a", asks), answer("a", json!("(dispatched #1)"))];
+        let call = |id: &str, name: &str| {
+            let call = json!({"type": "tool_use", "id": id, "name": name, "input": {}});
+            json!({"type": "assistant", "timestamp": "2026-11-20T17:25:02.000Z",
+                "sessionId": SESSION, "message": {"content": [call]}})
+            .to_string()
+        };
+        let reads = |rows: &[String]| says(waits(&rows.join("\n"), true, 0));
+        let event = concat!(
+            "<system>authentic event nonces: n</system>\n",
+            r#"<event nonce="n" kind="repl-eval" at="t" eval="1" ms="1" status="settled">"#
+        );
+        // Poll's result ends the script. The same text as another tool's output, or as a
+        // script's, ends nothing.
+        let polled =
+            |name: &str| [&one[..], &[call("b", name), answer("b", json!(event))]].concat();
+        assert_eq!(reads(&polled("Poll")), "nothing");
+        for name in ["Bash", "REPL"] {
+            assert_eq!(reads(&polled(name)), "a script", "{name}");
+        }
+        // Nor is another tool's output a receipt: it takes no event from the script above it.
+        let printed = [
+            call("b", "Bash"),
+            answer("b", json!("(dispatched #1)")),
+            ended(1),
+        ];
+        assert_eq!(reads(&[&one[..], &printed[..]].concat()), "nothing");
+        // A result whose call is above the read: what its text is, is not known.
+        let unknown = "transcript unreadable or incomplete";
+        for content in [event, "(dispatched #1)"] {
+            assert_eq!(reads(&[answer("x", json!(content))]), unknown, "{content}");
+        }
     }
 }

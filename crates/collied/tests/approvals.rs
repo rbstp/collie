@@ -398,11 +398,25 @@ fn answer(h: &mut Herdr, req: &Value) -> Value {
 
 fn move_cursor(text: &str, by: isize) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let label = |l: &str| {
+        l.trim_start()
+            .trim_start_matches('❯')
+            .trim_start()
+            .to_owned()
+    };
+    let number = |l: &str| {
+        let t = label(l);
+        (t.as_bytes().first().is_some_and(u8::is_ascii_digit) && t[1..].starts_with(". "))
+            .then(|| l.chars().count() - t.chars().count())
+    };
+    // Claude Code moves its cursor over its own option rows, numbered in one column: a
+    // numbered row of an option's text, set in deeper, is none.
+    let cursors = lines.iter().filter(|l| l.contains('❯'));
+    let column = cursors.filter_map(|l| number(l)).min();
     let options: Vec<usize> = (0..lines.len())
         .filter(|&i| {
-            let t = lines[i].trim_start().trim_start_matches('❯').trim_start();
-            (t.as_bytes().first().is_some_and(u8::is_ascii_digit) && t[1..].starts_with(". "))
-                || TRUST_OPTIONS.contains(&t)
+            number(&lines[i]).is_some_and(|c| Some(c) == column)
+                || TRUST_OPTIONS.contains(&&*label(&lines[i]))
         })
         .collect();
     let at = options
@@ -2304,9 +2318,10 @@ async fn a_menu_with_no_approval_is_no_permission_prompt_without_its_call() {
     // Not drawn as a question, and no dialog its wording tells: (hand-built) QUESTION without
     // its `Type something.`, ordinary labels under a cursor set in by a column. Nothing is
     // offered, whether or not another call is pending.
-    let (plain, _) = QUESTION.split_once("   3. Type something.\n").unwrap();
+    let (plain, _) = QUESTION.split_once("  3. Type something.\n").unwrap();
+    let plain: Vec<String> = plain.lines().map(|l| format!(" {l}")).collect();
     for transcript in [CUT, &*bash] {
-        show(&rig, "live_blocked_form", plain, transcript);
+        show(&rig, "live_blocked_form", &plain.join("\n"), transcript);
         let a = rig.needed().await;
         assert!(a.options.is_empty() && a.choices.is_empty() && !a.accepts_input);
     }
@@ -2478,6 +2493,70 @@ async fn a_question_in_code_mode_is_matched_to_the_pending_script() {
 }
 
 #[tokio::test]
+async fn a_numbered_row_in_an_options_text_is_no_option_to_choose() {
+    // Hand-built from the Code Mode capture: rows of option 2's description, as Claude Code
+    // 2.1.329 wraps one at the label's column, that read as a rule, a header, the question
+    // and a menu with its cursor on option 2. Claude Code's cursor is on option 1.
+    let mut rig = Rig::start(TTL).await;
+    let (screen, transcript) = SCRIPTED;
+    let under = "     Second test choice.\n";
+    let drawn = |rows: &[&str]| {
+        let rows: String = rows.iter().map(|r| format!("     {r}\n")).collect();
+        screen.replacen(under, &format!("{under}{rows}"), 1)
+    };
+    let show = |rig: &Rig, screen: &str, transcript: &str| {
+        rig.transcript(transcript);
+        rig.herdr.with(|h| {
+            h.rule = "live_blocked_form".into();
+            h.text = screen.into();
+            set_status(h, "blocked");
+        });
+    };
+    let rule = "─".repeat(95);
+    let asks = "Which option do you want to pick for this test?";
+    let block = [&rule, "☐ Test", asks, "1. Option A", "❯ 2. Option B"];
+    assert_ne!(drawn(&block), screen);
+    show(&rig, &drawn(&block), &fresh(transcript));
+    let a = rig.needed().await;
+    assert!(a.choices.is_empty() && a.options.is_empty() && !a.accepts_input);
+
+    // A description the script does hold, its last two rows numbered: they are option 2's
+    // text, and a choice moves Claude Code's cursor over its own four options.
+    let text = "Second test choice. 1. Option A ❯ 2. Option B";
+    let described = fresh(transcript).replace("Second test choice.", text);
+    assert_ne!(described, fresh(transcript));
+    show(&rig, &drawn(&block[3..]), &described);
+    let a = rig.needed().await;
+    let shown: Vec<(&str, bool)> = (a.choices.iter())
+        .map(|c| (c.label.as_str(), c.current))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("Option A", true),
+            ("Option B", false),
+            ("Type something.", false),
+            ("Chat about this", false)
+        ]
+    );
+    assert_eq!(a.choices[1].detail.as_deref(), Some(text));
+    assert_eq!(
+        resolved(rig.choose(&a, 3, &a.nonce).await),
+        ApprovalOutcome::Chosen {
+            choice: 3,
+            by: LABEL.into()
+        }
+    );
+    assert_eq!(
+        rig.herdr.params("agent.send_keys"),
+        [
+            json!({"target": "w7:p1", "keys": ["down", "down", "down"]}),
+            json!({"target": "w7:p1", "keys": ["enter"]}),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_question_from_a_dispatched_script_is_answered_while_the_script_runs() {
     let mut rig = Rig::start(TTL).await;
     let show = |rig: &Rig, screen: &str, transcript: &str| {
@@ -2511,6 +2590,14 @@ async fn a_question_from_a_dispatched_script_is_answered_while_the_script_runs()
     }
     // The script ended: its question is asked no more, whatever the screen still shows.
     show(&rig, DISPATCHED.0, &fresh(DISPATCHED_ANSWERED));
+    let a = rig.needed().await;
+    assert!(a.choices.is_empty() && !a.accepts_input);
+    // Nor from the event that ends the script to the lines Claude Code writes of the answer:
+    // the transcript holds no call then, as it does outside Code Mode under a form the
+    // screen shows whole.
+    let settled: Vec<&str> = DISPATCHED_ANSWERED.lines().take(9).collect();
+    assert!(settled[8].contains("poll_events"));
+    show(&rig, DISPATCHED_LATER.0, &fresh(&settled.join("\n")));
     let a = rig.needed().await;
     assert!(a.choices.is_empty() && !a.accepts_input);
 
@@ -2576,6 +2663,10 @@ async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
         assert!(a.options.is_empty() && a.accepts_input && a.has_text_field);
     }
     let open = fresh(LIVE.1);
+    // Versions compare by number: 2.1.1000 is later than 2.1.329, and 2.1.33 earlier.
+    let version = |v: &str| open.replace(r#""version":"2.1.329""#, &format!(r#""version":"{v}""#));
+    show(&rig, form, LIVE.0, &version("2.1.1000"));
+    assert_eq!(rig.needed().await.choices.len(), 4);
     let over = json!({"type": "assistant", "timestamp": "2999-01-01T00:00:00.000Z",
         "sessionId": SESSION, "version": "2.1.329",
         "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "OK"}]}});
@@ -2585,11 +2676,8 @@ async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
         // The capture's own lines, older than this process.
         (form, LIVE.0, LIVE.1.to_owned()),
         // A Claude Code not known to draw a question so.
-        (
-            form,
-            LIVE.0,
-            open.replace(r#""version":"2.1.329""#, r#""version":"2.1.328""#),
-        ),
+        (form, LIVE.0, version("2.1.328")),
+        (form, LIVE.0, version("2.1.33")),
         // The turn is over.
         (form, LIVE.0, format!("{open}{over}\n")),
         // A form that scrolls, and the review page.
@@ -2597,6 +2685,7 @@ async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
         (form, LIVE_REVIEW.0, fresh(LIVE_REVIEW.1)),
     ];
     assert_ne!(refused[2].2, open);
+    assert_ne!(refused[3].2, open);
     for (rule, screen, transcript) in &refused {
         show(&rig, rule, screen, transcript);
         let a = rig.needed().await;
