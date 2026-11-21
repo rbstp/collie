@@ -319,6 +319,10 @@ impl Rex {
         Ok(Some(self.target(id)?.3.0))
     }
 
+    pub fn terminal_size(&self, id: &str) -> Result<(u16, u16), Error> {
+        Ok(self.target(id)?.3)
+    }
+
     /// Follows the terminal as a stream until the last watch of it is dropped, unless
     /// streaming is off for this run.
     pub fn watch(self: &Arc<Self>, id: &str) -> Result<Option<Watch>, Error> {

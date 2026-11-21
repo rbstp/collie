@@ -489,6 +489,8 @@ fn agent(
         launch_pending: false,
         read_only,
         unreported: t.status.is_none(),
+        cli: cli.map(str::to_owned),
+        reported,
     })
 }
 
@@ -879,6 +881,11 @@ impl Core {
 
     pub fn columns(&self, id: &str) -> Result<Option<u16>, Error> {
         Ok(Some(self.terminal(id)?.1))
+    }
+
+    pub fn terminal_size(&self, id: &str) -> Result<(u16, u16), Error> {
+        let (_, columns, rows) = self.terminal(id)?;
+        Ok((columns, rows))
     }
 
     /// From the watched screen while a watch holds one, else through an attach of its own

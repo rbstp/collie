@@ -605,3 +605,50 @@ async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer
     );
     assert_eq!(events(&fake, B1), [key("digit_2", "", "2", 50)]);
 }
+
+/// #897, on Rex: a Copilot CLI's trust box takes its own keys until Copilot reports `blocked`,
+/// and the box's rows count in display cells, a wide character's two included.
+#[tokio::test]
+async fn a_copilot_trust_box_takes_keys_until_copilot_reports_blocked() {
+    let wide =
+        include_str!("../../../../tests/fixtures/copilot-1.0.112/trust-wide-char.detection.txt");
+    let fake = Fake::start().await;
+    let record = |state: &str| {
+        json!({
+            "state": state, "app": "copilot", "updated_at": T0,
+            "owner": { "pid": 10, "name": "copilot" },
+        })
+    };
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        let copilot = fake::process(10, "/opt/homebrew/bin/copilot", "copilot");
+        s.add(S1, B1, copilot, vec![record("idle")]);
+        s.block(B1).screen = wide.trim_end().replace('\n', "\r\n");
+    }
+    let (rex, _rt, dir) = followed(&fake).await;
+    let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+        .unwrap()
+        .with_rex(Some(rex.clone()));
+    let yes: Authorized = Arc::new(|| true);
+    let keys = |keys: Vec<Key>| AgentSendKeysParams {
+        op_id: OpId::new("K".repeat(22)).unwrap(),
+        terminal_id: TerminalId::new(id(B1)).unwrap(),
+        keys,
+    };
+    let (sent, audited) = drive.send_keys(keys(vec![Key::Down]), &yes).await;
+    assert_eq!(sent, Ok(protocol::Response::Ok));
+    assert_eq!(audited, Some(format!("{} blocked keys=down", id(B1))));
+    assert_eq!(events(&fake, B1), [key("arrow_down", "", "", 0)]);
+    fake.emit(move |_| vec![fake::status_changed(S1, B1, record("blocked"))]);
+    super::eventually("the blocked report", || {
+        rex.get(&id(B1)).is_ok_and(|a| a.agent_status == "blocked")
+    })
+    .await;
+    let (sent, audited) = drive.send_keys(keys(vec![Key::Down]), &yes).await;
+    assert_eq!(
+        (sent.unwrap_err().0, audited),
+        (ErrorCode::AgentNotReady, None)
+    );
+    assert_eq!(events(&fake, B1), Vec::<Value>::new());
+}

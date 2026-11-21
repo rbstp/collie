@@ -420,21 +420,32 @@ impl Driver {
 
     /// Keys and keystrokes, which add no Enter, also reach a Codex that has reported nothing
     /// while its startup dialog fills the screen (0.171.0 reports nothing at its folder trust
-    /// prompt), as keys to a blocked agent: `true` when the agent counts as blocked, and the
-    /// dialog's screen when only its own keys may go. The screen read right after an answer can
-    /// still show the dialog it answered, so the same screen within `SCREEN_SETTLE` of an
-    /// answer counts as no dialog.
+    /// prompt), and a Copilot CLI whose own report and foreground process are Copilot's while
+    /// its folder trust box is up (1.0.112 reports `idle` there), as keys to a blocked agent:
+    /// `true` when the agent counts as blocked, and the dialog's screen when only its own keys
+    /// may go. The screen read right after an answer can still show the dialog it answered, so
+    /// the same screen within `SCREEN_SETTLE` of an answer counts as no dialog.
     async fn keystroke_agent(
         &self,
         terminal_id: &TerminalId,
     ) -> Result<(AgentInfo, bool, Option<String>), Fail> {
         let (current, ready) = self.current_agent(terminal_id).await?;
-        if ready.is_ok() && current.unreported && current.agent.as_deref() == Some("codex") {
+        let kind = current.agent.as_deref();
+        let codex = current.unreported && kind == Some("codex");
+        let copilot = current.reported.as_deref() == Some("copilot")
+            && current.cli.as_deref() == Some("copilot");
+        if ready.is_ok() && current.read_only && (codex || copilot) {
             let screen = self.runtime.detection_text(&current.pane_id).await.ok();
+            let size = self.runtime.pane_size(&current.pane_id).ok().flatten();
+            let shown = |s: &String| match size {
+                _ if codex => prompt::codex_startup(s),
+                Some((columns, rows)) => prompt::copilot_trust(s, columns, rows),
+                None => false,
+            };
             let answered = crate::lock(&self.answered)
                 .get(terminal_id.as_str())
                 .cloned();
-            if let Some(screen) = screen.filter(|s| prompt::codex_startup(s))
+            if let Some(screen) = screen.filter(shown)
                 && answered.is_none_or(|(s, at)| s != screen || at.elapsed() >= SCREEN_SETTLE)
             {
                 return Ok((current, true, Some(screen)));
@@ -3671,7 +3682,8 @@ mod tests {
             );
             let calls = crate::lock(&seen).calls.clone();
             assert!(
-                calls.iter().all(|c| c["method"] == "terminal.get"),
+                (calls.iter())
+                    .all(|c| c["method"] == "terminal.get" || c["method"] == "terminal.read"),
                 "{kind} {state}: {calls:?}"
             );
         }
@@ -3818,6 +3830,126 @@ mod tests {
                 vec![]
             };
             assert_eq!(keys, expected, "{methods:?}");
+            assert!(!methods.contains(&"terminal.send"), "{methods:?}");
+            assert_eq!(methods.contains(&"terminal.read"), reads, "{methods:?}");
+        }
+    }
+
+    /// #897: Copilot CLI stays read-only (#745) and takes its trust box's own keys only while
+    /// the box is up, only from a report and a foreground process that are both Copilot's, and
+    /// only at the terminal's own size.
+    #[tokio::test]
+    async fn a_read_only_copilot_takes_its_trust_boxs_keys_only() {
+        const TRUST: &str = include_str!("../tests/fixtures/copilot-1.0.112/trust.detection.txt");
+        const IDLE: &str = include_str!("../tests/fixtures/copilot-1.0.112/idle.detection.txt");
+        fn copilot(status: serde_json::Value, argv0: &str) -> serde_json::Value {
+            core_tests::terminal("t1", status, argv0)
+        }
+        const BIN: &str = "/opt/homebrew/bin/copilot";
+        fn idle() -> serde_json::Value {
+            copilot(serde_json::json!({"state": "idle", "app": "copilot"}), BIN)
+        }
+        fn taller() -> serde_json::Value {
+            let mut t = idle();
+            t["rows"] = serde_json::json!(30);
+            t
+        }
+        fn asking() -> serde_json::Value {
+            copilot(
+                serde_json::json!({"state": "blocked", "app": "copilot"}),
+                BIN,
+            )
+        }
+        fn stale() -> serde_json::Value {
+            let report = serde_json::json!({"state": "idle", "app": "copilot"});
+            copilot(report, "/opt/homebrew/bin/claude")
+        }
+        fn silent() -> serde_json::Value {
+            copilot(serde_json::Value::Null, BIN)
+        }
+        fn nameless() -> serde_json::Value {
+            copilot(serde_json::json!({"state": "idle"}), BIN)
+        }
+        fn screen(m: &str, terminal: fn() -> serde_json::Value, text: &str) -> serde_json::Value {
+            match m {
+                "terminal.read" => serde_json::json!({ "text": text }),
+                "terminal.keys" => serde_json::json!({}),
+                m => core_get(m, terminal),
+            }
+        }
+        type Terminal = fn() -> serde_json::Value;
+        type Answer = fn(&str) -> serde_json::Value;
+        let cases: [(Answer, Terminal, bool, bool); 7] = [
+            (|m| screen(m, idle, TRUST), idle, true, true),
+            (|m| screen(m, idle, IDLE), idle, false, true),
+            (|m| screen(m, taller, TRUST), taller, false, true),
+            (|m| screen(m, asking, TRUST), asking, false, false),
+            (|m| screen(m, stale, TRUST), stale, false, false),
+            (|m| screen(m, silent, TRUST), silent, false, false),
+            (|m| screen(m, nameless, TRUST), nameless, false, false),
+        ];
+        for (answer, listed, takes, reads) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(dir.path()).unwrap();
+            let seen = core_tests::fake_core(&root.join("core.sock"), answer).await;
+            let core = core_tests::core_of(&root, serde_json::json!([listed()]));
+            assert!(core.agents().unwrap()[0].read_only);
+            let drive = core_driver(&root, core);
+            let yes: Authorized = Arc::new(|| true);
+            let op = || OpId::new("P".repeat(22)).unwrap();
+            let terminal = TerminalId::new(core_id()).unwrap();
+            let keys = |keys: Vec<Key>| AgentSendKeysParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                keys,
+            };
+            let (down, down_target) = drive.send_keys(keys(vec![Key::Down]), &yes).await;
+            let text = SendTextParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::TypedText::new("1".to_owned()).unwrap(),
+            };
+            let (digit, digit_target) = drive.send_text(text, &yes).await;
+            let (enter, enter_target) = drive.send_keys(keys(vec![Key::Enter]), &yes).await;
+            assert_eq!(enter.unwrap_err().0, ErrorCode::AgentNotReady);
+            assert_eq!(enter_target, None);
+            let prompt = AgentPromptParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::PromptText::new("hi".to_owned()).unwrap(),
+                expected_draft: None,
+            };
+            assert!(drive.prompt(prompt, &yes).await.is_err());
+            let answer = AgentTypeTextParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::PromptText::new("yes".to_owned()).unwrap(),
+            };
+            assert!(drive.type_text(answer, &yes).await.is_err());
+            if takes {
+                assert_eq!((down, digit), (Ok(Response::Ok), Ok(Response::Ok)));
+                let id = core_id();
+                assert_eq!(down_target, Some(format!("{id} blocked keys=down")));
+                assert_eq!(digit_target, Some(format!("{id} blocked text")));
+            } else {
+                assert!(down.is_err() && digit.is_err());
+                assert_eq!((down_target, digit_target), (None, None));
+            }
+            let seen = crate::lock(&seen).clone();
+            assert_eq!((seen.typed.as_slice(), seen.closed), (&b""[..], 0));
+            let methods: Vec<&str> = (seen.calls.iter())
+                .filter_map(|c| c["method"].as_str())
+                .collect();
+            let sent: Vec<_> = (seen.calls.iter())
+                .filter(|c| c["method"] == "terminal.keys")
+                .map(|c| c["params"]["keys"].clone())
+                .collect();
+            let expected = if takes {
+                vec![serde_json::json!(["down"]), serde_json::json!(["1"])]
+            } else {
+                vec![]
+            };
+            assert_eq!(sent, expected, "{methods:?}");
             assert!(!methods.contains(&"terminal.send"), "{methods:?}");
             assert_eq!(methods.contains(&"terminal.read"), reads, "{methods:?}");
         }

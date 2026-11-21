@@ -1036,6 +1036,8 @@ mod tests {
             launch_pending: false,
             read_only: false,
             unreported: false,
+            cli: None,
+            reported: None,
         }
     }
 
