@@ -1,28 +1,31 @@
 # iOS release notes
 
-Text for 0.2.0. Confirm its final build in App Store Connect once the upload is processed.
+Text for 0.2.6, covering everything since 0.2.2, the last version on the App Store. Confirm its final build in App Store Connect once the upload is processed.
 
 ## App Store release notes
 
-- Watching a Rex agent no longer loads your Mac: on a terminal with a long history, Rex used about 30% of a CPU core while you watched; it now uses under 1%.
-- Use your Rex shells from the phone. With terminals turned on, they appear under Terminals, and you can type commands and keys into them as into herdr's.
-- On a Mac, you no longer get a done alert for a herdr agent you are looking at: its pane focused in herdr, the terminal that shows herdr or Herdr.app in front, and you typing or moving the pointer in the last 30 seconds. Herdr Core and Rex agents, and agents on Linux, alert as before.
-- When Chat cannot show a Rex agent's conversation, it now says what to check in Rex rather than giving herdr's advice. Copilot CLI has Chat in herdr only.
-- Terminal now uses libghostty-vt 1.0.1, up from 1.0.0.
+- Follow Antigravity CLI agents: their status, Chat, Terminal, approval alerts, plan usage and token cost, and start Antigravity tasks in herdr, Herdr Core or Rex.
+- Choose Code Mode when you start a Claude Code task. Turn it off for a session you want to open with Remote Control.
+- Answer a Claude Code question from the phone, with or without Code Mode, once the whole question is on screen. A form only partly on screen, or one an agent could have faked, is left to the terminal.
+- Answer Codex's folder trust prompt with the terminal keys when a task starts in a new folder, and Copilot CLI's in a session you run in Herdr Core or Rex.
+- Approve and Deny in a notification check the dialog again before they act, and Always allow appears only when its whole scope is shown.
+- Agent cards show each agent's folder when several share a workspace, Herdr Core agents included.
+- Usage shows plan limits again after an early reset, and prices Claude Fable 5.2 and Mythos 5.2.
+- The app covers its window in the app switcher, checks links before it opens them, and clears a locked shell's screen.
+- The keys that identify your phone stay in the app's own Keychain group. If a brief Secure Enclave or Keychain failure leaves a key unusable, Settings says why and lets you replace it.
+- The watch refreshes after an approval is decided elsewhere.
 
-Update collied to 0.2.0 on each machine: every change above except libghostty-vt 1.0.1 needs it. Rex shells also need `[terminals] enabled = true` in `collied.toml` and a restart of collied. collied's service log now records warnings, and logs a lasting problem once when it starts, not on every retry. You can update the app and collied in either order.
+Update collied to 0.2.6 on each machine: most changes above need it. If a machine refuses this phone's key after the update, run `collied peers revoke` for the phone there and pair again.
 
-Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI; herdr's other agent integrations have not been validated. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on an Apple silicon Mac, with Claude Code and Codex. On Linux, only Arch Linux with Omarchy has been tested.
+Collie Herd has been tested only with Claude Code CLI, Codex CLI, GitHub Copilot CLI and Antigravity CLI; herdr's other agent integrations have not been validated. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on an Apple silicon Mac. On Linux, only Arch Linux with Omarchy has been tested.
 
 ## What to Test
 
-- On the Mac that runs Rex, with collied updated, open a Claude Code or Codex agent in Rex while it works. In Terminal, check that the screen keeps up with the agent as before: colors, wide characters such as emoji, wrapped lines, scrolling back, and rotating the phone. Switch to Chat and check that it loads.
-- Keep a Claude Code agent in Rex open while it asks for an approval. Check that the approval card appears, approve it and check that the agent goes on, then deny the next one.
-- Go back to the Agents tab while the agent works, wait a few seconds, then open it again. Check that its screen shows what it printed meanwhile, with no lines missing or repeated.
-- In Activity Monitor on the Mac, find Rex Server (its process is `rex`). Open a working Rex agent with a long history, tens of thousands of lines, on the phone, and check that Rex Server's % CPU stays near what it shows with no agent open, rather than climbing toward 30% as it did with collied 0.1.22.
-- Turn on terminals in `collied.toml` on the Mac that runs Rex and restart collied. Check that a Rex.app terminal appears under Terminals, labelled with its Rex session's name, and that a session started with `rex new demo -- top` does not. Open the terminal, unlock it, run `ls`, then `sleep 30`, and check that the terminal stays listed while `sleep` runs and that ⌃C from the key strip stops it. Start `claude` in it and check that it leaves Terminals and shows as an agent.
-- On a Mac with herdr, give an agent a task of 40 seconds or more, keep its pane focused and the terminal app or Herdr.app in front, and move the mouse now and then. Keep Collie in the background or away from that agent, since the app hides the alert of the agent it shows. Check that no done alert arrives and that the app shows the agent idle. Repeat with another app in front, then with a Rex agent: each time the alert arrives. With another tab of the terminal showing, the alert arrives too if the terminal tells herdr when a tab loses focus.
-- Run Copilot CLI in Rex and open its Chat. Check that it says "Chat is not available for this Rex agent."
-- Open a herdr shell under Terminals, unlock it and run a command. Then, with your paired machines, check approvals, notifications, Live Activities, and that the agents load without a manual retry after the app sits in the background for about 15 minutes.
+- Start a Claude Code task with Code Mode off, and check that the session offers Remote Control. Start another with Code Mode on.
+- Ask a Claude Code agent a question with options, once in Code Mode and once without, in a terminal wider than 75 columns. Check that the phone lists the options and that choosing one answers the question.
+- Approve an Edit with a note, a Bash command and a plan from the phone.
+- Start a Claude Code task in a folder Claude has not trusted, and check that Approve answers the trust prompt. Start a Codex task in a new folder and answer its trust prompt with the terminal's arrow keys and Return.
+- Run Antigravity CLI in herdr or Rex with collied's hook set up, and check its card, Chat, Terminal and Usage.
+- With your paired machines, check approvals, notifications, Live Activities, and that the agents load without a manual retry after the app sits in the background for about 15 minutes.
 
-Use Claude Code CLI, Codex CLI or GitHub Copilot CLI for these checks; other agents have not been validated with Collie.
+Use Claude Code CLI, Codex CLI, GitHub Copilot CLI or Antigravity CLI for these checks; other agents have not been validated with Collie.
