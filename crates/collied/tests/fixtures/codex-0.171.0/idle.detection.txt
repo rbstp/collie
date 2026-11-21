@@ -1,0 +1,24 @@
+
+  >_ OpenAI Codex (v0.171.0)
+     /private/tmp/rcz/work/cx
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-6.2-Sol default · /private/tmp/rcz/work/cx
+  ← for agents · ? for shortcuts

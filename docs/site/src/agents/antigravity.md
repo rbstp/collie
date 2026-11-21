@@ -62,4 +62,4 @@ With `stack_with_default` enabled, Antigravity keeps its built-in status line wh
 
 ## Startup prompts
 
-When a new task meets a startup prompt, such as sign-in or folder trust, it stops without sending your prompt. Answer the startup prompt in Terminal.
+When a new task meets a startup prompt, such as sign-in or folder trust, it stops without sending your prompt. Open the session and answer the startup prompt in Terminal with the arrow keys, Return or Esc, then send your prompt.

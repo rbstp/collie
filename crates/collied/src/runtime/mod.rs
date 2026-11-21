@@ -78,6 +78,9 @@ pub struct AgentInfo {
     /// ([`agents::read_only`]), so it takes no input from the phone.
     #[serde(skip)]
     pub read_only: bool,
+    /// A herdr-core or Rex agent with no status report, whose kind is its foreground CLI's.
+    #[serde(skip)]
+    pub unreported: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

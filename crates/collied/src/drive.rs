@@ -60,6 +60,7 @@ const SCREEN_POLL: Duration = Duration::from_millis(100);
 pub const DRAFT_CHANGED: &str = "the agent's input box has unsent text";
 const BLOCKED: &str = "agent is blocked; answer it through an approval";
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
+const STARTUP_KEYS: &str = "a startup prompt takes only arrows, Enter, Esc or one digit, and nothing after the key that answers it; nothing was sent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const UNFOCUSED: &str =
@@ -224,6 +225,9 @@ pub struct Driver {
     /// another session's write.
     box_writes: tokio::sync::Mutex<()>,
     transcripts: Transcripts,
+    /// The startup dialog each agent showed when collied last sent a key that answers one,
+    /// and when.
+    answered: std::sync::Mutex<HashMap<String, (String, tokio::time::Instant)>>,
 }
 
 pub enum Watched {
@@ -265,6 +269,7 @@ impl Driver {
             ops: OpCache::new(OPS_PER_PEER, OP_TTL),
             box_writes: tokio::sync::Mutex::new(()),
             transcripts: Transcripts::default(),
+            answered: std::sync::Mutex::default(),
         })
     }
 
@@ -409,12 +414,43 @@ impl Driver {
     }
 
     async fn writable_agent(&self, terminal_id: &TerminalId) -> Result<AgentInfo, Fail> {
-        match self.current_agent(terminal_id).await? {
-            (current, Err((ErrorCode::AgentBlocked, _))) if current.agent.is_some() => {
-                takes_input(&current).map(|()| current)
+        let (current, ready) = self.current_agent(terminal_id).await?;
+        writable(current, ready)
+    }
+
+    /// Keys and keystrokes, which add no Enter, also reach a Codex that has reported nothing
+    /// while its startup dialog fills the screen (0.171.0 reports nothing at its folder trust
+    /// prompt), as keys to a blocked agent: `true` when the agent counts as blocked, and the
+    /// dialog's screen when only its own keys may go. The screen read right after an answer can
+    /// still show the dialog it answered, so the same screen within `SCREEN_SETTLE` of an
+    /// answer counts as no dialog.
+    async fn keystroke_agent(
+        &self,
+        terminal_id: &TerminalId,
+    ) -> Result<(AgentInfo, bool, Option<String>), Fail> {
+        let (current, ready) = self.current_agent(terminal_id).await?;
+        if ready.is_ok() && current.unreported && current.agent.as_deref() == Some("codex") {
+            let screen = self.runtime.detection_text(&current.pane_id).await.ok();
+            let answered = crate::lock(&self.answered)
+                .get(terminal_id.as_str())
+                .cloned();
+            if let Some(screen) = screen.filter(|s| prompt::codex_startup(s))
+                && answered.is_none_or(|(s, at)| s != screen || at.elapsed() >= SCREEN_SETTLE)
+            {
+                return Ok((current, true, Some(screen)));
             }
-            (current, ready) => ready.and_then(|()| takes_input(&current)).map(|()| current),
         }
+        let blocked = flock::status(&current.agent_status) == AgentStatus::Blocked;
+        writable(current, ready).map(|a| (a, blocked, None))
+    }
+
+    fn answer(&self, terminal_id: &TerminalId, screen: String) {
+        let mut answered = crate::lock(&self.answered);
+        answered.retain(|_, (_, at)| at.elapsed() < SCREEN_SETTLE);
+        answered.insert(
+            terminal_id.as_str().to_owned(),
+            (screen, tokio::time::Instant::now()),
+        );
     }
 
     /// Read with SGR: [`protocol::jump_banner`] finds the banner by how it is drawn.
@@ -781,15 +817,24 @@ impl Driver {
         auth: &Authorized,
     ) -> (Reply, Option<String>) {
         let _box = self.box_writes.lock().await;
-        let a = match self.writable_agent(&p.terminal_id).await {
+        let (a, blocked, startup) = match self.keystroke_agent(&p.terminal_id).await {
             Ok(found) => found,
             Err(e) => return (Err(e), None),
         };
-        let blocked = flock::status(&a.agent_status) == AgentStatus::Blocked;
         if let Err(e) = self.input_safeguards(&a).await {
             return (Err(e), None);
         }
         let keys: Vec<&str> = p.keys.iter().map(|k| k.herdr_name()).collect();
+        if let Some(screen) = startup {
+            let answers = keys.iter().position(|k| answers_startup(k));
+            if !keys.iter().all(|k| startup_key(k)) || answers.is_some_and(|i| i + 1 != keys.len())
+            {
+                return (fail(ErrorCode::AgentNotReady, STARTUP_KEYS), None);
+            }
+            if answers.is_some() {
+                self.answer(&p.terminal_id, screen);
+            }
+        }
         let target =
             blocked.then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(" ")));
         let sent = async {
@@ -820,17 +865,37 @@ impl Driver {
         Ok(Response::Ok)
     }
 
-    /// Keystrokes typed as is, without Enter.
-    pub async fn send_text(&self, p: SendTextParams, auth: &Authorized) -> Reply {
+    /// Keystrokes typed as is, without Enter. Text to a blocked agent also returns its audit
+    /// target, which never names the text.
+    pub async fn send_text(&self, p: SendTextParams, auth: &Authorized) -> (Reply, Option<String>) {
         let _box = self.box_writes.lock().await;
-        let a = self.writable_agent(&p.terminal_id).await?;
-        self.input_safeguards(&a).await?;
-        authorized(auth)?;
-        self.runtime
-            .pane_send_text(&a.pane_id, p.text.as_str())
-            .await
+        let (a, blocked, startup) = match self.keystroke_agent(&p.terminal_id).await {
+            Ok(found) => found,
+            Err(e) => return (Err(e), None),
+        };
+        let digit = startup.is_some();
+        if let Some(screen) = startup {
+            if !answers_startup(p.text.as_str()) || p.text.as_str().len() != 1 {
+                return (fail(ErrorCode::AgentNotReady, STARTUP_KEYS), None);
+            }
+            self.answer(&p.terminal_id, screen);
+        }
+        let target = blocked.then(|| format!("{} blocked text", p.terminal_id.as_str()));
+        let sent = async {
+            self.input_safeguards(&a).await?;
+            authorized(auth)?;
+            // A digit goes as a key, as one pressed in the dialog would.
+            if digit {
+                self.runtime.notice_digit(&a.pane_id, p.text.as_str()).await
+            } else {
+                self.runtime
+                    .pane_send_text(&a.pane_id, p.text.as_str())
+                    .await
+            }
             .map_err(herdr_fail)?;
-        Ok(Response::Ok)
+            Ok(Response::Ok)
+        };
+        (sent.await, target)
     }
 
     /// One line, then Enter, into a pane that has no agent at this moment. herdr sends the
@@ -2959,6 +3024,26 @@ pub fn check_ready(listed: &AgentInfo, current: &AgentInfo) -> Result<(), Fail> 
     Ok(())
 }
 
+/// A startup dialog's own keys, by herdr name: arrows, Enter, Esc and one digit.
+fn startup_key(key: &str) -> bool {
+    matches!(key, "up" | "down" | "left" | "right") || answers_startup(key)
+}
+
+/// A key that can close a startup dialog: Enter, Esc, or a digit, which can pick its option
+/// at once.
+fn answers_startup(key: &str) -> bool {
+    matches!(key, "enter" | "esc") || (key.len() == 1 && (b'1'..=b'9').contains(&key.as_bytes()[0]))
+}
+
+fn writable(current: AgentInfo, ready: Result<(), Fail>) -> Result<AgentInfo, Fail> {
+    match ready {
+        Err((ErrorCode::AgentBlocked, _)) if current.agent.is_some() => {
+            takes_input(&current).map(|()| current)
+        }
+        ready => ready.and_then(|()| takes_input(&current)).map(|()| current),
+    }
+}
+
 fn takes_input(a: &AgentInfo) -> Result<(), Fail> {
     if a.read_only {
         return fail(
@@ -3395,6 +3480,8 @@ mod tests {
 
  Esc to cancel · Tab to amend · ctrl+e to explain
 ";
+    const CODEX_TRUST: &str = include_str!("../tests/fixtures/codex/trust.detection.txt");
+    const CODEX_UPDATE_PICKER: &str = include_str!("../tests/fixtures/codex/update.detection.txt");
 
     /// A Claude Code collied started as `NAME` in t1, with `status`, in the state `state`.
     fn claude(cwd: &Path, status: serde_json::Value, state: &str) -> serde_json::Value {
@@ -3575,7 +3662,7 @@ mod tests {
                 text: protocol::TypedText::new("/x".to_owned()).unwrap(),
             };
             assert_eq!(
-                refused(drive.send_text(text, &yes).await),
+                refused(drive.send_text(text, &yes).await.0),
                 ErrorCode::AgentNotReady
             );
             assert_eq!(
@@ -3616,6 +3703,150 @@ mod tests {
                 .iter()
                 .any(|c| c["method"] == "terminal.keys")
         );
+    }
+
+    /// #895: only a startup dialog's own keys, no Enter of collied's, reach a Codex that has
+    /// reported nothing, and only while that dialog fills the screen and until a key answers
+    /// it; never a Codex label a retained report gives another CLI, nor a Claude Code with no
+    /// status.
+    #[tokio::test]
+    async fn a_codex_with_no_status_takes_keystrokes_only_at_a_startup_dialog() {
+        fn codex() -> serde_json::Value {
+            core_tests::terminal("t1", serde_json::Value::Null, "/opt/homebrew/bin/codex")
+        }
+        fn stale() -> serde_json::Value {
+            let error = serde_json::json!({"state": "error", "app": "codex"});
+            core_tests::terminal("t1", error, "/opt/homebrew/bin/copilot")
+        }
+        fn claude() -> serde_json::Value {
+            core_tests::terminal("t1", serde_json::Value::Null, "/opt/homebrew/bin/claude")
+        }
+        fn screen(m: &str, terminal: fn() -> serde_json::Value, text: &str) -> serde_json::Value {
+            match m {
+                "terminal.read" => serde_json::json!({ "text": text }),
+                "terminal.keys" => serde_json::json!({}),
+                m => core_get(m, terminal),
+            }
+        }
+        const SPOOF: &str = "Update available\n1. Update now\n› Ask Codex to do anything\n";
+        type Terminal = fn() -> serde_json::Value;
+        type Answer = fn(&str) -> serde_json::Value;
+        let cases: [(Answer, Terminal, bool, bool); 6] = [
+            (|m| screen(m, codex, CODEX_TRUST), codex, true, true),
+            (|m| screen(m, codex, CODEX_UPDATE_PICKER), codex, true, true),
+            (
+                |m| screen(m, codex, "› Ask Codex to do anything"),
+                codex,
+                false,
+                true,
+            ),
+            (|m| screen(m, codex, SPOOF), codex, false, true),
+            (|m| screen(m, stale, CODEX_TRUST), stale, false, false),
+            (|m| screen(m, claude, DIALOG), claude, false, false),
+        ];
+        for (answer, listed, takes, reads) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(dir.path()).unwrap();
+            let seen = core_tests::fake_core(&root.join("core.sock"), answer).await;
+            let core = core_tests::core_of(&root, serde_json::json!([listed()]));
+            assert!(core.agents().unwrap()[0].read_only);
+            let drive = core_driver(&root, core);
+            let yes: Authorized = Arc::new(|| true);
+            let op = || OpId::new("P".repeat(22)).unwrap();
+            let terminal = TerminalId::new(core_id()).unwrap();
+            let keys = AgentSendKeysParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                keys: vec![Key::Down],
+            };
+            let (sent, keys_target) = drive.send_keys(keys, &yes).await;
+            let text = SendTextParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::TypedText::new("1".to_owned()).unwrap(),
+            };
+            let (typed, text_target) = drive.send_text(text, &yes).await;
+            let enter = AgentSendKeysParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                keys: vec![Key::Enter],
+            };
+            let (after, after_target) = drive.send_keys(enter, &yes).await;
+            assert_eq!(after.unwrap_err().0, ErrorCode::AgentNotReady);
+            assert_eq!(after_target, None);
+            let prompt = AgentPromptParams {
+                op_id: op(),
+                terminal_id: terminal.clone(),
+                text: protocol::PromptText::new("hi".to_owned()).unwrap(),
+                expected_draft: None,
+            };
+            assert_eq!(
+                drive.prompt(prompt, &yes).await.unwrap_err().0,
+                ErrorCode::AgentNotReady
+            );
+            let answer = AgentTypeTextParams {
+                op_id: op(),
+                terminal_id: terminal,
+                text: protocol::PromptText::new("yes".to_owned()).unwrap(),
+            };
+            assert_eq!(
+                drive.type_text(answer, &yes).await.unwrap_err().0,
+                ErrorCode::AgentNotReady
+            );
+            if takes {
+                assert_eq!((sent, typed), (Ok(Response::Ok), Ok(Response::Ok)));
+                let id = core_id();
+                assert_eq!(keys_target, Some(format!("{id} blocked keys=down")));
+                assert_eq!(text_target, Some(format!("{id} blocked text")));
+            } else {
+                assert_eq!(sent.unwrap_err().0, ErrorCode::AgentNotReady);
+                assert_eq!(typed.unwrap_err().0, ErrorCode::AgentNotReady);
+                assert_eq!((keys_target, text_target), (None, None));
+            }
+            let seen = crate::lock(&seen).clone();
+            assert_eq!((seen.typed.as_slice(), seen.closed), (&b""[..], 0));
+            let methods: Vec<&str> = (seen.calls.iter())
+                .filter_map(|c| c["method"].as_str())
+                .collect();
+            let keys: Vec<_> = (seen.calls.iter())
+                .filter(|c| c["method"] == "terminal.keys")
+                .map(|c| c["params"]["keys"].clone())
+                .collect();
+            let expected = if takes {
+                vec![serde_json::json!(["down"]), serde_json::json!(["1"])]
+            } else {
+                vec![]
+            };
+            assert_eq!(keys, expected, "{methods:?}");
+            assert!(!methods.contains(&"terminal.send"), "{methods:?}");
+            assert_eq!(methods.contains(&"terminal.read"), reads, "{methods:?}");
+        }
+    }
+
+    /// Antigravity CLI 1.5.13 reports `blocked` at its sign-in prompt, so the keys answer it.
+    #[tokio::test]
+    async fn an_antigravity_cli_blocked_at_sign_in_takes_keys() {
+        fn agy() -> serde_json::Value {
+            let blocked = serde_json::json!({"state": "blocked", "app": "antigravity"});
+            core_tests::terminal("t1", blocked, "/usr/local/bin/agy")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        core_tests::fake_core(&root.join("core.sock"), |m| match m {
+            "terminal.keys" => serde_json::json!({}),
+            m => core_get(m, agy),
+        })
+        .await;
+        let core = core_tests::core_of(&root, serde_json::json!([agy()]));
+        let keys = AgentSendKeysParams {
+            op_id: OpId::new("P".repeat(22)).unwrap(),
+            terminal_id: TerminalId::new(core_id()).unwrap(),
+            keys: vec![Key::Down],
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let (sent, target) = core_driver(&root, core).send_keys(keys, &yes).await;
+        assert_eq!(sent, Ok(Response::Ok));
+        assert_eq!(target, Some(format!("{} blocked keys=down", core_id())));
     }
 
     fn core_get(method: &str, terminal: fn() -> serde_json::Value) -> serde_json::Value {

@@ -530,6 +530,7 @@ impl Block {
             interactive_ready: false,
             launch_pending: false,
             read_only,
+            unreported: record.is_none(),
         })
     }
 

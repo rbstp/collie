@@ -766,6 +766,7 @@ mod tests {
             interactive_ready: true,
             launch_pending: false,
             read_only: false,
+            unreported: false,
         }
     }
 

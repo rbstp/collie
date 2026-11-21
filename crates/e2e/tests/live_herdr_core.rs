@@ -1141,7 +1141,7 @@ async fn input_scenario(core: &CoreSession) {
         terminal_id: TerminalId::new(d.terminal_id.clone()).unwrap(),
         text: TypedText::new("a b".to_owned()).unwrap(),
     };
-    assert_eq!(drive.send_text(typed, &yes).await, Ok(Response::Ok));
+    assert_eq!(drive.send_text(typed, &yes).await.0, Ok(Response::Ok));
     expected.push_str("612062");
     dumped(&expected).await;
     assert_eq!(size(core, &dump), (70, 20));

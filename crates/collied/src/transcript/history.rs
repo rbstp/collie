@@ -1037,6 +1037,7 @@ mod tests {
             interactive_ready: true,
             launch_pending: false,
             read_only: false,
+            unreported: false,
         };
         (dir, t, agent, path)
     }
@@ -2677,6 +2678,7 @@ mod tests {
             interactive_ready: true,
             launch_pending: false,
             read_only: false,
+            unreported: false,
         };
         let a = mk(Some(id));
         let page = t.history(&a, &params(None, None, None));

@@ -173,7 +173,7 @@ async fn an_agent_with_no_status_or_copilot_takes_no_prompt_answer_or_key() {
             text: TypedText::new("/x".to_owned()).unwrap(),
         };
         assert_eq!(
-            refused(drive.send_text(text, &yes).await),
+            refused(drive.send_text(text, &yes).await.0),
             ErrorCode::AgentNotReady
         );
         assert_eq!(
@@ -493,4 +493,115 @@ async fn a_shell_keeping_an_agent_under_it_takes_no_terminal_input_and_drops_its
         events(&fake, B2),
         [paste("yes"), key("enter", "", "\r", 13)]
     );
+}
+
+/// #895, on Rex: a Codex that has reported nothing takes only its startup dialog's own keys,
+/// up to the one that answers it, and nothing more until the screen moves on; never at its
+/// composer or at a screen agent output fakes.
+#[tokio::test]
+async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer() {
+    let trust = include_str!("../../../../tests/fixtures/codex-0.171.0/trust.detection.txt");
+    let narrow =
+        include_str!("../../../../tests/fixtures/codex-0.171.0/trust-narrow.detection.txt");
+    let composer = include_str!("../../../../tests/fixtures/codex-0.171.0/idle.detection.txt");
+    let fake = Fake::start().await;
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        let codex = fake::process(10, "/opt/homebrew/bin/codex", "codex");
+        s.add(S1, B1, codex, vec![]);
+    }
+    let show = |screen: &str| fake.state().block(B1).screen = screen.replace('\n', "\r\n");
+    show(trust);
+    let (rex, _rt, dir) = followed(&fake).await;
+    let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+        .unwrap()
+        .with_rex(Some(rex));
+    let yes: Authorized = Arc::new(|| true);
+    let op = || OpId::new("K".repeat(22)).unwrap();
+    let terminal = TerminalId::new(id(B1)).unwrap();
+    let combo = |k: &str| Key::Combo(KeyCombo::new(k).unwrap());
+    let keys = |keys: Vec<Key>| AgentSendKeysParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        keys,
+    };
+    let text = |t: &str| SendTextParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        text: TypedText::new(t.to_owned()).unwrap(),
+    };
+    let refused = |r: (
+        Result<protocol::Response, (ErrorCode, String)>,
+        Option<String>,
+    )| {
+        assert_eq!(r.1, None);
+        r.0.unwrap_err().0
+    };
+    for batch in [
+        vec![combo("1"), combo("h"), combo("i"), Key::Enter],
+        vec![Key::Enter, Key::Down],
+        vec![combo("1"), combo("2")],
+        vec![Key::Tab],
+        vec![combo("h")],
+        vec![combo("shift+1")],
+    ] {
+        assert_eq!(
+            refused(drive.send_keys(keys(batch), &yes).await),
+            ErrorCode::AgentNotReady
+        );
+    }
+    for t in ["hi", "12", "1h", "x"] {
+        assert_eq!(
+            refused(drive.send_text(text(t), &yes).await),
+            ErrorCode::AgentNotReady
+        );
+    }
+    assert_eq!(events(&fake, B1), Vec::<Value>::new());
+
+    let target = |what: &str| Some(format!("{} blocked {what}", id(B1)));
+    let (sent, audited) = drive
+        .send_keys(keys(vec![Key::Down, Key::Up, Key::Enter]), &yes)
+        .await;
+    assert_eq!(
+        (sent, audited),
+        (Ok(protocol::Response::Ok), target("keys=down up enter"))
+    );
+    let enter = key("enter", "", "\r", 13);
+    assert_eq!(
+        events(&fake, B1),
+        [
+            key("arrow_down", "", "", 0),
+            key("arrow_up", "", "", 0),
+            enter
+        ]
+    );
+    // Its screen has not moved on yet: even the dialog's own keys wait.
+    assert_eq!(
+        refused(drive.send_keys(keys(vec![Key::Down]), &yes).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(
+        refused(drive.send_text(text("1"), &yes).await),
+        ErrorCode::AgentNotReady
+    );
+    show(composer);
+    assert_eq!(
+        refused(drive.send_keys(keys(vec![Key::Down]), &yes).await),
+        ErrorCode::AgentNotReady
+    );
+    show("Update available\n1. Update now\n› Ask Codex to do anything\n");
+    assert_eq!(
+        refused(drive.send_text(text("1"), &yes).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(events(&fake, B1), Vec::<Value>::new());
+
+    show(narrow);
+    let (sent, audited) = drive.send_text(text("2"), &yes).await;
+    assert_eq!(
+        (sent, audited),
+        (Ok(protocol::Response::Ok), target("text"))
+    );
+    assert_eq!(events(&fake, B1), [key("digit_2", "", "2", 50)]);
 }
