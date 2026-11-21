@@ -1,0 +1,27 @@
+ ▐▛███▛█   Claude Code v2.1.330
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+⚠ 1 MCP server needs authentication · run /mcp
+
+❯ Use the AskUserQuestion tool now, once, and do nothing
+  else: one question 'Should the release go to the stable
+  channel this week or wait until Monday?' (no line break
+  in it) with header 'Channel' and two options: 'Stable'
+  (description 'Ship now.'), 'Wait' (description 'Ship
+  Monday.').
+────────────────────────────────────────────────────────────
+ ☐ Channel
+
+Should the release go to the stable channel this week or
+wait until Monday?
+
+❯ 1. Stable
+     Ship now.
+  2. Wait
+     Ship Monday.
+  3. Type something.
+────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

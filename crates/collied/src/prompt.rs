@@ -848,13 +848,17 @@ impl Menu {
     /// rows above it unseen. 2.1.329 draws a question that holds a line break, or is wider
     /// than 80 columns, behind a `│` gutter, where no row is a rule. Any other question is
     /// one line of at most 80 columns, which is one row, and no rule of its own making, when
-    /// the terminal is wider than that. So the form is whole when its top rule spans more
-    /// than 80 columns, Claude Code's header or its tabs sit directly under that rule, and
-    /// the text under them is one row of at most 80 columns or rows all behind the gutter. A
-    /// form taller than the terminal hides its header and its top rule; no row the agent
-    /// writes above it starts at the screen's edge. The menu ends in Claude Code's own
-    /// entries, with no row under the last. The review page of several questions is not
-    /// shown whole this way, nor a form in a terminal of 80 columns or fewer.
+    /// the terminal is wider than that; in a narrower one it wraps at column 0 (2.1.330,
+    /// captured). So the form is whole when Claude Code's header or its tabs sit directly
+    /// under its top rule and the text under them is one row of at most 80 columns under a
+    /// rule of more than 80, or rows all behind the gutter under a rule of more than 75: a
+    /// question of at most 80 characters, drawn without the gutter, cannot hold such a rule,
+    /// a header (four characters or more) and a row that starts with `│`. A form taller than
+    /// the terminal hides its header and its top rule; no row the agent writes above it
+    /// starts at the screen's edge. The menu ends in Claude Code's own entries, with no row
+    /// under the last. The review page of several questions is not shown whole this way, nor
+    /// a form in a terminal of 75 columns or fewer, nor one of 80 or fewer whose question
+    /// fits one row.
     ///
     /// It holds for the version that draws so: the caller checks which one runs.
     pub fn stands_whole(&self) -> bool {
@@ -865,11 +869,11 @@ impl Menu {
         };
         let text = self.raw_body.get(1..).unwrap_or_default();
         let one = matches!(text, [row] if !row.starts_with('│') && row.chars().count() <= QUESTION_COLUMNS);
-        self.span > QUESTION_COLUMNS
+        let gutter = !text.is_empty() && text.iter().all(|row| row.starts_with('│'));
+        (one && self.span > QUESTION_COLUMNS || gutter && self.span + 5 > QUESTION_COLUMNS)
             && self.flush
             && self.after.is_empty()
             && self.raw_body.first().is_some_and(header)
-            && (one || !text.is_empty() && text.iter().all(|row| row.starts_with('│')))
             && self.own_entries().is_some()
     }
 
@@ -3814,6 +3818,20 @@ mod tests {
         assert!(!whole(&draw(&narrow)));
         // The same in a terminal of 80 columns, where a question of 80 can wrap.
         assert!(!whole(&live.replace(&wide, &"─".repeat(80))));
+        // Captured from Claude Code 2.1.330 while the form was up: a question behind the
+        // gutter in a terminal of 80 columns, and one of fewer than 80 characters in a
+        // terminal of 60, wrapped at column 0.
+        let gutter = include_str!("../tests/fixtures/claude-2.1.330/live-question-gutter-80.txt");
+        let wrapped = include_str!("../tests/fixtures/claude-2.1.330/live-question-wrapped-60.txt");
+        assert!(whole(gutter) && !whole(wrapped));
+        // Rows behind the gutter under a rule of 75 columns or fewer: a question of 80
+        // characters, drawn without the gutter, holds that rule, a header and a `│` row.
+        let rule = "─".repeat(80);
+        assert_eq!(gutter.matches(&rule).count(), 2);
+        let forged = format!("{}\n ☐ x\n│", "─".repeat(75));
+        assert_eq!(forged.replace('\n', "").chars().count(), 80);
+        assert!(whole(&gutter.replace(&rule, &"─".repeat(76))));
+        assert!(!whole(&gutter.replace(&rule, &"─".repeat(75))));
         // A rule the text draws with nothing of a header under it, text over two rows with
         // no gutter, a row too wide to have none, and rows only some of which have it.
         for text in [

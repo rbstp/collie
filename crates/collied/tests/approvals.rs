@@ -102,6 +102,17 @@ macro_rules! capture {
         )
     };
 }
+// Claude Code 2.1.330 (2026-11-21), the transcript read while the form was up: a question
+// behind the gutter in a terminal of 80 columns, and a shorter one wrapped at column 0 in a
+// terminal of 60.
+const LIVE_GUTTER_80: (&str, &str) = (
+    include_str!("fixtures/claude-2.1.330/live-question-gutter-80.txt"),
+    include_str!("fixtures/claude-2.1.330/live-question-gutter-80.transcript.min.jsonl"),
+);
+const LIVE_WRAPPED_60: (&str, &str) = (
+    include_str!("fixtures/claude-2.1.330/live-question-wrapped-60.txt"),
+    include_str!("fixtures/claude-2.1.330/live-question-wrapped-60.transcript.min.jsonl"),
+);
 const ASKED_ONE: (&str, &str) = cut!("question-one");
 const ASKED_MULTI: (&str, &str) = cut!("two-questions-second-multiselect");
 const ASKED_REVIEW: (&str, &str) = cut!("two-questions-after-tab");
@@ -2769,6 +2780,15 @@ async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
     for ((screen, transcript), labels) in [
         (LIVE, &["SQLite", "Redis"][..]),
         (LIVE_LATER, &["ops", "dev", "qa", "docs"][..]),
+        (
+            LIVE_GUTTER_80,
+            &[
+                "Review the retry change",
+                "Open the pull request",
+                "Run the tests",
+                "Something else",
+            ][..],
+        ),
     ] {
         show(&rig, form, screen, &fresh(transcript));
         let a = rig.needed().await;
@@ -2797,6 +2817,8 @@ async fn a_question_outside_code_mode_is_held_to_what_the_screen_proves() {
         // A form that scrolls, and the review page.
         (form, LIVE_TALL.0, fresh(LIVE_TALL.1)),
         (form, LIVE_REVIEW.0, fresh(LIVE_REVIEW.1)),
+        // A question of fewer than 80 characters wrapped at column 0 in a narrow terminal.
+        (form, LIVE_WRAPPED_60.0, fresh(LIVE_WRAPPED_60.1)),
     ];
     assert_ne!(refused[2].2, open);
     assert_ne!(refused[3].2, open);
