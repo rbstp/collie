@@ -388,11 +388,17 @@ fn approve_or_deny(a: &Approval) -> bool {
 }
 
 // Private template: only `for_device` output may cross APNs.
-pub fn approval_alert(a: &Approval, title: &str, node_id: &str, context: &str) -> Alert {
+pub fn approval_alert(
+    a: &Approval,
+    title: &str,
+    folder: &str,
+    node_id: &str,
+    context: &str,
+) -> Alert {
     let mut aps = json!({
         "alert": {
             "title": title,
-            "body": format!("Blocked in {}", a.workspace_label),
+            "body": format!("Blocked in {folder}"),
         },
         "thread-id": a.terminal_id.as_str(),
         "mutable-content": 1,
@@ -433,8 +439,8 @@ pub fn approval_clear(node_id: &str, approval_id: &ApprovalId) -> Alert {
     }
 }
 
-pub fn done_alert(terminal_id: &TerminalId, title: &str, workspace: &str, node_id: &str) -> Alert {
-    agent_alert(terminal_id, title, &format!("Done in {workspace}"), node_id)
+pub fn done_alert(terminal_id: &TerminalId, title: &str, folder: &str, node_id: &str) -> Alert {
+    agent_alert(terminal_id, title, &format!("Done in {folder}"), node_id)
 }
 
 pub fn agent_alert(terminal_id: &TerminalId, title: &str, body: &str, node_id: &str) -> Alert {
@@ -1478,7 +1484,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             Decision::ApproveAlways,
             Decision::Deny,
         ]);
-        let alert = approval_alert(&a, "api-fixer", "nMAC", "Bash: rm -rf build CONTEXT");
+        let alert = approval_alert(&a, "api-fixer", "api", "nMAC", "Bash: rm -rf build CONTEXT");
         assert_eq!(
             alert.payload,
             json!({
@@ -1532,10 +1538,10 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         );
         assert!(missing.payload["aps"].get("category").is_none());
 
-        let deny_only = approval_alert(&approval(vec![Decision::Deny]), "t", "nMAC", "");
+        let deny_only = approval_alert(&approval(vec![Decision::Deny]), "t", "api", "nMAC", "");
         assert!(deny_only.payload["aps"].get("category").is_none());
         assert!(
-            approval_alert(&approval(vec![]), "t", "nMAC", "").payload["aps"]
+            approval_alert(&approval(vec![]), "t", "api", "nMAC", "").payload["aps"]
                 .get("category")
                 .is_none()
         );
@@ -1865,8 +1871,15 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let device = device(Some(key()));
         let a = approval(vec![Decision::Approve, Decision::Deny]);
         let producers = [
-            approval_alert(&a, "PRIVATE_AGENT", "nMAC", "PRIVATE_COMMAND"),
-            done_alert(&term(1), "PRIVATE_AGENT", "PRIVATE_WORKSPACE", "nMAC"),
+            approval_alert(
+                &a,
+                "PRIVATE_AGENT",
+                "PRIVATE_FOLDER",
+                "nMAC",
+                "PRIVATE_COMMAND",
+            ),
+            approval_alert(&a, "PRIVATE_AGENT", "PRIVATE_FOLDER", "nMAC", ""),
+            done_alert(&term(1), "PRIVATE_AGENT", "PRIVATE_FOLDER", "nMAC"),
             agent_alert(
                 &term(1),
                 "Woke PRIVATE_AGENT",
@@ -1904,6 +1917,9 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
             )
             .unwrap();
             assert_eq!(display["title"], producer.payload["aps"]["alert"]["title"]);
+            if producer.context.is_none() {
+                assert_eq!(display["body"], producer.payload["aps"]["alert"]["body"]);
+            }
             assert_eq!(
                 display["terminalId"],
                 producer.payload["terminal_id"]
@@ -1919,7 +1935,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         let mut legacy = device.clone();
         legacy.encrypted_display = false;
         let unsupported =
-            done_alert(&term(1), "PRIVATE_AGENT", "PRIVATE_WORKSPACE", "nMAC").for_device(&legacy);
+            done_alert(&term(1), "PRIVATE_AGENT", "PRIVATE_FOLDER", "nMAC").for_device(&legacy);
         assert!(unsupported.payload.get("enc").is_none());
         assert!(!unsupported.payload.to_string().contains("PRIVATE"));
     }
@@ -2290,7 +2306,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
         )
         .unwrap();
         let a = approval(vec![Decision::Approve, Decision::Deny]);
-        let alert = approval_alert(&a, "api-fixer", "nMAC", "Bash: rm -rf build");
+        let alert = approval_alert(&a, "api-fixer", "api", "nMAC", "Bash: rm -rf build");
 
         push.notify_approval(&a, alert.clone(), true);
         let routed = push.take_routed();
@@ -2401,7 +2417,7 @@ UVsdPckAuSvGZZ/iBp9pjFsmPhLMtTEWs9uKc4/mI+REKuFUluqakETu
                 device: device.clone(),
                 terminal_id: a.terminal_id.clone(),
                 approval_id: a.approval_id.clone(),
-                alert: approval_alert(&a, "api-fixer", "nMAC", "Bash: rm -rf build"),
+                alert: approval_alert(&a, "api-fixer", "api", "nMAC", "Bash: rm -rf build"),
                 due: true,
             }
         };

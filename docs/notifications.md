@@ -28,8 +28,10 @@ Attention previews prefer the pending question or action:
 
 - Codex structured question: the question text between the numbered heading and its choices, while the submit footer shows the dialog is open, without notes or earlier conversation.
 - Codex conversation screen: the assistant response marked `•` after the user input marked `›`, never that input.
-- Incomplete or ambiguous question: `Blocked in <workspace>`.
-- Completion: `Done in <workspace>`, with no reply excerpt.
+- Incomplete or ambiguous question: `Blocked in <folder>`.
+- Completion: `Done in <folder>`, with no reply excerpt.
+
+An alert's title names the session as the app's session page does: its terminal title, else the title the agent reports, its name, then its kind. `<folder>` is the last folder of the agent's working directory, as its card shows it, else its workspace. Woke and Archived alerts name the session the same way. An approval alert keeps the agent's name or kind as its title, since the agent's own program sets the terminal title.
 
 iPhone and Apple Watch show the authenticated preview, as does an iPhone notification mirrored to macOS; CollieBar and CollieTray send no desktop notifications.
 

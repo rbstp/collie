@@ -976,7 +976,7 @@ async fn archive_merged(
     {
         state.push.notify_done(push::agent_alert(
             &terminal_id,
-            &format!("Archived {}", approvals::alert_title(agent)),
+            &format!("Archived {}", approvals::session_title(agent)),
             &format!("PR #{number} merged"),
             &state.machine.node_id,
         ));
@@ -1071,7 +1071,7 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             if let Ok(t) = TerminalId::new(terminal_id.clone()) {
                 state.push.notify_done(push::agent_alert(
                     &t,
-                    &format!("Woke {}", approvals::alert_title(agent)),
+                    &format!("Woke {}", approvals::session_title(agent)),
                     &summary,
                     &state.machine.node_id,
                 ));
@@ -3068,8 +3068,8 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             }
             state.push.notify_done(push::done_alert(
                 &terminal_id,
-                &approvals::alert_title(a),
-                &approvals::workspace_label(&a.workspace_id, &workspaces),
+                &approvals::session_title(a),
+                &approvals::folder_label(a, &workspaces),
                 &state.machine.node_id,
             ));
         }

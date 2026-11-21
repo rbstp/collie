@@ -173,11 +173,11 @@ fn non_empty(s: &Option<String>) -> Option<String> {
     s.as_deref().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
-fn title(a: &AgentInfo) -> Option<String> {
+pub(crate) fn title(a: &AgentInfo) -> Option<String> {
     non_empty(&a.terminal_title_stripped).or_else(|| non_empty(&a.title))
 }
 
-fn cwd(a: &AgentInfo) -> Option<String> {
+pub(crate) fn cwd(a: &AgentInfo) -> Option<String> {
     non_empty(&a.foreground_cwd).or_else(|| non_empty(&a.cwd))
 }
 

@@ -1524,11 +1524,11 @@ async fn codex_attention_preview_excludes_user_input_for_direct_and_relay_delive
             ),
             (
                 "  Question 1/2 (2 unanswered)\n  Old preview question?\n\n  › 1. Blue\n    2. Green\n\n  Question 2/2 (1 unanswered)\n  Current question still rendering?\n\n  tab to add notes | enter to submit answer | esc to interrupt\n",
-                "Blocked in api",
+                "Blocked in planlab",
             ),
             (
                 "› Is storage healthy?\n  including cached files\n",
-                "Blocked in api",
+                "Blocked in planlab",
             ),
         ] {
             let mut rig = Rig::start_with_delivery(TTL, None, relay).await;
