@@ -156,7 +156,7 @@ To refresh without a release, run the workflow by hand (Actions, docs screenshot
 
 ## Prices
 
-Every Monday, `.github/workflows/prices.yml` moves `litellm_commit` in the `justfile` to LiteLLM's latest `main` commit and runs `just prices` with the jq release that wrote `crates/collied/data/prices.json`, downloaded and checked against its SHA-256, so an unchanged price keeps its formatting. jq only filters the fetched table; the job runs nothing from it. When `prices.json` changes, the job force-pushes the `refresh-prices` branch and opens or updates the pull request "Refresh LiteLLM prices". It never enables auto-merge: the diff is third-party data and merging it ships a release, so review the changed models and rates first.
+Every Monday, `.github/workflows/prices.yml` moves `litellm_commit` in the `justfile` to LiteLLM's latest `main` commit and runs `just prices` with the jq release that wrote `crates/collied/data/prices.json`, downloaded and checked against its SHA-256, so an unchanged price keeps its formatting. jq only filters the fetched table; the job runs nothing from it. When `prices.json` changes, the job force-pushes the `refresh-prices` branch and opens or updates the pull request "Refresh LiteLLM prices [skip-release]". Merging it ships no build: the new prices go out with the next release. It never enables auto-merge: the diff is third-party data, so review the changed models and rates first.
 
 The job shares the `docs-screenshots` environment and its `DOCS_SCREENSHOTS_TOKEN` (above), for the same reason: a pull request opened with `GITHUB_TOKEN` starts no workflow. Without the secret, it fails with a message pointing here. To refresh between Mondays, run the workflow by hand (Actions, prices, Run workflow, on `master`).
 
