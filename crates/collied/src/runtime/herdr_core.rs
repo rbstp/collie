@@ -488,6 +488,7 @@ fn agent(
         interactive_ready: false,
         launch_pending: false,
         read_only,
+        unreported: t.status.is_none(),
     })
 }
 
@@ -1836,7 +1837,7 @@ pub(crate) mod tests {
         /// What clients typed on their attaches.
         pub(crate) typed: Vec<u8>,
         /// Attaches that ended.
-        closed: usize,
+        pub(crate) closed: usize,
         /// Line-mode calls, as `{method, params}`.
         pub(crate) calls: Vec<Value>,
         /// Each attach's paint, from what clients typed before it; `ready` when unset.

@@ -1852,7 +1852,7 @@ async fn typed_text_reaches_an_agent_box_without_enter() {
     let drive = herdr.driver(&["claude"], &base);
     herdr.with(|h| h.text = SLASH_MENU.into());
     assert_eq!(
-        drive.send_text(sent(CLAUDE, "el"), &yes()).await,
+        drive.send_text(sent(CLAUDE, "el"), &yes()).await.0,
         Ok(Response::Ok)
     );
     assert_eq!(
@@ -1860,16 +1860,16 @@ async fn typed_text_reaches_an_agent_box_without_enter() {
         vec![json!({"pane_id": "w6:p1", "text": "el"})]
     );
     assert_eq!(
-        code(drive.send_text(sent(CLAUDE, "x"), &no()).await),
+        code(drive.send_text(sent(CLAUDE, "x"), &no()).await.0),
         ErrorCode::NotPaired
     );
     assert_eq!(
-        code(drive.send_text(sent(SHELL, "x"), &yes()).await),
+        code(drive.send_text(sent(SHELL, "x"), &yes()).await.0),
         ErrorCode::NotFound
     );
     herdr.with(|h| h.text = drawn(SCROLLED));
     assert_eq!(
-        code(drive.send_text(sent(CLAUDE, "x"), &yes()).await),
+        code(drive.send_text(sent(CLAUDE, "x"), &yes()).await.0),
         ErrorCode::AgentNotReady
     );
     assert_eq!(herdr.mutations(), ["pane.send_text"]);

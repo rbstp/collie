@@ -1801,7 +1801,7 @@ impl Session<'_> {
             Request::AgentSendText(p) => {
                 let (op_id, d) = (p.op_id.clone(), drive.clone());
                 let op = self.audited(method, target.clone(), async move {
-                    (d.send_text(p, &auth).await, None)
+                    d.send_text(p, &auth).await
                 });
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))

@@ -240,6 +240,73 @@ pub fn codex_update(text: &str) -> bool {
             .any(|l| option_line(l).is_some_and(|(_, _, label)| label.starts_with("Update now")))
 }
 
+/// Codex's folder trust prompt or update picker alone on the screen, as Codex 0.160.1 to 0.171.0
+/// draw them: blank rows, the heading, indented text, a blank row, options numbered from 1 with
+/// one cursor, a blank row and the key hint, nothing else. Codex draws its composer under any
+/// transcript, so no screen where agent output shows passes.
+pub fn codex_startup(text: &str) -> bool {
+    const DIALOGS: [(&str, &str, &str); 3] = [
+        (
+            "  Folder access",
+            "Trust and continue",
+            "  enter continue · esc back",
+        ),
+        (
+            "  Update available · ",
+            "Update now",
+            "  enter continue · esc skip",
+        ),
+        (
+            "  ✨ Update available! ",
+            "Update now",
+            "  Press enter to continue",
+        ),
+    ];
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let Some(first) = lines.iter().position(|l| !l.is_empty()) else {
+        return false;
+    };
+    let last = lines.iter().rposition(|l| !l.is_empty()).unwrap_or(first);
+    let lines = &lines[first..=last];
+    fn option(l: &str) -> Option<(bool, usize, &str)> {
+        let (cursor, rest) = match l.strip_prefix("› ") {
+            Some(rest) => (true, rest),
+            None => (false, l.strip_prefix("  ")?),
+        };
+        let (n, label) = rest.split_once(". ")?;
+        let n: usize = n.parse().ok().filter(|n| (1..=9).contains(n))?;
+        (!label.is_empty() && !label.starts_with(' ')).then_some((cursor, n, label))
+    }
+    DIALOGS.iter().any(|&(heading, first_option, hint)| {
+        let [head, .., blank, footer] = lines else {
+            return false;
+        };
+        let opening = if heading.ends_with(' ') {
+            head.starts_with(heading)
+        } else {
+            *head == heading
+        };
+        if !opening || *footer != hint || !blank.is_empty() {
+            return false;
+        }
+        let body = &lines[1..lines.len() - 2];
+        let start = body
+            .iter()
+            .rposition(|l| option(l).is_none())
+            .map_or(0, |i| i + 1);
+        let options: Vec<_> = body[start..].iter().filter_map(|l| option(l)).collect();
+        options.len() >= 2
+            && start >= 1
+            && body[start - 1].is_empty()
+            && options.iter().enumerate().all(|(i, &(_, n, _))| n == i + 1)
+            && options.iter().filter(|&&(cursor, ..)| cursor).count() == 1
+            && options[0].2.starts_with(first_option)
+            && body[..start - 1]
+                .iter()
+                .all(|l| l.is_empty() || (l.starts_with("  ") && !l.starts_with("  ›")))
+    })
+}
+
 /// Whether Claude Code shows ultracode on: the rule directly above its last `❯` row, the
 /// input box's top rule, carries the `ultracode` tag (`─── ultracode ─` in 2.1.299).
 pub fn ultracode_on(text: &str) -> bool {
@@ -2445,6 +2512,36 @@ mod tests {
         assert!(startup_dialog(
             "✨ Update available! 0.166.0 -> 0.167.0\n› 1. Update now\n  2. Skip\n"
         ));
+    }
+
+    /// #895: only Codex's own startup dialog, alone on the screen, lets keys reach a Codex
+    /// that has not reported.
+    #[test]
+    fn a_codex_startup_dialog_fills_the_screen() {
+        let trust = include_str!("../tests/fixtures/codex-0.171.0/trust.detection.txt");
+        let narrow = include_str!("../tests/fixtures/codex-0.171.0/trust-narrow.detection.txt");
+        for screen in [
+            trust,
+            narrow,
+            CODEX[2].1,
+            CODEX_UPDATES[0],
+            CODEX_UPDATES[1],
+        ] {
+            assert!(codex_startup(screen), "{screen}");
+        }
+        let idle = include_str!("../tests/fixtures/codex-0.171.0/idle.detection.txt");
+        let spoof = "Update available\n1. Update now\n› Ask Codex to do anything\n";
+        let composer = format!("{trust}\n› Ask Codex to do anything\n\n  gpt · ~/app\n");
+        let transcript = format!("• Here is what it showed:\n{trust}");
+        let two = trust.replace("  2. Back", "› 2. Back");
+        let none = trust.replace("› 1. Trust", "  1. Trust");
+        let other = trust.replace("1. Trust and continue", "1. Run it now");
+        for screen in [idle, spoof, &composer, &transcript, &two, &none, &other] {
+            assert!(!codex_startup(screen), "{screen}");
+        }
+        for (_, screen) in CODEX[..2].iter().chain(&COPILOT) {
+            assert!(!codex_startup(screen), "{screen}");
+        }
     }
 
     #[test]

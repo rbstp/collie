@@ -173,7 +173,7 @@ async fn an_agent_with_no_status_or_copilot_takes_no_prompt_answer_or_key() {
             text: TypedText::new("/x".to_owned()).unwrap(),
         };
         assert_eq!(
-            refused(drive.send_text(text, &yes).await),
+            refused(drive.send_text(text, &yes).await.0),
             ErrorCode::AgentNotReady
         );
         assert_eq!(
