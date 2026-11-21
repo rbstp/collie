@@ -16,12 +16,13 @@ use zeroize::Zeroizing;
 use crate::audit::Audit;
 use crate::drive::{Authorized, Reply, fail, herdr_fail};
 use crate::flock;
-use crate::prompt::{self, Menu};
+use crate::prompt::{self, Menu, Refused};
 use crate::push::{self, Push};
 use crate::runtime::herdr_core::{self, Core};
 use crate::runtime::rex::Rex;
 use crate::runtime::{self, AgentInfo, Owner, Runtime, WorkspaceInfo};
 use crate::server::TokenBucket;
+use crate::transcript::{Transcripts, Waits};
 
 pub const TTL: Duration = Duration::from_secs(600);
 pub const SETTLE: Duration = Duration::from_secs(3);
@@ -55,7 +56,13 @@ struct Screen {
     blocked: bool,
     settings_picker: bool,
     menu: Option<Menu>,
+    /// The menu on screen whether or not the question rule lets the phone answer it: what a
+    /// decision under way compares with the menu it claimed ([`Menu::only_changed`]). The
+    /// note it types turns `Yes` into text that reads as no approval, on the same prompt.
+    drawn: Option<Menu>,
     offered: Vec<(Decision, usize)>,
+    /// Whether the report makes the menu a question: its options are only chosen.
+    question: bool,
     accepts_input: bool,
     has_text_field: bool,
     supports_note: bool,
@@ -66,6 +73,8 @@ struct Screen {
     reason: Option<String>,
     context: String,
     tool: Option<PendingTool>,
+    /// Why the question rule keeps this menu from the phone.
+    refused: Option<Refused>,
 }
 
 impl Screen {
@@ -111,6 +120,9 @@ struct Inner {
     notified: HashMap<String, ApprovalId>,
     /// A blocked Rex agent's report and the reconciles that read its screen.
     rex_reads: HashMap<String, (u64, u8)>,
+    /// The blocked episode and reason of the refusal last logged per terminal, so a dialog is
+    /// logged once, whatever its cursor or its approval's expiry reissue.
+    refused: HashMap<String, (u64, Refused)>,
 }
 
 impl Inner {
@@ -151,6 +163,7 @@ impl Inner {
 
 pub struct Approvals {
     runtime: Runtime,
+    transcripts: Option<Arc<Mutex<Transcripts>>>,
     node_id: String,
     events: broadcast::Sender<Event>,
     audit: Arc<Audit>,
@@ -173,6 +186,7 @@ pub fn fingerprint(
     session: Option<&str>,
     region: &str,
     reason: Option<&str>,
+    question: Option<&str>,
 ) -> [u8; 32] {
     let mut h = Sha256::new();
     for part in [
@@ -182,6 +196,7 @@ pub fn fingerprint(
         session.unwrap_or(""),
         region,
         reason.unwrap_or(""),
+        question.unwrap_or(""),
     ] {
         h.update((part.len() as u64).to_be_bytes());
         h.update(part.as_bytes());
@@ -255,6 +270,7 @@ impl Approvals {
     ) -> Self {
         Self {
             runtime: Runtime::new(herdr),
+            transcripts: None,
             node_id,
             events,
             audit,
@@ -275,6 +291,11 @@ impl Approvals {
 
     pub fn with_budget(mut self, budget: Duration) -> Self {
         self.budget = budget;
+        self
+    }
+
+    pub fn with_transcripts(mut self, transcripts: Arc<Mutex<Transcripts>>) -> Self {
+        self.transcripts = Some(transcripts);
         self
     }
 
@@ -435,9 +456,11 @@ impl Approvals {
                 pending,
                 notified,
                 rex_reads,
+                refused,
                 ..
             } = &mut *inner;
             rex_reads.retain(|t, _| agents.iter().any(|a| a.terminal_id == *t && is_blocked(a)));
+            refused.retain(|t, _| agents.iter().any(|a| a.terminal_id == *t && is_blocked(a)));
             notified.retain(|t, id| {
                 let ended = !pending.contains_key(t)
                     && !agents.iter().any(|a| a.terminal_id == *t && is_blocked(a));
@@ -469,8 +492,75 @@ impl Approvals {
             .then(|| Menu::parse(&text))
             .flatten();
         let unnumbered = parsed.is_none() && !prompt::numbered(&text);
-        let menu = parsed.filter(Menu::on_screen);
+        // The screen cannot say a question form is whole, so it is answered only when it draws
+        // the session's one pending AskUserQuestion call whole, as the transcript records it.
+        // While such a call is pending, no other menu gets an answer either. A Code Mode
+        // script is pending through every call it makes, so beside one a question form is
+        // matched to its literals and any other dialog is read as the screen says. With no
+        // such call known, whatever else the transcript says or fails to say, only a menu the
+        // screen alone makes another dialog is answered ([`Menu::is_question`]), so that
+        // approvals work without the transcript.
+        let waits = match &parsed {
+            Some(_) => self.waits(a),
+            None => Waits::Nothing,
+        };
+        // Which dialog blocks the agent is the report's to say, never the wording on screen:
+        // the agent writes an option's description, which can draw a whole plan prompt or
+        // permission prompt with Claude Code's own rows off screen. Under a report of a form
+        // menu drawn without a `▔` border is a question, answered only by choosing an option,
+        // but the folder trust prompt herdr reports so; under any other report a menu that reads
+        // as a question is refused.
+        let form = prompt::reports_form(kind, rule);
+        let asked_form =
+            |m: &Menu| form && !m.bordered && !(m.trust && rule == Some("live_blocked_form"));
+        let asked = parsed.as_ref().map(|m| match &waits {
+            _ if !form && m.is_question() => Err(Refused::NotReported),
+            Waits::Question { .. } if !form => Err(Refused::OtherCall),
+            Waits::Question {
+                session,
+                call,
+                questions,
+            } => (m.asks(questions)).map(|asked| Some(format!("{session} {call:?} {asked}"))),
+            Waits::Script {
+                session,
+                call,
+                literals,
+            } if asked_form(m) => {
+                let literals = literals.as_deref().ok_or(Refused::ScriptNotRead);
+                literals
+                    .and_then(|literals| m.scripted(literals))
+                    .map(|asked| Some(format!("{session} {call:?} {asked}")))
+            }
+            // No call on disk is all a question asked outside Code Mode leaves there: it is
+            // held to what the screen alone proves, for the version known to draw it so, and
+            // to the report that a form is what blocks the agent.
+            Waits::Open { version } if asked_form(m) => {
+                if version.is_none_or(|v| v < prompt::QUESTION_VERSION) {
+                    Err(Refused::Version)
+                } else if !m.stands_whole() {
+                    Err(Refused::NotWhole)
+                } else {
+                    Ok(None)
+                }
+            }
+            Waits::Other if asked_form(m) => Err(Refused::OtherCall),
+            Waits::Nothing if asked_form(m) => Err(Refused::NoCall),
+            Waits::Unknown(why) if asked_form(m) => Err(*why),
+            _ => Ok(None),
+        });
+        let (question, refused) = match asked {
+            Some(Ok(question)) => (question, None),
+            Some(Err(why)) => (None, Some(why)),
+            None => (None, None),
+        };
+        // A question-shaped menu with no top is refused before any match: logged as one too.
+        let headless = |m: &&Menu| !m.on_screen() && asked_form(m);
+        let refused =
+            refused.or_else(|| (parsed.as_ref().filter(headless)).map(|_| Refused::NotWhole));
+        let drawn = parsed.filter(Menu::on_screen);
+        let menu = drawn.clone().filter(|_| refused.is_none());
         let (region, snippet, offered) = match &menu {
+            Some(m) if asked_form(m) => (m.region(), m.snippet(), Vec::new()),
             Some(m) => (m.region(), m.snippet(), m.decisions()),
             None => (
                 text.clone(),
@@ -497,6 +587,7 @@ impl Approvals {
                 session,
                 region,
                 reason.as_deref(),
+                question.as_deref(),
             )
         };
         Ok(Screen {
@@ -513,13 +604,25 @@ impl Approvals {
             accepts_input,
             has_text_field,
             supports_note,
+            question: menu.as_ref().is_some_and(asked_form),
             menu,
+            drawn,
             offered,
             snippet,
             reason,
             context,
             tool,
+            refused,
         })
+    }
+
+    fn waits(&self, a: &AgentInfo) -> Waits {
+        let asking = (self.transcripts.as_ref()).map(|t| crate::lock(t).asking(a));
+        match asking {
+            Some(Ok(asking)) => asking.waits(),
+            Some(Err(why)) => Waits::Unknown(why),
+            None => Waits::Unknown(Refused::NoSession),
+        }
     }
 
     async fn create(&self, a: &AgentInfo, workspaces: &[WorkspaceInfo]) -> anyhow::Result<()> {
@@ -573,6 +676,17 @@ impl Approvals {
             let mut inner = self.lock();
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
+            }
+            // Never the question's text, its labels or a path: the reason and the terminal.
+            if let Some(why) = screen.refused
+                && (inner.refused).insert(a.terminal_id.clone(), (screen.seq, why))
+                    != Some((screen.seq, why))
+            {
+                tracing::warn!(
+                    terminal = %a.terminal_id,
+                    reason = why.as_str(),
+                    "question form not answered from the phone"
+                );
             }
             let alert = inner.alert_due(&a.terminal_id, &screen, &approval);
             if alert {
@@ -675,7 +789,7 @@ impl Approvals {
                         && s.pane_id == screen.pane_id
                         && s.reason == screen.reason =>
                 {
-                    if s.menu.as_ref().is_some_and(&done) {
+                    if s.drawn.as_ref().is_some_and(&done) {
                         return true;
                     }
                 }
@@ -798,7 +912,7 @@ impl Approvals {
             Some(i) => {
                 let chosen = (screen.menu.as_ref())
                     .filter(|m| usize::from(i) < m.options.len())
-                    .filter(|m| m.takes_choice(usize::from(i)));
+                    .filter(|m| screen.question || m.takes_choice(usize::from(i)));
                 if !screen.offered.is_empty() || chosen.is_none() {
                     return reject(
                         ApprovalOutcome::Superseded,
@@ -1037,21 +1151,95 @@ mod tests {
 
     #[test]
     fn fingerprint_covers_every_field() {
-        let base = fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"));
+        let base = fingerprint(
+            "claude",
+            Some("r"),
+            "t",
+            Some("s"),
+            "q",
+            Some("y"),
+            Some("a"),
+        );
         assert_eq!(
             base,
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"))
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a")
+            )
         );
         for other in [
-            fingerprint("codex", Some("r"), "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r2"), "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", None, "t", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t2", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", None, "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q2", Some("y")),
-            fingerprint("claude", Some("rt"), "", Some("s"), "q", Some("y")),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", None),
-            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y2")),
+            fingerprint(
+                "codex",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint(
+                "claude",
+                Some("r2"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", None, "t", Some("s"), "q", Some("y"), Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t2",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", None, "q", Some("y"), Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q2",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint(
+                "claude",
+                Some("rt"),
+                "",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", None, Some("a")),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y2"),
+                Some("a"),
+            ),
+            fingerprint("claude", Some("r"), "t", Some("s"), "q", Some("y"), None),
+            fingerprint(
+                "claude",
+                Some("r"),
+                "t",
+                Some("s"),
+                "q",
+                Some("y"),
+                Some("a2"),
+            ),
         ] {
             assert_ne!(base, other);
         }

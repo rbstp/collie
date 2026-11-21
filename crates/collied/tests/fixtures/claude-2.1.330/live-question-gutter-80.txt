@@ -1,0 +1,34 @@
+ ▐▛███▛█   Claude Code v2.1.330
+▝▜██████▀  Opus 5.5 with high effort · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+⚠ 1 MCP server needs authentication · run /mcp
+
+❯ Use the AskUserQuestion tool now, once, and do nothing else: one question
+  'Which part of the billing service should we look at next (we are at the
+  invoice-retry-backoff change)?' with header 'Next step' and four options:
+  'Review the retry change' (description 'Run a code review on the retry change
+  (invoice-retry-backoff billing approval gate).'), 'Open the pull request'
+  (description 'Push the branch and open a pull request.'), 'Run the tests'
+  (description 'Run the billing test suite.'), 'Something else' (description
+  'Pick another task.').
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Next step
+
+│ Which part of the billing service should we look at next (we are at the
+│ invoice-retry-backoff change)?
+
+❯ 1. Review the retry change
+     Run a code review on the retry change (invoice-retry-backoff billing
+     approval gate).
+  2. Open the pull request
+     Push the branch and open a pull request.
+  3. Run the tests
+     Run the billing test suite.
+  4. Something else
+     Pick another task.
+  5. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

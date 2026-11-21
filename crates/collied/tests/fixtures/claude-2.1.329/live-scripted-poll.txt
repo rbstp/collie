@@ -1,0 +1,25 @@
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Sonnet 5.5 · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+
+❯ In one reply make two tool calls and nothing else: first a REPL call whose script asks me one
+  question 'Keep going?' with header 'Next' and options 'Carry on' (description 'Continue the
+  test') and 'Stop here' (description 'End the test'); second a Poll call.
+
+⏺ Working · 38s…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Next
+
+Keep going?
+
+❯ 1. Carry on
+     Continue the test
+  2. Stop here
+     End the test
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

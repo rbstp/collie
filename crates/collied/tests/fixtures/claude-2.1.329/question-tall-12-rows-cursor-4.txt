@@ -1,0 +1,10 @@
+Which release channel should this build go to?
+
+↑ 3. Nightly
+     Built from master every night
+❯ 4. Internal
+     Only the team
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+ ↑ 1 more line
+Enter to select · ↑/↓ to navigate · Esc to cancel

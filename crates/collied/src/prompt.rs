@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use protocol::limits::{MAX_CHOICE_LABEL_CHARS, MAX_SNIPPET_CHARS};
 use protocol::{ApprovalChoice, Decision, PendingTool, is_format};
 
@@ -69,6 +71,18 @@ pub fn numbered(text: &str) -> bool {
 const CLAUDE_PLAN_RULES: &[&str] = &["legacy_no_prompt_blocker", "permission"];
 
 const FEEDBACK: &str = "Tell Claude what to change";
+/// The widest question Claude Code 2.1.329 draws without its `│` gutter.
+const QUESTION_COLUMNS: usize = 80;
+/// The first Claude Code whose question form is known to be drawn as [`Menu::stands_whole`]
+/// reads it: the captures are 2.1.329's.
+pub const QUESTION_VERSION: [u32; 3] = [2, 1, 329];
+
+/// Whether what blocks the agent is reported as a form: herdr's rule for one, or the kind a
+/// herdr-core or Rex agent's own report gives (Claude Code says `question` for
+/// AskUserQuestion's form and `permission` for its permission and plan prompts).
+pub fn reports_form(kind: &str, rule: Option<&str>) -> bool {
+    kind == "claude" && rule.is_some_and(|r| CLAUDE_FORM_RULES.contains(&r))
+}
 const FEEDBACK_HINT: &str = "shift+tab to approve with this feedback";
 
 pub fn open_to_text(kind: &str, rule: Option<&str>, text: &str) -> bool {
@@ -260,6 +274,55 @@ fn grants(label: &str) -> bool {
     classify(label).is_some() || label.to_lowercase().starts_with("yes")
 }
 
+/// Why a question form gets no answer from the phone: all the log says of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Refused {
+    NoSession,
+    Truncated,
+    ManySessions,
+    Transcript,
+    NoCall,
+    OtherCall,
+    Several,
+    Stale,
+    NotWhole,
+    Ambiguous,
+    NotInScript,
+    ScriptNotRead,
+    NotReported,
+    Version,
+}
+
+impl Refused {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoSession => "no session tied",
+            Self::Truncated => "truncated process list",
+            Self::ManySessions => "too many session files",
+            Self::Transcript => "transcript unreadable or incomplete",
+            Self::NoCall => "no pending call",
+            Self::OtherCall => "another call pending",
+            Self::Several => "several pending calls",
+            Self::Stale => "stale call",
+            Self::NotWhole => "question not drawn whole",
+            Self::Ambiguous => "ambiguous",
+            Self::NotInScript => "question not found in the pending script",
+            Self::ScriptNotRead => "pending script not read whole",
+            Self::NotReported => "not reported as a question",
+            Self::Version => "Claude Code version not known",
+        }
+    }
+}
+
+/// One question of an AskUserQuestion call, as the session transcript records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Question {
+    pub text: String,
+    /// Each option's label and description.
+    pub options: Vec<(String, String)>,
+    pub multi: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Menu {
     pub body: Vec<String>,
@@ -268,6 +331,8 @@ pub struct Menu {
     pub options: Vec<String>,
     /// Each option's first line, the rest of `options[i]` being the lines under it.
     pub heads: Vec<String>,
+    /// Each option's rows: Claude Code starts a description on a row of its own.
+    rows: Vec<Vec<String>>,
     pub cursor: usize,
     /// The lines right under the last option: where its label wraps, and hints.
     pub after: Vec<String>,
@@ -283,12 +348,24 @@ pub struct Menu {
     /// Whether the dialog's top rule is on screen. A dialog taller than the screen has lost
     /// its first rows, a command's first lines among them: no read shows or binds them.
     pub topped: bool,
+    /// How many columns that rule spans: Claude Code draws it across the terminal.
+    span: usize,
     /// Whether a `▔` border tops the form: from the last option up, the nearest row that
     /// starts at column 0 starts with `▔`. Claude Code draws that border at column 0 and
     /// every row of the form under it indented, its options included, so no text of the form
     /// passes for it, and one above the form has the border under it. A question form, whose
     /// text starts at column 0 like its cursor row, never has one.
-    bordered: bool,
+    pub bordered: bool,
+    /// Whether the cursor row starts at column 0, where Claude Code draws AskUserQuestion's
+    /// form and its review page (2.1.289 to 2.1.329). It indents its permission prompts, the
+    /// plan prompt and the workflow prompt, and no row of an option's text, which the agent
+    /// writes, starts there: a question form is not answered without it ([`option_rows`]).
+    flush: bool,
+    /// Whether it is the unnumbered folder trust prompt ([`Menu::parse_trust`]) with its cursor
+    /// at column 1, where Claude Code draws it and herdr reports it as a form. No row the agent
+    /// writes starts there: an option's text starts at its label's column, 5 or deeper, and a
+    /// question's at column 0 or behind the gutter.
+    pub trust: bool,
 }
 
 impl Menu {
@@ -303,7 +380,8 @@ impl Menu {
 
     fn parse_numbered(text: &str) -> Option<Self> {
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
-        let last = lines.iter().rposition(|l| option_line(l).is_some())?;
+        let numbered = option_rows(&lines);
+        let last = numbered.iter().rposition(Option::is_some)?;
         if last < lines.len() - after_last_rule(text).len() {
             return None;
         }
@@ -313,7 +391,7 @@ impl Menu {
             .take_while(|l| !l.trim().is_empty() && !is_rule(l))
             .collect();
         let indent = |l: &str| l.chars().take_while(|c| c.is_whitespace()).count();
-        let column = option_line(lines[last]).map_or(0, |(_, _, label)| {
+        let column = numbered[last].map_or(0, |(_, _, label)| {
             lines[last][..lines[last].len() - label.len()]
                 .chars()
                 .count()
@@ -322,30 +400,42 @@ impl Menu {
         let unshown = lines[last + 1 + continued..]
             .iter()
             .any(|l| !l.trim().is_empty());
+        // Claude Code 2.1.329 scrolls the options of a form taller than the terminal and
+        // marks the last one on screen `↓` in the cursor column when more are hidden under
+        // it. That row is no option row, so it lands here, under the last option read, and no
+        // index or decision answers a list not seen whole. A gap in the numbers already stops
+        // the read when a numbered row follows, or when `↑` marks options hidden above.
+        let scrolls = |l: &&str| {
+            let marked = l.trim_start().strip_prefix('↓');
+            marked.is_some_and(|rest| option_line(rest).is_some())
+        };
+        if under.iter().any(scrolls) {
+            return None;
+        }
         let after = under.iter().map(|l| l.trim().to_owned()).collect();
-        let mut options: Vec<(bool, String, String)> = Vec::new();
+        let mut options: Vec<(bool, Vec<String>)> = Vec::new();
         let mut continuation: Vec<&str> = Vec::new();
         let mut expect = None;
+        let mut number = None;
         let mut first = None;
+        let mut flush = false;
         for i in (0..=last).rev() {
             let line = lines[i];
-            if let Some((cursor, n, label)) = option_line(line) {
-                if expect.is_some_and(|e| e != n) {
+            if let Some((cursor, n, label)) = numbered[i] {
+                // Claude Code draws a menu's numbers in one column.
+                let at = number_column(line);
+                if expect.is_some_and(|e| e != n) || *number.get_or_insert(at) != at {
                     return None;
                 }
-                let head = label.to_owned();
-                let mut label = head.clone();
-                for c in continuation.drain(..).rev() {
-                    label.push(' ');
-                    label.push_str(c);
-                }
-                options.push((cursor, label, head));
+                let rows = std::iter::once(label).chain(continuation.drain(..).rev());
+                flush |= cursor && line.starts_with('❯');
+                options.push((cursor, rows.map(str::to_owned).collect()));
                 if n == 1 {
                     first = Some(i);
                     break;
                 }
                 expect = Some(n - 1);
-            } else if splits_options(&lines, i) {
+            } else if splits_options(&lines, &numbered, i) {
                 continue;
             } else if line.trim().is_empty() || continuation.len() == MAX_CONTINUATION_LINES {
                 return None;
@@ -355,12 +445,12 @@ impl Menu {
         }
         let first = first?;
         options.reverse();
-        let mut cursors = options.iter().enumerate().filter(|(_, (c, _, _))| *c);
+        let mut cursors = options.iter().enumerate().filter(|(_, (c, _))| *c);
         let (cursor, _) = cursors.next()?;
         if cursors.next().is_some() {
             return None;
         }
-        let rule = top_rule(&lines, first);
+        let rule = top_rule(&lines, &numbered, first);
         let bordered = lines[..=last]
             .iter()
             .rfind(|l| !l.is_empty() && !l.starts_with(char::is_whitespace))
@@ -383,18 +473,22 @@ impl Menu {
                 }
             })
             .collect();
-        let (options, heads) = options.into_iter().map(|(_, l, h)| (l, h)).unzip();
+        let rows: Vec<Vec<String>> = options.into_iter().map(|(_, rows)| rows).collect();
         Some(Self {
             body,
             raw_body,
-            options,
-            heads,
+            options: rows.iter().map(|r| r.join(" ")).collect(),
+            heads: rows.iter().map(|r| r[0].clone()).collect(),
+            rows,
             cursor,
             after,
             continued,
             unshown,
             topped: rule.is_some(),
+            span: rule.map_or(0, |r| lines[r].trim().chars().count()),
             bordered,
+            flush,
+            trust: false,
         })
     }
 
@@ -462,13 +556,17 @@ impl Menu {
             body: raw_body.iter().map(|l| l.trim().to_owned()).collect(),
             raw_body,
             heads: options.clone(),
+            rows: options.iter().map(|o| vec![o.clone()]).collect(),
             options,
             cursor: at - first,
             after: Vec::new(),
             continued: 0,
             unshown: false,
             topped: true,
+            span: 0,
             bordered: false,
+            flush: false,
+            trust: indent == 1,
         })
     }
 
@@ -515,13 +613,25 @@ impl Menu {
     /// options are pressed as a decision or not at all. A plan holds no such option, so its
     /// `Yes, and ...` options stay chosen by index.
     pub fn takes_choice(&self, i: usize) -> bool {
-        let approval = |j: usize| {
+        !(grants(&self.text(i)) && self.approves())
+    }
+
+    /// Whether an option reads as an approval ([`classify`]), as shown: a permission prompt.
+    pub fn approves(&self) -> bool {
+        (0..self.options.len()).any(|j| {
             matches!(
                 classify(&self.text(j)),
                 Some(Decision::Approve | Decision::ApproveAlways)
             )
-        };
-        !(grants(&self.text(i)) && (0..self.options.len()).any(approval))
+        })
+    }
+
+    /// The plan prompt by its own wording (2.1.289 to 2.1.329): its question over option 1,
+    /// and `Yes` leading that option. A question can word itself so, and is told by how it is
+    /// drawn ([`Menu::is_question`]).
+    fn is_plan(&self) -> bool {
+        self.body.join(" ").ends_with("Would you like to proceed?")
+            && self.text(0).starts_with("Yes")
     }
 
     /// Option `i` as the phone shows it, label then detail, cleaned as [`Menu::choices`]
@@ -547,6 +657,284 @@ impl Menu {
     /// rule and keep the border.
     pub fn on_screen(&self) -> bool {
         self.topped || self.bordered && !self.grants()
+    }
+
+    /// Whether an option reads as Tab leaves an Approve or a Deny ([`amend`]): a permission
+    /// prompt left in its amend state, whose `Yes` no longer reads as an approval.
+    fn amends(&self) -> bool {
+        let fields = [Decision::Approve, Decision::Deny].map(|d| amend(d).map(|(field, _)| field));
+        (0..self.options.len()).any(|j| {
+            let text = self.text(j).to_lowercase();
+            fields.iter().flatten().any(|field| text.starts_with(field))
+        })
+    }
+
+    /// Whether Claude Code drew this menu as it draws AskUserQuestion's form: the cursor row at
+    /// column 0, or an entry it adds to a question's options. Neither is the agent's to write
+    /// or to leave out. The review page needs no mark of its own: `Submit answers` and
+    /// `Cancel` read as no other dialog.
+    fn asked_shape(&self) -> bool {
+        let added = |o: &String| {
+            let option = unspaced(o);
+            let option = option.trim_end_matches('─');
+            ["Typesomething.", "Chataboutthis", "[]TypesomethingSubmit"].contains(&option)
+        };
+        self.flush || self.options.iter().any(added)
+    }
+
+    /// Whether this menu may be AskUserQuestion's form or its review page, whose top the
+    /// screen cannot tell ([`Menu::asks`]): one with no `▔` border over it that is drawn as a
+    /// question form ([`Menu::asked_shape`]), whatever its labels read, or that reads as no
+    /// other dialog.
+    ///
+    /// How it is drawn comes before any wording: the agent writes a question's labels, and
+    /// can word one as an approval, as an amend field or as the plan prompt. Only a menu not
+    /// drawn so is another dialog by its wording: a permission prompt holds an option that
+    /// reads as an approval or, left in its amend state, as an amend field, and the plan
+    /// prompt, which holds neither, is told by its own wording, so that plans are still
+    /// chosen from with no session tied. A menu with none of these is no dialog collied
+    /// knows, whatever call the transcript names: a question form Claude Code came to draw
+    /// without those marks does not fail open.
+    pub fn is_question(&self) -> bool {
+        !self.bordered
+            && (self.asked_shape() || !(self.approves() || self.amends() || self.is_plan()))
+    }
+
+    /// What this menu draws of `asked`, the questions of the session's one pending
+    /// AskUserQuestion call, when it draws it whole: the one question whose options these are,
+    /// or all of them on the review page. Refused for anything else, a form cut or scrolled
+    /// included, which then gets no answer from the phone.
+    ///
+    /// The screen alone cannot say a question form is whole: its text starts at the top
+    /// rule's column, so a row of `─` in it passes for that rule, and a form taller than the
+    /// terminal scrolls its options. Against the transcript it can. Every option of the
+    /// question is on screen in order, each reading its label and description, followed only
+    /// by the entries Claude Code 2.1.329 adds (`Type something.` then `Chat about this`; for
+    /// a multi-select question a `[ ]` or `[✔]` box before each label, `[ ] Type something`
+    /// over `Submit`, then `Chat about this`), with no row under the last one, and the rows
+    /// between the dialog's first row (the header or the tabs) and option 1 read the question's
+    /// whole text: all behind the `│` gutter Claude Code draws a long or multi-line question
+    /// behind, or none of them. A row hidden above a rule the text draws leaves less than the
+    /// whole text, and an option hidden or marked `↓` leaves the options short. When the
+    /// options on screen read as those of more than one question of the call, the form is
+    /// refused, since a cut first one can draw the second's tabs and text: the test is the
+    /// one that matches an option, label and description together, so two questions that
+    /// split the same words between them differently are two such questions. Only whitespace
+    /// is set aside, as wrapping moves it: a text Claude Code rewrites on screen (format
+    /// characters, a cut at 2000 columns) offers nothing.
+    pub fn asks(&self, asked: &[Question]) -> Result<String, Refused> {
+        if !self.after.is_empty() || !self.flush {
+            return Err(Refused::NotWhole);
+        }
+        if self.reviews(asked) {
+            return Ok(format!("{asked:?}"));
+        }
+        let mut listed = asked.iter().filter(|q| self.lists(q));
+        match (listed.next(), listed.next()) {
+            (Some(q), None) if self.words(q) => Ok(format!("{q:?}")),
+            (Some(_), Some(_)) => Err(Refused::Ambiguous),
+            _ => Err(Refused::NotWhole),
+        }
+    }
+
+    fn lists(&self, q: &Question) -> bool {
+        if self.options.len() <= q.options.len() {
+            return false;
+        }
+        let (options, added) = self.options.split_at(q.options.len());
+        let added: Vec<String> = added.iter().map(|o| unspaced(o)).collect();
+        let added: Vec<&str> = added.iter().map(String::as_str).collect();
+        let added = match added[..] {
+            // The inner rule follows `Submit`, which is no option row, so it reads as one
+            // more row of that entry.
+            [typed, "Chataboutthis"] if q.multi => {
+                typed.trim_end_matches('─') == "[]TypesomethingSubmit"
+            }
+            ["Typesomething."] | ["Typesomething.", "Chataboutthis"] => !q.multi,
+            _ => false,
+        };
+        let reads = |shown: &String, (label, description): &(String, String)| {
+            let shown = unspaced(shown);
+            let shown = match q.multi {
+                true => shown
+                    .strip_prefix("[]")
+                    .or_else(|| shown.strip_prefix("[✔]")),
+                false => Some(shown.as_str()),
+            };
+            shown == Some(unspaced(&format!("{label}{description}")).as_str())
+        };
+        added && options.iter().zip(&q.options).all(|(s, o)| reads(s, o))
+    }
+
+    fn words(&self, q: &Question) -> bool {
+        self.asked_text()
+            .is_some_and(|text| text == unspaced(&q.text))
+    }
+
+    /// The question as drawn between the dialog's first row and option 1, whitespace aside:
+    /// its rows without their `│` gutter when every one has it.
+    fn asked_text(&self) -> Option<String> {
+        let rows = self.raw_body.get(1..).unwrap_or_default();
+        let gutter = rows.iter().all(|r| r.starts_with('│'));
+        let text: String = rows
+            .iter()
+            .map(|r| r.strip_prefix('│').filter(|_| gutter).unwrap_or(r.as_str()))
+            .collect();
+        (!rows.is_empty()).then(|| unspaced(&text))
+    }
+
+    /// The review page of a call (2.1.329): under the tabs, `Review your answers`, then every
+    /// question in order, its whole text behind `●` and its answer behind `→`, over `Submit
+    /// answers` and `Cancel`. A row hidden above a rule that a question or an answer draws
+    /// leaves a question out or short.
+    fn reviews(&self, asked: &[Question]) -> bool {
+        let asked: Vec<String> = asked.iter().map(|q| unspaced(&q.text)).collect();
+        self.reviewed() == Some(asked)
+    }
+
+    /// The questions a review page lists, whitespace aside; none unless every row of it is
+    /// one of a question or of its answer.
+    fn reviewed(&self) -> Option<Vec<String>> {
+        let rows: Vec<String> = self.raw_body.iter().skip(1).map(|r| unspaced(r)).collect();
+        let (title, rows) = rows.split_first()?;
+        if self.options != ["Submit answers", "Cancel"] || title != "Reviewyouranswers" {
+            return None;
+        }
+        let mut asked = Vec::new();
+        let mut at = 0;
+        while at < rows.len() {
+            let mut text = rows[at].strip_prefix('●')?.to_owned();
+            at += 1;
+            while let Some(row) = rows.get(at).filter(|r| !r.starts_with(['●', '→'])) {
+                text.push_str(row);
+                at += 1;
+            }
+            rows.get(at).filter(|r| r.starts_with('→'))?;
+            while rows.get(at).is_some_and(|r| !r.starts_with('●')) {
+                at += 1;
+            }
+            asked.push(text);
+        }
+        Some(asked)
+    }
+
+    /// The entries Claude Code 2.1.329 draws under a question's own options, when the menu
+    /// ends in them: how many, and whether the question is a multi-select one (`Type
+    /// something.` then `Chat about this`; `[ ] Type something` over `Submit`, then `Chat
+    /// about this`). `Chat about this` keeps its number under options a form hides, so a
+    /// menu numbered through to it holds every option.
+    fn own_entries(&self) -> Option<(usize, bool)> {
+        let options: Vec<String> = self.options.iter().map(|o| unspaced(o)).collect();
+        match &options[..] {
+            [.., typed, chat]
+                if chat == "Chataboutthis"
+                    && typed.trim_end_matches('─') == "[]TypesomethingSubmit" =>
+            {
+                Some((2, true))
+            }
+            [.., typed, chat] if typed == "Typesomething." && chat == "Chataboutthis" => {
+                Some((2, false))
+            }
+            [.., typed] if typed == "Typesomething." => Some((1, false)),
+            _ => None,
+        }
+    }
+
+    /// Whether the screen alone shows this question form whole, as Claude Code 2.1.329 draws
+    /// one: what stands in for the transcript where it holds no call to match, a question
+    /// asked outside Code Mode ([`crate::transcript::Waits::Open`]).
+    ///
+    /// The danger is a row of `─` in the question's text passing for the top rule, with the
+    /// rows above it unseen. 2.1.329 draws a question that holds a line break, or is wider
+    /// than 80 columns, behind a `│` gutter, where no row is a rule. Any other question is
+    /// one line of at most 80 columns, which is one row, and no rule of its own making, when
+    /// the terminal is wider than that; in a narrower one it wraps at column 0 (2.1.330,
+    /// captured). So the form is whole when Claude Code's header or its tabs sit directly
+    /// under its top rule and the text under them is one row of at most 80 columns under a
+    /// rule of more than 80, or rows all behind the gutter under a rule of more than 75: a
+    /// question of at most 80 characters, drawn without the gutter, cannot hold such a rule,
+    /// a header (four characters or more) and a row that starts with `│`. A form taller than
+    /// the terminal hides its header and its top rule; no row the agent writes above it
+    /// starts at the screen's edge. The menu ends in Claude Code's own entries, with no row
+    /// under the last. The review page of several questions is not shown whole this way, nor
+    /// a form in a terminal of 75 columns or fewer, nor one of 80 or fewer whose question
+    /// fits one row.
+    ///
+    /// It holds for the version that draws so: the caller checks which one runs.
+    pub fn stands_whole(&self) -> bool {
+        let header = |row: &String| {
+            row.starts_with(" ☐ ")
+                || row.starts_with(" ☒ ")
+                || row.starts_with("←  ") && row.ends_with('→')
+        };
+        let text = self.raw_body.get(1..).unwrap_or_default();
+        let one = matches!(text, [row] if !row.starts_with('│') && row.chars().count() <= QUESTION_COLUMNS);
+        let gutter = !text.is_empty() && text.iter().all(|row| row.starts_with('│'));
+        (one && self.span > QUESTION_COLUMNS || gutter && self.span + 5 > QUESTION_COLUMNS)
+            && self.flush
+            && self.after.is_empty()
+            && self.raw_body.first().is_some_and(header)
+            && self.own_entries().is_some()
+    }
+
+    /// [`Menu::asks`] for a session in Code Mode, whose pending call is a script that calls
+    /// AskUserQuestion: `literals` are that script's whole string literals. The script is
+    /// not parsed, so nothing says which call or question of it is drawn. What is drawn must
+    /// each be the whole content of a literal, whitespace aside: the question's text, and of
+    /// every option the label and the description, which Claude Code starts on a row of its
+    /// own; on the review page, every question. The rest is as in [`Menu::asks`]: Claude
+    /// Code's own entries after the options, no row under the last one.
+    ///
+    /// A whole literal is what defeats a cut form: the rows left under a rule the question
+    /// draws are the end of its text, and no literal of their own. A script that holds such
+    /// an end as a literal too is refused: the text on screen must not be the end of a longer
+    /// literal. Claude Code draws no question's options under another's text, so text and
+    /// options that are each whole are one question's. A script written to hold a decoy
+    /// literal is not defended against: it can as well ask the short question outright.
+    pub fn scripted(&self, literals: &[String]) -> Result<String, Refused> {
+        if !self.after.is_empty() || !self.flush {
+            return Err(Refused::NotWhole);
+        }
+        // A set, looked up once for each way an option's rows split, and one pass over it
+        // for each question: a script of a megabyte can hold a literal a few hundred thousand
+        // times.
+        let whole: HashSet<String> = literals.iter().map(|l| unspaced(l)).collect();
+        let is = |text: &str| !text.is_empty() && whole.contains(text);
+        let ends = |text: &String| {
+            whole
+                .iter()
+                .any(|l| l.len() > text.len() && l.ends_with(text))
+        };
+        let found = |asked: &[String]| match asked {
+            [] => Err(Refused::NotWhole),
+            _ if asked.iter().any(ends) => Err(Refused::NotWhole),
+            _ if asked.iter().all(|text| is(text)) => Ok(()),
+            _ => Err(Refused::NotInScript),
+        };
+        if let Some(asked) = self.reviewed() {
+            return found(&asked).map(|()| format!("{asked:?}"));
+        }
+        let (own, multi) = self.own_entries().ok_or(Refused::NotWhole)?;
+        let options = &self.rows[..self.rows.len() - own];
+        let reads = |rows: &Vec<String>| {
+            let rows: Vec<String> = rows.iter().map(|r| unspaced(r)).collect();
+            (1..rows.len()).any(|at| {
+                let label = rows[..at].concat();
+                let label = match multi {
+                    true => label
+                        .strip_prefix("[]")
+                        .or_else(|| label.strip_prefix("[✔]")),
+                    false => Some(label.as_str()),
+                };
+                label.is_some_and(is) && is(&rows[at..].concat())
+            })
+        };
+        let asked = self.asked_text().ok_or(Refused::NotWhole)?;
+        found(std::slice::from_ref(&asked))?;
+        if options.is_empty() || !options.iter().all(reads) {
+            return Err(Refused::NotInScript);
+        }
+        Ok(format!("{:?}", (asked, options)))
     }
 
     /// The rows under option `i`'s first line. For the last option they are the rows of
@@ -694,6 +1082,43 @@ fn option_line(line: &str) -> Option<(bool, u8, &str)> {
     (!label.is_empty()).then_some((cursor, digit - b'0', label))
 }
 
+type OptionRow<'a> = Option<(bool, u8, &'a str)>;
+
+/// [`option_line`] of each row, and none for a numbered row inside an option's own text: one
+/// under an option row, indented deeper than that row's number, with every row between them
+/// as deep. Claude Code draws an option's number left of all its text, the label where it
+/// wraps and the description, and the agent writes that text: 2.1.329 draws a description as
+/// one paragraph wrapped at the label's column, a line break in it as U+FFFD, so a text of
+/// the right width starts a row with `1. ` or `❯ 2. `. Read as options, such rows are a menu
+/// of the agent's making, its cursor where the agent put it, under a rule the same text
+/// draws. A blank row ends nothing: the text may draw one.
+fn option_rows<'a>(lines: &[&'a str]) -> Vec<OptionRow<'a>> {
+    let mut owner = None;
+    let row = |line: &'a str| {
+        let text = line.trim_start();
+        if text.is_empty() {
+            return None;
+        }
+        let indent = line.chars().count() - text.chars().count();
+        if owner.is_some_and(|number| indent > number) {
+            return None;
+        }
+        owner = option_line(line).map(|_| number_column(line));
+        option_line(line)
+    };
+    lines.iter().copied().map(row).collect()
+}
+
+fn number_column(line: &str) -> usize {
+    let text = line.trim_start();
+    let text = text.strip_prefix('❯').map_or(text, str::trim_start);
+    line.chars().count() - text.chars().count()
+}
+
+fn first_option(numbered: &[OptionRow], last: usize) -> Option<usize> {
+    (0..=last).rfind(|&i| numbered[i].is_some_and(|(_, n, _)| n == 1))
+}
+
 // Same test as herdr's `is_horizontal_rule`.
 pub fn is_rule(line: &str) -> bool {
     let t = line.trim();
@@ -710,7 +1135,9 @@ fn classify(label: &str) -> Option<Decision> {
     }
     let l = l.trim();
     let starts = |prefixes: &[&str]| prefixes.iter().any(|p| l.starts_with(p));
-    if l == "yes" || starts(&["yes, proceed", "yes, i trust"]) {
+    // `Yes, run it` is the dynamic workflow prompt's approval (2.1.300), that label whole: a
+    // label that goes on past it is not one.
+    if l == "yes" || l == "yes, run it" || starts(&["yes, proceed", "yes, i trust"]) {
         Some(Decision::Approve)
     } else if starts(&[
         "yes, and don't ask again",
@@ -1173,11 +1600,11 @@ fn snippet_from(lines: &[&str], from: usize) -> String {
 /// this": a row of `─` alone, indented no deeper than the option rows above and below it.
 /// It ends neither the menu nor the dialog. Any other rule-like row between two options is
 /// text of the option above it, which the agent writes, so it stays in that option's label.
-fn splits_options(lines: &[&str], i: usize) -> bool {
+fn splits_options(lines: &[&str], numbered: &[OptionRow], i: usize) -> bool {
     let indent = |l: &str| l.len() - l.trim_start().len();
     let option = |j: Option<usize>| {
-        j.and_then(|j| lines.get(j))
-            .is_some_and(|l| option_line(l).is_some() && indent(lines[i]) <= indent(l))
+        j.filter(|&j| numbered.get(j).is_some_and(Option::is_some))
+            .is_some_and(|j| indent(lines[i]) <= indent(lines[j]))
     };
     let t = lines[i].trim();
     !t.is_empty() && t.chars().all(|c| c == '─') && option(i.checked_sub(1)) && option(Some(i + 1))
@@ -1204,12 +1631,9 @@ pub fn without_deny_countdown(kind: &str, text: &str) -> String {
         return text.to_owned();
     }
     let lines: Vec<&str> = text.lines().collect();
-    let Some(first) = lines
-        .iter()
-        .rposition(|l| option_line(l).is_some())
-        .and_then(|last| {
-            (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
-        })
+    let numbered = option_rows(&lines);
+    let Some(first) =
+        (numbered.iter().rposition(Option::is_some)).and_then(|last| first_option(&numbered, last))
     else {
         return text.to_owned();
     };
@@ -1261,12 +1685,9 @@ pub fn without_reason<'a>(kind: &str, text: &'a str) -> (String, Option<String>)
         return unchanged();
     }
     let lines: Vec<&'a str> = text.lines().collect();
-    let Some(question) = lines
-        .iter()
-        .rposition(|l| option_line(l).is_some())
-        .and_then(|last| {
-            (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
-        })
+    let numbered = option_rows(&lines);
+    let Some(question) = (numbered.iter().rposition(Option::is_some))
+        .and_then(|last| first_option(&numbered, last))
         .and_then(|first| first.checked_sub(1))
         .and_then(|q| question_start(q, |i| (!is_border(lines[i])).then(|| lines[i].trim())))
     else {
@@ -1465,7 +1886,7 @@ fn unspaced(s: &str) -> String {
 /// always has the closing `╌` rule, the question or the header to its left, so a command
 /// cannot pass a rule of its own off as the top and hide the rows above it. One pass up from
 /// option 1: a screen of rule-like rows costs no more than its length.
-fn top_rule(lines: &[&str], first: usize) -> Option<usize> {
+fn top_rule(lines: &[&str], numbered: &[OptionRow], first: usize) -> Option<usize> {
     let mut left = usize::MAX;
     for r in (0..first).rev() {
         let line = lines[r];
@@ -1473,7 +1894,7 @@ fn top_rule(lines: &[&str], first: usize) -> Option<usize> {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
-        if indent <= left && is_rule(line) && !splits_options(lines, r) {
+        if indent <= left && is_rule(line) && !splits_options(lines, numbered, r) {
             return Some(r);
         }
         left = left.min(indent);
@@ -1487,18 +1908,17 @@ fn top_rule(lines: &[&str], first: usize) -> Option<usize> {
 /// option, such as an option's label wrapped onto a row starting with `─`, never tops it.
 pub fn after_last_rule(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
-    let last = lines.iter().rposition(|l| option_line(l).is_some());
-    let first = last.and_then(|last| {
-        (0..=last).rfind(|&i| option_line(lines[i]).is_some_and(|(_, n, _)| n == 1))
-    });
+    let numbered = option_rows(&lines);
+    let last = numbered.iter().rposition(Option::is_some);
+    let first = last.and_then(|last| first_option(&numbered, last));
     let ruled = |from: usize| {
-        (from..lines.len()).rfind(|&i| is_rule(lines[i]) && !splits_options(&lines, i))
+        (from..lines.len()).rfind(|&i| is_rule(lines[i]) && !splits_options(&lines, &numbered, i))
     };
     let rows_follow = |r: &usize| lines[r + 1..].iter().any(|l| !l.trim().is_empty());
     let start = match (first, last) {
         (Some(first), Some(last)) => ruled(last + 1)
             .filter(rows_follow)
-            .or_else(|| top_rule(&lines, first)),
+            .or_else(|| top_rule(&lines, &numbered, first)),
         _ => ruled(0),
     }
     .map_or(0, |i| i + 1);
@@ -1668,6 +2088,14 @@ pub mod fixtures {
     // first 28 lines have scrolled off.
     pub const BASH_TALL_328: &str =
         include_str!("../tests/fixtures/claude-2.1.328/bash-tall.tmux.txt");
+    // Captured from Claude Code 2.1.329 (100 columns, 12 rows): a question with four options,
+    // which scrolls. The header and the top rule are not drawn, and the options hidden under
+    // or above the rows on screen are marked `↓` and `↑` in the cursor column. The cursor on
+    // option 1, then on option 4.
+    pub const QUESTION_TALL_329: [&str; 2] = [
+        include_str!("../tests/fixtures/claude-2.1.329/question-tall-12-rows.txt"),
+        include_str!("../tests/fixtures/claude-2.1.329/question-tall-12-rows-cursor-4.txt"),
+    ];
     // The plan prompt (herdr rule legacy_no_prompt_blocker), indented by 2 columns, and
     // the same with feedback typed into its third option.
     pub const PLAN_LIVE: &str = include_str!("../tests/fixtures/claude-2.1.289/plan.detection.txt");
@@ -2615,8 +3043,8 @@ mod tests {
             "{detail}"
         );
         let moved = QUESTION
-            .replace(" ❯ 1. SQLite", "   1. SQLite")
-            .replace("   3. Type", " ❯ 3. Type");
+            .replace("❯ 1. SQLite", "  1. SQLite")
+            .replace("  3. Type", "❯ 3. Type");
         let m = Menu::parse(&moved).unwrap();
         assert!(m.choices()[2].current && !m.choices()[0].current);
         assert_eq!(m.arrows(0), ["up", "up"]);
@@ -3259,6 +3687,222 @@ mod tests {
             assert!(!numbered(screen) && Menu::parse(screen).is_none());
             assert!(open_to_keys("claude", Some("live_blocked_form"), screen));
         }
+    }
+
+    #[test]
+    fn a_menu_is_a_question_unless_the_screen_makes_it_another_dialog() {
+        let menu = |screen: &str| Menu::parse(screen).unwrap();
+        let question = |screen: &str| (menu(screen).asked_shape(), menu(screen).is_question());
+        // Every permission, trust, amend and plan screen of the fixtures: not drawn as a
+        // question form, and another dialog by its wording.
+        let dialogs = [
+            BASH,
+            BASH_TWO,
+            EDIT,
+            TRUST,
+            TRUST_LIVE,
+            TRUST_292,
+            TRUST_292_ON_YES,
+            BASH_LIVE,
+            BASH_AMEND_LIVE,
+            BASH_AMEND_TYPED_LIVE,
+            BASH_COUNTDOWN,
+            RM_REASON,
+            RM_REASON_WRAPPED,
+            BASH_TIP_WRAPPED,
+            EDIT_WRAPPED,
+            BASH_TALL_328,
+            PLAN,
+            PLAN_LIVE,
+            PLAN_TYPED_LIVE,
+            include_str!("../tests/fixtures/claude-2.1.329/bash.txt"),
+            include_str!("../tests/fixtures/claude-2.1.329/plan.txt"),
+            // Claude Code 2.1.325's Bash prompt as Rex 0.1.0-preview.19 renders it.
+            include_str!("../tests/fixtures/rex-0.1.0-preview.19/claude-2.1.325-permission.txt"),
+        ];
+        let dialogs = (dialogs.into_iter().chain(BASH_327)).chain(OTHER_TOOLS_328);
+        for screen in dialogs.chain(RENAMED_BASH) {
+            assert_eq!(question(screen), (false, false), "{screen}");
+        }
+        let form =
+            include_str!("../tests/fixtures/claude-2.1.294/rate-limit-options.detection.txt");
+        assert!(!menu(form).is_question(), "under its border");
+        // Every question form of the fixtures is drawn as one, its cursor at column 0: the
+        // 2.1.289, 2.1.300 and 2.1.329 captures and the reconstructed QUESTION.
+        macro_rules! asked {
+            ($name:literal) => {
+                include_str!(concat!("../tests/fixtures/claude-2.1.329/", $name, ".txt"))
+            };
+        }
+        let named = RENAMED_QUESTIONS
+            .map(|s| without_session_name("claude", Some(NAMED_SESSION_RULE), s).1);
+        let questions = [
+            QUESTION,
+            QUESTION_LIVE,
+            asked!("question-one"),
+            asked!("question-multiline"),
+            asked!("two-questions-first"),
+            asked!("two-questions-second-multiselect"),
+            asked!("two-questions-second-checked"),
+            asked!("two-questions-after-tab"),
+        ];
+        for screen in questions.into_iter().chain(named) {
+            assert_eq!(question(screen), (true, true), "{screen}");
+        }
+        assert!(menu(QUESTION).flush && menu(QUESTION_LIVE).flush);
+
+        // Hand-built from the 2.1.289 capture: a question whose first option reads as an
+        // approval, drawn with both marks, then with each alone: without the entries Claude
+        // Code adds, and set in by a column. It is a question each time.
+        let (above, under) = QUESTION_LIVE.split_once("1. SQLite\n").unwrap();
+        let (_, under) = under.split_once('\n').unwrap();
+        let agreed = format!("{above}1. Yes\n{under}");
+        let (flush, _) = agreed.split_once("  3. Type something.\n").unwrap();
+        let inset: Vec<String> = agreed.lines().map(|l| format!(" {l}")).collect();
+        for screen in [&*agreed, flush, &inset.join("\n")] {
+            assert!(menu(screen).approves(), "{screen}");
+            assert_eq!(question(screen), (true, true), "{screen}");
+        }
+        // The same with an option worded as an amend field, and worded as the plan prompt.
+        let amending =
+            QUESTION_LIVE.replace("1. SQLite", "1. Yes, and tell Claude what to do next");
+        let asks = "\nWhich storage backend should the cache use?\n";
+        let planned = QUESTION_LIVE
+            .replacen(asks, "\nWould you like to proceed?\n", 1)
+            .replace("1. SQLite", "1. Yes, and use auto mode");
+        assert!(menu(&amending).amends() && menu(&planned).is_plan());
+        for screen in [amending, planned] {
+            assert_eq!(question(&screen), (true, true), "{screen}");
+        }
+
+        // The workflow prompt is a permission prompt by its `Yes, run it`. Not drawn as a
+        // question, and no dialog its wording tells: (hand-built) QUESTION without its `Type
+        // something.`, ordinary labels set in by a column, which offers nothing whatever call
+        // is pending.
+        assert_eq!(question(RENAMED_WORKFLOW), (false, false));
+        let (plain, _) = QUESTION.split_once("  3. Type something.\n").unwrap();
+        let plain: Vec<String> = plain.lines().map(|l| format!(" {l}")).collect();
+        assert_eq!(question(&plain.join("\n")), (false, true));
+        // Claude Code 2.1.328's Edit prompt, whose only option reading as an approval is
+        // `Yes`, after Tab on it (hand-built from the capture): the same permission prompt.
+        let amended =
+            OTHER_TOOLS_328[0].replace("1. Yes\n", "1. Yes, and tell Claude what to do next\n");
+        assert_ne!(amended, OTHER_TOOLS_328[0]);
+        assert!(!menu(&amended).approves() && menu(&amended).decisions().is_empty());
+        assert_eq!(question(&amended), (false, false));
+        // The plan's question wrapped by a narrow terminal still reads as the plan's.
+        let narrow = PLAN.replace("Would you like to proceed?", "Would you like to\n proceed?");
+        assert_ne!(narrow, PLAN);
+        assert_eq!(question(&narrow), (false, false));
+    }
+
+    #[test]
+    fn a_question_form_stands_whole_only_as_claude_code_draws_one() {
+        // Captured from Claude Code 2.1.329 while the form was up (100 columns).
+        let live = include_str!("../tests/fixtures/claude-2.1.329/live-question.txt");
+        let whole = |screen: &str| Menu::parse(screen).is_some_and(|m| m.stands_whole());
+        assert!(whole(live));
+        let asks = "\nWhich cache backend should we use?\n";
+        let header = " ☐ Cache\n";
+        let wide = "─".repeat(100);
+        assert_eq!(live.matches(&wide).count(), 2);
+        let draw = |text: &str| live.replacen(asks, &format!("\n{text}\n"), 1);
+        // Hand-built from it, each a thing the form's own text or a short terminal does. A
+        // question whose rows draw a rule and a copy of the header, the rule narrower than
+        // any terminal that leaves a short question on one row: the rule is no top.
+        let narrow = format!(
+            "Drop the database first.\n{}\n ☐ Cache\nContinue?",
+            "─".repeat(80)
+        );
+        assert!(Menu::parse(&draw(&narrow)).unwrap().on_screen());
+        assert!(!whole(&draw(&narrow)));
+        // The same in a terminal of 80 columns, where a question of 80 can wrap.
+        assert!(!whole(&live.replace(&wide, &"─".repeat(80))));
+        // Captured from Claude Code 2.1.330 while the form was up: a question behind the
+        // gutter in a terminal of 80 columns, and one of fewer than 80 characters in a
+        // terminal of 60, wrapped at column 0.
+        let gutter = include_str!("../tests/fixtures/claude-2.1.330/live-question-gutter-80.txt");
+        let wrapped = include_str!("../tests/fixtures/claude-2.1.330/live-question-wrapped-60.txt");
+        assert!(whole(gutter) && !whole(wrapped));
+        // Rows behind the gutter under a rule of 75 columns or fewer: a question of 80
+        // characters, drawn without the gutter, holds that rule, a header and a `│` row.
+        let rule = "─".repeat(80);
+        assert_eq!(gutter.matches(&rule).count(), 2);
+        let forged = format!("{}\n ☐ x\n│", "─".repeat(75));
+        assert_eq!(forged.replace('\n', "").chars().count(), 80);
+        assert!(whole(&gutter.replace(&rule, &"─".repeat(76))));
+        assert!(!whole(&gutter.replace(&rule, &"─".repeat(75))));
+        // A rule the text draws with nothing of a header under it, text over two rows with
+        // no gutter, a row too wide to have none, and rows only some of which have it.
+        for text in [
+            format!("Drop the database first.\n{wide}\nContinue?"),
+            "Drop the database first.\nContinue?".to_owned(),
+            "x".repeat(81),
+            "│ Drop the database first.\nContinue?".to_owned(),
+        ] {
+            assert!(!whole(&draw(&text)), "{text}");
+        }
+        assert!(whole(&draw(&"x".repeat(80))));
+        assert!(whole(&draw(
+            "│ Drop the database first.\n│ ───\n│ Continue?"
+        )));
+        // No header under the rule, a row under the last option, and options that do not
+        // end in Claude Code's own entries.
+        assert!(!whole(&live.replacen(header, "", 1)));
+        let rows = draw("│ Drop the database first.\n│ Continue?");
+        assert!(whole(&rows) && !whole(&rows.replacen(header, "", 1)));
+        assert!(!whole(&live.replacen(
+            "Chat about this\n",
+            "Chat about this\n ↑ 1 more line\n",
+            1
+        )));
+        let entries = format!("  3. Type something.\n{wide}\n  4. Chat about this\n");
+        let bare = live.replacen(&entries, "  3. Memory\n", 1);
+        assert_ne!(bare, live);
+        assert!(Menu::parse(&bare).is_some_and(|m| m.after.is_empty()) && !whole(&bare));
+        // A rule of the terminal's width with a copy of the header under it reads as a whole
+        // form: Claude Code drew a question of several lines so before its gutter. Nothing on
+        // the screen tells the two apart, so the caller asks which version runs.
+        let old = format!("Drop the database first.\n{wide}\n ☐ Cache\nContinue?");
+        assert!(whole(&draw(&old)));
+        // Claude Code draws the form's cursor at column 0, where no row of an option's text
+        // starts: a form set in by a column, its own entries and all, stands for none.
+        let set_in: String = (live.lines())
+            .map(|l| match l.starts_with("❯ ") || l.starts_with("  ") {
+                true => format!(" {l}\n"),
+                false => format!("{l}\n"),
+            })
+            .collect();
+        let m = Menu::parse(&set_in).unwrap();
+        assert!(m.is_question() && m.after.is_empty() && m.own_entries().is_some());
+        assert!(!m.stands_whole());
+    }
+
+    #[test]
+    fn a_form_that_scrolls_its_options_is_no_menu() {
+        for screen in QUESTION_TALL_329 {
+            assert!(
+                numbered(screen) && Menu::parse(screen).is_none(),
+                "{screen}"
+            );
+        }
+        // Hand-built from the capture, not captured: no description rows and no `Chat about
+        // this`, so no number is missing among the rows read, under a header and a rule.
+        let scrolled = "\
+────────────────────────────────────────────────────────────
+ ☐ Channel
+
+Which release channel should this build go to?
+
+❯ 1. Stable
+  2. Beta
+↓ 3. Nightly
+ ↑ 1 more line
+Enter to select · ↑/↓ to navigate · Esc to cancel
+";
+        assert!(numbered(scrolled) && Menu::parse(scrolled).is_none());
+        let unmarked = scrolled.replace("↓ 3.", "  3.");
+        assert_eq!(Menu::parse(&unmarked).unwrap().options.len(), 3);
     }
 
     #[test]
@@ -4094,6 +4738,99 @@ me@mac app % codex
     }
 
     #[test]
+    fn a_numbered_row_in_an_options_text_is_no_option() {
+        // Claude Code 2.1.329 (100 columns, 2026-11-20) draws a description as one paragraph
+        // wrapped at the label's column, a line break in it as U+FFFD: a description of the
+        // right width starts rows with a rule, a header, the question and numbered labels.
+        // Hand-built from the Code Mode capture: such rows under option 2, as they wrap.
+        let screen = include_str!("../tests/fixtures/claude-2.1.329/live-scripted-manual.txt");
+        let asks = "Which option do you want to pick for this test?";
+        let literals = [
+            asks,
+            "Option A",
+            "First test choice.",
+            "Option B",
+            "Second test choice.",
+        ]
+        .map(str::to_owned);
+        let under = |screen: &str, row: &str, rows: &[&str]| {
+            let rows: String = rows.iter().map(|r| format!("     {r}\n")).collect();
+            let drawn = screen.replacen(row, &format!("{row}{rows}"), 1);
+            assert_ne!(drawn, screen);
+            drawn
+        };
+        let drawn = |rows: &[&str]| under(screen, "     Second test choice.\n", rows);
+        let menu = Menu::parse(screen).unwrap();
+        assert!(menu.scripted(&literals).is_ok() && menu.cursor == 0);
+        let rule = "─".repeat(95);
+        let block = [&rule, "☐ Test", asks, "1. Option A", "❯ 2. Option B"];
+        // Read as options, the last two rows were a menu under a rule of its own, its cursor
+        // on option 2 while Claude Code's is on option 1. They are option 2's text, and more
+        // rows than an option's text is read over: no menu.
+        assert!(Menu::parse(&drawn(&block)).is_none());
+        // Few enough to be read: the menu is Claude Code's, with its cursor.
+        let short = Menu::parse(&drawn(&block[3..])).unwrap();
+        assert_eq!((short.cursor, short.options.len()), (0, 4));
+        assert!(short.options[1].ends_with("1. Option A ❯ 2. Option B"));
+        assert_eq!(short.scripted(&literals), Err(Refused::NotInScript));
+
+        // Under the option a form that scrolls marks `↓`, which is no option row, with
+        // entries like Claude Code's own: their numbers are not in the column of its own.
+        let tall = include_str!("../tests/fixtures/claude-2.1.329/live-question-tall.txt");
+        let asks_tall = "Which release channel should this build go to?";
+        let block = [
+            &rule,
+            "☐ Channel",
+            asks_tall,
+            "1. Stable",
+            "❯ 2. Beta",
+            "3. Canary",
+            "4. Nightly",
+            "5. Type something.",
+        ];
+        assert!(Menu::parse(&under(tall, "     Testers get it first\n", &block)).is_none());
+
+        // With the option row those rows belong to off screen, nothing says whose text they
+        // are. Over Claude Code's own entries their numbers are in another column: no menu.
+        let cut = drawn(&[&rule, "☐ Test", asks, "1. Option A", "❯ 2. Option B"]);
+        let rows: Vec<&str> = cut.lines().collect();
+        let from = rows.iter().position(|r| r.starts_with("     ─")).unwrap();
+        assert!(Menu::parse(&rows[from..].join("\n")).is_none());
+        // Alone on screen and set in one column, with entries like Claude Code's own, they
+        // are a menu. No question form: Claude Code draws that one's cursor at column 0,
+        // where no row of an option's text starts.
+        let alone = [
+            &rule,
+            "☐ Test",
+            asks,
+            "  1. Option A",
+            "     First test choice.",
+            "❯ 2. Option B",
+            "     Second test choice.",
+            "  3. Type something.",
+            "  4. Chat about this",
+        ];
+        let alone: String = alone.iter().map(|r| format!("     {r}\n")).collect();
+        // Under their option row they are its text, a blank row between them or not, and no
+        // menu of their own.
+        let (above, _) = screen.split_once("  3. Type something.\n").unwrap();
+        assert!(Menu::parse(&format!("{above}\n{alone}")).is_none());
+        let nested = Menu::parse(&alone).unwrap();
+        assert!(nested.on_screen() && nested.is_question() && nested.cursor == 1);
+        assert_eq!(nested.scripted(&literals), Err(Refused::NotWhole));
+        let asked = Question {
+            text: asks.to_owned(),
+            options: vec![
+                ("Option A".to_owned(), "First test choice.".to_owned()),
+                ("Option B".to_owned(), "Second test choice.".to_owned()),
+            ],
+            multi: false,
+        };
+        assert_eq!(nested.asks(&[asked]), Err(Refused::NotWhole));
+        assert!(!nested.stands_whole());
+    }
+
+    #[test]
     fn renamed_sessions_draw_no_rule_under_other_dialogs() {
         for screen in RENAMED_BASH {
             let m = Menu::parse(screen).unwrap();
@@ -4102,7 +4839,9 @@ me@mac app % codex
         }
         let m = Menu::parse(RENAMED_WORKFLOW).unwrap();
         assert_eq!(m.heads, ["Yes, run it", "View raw script", "No"]);
-        assert!(m.decisions().is_empty());
+        assert_eq!(m.decisions(), [(Approve, 0), (Deny, 2)]);
+        assert_eq!(classify("yes, run it  "), Some(Approve));
+        assert_eq!(classify("Yes, run it and skip the review"), None);
         assert_eq!(
             context("claude", RENAMED_WORKFLOW),
             "Run a dynamic workflow?"

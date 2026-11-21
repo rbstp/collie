@@ -1,0 +1,34 @@
+ ▐▛███▛█   Claude Code v2.1.329
+▝▜██████▀  Sonnet 5.5 · Claude Team
+ ▝▝   ▝▝   /private/tmp/planlab
+
+⚠ Code Mode (experimental) is on · this session can be resumed only with Code Mode on
+
+⏺ Auto mode lets Claude handle permission prompts automatically — Claude checks each tool
+  call for risky actions and prompt injection before executing. Actions Claude identifies as
+  safe are executed, while actions Claude identifies as risky are blocked and Claude may
+  try a different approach. Ideal for long-running tasks. Claude can make mistakes that
+  allow harmful commands to run, it's recommended to only use in isolated environments.
+  Shift+Tab to change mode.
+
+❯ ask me test question
+
+  Working… (ctrl+o to expand)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Test Q
+
+Which of these is the largest planet in our solar system?
+
+❯ 1. Jupiter
+     Gas giant, fifth from the Sun
+  2. Saturn
+     Ringed gas giant
+  3. Neptune
+     Outermost planet
+  4. Earth
+     Our home planet
+  5. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

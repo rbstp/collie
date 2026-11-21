@@ -1,0 +1,10 @@
+Which release channel should this build go to?
+
+❯ 1. Stable
+     Everyone gets it after review
+↓ 2. Beta
+     Testers get it first
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  6. Chat about this
+ ↑ 1 more line
+Enter to select · ↑/↓ to navigate · Esc to cancel
