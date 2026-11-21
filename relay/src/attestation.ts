@@ -93,7 +93,7 @@ function extensions(reader: CborReader, flags: number, policy: AttestationPolicy
 async function authenticator(input: Uint8Array<ArrayBuffer>, policy: AttestationPolicy, attested: boolean): Promise<{ counter: number; reader: CborReader; flags: number }> {
   require(input.length >= 37 && equal(input.slice(0, 32), await sha256(bytes(policy.appId))));
   const flags = input[32];
-  // Apple assertions can retain the AT flag without including credential data.
+  // ADR-0008
   require((!attested || (flags & 64) !== 0) && (flags & 0x3e) === 0);
   const counter = new DataView(input.buffer, input.byteOffset + 33, 4).getUint32(0);
   return { counter, reader: new CborReader(input.slice(37)), flags };

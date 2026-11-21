@@ -487,7 +487,6 @@ fn live_activity_follows_an_agent() {
     rt.block_on(handle.shutdown());
 }
 
-/// The first Live Activity push that matches.
 async fn live(
     apns: &Apns,
     what: &str,

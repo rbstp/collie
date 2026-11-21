@@ -330,8 +330,7 @@ impl Model {
         (a.agent.as_deref() == Some("claude")).then_some((session, block, pid))
     }
 
-    /// The session, foreground pid and kind of a block listed as a hook-bound agent (Codex or
-    /// Antigravity).
+    /// The session, foreground pid and kind of a block listed as a Codex or Antigravity agent.
     pub(super) fn hook_agent(&self, block: &str) -> Option<(String, u32, &'static str)> {
         self.sessions.iter().find_map(|(session, s)| {
             let b = s.blocks.get(block)?;

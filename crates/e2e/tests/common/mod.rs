@@ -481,7 +481,6 @@ impl CoreSession {
         session
     }
 
-    /// `hc` against this core only.
     pub fn command(&self, args: &[&str]) -> Command {
         let mut cmd = isolated("hc", &self.root);
         cmd.env("HC_SESSION", &self.name)
@@ -602,7 +601,6 @@ impl RexServer {
         server
     }
 
-    /// `rex` against this server only.
     pub fn rex(&self, args: &[&str]) -> Value {
         let out = rex_env(&mut Command::new(&self.cli), &self.root)
             .arg("--autostart=false")

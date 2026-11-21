@@ -56,12 +56,8 @@ struct Screen {
     blocked: bool,
     settings_picker: bool,
     menu: Option<Menu>,
-    /// The menu on screen whether or not the question rule lets the phone answer it: what a
-    /// decision under way compares with the menu it claimed ([`Menu::only_changed`]). The
-    /// note it types turns `Yes` into text that reads as no approval, on the same prompt.
     drawn: Option<Menu>,
     offered: Vec<(Decision, usize)>,
-    /// Whether the report makes the menu a question: its options are only chosen.
     question: bool,
     accepts_input: bool,
     has_text_field: bool,
@@ -73,7 +69,6 @@ struct Screen {
     reason: Option<String>,
     context: String,
     tool: Option<PendingTool>,
-    /// Why the question rule keeps this menu from the phone.
     refused: Option<Refused>,
 }
 
@@ -120,8 +115,6 @@ struct Inner {
     notified: HashMap<String, ApprovalId>,
     /// A blocked Rex agent's report and the reconciles that read its screen.
     rex_reads: HashMap<String, (u64, u8)>,
-    /// The blocked episode and reason of the refusal last logged per terminal, so a dialog is
-    /// logged once, whatever its cursor or its approval's expiry reissue.
     refused: HashMap<String, (u64, Refused)>,
 }
 
@@ -492,24 +485,12 @@ impl Approvals {
             .then(|| Menu::parse(&text))
             .flatten();
         let unnumbered = parsed.is_none() && !prompt::numbered(&text);
-        // The screen cannot say a question form is whole, so it is answered only when it draws
-        // the session's one pending AskUserQuestion call whole, as the transcript records it.
-        // While such a call is pending, no other menu gets an answer either. A Code Mode
-        // script is pending through every call it makes, so beside one a question form is
-        // matched to its literals and any other dialog is read as the screen says. With no
-        // such call known, whatever else the transcript says or fails to say, only a menu the
-        // screen alone makes another dialog is answered ([`Menu::is_question`]), so that
-        // approvals work without the transcript.
+        // ADR-0012
         let waits = match &parsed {
             Some(_) => self.waits(a),
             None => Waits::Nothing,
         };
-        // Which dialog blocks the agent is the report's to say, never the wording on screen:
-        // the agent writes an option's description, which can draw a whole plan prompt or
-        // permission prompt with Claude Code's own rows off screen. Under a report of a form
-        // menu drawn without a `▔` border is a question, answered only by choosing an option,
-        // but the folder trust prompt herdr reports so; under any other report a menu that reads
-        // as a question is refused.
+        // ADR-0012
         let form = prompt::reports_form(kind, rule);
         let asked_form =
             |m: &Menu| form && !m.bordered && !(m.trust && rule == Some("live_blocked_form"));
@@ -531,9 +512,6 @@ impl Approvals {
                     .and_then(|literals| m.scripted(literals))
                     .map(|asked| Some(format!("{session} {call:?} {asked}")))
             }
-            // No call on disk is all a question asked outside Code Mode leaves there: it is
-            // held to what the screen alone proves, for the version known to draw it so, and
-            // to the report that a form is what blocks the agent.
             Waits::Open { version } if asked_form(m) => {
                 if version.is_none_or(|v| v < prompt::QUESTION_VERSION) {
                     Err(Refused::Version)
@@ -553,7 +531,6 @@ impl Approvals {
             Some(Err(why)) => (None, Some(why)),
             None => (None, None),
         };
-        // A question-shaped menu with no top is refused before any match: logged as one too.
         let headless = |m: &&Menu| !m.on_screen() && asked_form(m);
         let refused =
             refused.or_else(|| (parsed.as_ref().filter(headless)).map(|_| Refused::NotWhole));
@@ -677,7 +654,7 @@ impl Approvals {
             if inner.pending.contains_key(&a.terminal_id) {
                 return Ok(());
             }
-            // Never the question's text, its labels or a path: the reason and the terminal.
+            // ADR-0012
             if let Some(why) = screen.refused
                 && (inner.refused).insert(a.terminal_id.clone(), (screen.seq, why))
                     != Some((screen.seq, why))

@@ -2,9 +2,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import SwiftUI
 
-/// `collied pair` in a window: the QR, then the candidate phone to accept or refuse on this
-/// Mac. The invite is never shown as text, copied, logged or kept: only its QR image lives
-/// in this view's state, and closing the window closes the connection, which cancels.
+// ADR-0006
 struct PairingView: View {
     let daemon: Daemon
     @Environment(\.dismissWindow) private var dismissWindow
@@ -47,8 +45,7 @@ struct PairingView: View {
                             Button("Don't Pair") { answer(false) }
                                 .keyboardShortcut(.cancelAction)
                                 .disabled(answered)
-                            // No default button, and live only after a second: Return or a
-                            // click meant for the QR window cannot approve.
+                            // ADR-0006
                             Button("Pair") { answer(true) }
                                 .disabled(answered || !armed || left == 0)
                         }

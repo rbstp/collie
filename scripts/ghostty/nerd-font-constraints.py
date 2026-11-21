@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# Writes Collie/GhosttyTerminal/Sources/GhosttyTerminal/NerdFontConstraints.swift from Ghostty's
-# src/font/nerd_font_tables.zig at the commit scripts/ghostty/pins.env pins.
 import re
 import urllib.request
 from pathlib import Path
@@ -27,7 +25,6 @@ for cp in range(0x110000):
     else:
         ranges.append([cp, cp, index])
 
-# Field order of NerdConstraint's memberwise initializer.
 FIELDS = [
     ("size", "size"), ("height", "iconHeight"), ("max_constraint_width", "maxConstraintWidth"),
     ("align_horizontal", "alignHorizontal"), ("align_vertical", "alignVertical"),

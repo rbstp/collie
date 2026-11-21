@@ -424,11 +424,6 @@ fn tui_structure(text: &str) -> bool {
         || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
 }
 
-/// Antigravity draws assistant prose, expanded thinking blocks and Glamour lists at indent 2
-/// with no column-0 marker, reserving 1 column for its alt-screen scrollbar plus Glamour's
-/// 2-column right margin (`cols - ind - 3`); tool output sits at indent 4, and the input box
-/// sits between full-width `─` rules around a column-0 `>` prompt at the bottom, wrapped at
-/// the rule width minus 3 (2 for the prompt/indent and 1 for the cursor).
 fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let raw: Vec<&str> = ansi.split('\n').collect();
     let mut rows: Vec<String> = Vec::with_capacity(raw.len());
@@ -504,8 +499,6 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                 if let Some((_, line)) = item.filter(|_| ind != hang) {
                     tail = line;
                 }
-                // Antigravity's alt-screen viewport reserves 1 column for its scrollbar, and
-                // Glamour pads markdown with 2 columns on both sides.
                 let available = cols.saturating_sub(ind + 3);
                 if tail.width() <= available {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
@@ -1765,7 +1758,6 @@ mod tests {
     #[test]
     fn agy_input_box_joins_soft_wraps_and_keeps_newlines_and_hints() {
         let rule = "─".repeat(80);
-        // 80-column terminal -> 77-column text width (2 for `> ` / `  `, 1 for cursor).
         let wrapped = [
             "  Done.",
             "",
@@ -1804,7 +1796,6 @@ mod tests {
         );
 
         let rule40 = "─".repeat(40);
-        // 40-column rule -> 37-column text width.
         let newlines = [
             rule40.as_str(),
             "> short line",
@@ -1860,7 +1851,6 @@ mod tests {
 
     #[test]
     fn agy_glamour_lists_wrap_flush_under_the_marker_at_scrollbar_width() {
-        // 80-column alt-screen pane: 1-col scrollbar + 2-col left/right margins -> 75 cols.
         let rows = [
             "  Verification",
             "  • Technical & progress invariants: Verified across all 34 pages against",

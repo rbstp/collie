@@ -1837,13 +1837,10 @@ pub(crate) mod tests {
 
     #[derive(Default, Clone)]
     pub(crate) struct Seen {
-        /// Each attach's params.
         attaches: Vec<Value>,
         /// The kinds of the frames each client wrote after its attach.
         kinds: Vec<u8>,
-        /// What clients typed on their attaches.
         pub(crate) typed: Vec<u8>,
-        /// Attaches that ended.
         pub(crate) closed: usize,
         /// Line-mode calls, as `{method, params}`.
         pub(crate) calls: Vec<Value>,

@@ -194,7 +194,6 @@ async fn each_kind_and_resume_runs_as_one_argument_vector_whatever_its_values_ho
         command,
         json!(through_env("/opt/bin/claude", &[hostile, "-x"]))
     );
-    // Code Mode is set on the command, after the login profile ran, never in `--settings`.
     for (n, on) in [(6, true), (7, false)] {
         host.start(
             "/w",

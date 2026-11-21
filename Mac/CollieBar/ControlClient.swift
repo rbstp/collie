@@ -1,14 +1,12 @@
 import Foundation
 import Synchronization
 
-/// collied's control protocol (crates/collied/src/control.rs): one JSON object per line.
 enum Request: Equatable, Sendable {
     case pair
     case peersList
     case watch
     case confirm(accept: Bool)
 
-    /// collied refuses unknown fields: these are the exact lines it expects.
     var line: Data {
         let json = switch self {
         case .pair: #"{"cmd":"pair"}"#
@@ -46,7 +44,6 @@ struct Candidate: Decodable, Equatable, Sendable {
         case deviceLabel, nodeName, stableId, login, userId, terminalKey, replaces, previousTerminalKey
     }
 
-    /// Same as `Candidate::terminal_key_change`.
     var terminalKeyChange: String {
         switch (terminalKey, previousTerminalKey) {
         case (nil, _): "none"
@@ -109,9 +106,7 @@ enum Reply: Equatable, Sendable {
     }
 }
 
-/// Like `collied::printable` (`char::escape_debug`): control, format (bidi included), separator,
-/// combining, default-ignorable and non-ASCII space characters from the phone are shown escaped,
-/// never interpreted.
+// ADR-0006
 func printable(_ s: String) -> String {
     var out = ""
     for scalar in s.unicodeScalars {
@@ -145,7 +140,6 @@ enum ControlError: Error, Equatable {
     case closed
 }
 
-/// collied's MAX_LINE.
 let maxLine = 64 * 1024
 
 struct LineFramer {
@@ -164,8 +158,6 @@ struct LineFramer {
     }
 }
 
-/// One connection to the control socket. The socket is 0600 in collied's 0700 data dir, and
-/// collied checks the peer's uid: only this user's processes get this far.
 final class ControlConnection: Sendable {
     private let fd: Int32
     private let open = Mutex(true)
@@ -224,7 +216,6 @@ final class ControlConnection: Sendable {
         }
     }
 
-    /// Ends the connection: collied sees EOF, which cancels a pairing as Ctrl-C does.
     func close() {
         open.withLock { open in
             if open { _ = shutdown(fd, SHUT_RDWR) }
@@ -281,8 +272,6 @@ enum DaemonState: Equatable, Sendable {
     }
 }
 
-/// The menu bar status, pushed by collied over one held connection. The only polling is a
-/// failing connect every `retry` while collied is off.
 func watchDaemon(socket: String, retry: Duration, update: @Sendable (DaemonState) async -> Void) async {
     while !Task.isCancelled {
         if let conn = try? ControlConnection.connect(path: socket) {

@@ -564,10 +564,7 @@ pub async fn agent_start(
 }
 
 /// A task agent's arguments, in herdr and herdr-core alike. Codex always gets `--no-daemon`:
-/// under its shared app-server, its SessionStart hook reports the wrong terminal. Code Mode
-/// goes in Claude Code's `--settings` `env` because herdr's `agent.start` takes no environment
-/// and types the command into a shell whose start-up files already ran; herdr-core and Rex
-/// pass `None` and set it on the command (`task_argv`).
+/// under its shared app-server, its SessionStart hook reports the wrong terminal.
 pub fn agent_args(
     kind: &str,
     resume: Option<&str>,

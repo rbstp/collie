@@ -404,7 +404,6 @@ pub fn unload() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The end of the unit's journal, and where it is.
 pub fn log_tail(_: &Path) -> (String, Vec<String>) {
     let out = Command::new(crate::system_bin("journalctl"))
         .args([

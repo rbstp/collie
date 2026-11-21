@@ -66,7 +66,6 @@ pub struct SessionLimits {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Report {
-    /// No session id.
     Unnamed,
     /// A session with no limits on record: not told from a quiet session's old figures.
     First,
@@ -1194,13 +1193,11 @@ mod tests {
             assert!(!text.contains(kept_out), "{kept_out} leaked into the file");
         }
 
-        // Unchanged reading within RESTAMP_MS leaves the timestamp alone.
         record(&data, agy_input.as_bytes(), now_ms + 5_000).unwrap();
         assert_eq!(read(&data).agy.unwrap().recorded_ms, now_ms);
         record(&data, agy_input.as_bytes(), now_ms + RESTAMP_MS).unwrap();
         assert_eq!(read(&data).agy.unwrap().recorded_ms, now_ms + RESTAMP_MS);
 
-        // Disabled, expired and invalid buckets are skipped.
         let filtered = r#"{"product":"antigravity","quota":{"gemini-5h":{"remaining_fraction":0.5,"reset_in_seconds":3600},"off":{"remaining_fraction":0.1,"reset_in_seconds":3600,"disabled":true},"old":{"remaining_fraction":0.1,"reset_time":"2020-01-01T00:00:00Z"},"bad key":{"remaining_fraction":0.1,"reset_in_seconds":3600}}}"#;
         record(&data, filtered.as_bytes(), now_ms + RESTAMP_MS + 1).unwrap();
         let only = read(&data).agy.unwrap();

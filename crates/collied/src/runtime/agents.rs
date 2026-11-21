@@ -205,12 +205,10 @@ pub fn task_cli(kind: &str) -> Option<String> {
         .filter(|p| !p.contains('='))
 }
 
-/// Claude Code's Code Mode switch.
 pub const CODE_MODE: &str = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
 
 /// The argv a task agent runs as: `env` drops each of `STRIPPED` first, since neither
-/// `terminal.run`'s `env` nor Rex's options can remove a variable. Code Mode is set here, on
-/// the agent's own command, so it wins over a value the login profile exports.
+/// `terminal.run`'s `env` nor Rex's options can remove a variable.
 pub(super) fn task_argv(cli: &str, args: &[String], code_mode: Option<bool>) -> Vec<String> {
     let mut argv = vec!["/usr/bin/env".to_owned()];
     for name in STRIPPED {
@@ -283,7 +281,6 @@ mod tests {
             (5, 1, "hc"),
         ]);
         assert!(reported_by(10, 30, "codex", npm));
-        // collied hook under sh under the terminal's agy.
         let agy = table(&[
             (30, 20, "collied"),
             (20, 10, "sh"),

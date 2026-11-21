@@ -203,7 +203,6 @@ impl Terminal {
         ))
     }
 
-    /// History and screen rows.
     pub fn total_rows(&self) -> Option<usize> {
         self.get(sys::GHOSTTY_TERMINAL_DATA_TOTAL_ROWS)
     }

@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Builds libghostty-vt from the release tarballs pinned in pins.env into
-# Collie/GhosttyTerminal/GhosttyVt.xcframework (ios, ios-simulator, macOS for `swift test`).
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Render state only: no Kitty graphics (file, temp-file and shared-memory image media), no input
-# encoders, no snapshot/formatter/search. The terminal parser itself is always built.
 VT_FEATURES=-all,+render-state
 
 src="$work/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
@@ -28,11 +24,8 @@ echo "zig: $zig ($("$zig" version))"
 unpack_sources "$work"
 echo "libghostty-vt: $LIBGHOSTTY_VT_VERSION"
 
-# PACKAGING-LIBGHOSTTY.md requires an empty ZIG_GLOBAL_CACHE_DIR for every build: with Zig 0.17,
-# a cache that holds a package archive can crash the build.
 cache="$work/zig-global-cache"
 rm -rf "$cache" "$work/out"
-# The ceiling keeps Ghostty's build from taking this repository's git tags for its version.
 (
     cd "$src"
     GIT_CEILING_DIRECTORIES="$work" ZIG_GLOBAL_CACHE_DIR="$cache" "$zig" build \
@@ -48,8 +41,6 @@ headers="$work/headers"
 rm -rf "$headers" "$out"
 mkdir -p "$headers/GhosttyVt"
 (cd "$src/include" && find ghostty -name '*.h' -print0 | xargs -0 tar -cf -) | tar -xf - -C "$headers"
-# A module map at the Headers root would collide with any other static xcframework doing the same
-# once Xcode merges them into one include directory.
 cat >"$headers/GhosttyVt/module.modulemap" <<'EOF'
 module GhosttyVt {
     umbrella header "../ghostty/vt.h"

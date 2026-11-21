@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""The iOS test budget: measures a test run against Collie/Tests/budget.json and renders the table.
-
-  measure [--warn-only] <budget.json> <xcresult or the folder xcodebuild writes them to> <metrics.json>
-      Run by the ios job in ci.yml. Writes the metrics, prints the table (to the job summary too) and fails over a ceiling,
-      or with --warn-only (master) warns.
-  comment --pr <artifact.zip> [--baseline <artifact.zip>] --pr-sha <sha> [--baseline-sha <sha>] --conclusion <text>
-      Run by ios-test-budget.yml, which holds a token that can write to pull requests: prints the comment's markdown.
-      A pull request's artifact is whatever that pull request made it, so it is only ever read through load().
-"""
 import argparse
 import json
 import math
@@ -27,13 +18,11 @@ METRICS = {
     "slowest_ui_test_seconds": ("Slowest UI test", " s"),
     "unit_seconds": ("Unit tests (CollieTests), summed", " s"),
 }
-# Reported, never enforced: one 60 s idle stall (#694) in a passing attempt would fail the job with no regression.
 REPORTED = {"slowest_ui_test_seconds"}
 ENFORCED = set(METRICS) - REPORTED
 MAX_BYTES = 64 * 1024
 MAX_VALUE = 1_000_000
 MAX_RETRIED = 100
-# The suite's longest name part is 83 characters.
 NAME = re.compile(r"[A-Za-z0-9_]{1,200}(/[A-Za-z0-9_]{1,200}){1,3}")
 SHA = re.compile(r"[0-9a-f]{40}")
 CONCLUSION = re.compile(r"[a-z_]{1,20}")
@@ -58,7 +47,6 @@ def cases(node, bundle=None):
 
 
 def launches(activities):
-    """App launches in a test's last run: a retried test is counted once, as it passed."""
     def count(activity):
         return activity.get("title", "").startswith("Launch ") + sum(count(c) for c in activity.get("childActivities", []))
     runs = activities.get("testRuns", [])
@@ -66,7 +54,6 @@ def launches(activities):
 
 
 def runs(node):
-    """A test's retries and arguments. Xcode nests a parameterized test's retries under the argument that failed."""
     return [c for c in node.get("children", []) if c.get("nodeType") in ("Repetition", "Arguments")]
 
 
@@ -75,8 +62,6 @@ def failed(attempt):
 
 
 def seconds(node):
-    """A parameterized test's own duration is the mean of its arguments: its cost is their sum. A retried test's cost leaves
-    out its failed attempts: the retry absorbed them, and the table names the test."""
     children = runs(node)
     kept = [c for c in children if not failed(c)]
     return sum(seconds(c) for c in kept or children) if children else node.get("durationInSeconds") or 0
@@ -87,8 +72,6 @@ def failed_once(node):
 
 
 def ended_passing(node):
-    """Xcode marks a retried argument, and its test, failed even when the retry passed (Arguments, then a failed and a
-    passing Repetition): what counts is each argument's last attempt."""
     attempts = [c for c in node.get("children", []) if c.get("nodeType") == "Repetition"]
     if attempts:
         return attempts[-1].get("result") in ("Passed", "Expected Failure")
@@ -99,7 +82,6 @@ def ended_passing(node):
 
 
 def measure(tests, activities):
-    """`tests` is `xcresulttool get test-results tests`; `activities(test id)` is its `activities` for one test."""
     ui, unit, retried = [], [], []
     for node in tests.get("testNodes", []):
         for bundle, case in cases(node):
@@ -126,7 +108,6 @@ def measure(tests, activities):
 
 
 def validate(data):
-    """Returns `data` if it is exactly what `measure` writes, and raises ValueError otherwise."""
     if not isinstance(data, dict) or set(data) != {"metrics", "ceilings", "retried"}:
         raise ValueError("unexpected keys")
     for part, keys in (("metrics", set(METRICS)), ("ceilings", ENFORCED)):
@@ -145,7 +126,7 @@ def validate(data):
 
 
 def load(artifact):
-    """The metrics in an artifact's zip, read in memory and bounded: nothing is extracted to disk."""
+    # ADR-0003
     try:
         with zipfile.ZipFile(artifact) as archive:
             info = archive.getinfo(ARTIFACT_FILE)
@@ -165,7 +146,7 @@ def number(value, unit):
 
 
 def render(data, baseline=None, column="This run"):
-    """The summary line and the table. Every cell comes from a validated number or a name matching NAME."""
+    # ADR-0003
     rows, over = [], []
     for key, (label, unit) in METRICS.items():
         value, ceiling = data["metrics"][key], data["ceilings"].get(key)

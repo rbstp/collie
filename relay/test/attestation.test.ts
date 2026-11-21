@@ -267,8 +267,6 @@ test('cleanup deletes expired routes, keys, raw destinations and zeroed counters
 test('hourly cleanup drains the worst-case backlog at the exact global caps within the seven-day bound', async () => {
   const f = await controlFixture();
   try {
-    // Each control or enrollment sets at most one installation's retention deadline and creates at most one route, so a
-    // window straddling one UTC midnight can make two days of them eligible at once, each with 64 pairing tombstones.
     const controls = 1000, enrollments = 30, pairingTombstones = 64;
     const installations = 2 * (controls + enrollments), routes = 2 * controls;
     const start = Math.floor(Date.now() / 1000);
@@ -301,10 +299,8 @@ test('hourly cleanup drains the worst-case backlog at the exact global caps with
     assert.deepEqual(largest, { routes: 64, pairings: 4096, installation_usage: 64, installations: 64 });
     assert.deepEqual(await Promise.all(tables.map(count)), [1, 1, 1, 1]);
     assert.equal(await count('attestations'), 1);
-    // Sustained daily arrivals stay below hourly capacity, so a later day never adds more delay than this burst.
     for (const [table, daily] of [['routes', controls], ['pairings', (controls + enrollments) * pairingTombstones],
       ['installations', controls + enrollments]] as const) assert.ok(daily < 24 * largest[table]);
-    // One hour to the first trigger plus the route, pairing and installation stages each draining a two-day burst.
     const hours = 1 + Math.ceil(routes / largest.routes) + Math.ceil(installations * pairingTombstones / largest.pairings)
       + Math.ceil(installations / largest.installations);
     assert.ok(runs + 1 <= hours && hours < 7 * 24);
@@ -345,7 +341,6 @@ test('complete Apple fixture verifies pinned certificate chains, authenticator n
     minBundleVersion: 1, validationCategories: [1] };
   const key = 'zgSY9YSD-7TaDXssY6WlOPVS1K3Lmk-pFhlcSWE-ZV0';
   const time = Date.parse('2026-04-21T18:13:13Z') / 1000;
-  // Apple's fixture uses these raw bytes as clientDataHash and an OS-executable validation category.
   const hash = bytes('example_server_challenge');
   const verified = await verifyAttestation(sample, key, hash, context, time);
   assert.equal(verified.publicKey, 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQzJUSs8yPbd0RDyq8zn1bn6VxyT6wsFCWfNl4kRWULK1-yhbz1Sby2BZRBLnaCokJ-6tqftS3-0LGrF-0J-pvQ');

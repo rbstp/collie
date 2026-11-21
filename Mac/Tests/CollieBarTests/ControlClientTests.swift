@@ -2,8 +2,6 @@ import Foundation
 import Synchronization
 import Testing
 
-/// A scripted stand-in for collied's control socket, in a temporary directory: these tests
-/// never touch the real socket.
 final class FakeServer: Sendable {
     let path: String
     private let fd: Int32
@@ -42,8 +40,6 @@ final class FakeServer: Sendable {
         }
     }
 
-    /// The daemon's end of one connection. Lines are collected by one long-lived reader, so
-    /// a timed-out wait does not cancel the stream (which would close the connection).
     final class Remote: Sendable {
         let conn: ControlConnection
         private let received = Mutex<(lines: [String], eof: Bool)>(([], false))
@@ -60,7 +56,6 @@ final class FakeServer: Sendable {
             }
         }
 
-        /// The next line, or nil on EOF or after `timeout`.
         func next(timeout: Duration = .seconds(2)) async -> String? {
             let deadline = ContinuousClock.now + timeout
             while ContinuousClock.now < deadline {

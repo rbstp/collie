@@ -1436,7 +1436,6 @@ extension AgentKey {
         return (modifiers.map { $0[keyPath: modifier] } + [spelledKey]).joined(separator: separator)
     }
 
-    /// collied's name for the key.
     var name: String {
         switch self {
         case .esc: "esc"

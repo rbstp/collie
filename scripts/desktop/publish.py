@@ -65,7 +65,6 @@ def main(args):
     for name in names:
         if name not in assets:
             gh("release", "upload", args.tag, str(args.out / name))
-    # Existing signed assets win on retry; signatures and notarization are not reproducible.
     for name in names:
         gh("release", "download", args.tag, "--pattern", name, "--dir", str(args.out), "--clobber")
     homebrew(args)

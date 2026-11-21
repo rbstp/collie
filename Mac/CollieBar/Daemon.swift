@@ -21,7 +21,6 @@ final class Daemon {
     private let installedExecutable: URL
 
     init() {
-        // HOME as collied reads it (config::home_dir), so a test collied with its own HOME works.
         let home = URL(filePath: ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory())
         dataDir = home.appending(path: "Library/Application Support/collie")
         socketPath = dataDir.appending(path: "control.sock").path(percentEncoded: false)
@@ -97,7 +96,6 @@ final class Daemon {
             guard await collied(on ? "start" : "stop") else { return }
             guard on, !running else { return }
             starting = true
-            // The tailnet can take up to a minute to come up.
             try? await Task.sleep(for: .seconds(90))
             starting = false
         }
@@ -140,7 +138,6 @@ final class Daemon {
             return false
         }
         let result = await run(exe, [command])
-        // "already stopped" from `collied stop` means a collied launchd does not manage.
         lastError = result.ok && !result.output.hasPrefix("already") ? nil : printable(result.output)
         return result.ok
     }

@@ -44,7 +44,7 @@ Panel {
     } else svc.pairCancel()
   }
 
-  // A bar that goes away with its screen takes the pairing with it, as closing does.
+  // ADR-0006
   Component.onDestruction: if (opened && svc) svc.pairCancel()
 
   Timer {
@@ -55,7 +55,6 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
-  // The SVG is the mask, the bar's colour the fill: a tint follows the theme.
   component Silhouette: Item {
     id: silhouette
     property color color: root.foreground
@@ -174,7 +173,6 @@ Panel {
           }
         }
 
-        // ---------- Menu ----------
         Column {
           visible: root.phase === ""
           width: parent.width
@@ -232,7 +230,6 @@ Panel {
           }
         }
 
-        // ---------- Pairing ----------
         Line {
           visible: root.phase === "connecting"
           text: "Opening a pairing window…"
@@ -246,8 +243,7 @@ Panel {
 
           Line { text: "Scan with the Collie app"; font.bold: true; horizontalAlignment: Text.AlignHCenter }
 
-          // One native rectangle per module, with the quiet zone as padding: crisp, and the
-          // code never touches a file.
+          // ADR-0006
           Rectangle {
             id: qrCanvas
             readonly property int size: root.svc ? root.svc.qr.length : 0

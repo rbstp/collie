@@ -43,7 +43,6 @@ enum NotificationKey {
         return key
     }
 
-    /// Replaces any key stored for `nodeId`.
     static func store(_ key: SymmetricKey, nodeId: String) throws {
         delete(nodeId: nodeId)
         var item = baseQuery(nodeId: nodeId)

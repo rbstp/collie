@@ -1,14 +1,9 @@
-# Sourced by build-xcframework.sh and build-collied.sh: the pins, the pinned Zig, the checked
-# release tarballs and the license texts scripts/notices.py reads.
-
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/pins.env"
 root="$(cd "$here/../.." && pwd)"
 work="$root/target/ghostty"
 
-# The pinned Zig and finished builds, shared by every checkout and worktree of this user. What it
-# holds is linked into collied and the app, so it is trusted as target/ is: the user's own folder
-# only. Without one, nothing is shared.
+# ADR-0005
 user_cache="$work"
 if [ -n "${HOME:-}" ]; then
     case "$(uname -s)" in
@@ -28,9 +23,7 @@ sha256_check() {
     fi
 }
 
-# The checksum-verified download on the hosts pins.env has one for; elsewhere a zig on PATH, only at
-# the pinned version. The marker is written only after a whole verified extraction, which is then
-# moved into place, so an interrupted download is never trusted.
+# ADR-0005
 find_zig() {
     case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) host=aarch64-macos sha="$ZIG_SHA256_AARCH64_MACOS" ;;
@@ -49,28 +42,22 @@ find_zig() {
     [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
     mkdir -p "$user_cache"
     tmp="$(mktemp -d "$user_cache/.zig-$ZIG_VERSION.XXXXXX")"
-    # The sourcing scripts set no EXIT trap of their own; one that does must chain this one.
     trap 'rm -rf "$tmp"' EXIT
     curl -fsSL --retry 3 -o "$tmp/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/zig-$host-$ZIG_VERSION.tar.xz"
     sha256_check "$sha" "$tmp/zig.tar.xz"
     mkdir "$tmp/zig"
     tar -xJf "$tmp/zig.tar.xz" --strip-components=1 -C "$tmp/zig"
     echo "$sha" >"$tmp/zig/.collie-sha256"
-    # A concurrent build (another build script, another CARGO_TARGET_DIR) may have installed it
-    # meanwhile and be running it.
     [ -x "$zig" ] && [ "$(cat "$zigdir/.collie-sha256" 2>/dev/null)" = "$sha" ] && return
     rm -rf "$zigdir"
     mv "$tmp/zig" "$zigdir"
     rm -rf "$tmp"
 }
 
-# What a build stamp records of its inputs beyond the pins: the scripts that made it ($1 is the
-# build script).
 inputs_sum() {
     cat "$here/pins.env" "$here/common.sh" "$1" | cksum
 }
 
-# Copies the finished build stamped $2 from the cache to $1; fails when the cache has none.
 restore_build() {
     local from tmp
     from="$user_cache/built-$(printf '%s' "$2" | cksum | tr ' ' -)"
@@ -82,8 +69,6 @@ restore_build() {
     mv "$tmp" "$1"
 }
 
-# Keeps the finished build $1, stamped $2, for other checkouts. Copied whole before it gets its
-# name, so a reader never sees half of one; a concurrent build may have stored it first.
 save_build() {
     local to tmp
     to="$user_cache/built-$(printf '%s' "$2" | cksum | tr ' ' -)"
@@ -93,12 +78,10 @@ save_build() {
     if [ -e "$to" ]; then rm -rf "$tmp"; else mv "$tmp" "$to"; fi
 }
 
-# Unpacks the source and dependency tarballs into $1, as $1/libghostty-vt-<version>[-deps].
 unpack_sources() {
     for name in "libghostty-vt-$LIBGHOSTTY_VT_VERSION:$SOURCE_SHA256" "libghostty-vt-$LIBGHOSTTY_VT_VERSION-deps:$DEPS_SHA256"; do
         tarball="$1/${name%%:*}.tar.gz"
         mkdir -p "$1"
-        # Fallback for when release.files.ghostty.org is down: the same tarballs on this repo's release.
         curl -fsSL --retry 3 -o "$tarball" "https://release.files.ghostty.org/libghostty-vt/$LIBGHOSTTY_VT_VERSION/${name%%:*}.tar.gz" ||
             curl -fsSL --retry 3 -o "$tarball" "https://github.com/rbstp/collie/releases/download/ghostty-vt-$LIBGHOSTTY_VT_VERSION/${name%%:*}.tar.gz"
         sha256_check "${name#*:}" "$tarball"
@@ -108,8 +91,6 @@ unpack_sources() {
     done
 }
 
-# Writes the license texts of what links into the library, from sources $1 and dependencies $2,
-# into the new folder $3. scripts/notices.py names each file's license.
 write_licenses() {
     mkdir "$3"
     cp "$1/LICENSE" "$3/libghostty-vt"
@@ -128,7 +109,6 @@ write_licenses() {
         echo
         fetch_license "$UUCODE_LICENSES/LICENSE_Bjoern_Hoehrmann" "$UUCODE_HOEHRMANN_SHA256" "$3"
     } >"$3/uucode"
-    # Beside the binary in Zig's tarball, one level up in Homebrew's.
     zig_license="$(dirname "$(realpath "$zig")")/LICENSE"
     [ -f "$zig_license" ] || zig_license="$(dirname "$zig_license")/../LICENSE"
     cp "$zig_license" "$3/Zig compiler-rt"

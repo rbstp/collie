@@ -75,7 +75,7 @@ case "$(uname -s)" in
     Linux)
         if [ -f "$unit" ]; then
             service_tmp="$(mktemp "$(dirname "$unit")/.collied.XXXXXX")"
-            # systemd does not expand dollars in the executable path; percent still expands specifiers.
+            # ADR-0006
             escaped="$(printf '%s' "$dest" | sed 's/%/%%/g; s/[&|]/\\&/g')"
             sed "s|^ExecStart=\"[^\"]*\"|ExecStart=\"$escaped\"|" "$unit" > "$service_tmp"
             chmod 0644 "$service_tmp"

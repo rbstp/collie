@@ -171,7 +171,7 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--platform", choices=["macos-arm64", "linux-x86_64", "omarchy"])
     parser.add_argument("--binary", type=Path)
-    # Written by scripts/notices.py in a step without signing secrets: it runs downloaded tools.
+    # ADR-0004
     parser.add_argument("--notices", type=Path)
     args = parser.parse_args()
     if args.command == "package":

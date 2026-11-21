@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Builds collied's static libghostty-vt for one Rust target from the release tarballs pinned in
-# pins.env into target/ghostty/collied/<target>: lib/libghostty-vt.a and the license texts
-# scripts/notices.py reads. Run by crates/ghostty-vt-sys/build.rs.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-# Grid references, the formatter and the snapshot decoder: what collied's Rex and Herdr Core screens read.
 VT_FEATURES=-all,+grid-introspection,+formatter,+snapshot
 
 target="${1:?usage: build-collied.sh <rust target>}"
@@ -36,13 +32,7 @@ rm -rf "$out" "$build"
 unpack_sources "$build"
 src="$build/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
 
-# PACKAGING-LIBGHOSTTY.md requires an empty ZIG_GLOBAL_CACHE_DIR for every build. The ceiling keeps
-# Ghostty's build from taking this repository's git tags for its version. A baseline CPU, not the
-# build host's, since the release runners build for every machine. ReleaseSafe, unlike the app's
-# ReleaseFast: collied will parse untrusted program output in the process that holds its keys, so a
-# slice-bounds, overflow or assertion fault in the Zig code aborts it (launchd or systemd restarts
-# it) instead of corrupting memory. Pointer arithmetic, use after free and the C++ parts (simdutf,
-# Highway) stay unchecked.
+# ADR-0005
 (
     cd "$src"
     GIT_CEILING_DIRECTORIES="$work" ZIG_GLOBAL_CACHE_DIR="$build/zig-global-cache" "$zig" build \
@@ -54,7 +44,6 @@ src="$build/libghostty-vt-$LIBGHOSTTY_VT_VERSION"
         --prefix "$build/out"
 )
 
-# Apple's linker takes the dylib over the archive for -l, so the archive gets a folder alone.
 mkdir -p "$out/lib"
 cp "$build/out/lib/libghostty-vt.a" "$out/lib/"
 write_licenses "$src" "$src-deps" "$out/licenses"

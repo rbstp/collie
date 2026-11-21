@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Asserts a staged copy of the documentation site is complete, with no broken internal link.
-#
-#     docs/site/check-site.sh <site-dir>
-#
-# Env:
-#   SITE_DOMAIN   hostname expected in CNAME (default collie.rbstp.dev)
 set -euo pipefail
 
 SITE="$(cd "${1:?usage: check-site.sh <site-dir>}" && pwd)"
@@ -28,7 +22,6 @@ fi
 links=0
 while IFS= read -r page; do
   dir="$(dirname "$page")"
-  # 404.html is served at any depth, so mdBook roots it with <base href="/">.
   if grep -q '<base href="/">' "$page"; then dir="$SITE"; fi
   while IFS= read -r ref; do
     case "$ref" in

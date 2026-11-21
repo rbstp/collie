@@ -409,7 +409,6 @@ pub struct Status {
 }
 
 impl Status {
-    /// Phone side: the node that owns `ip` according to our netmap.
     pub fn peer_by_ip(&self, ip: IpAddr) -> Option<&PeerStatus> {
         self.peer
             .as_ref()?

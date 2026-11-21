@@ -1,7 +1,7 @@
 name: ios-test-budget
 run-name: "[ios-test-budget] - reporting ${{ github.event.workflow_run.head_sha }}"
 
-# Runs from master with a token that writes to pull requests: it never runs a pull request's code and reads its metrics only through scripts/ios-test-budget.py.
+# ADR-0003
 on:
   workflow_run:
     workflows:
@@ -39,7 +39,6 @@ jobs:
           [ -n "$id" ] || { echo "no metrics: the ios job did not run"; exit 0; }
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id/zip" > "$RUNNER_TEMP/pr.zip"
           echo "found=true" >> "$GITHUB_OUTPUT"
-          # The baseline: the latest successful ci run on master that has metrics, since some pushes skip the ios job.
           gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=master&event=push&status=success&per_page=20" \
             --jq '.workflow_runs[] | "\(.id) \(.head_sha)"' > "$RUNNER_TEMP/runs.txt"
           while read -r run sha; do
@@ -60,7 +59,6 @@ jobs:
           python3 scripts/ios-test-budget.py comment --pr "$RUNNER_TEMP/pr.zip" --baseline "$RUNNER_TEMP/baseline.zip" \
             --pr-sha "$PR_SHA" --baseline-sha "$BASELINE_SHA" --conclusion "$CONCLUSION" > "$RUNNER_TEMP/comment.md"
           jq -Rs '{body: .}' "$RUNNER_TEMP/comment.md" > "$RUNNER_TEMP/comment.json"
-          # One comment per pull request, updated in place.
           id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
             --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- ios-test-budget -->"))) | .id' | head -n 1)"
           if [ -n "$id" ]; then

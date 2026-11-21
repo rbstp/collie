@@ -1,4 +1,3 @@
-// node --test Linux/Tests: the wire format and the parsing the bar widget relies on.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
@@ -60,7 +59,6 @@ test("printable escapes what the phone could hide, like CollieBar", () => {
   assert.equal(printable("\u{1f600} caf\u00e9 \u65e5\u672c"), "\u{1f600} caf\u00e9 \u65e5\u672c");
 });
 
-// What `collied service install` writes (crates/collied/src/service/systemd.rs).
 const UNIT = `# Written by \`collied service install\`; rewritten on every install.
 [Service]
 Type=exec
@@ -91,7 +89,6 @@ test("qrencode's matrix becomes rows of modules", () => {
   const rows = M.qrRows(ascii);
   assert.ok(rows.length >= 21 && rows.length % 4 === 1, `size ${rows.length}`);
   for (const row of rows) assert.match(row, new RegExp(`^[01]{${rows.length}}$`));
-  // Finder pattern corners.
   assert.equal(rows[0].slice(0, 7), "1111111");
   assert.equal(rows[1].slice(0, 7), "1000001");
   assert.equal(rows[rows.length - 1].slice(0, 7), "1111111");

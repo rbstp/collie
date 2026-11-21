@@ -495,9 +495,6 @@ async fn a_shell_keeping_an_agent_under_it_takes_no_terminal_input_and_drops_its
     );
 }
 
-/// #895, on Rex: a Codex that has reported nothing takes only its startup dialog's own keys,
-/// up to the one that answers it, and nothing more until the screen moves on; never at its
-/// composer or at a screen agent output fakes.
 #[tokio::test]
 async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer() {
     let trust = include_str!("../../../../tests/fixtures/codex-0.171.0/trust.detection.txt");
@@ -576,7 +573,6 @@ async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer
             enter
         ]
     );
-    // Its screen has not moved on yet: even the dialog's own keys wait.
     assert_eq!(
         refused(drive.send_keys(keys(vec![Key::Down]), &yes).await),
         ErrorCode::AgentNotReady
@@ -606,8 +602,6 @@ async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer
     assert_eq!(events(&fake, B1), [key("digit_2", "", "2", 50)]);
 }
 
-/// #897, on Rex: a Copilot CLI's trust box takes its own keys until Copilot reports `blocked`,
-/// and the box's rows count in display cells, a wide character's two included.
 #[tokio::test]
 async fn a_copilot_trust_box_takes_keys_until_copilot_reports_blocked() {
     let wide =

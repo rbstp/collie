@@ -483,7 +483,6 @@ pub struct FlockState {
     pub low_data: bool,
     /// The challenge collied gave this session, for the grant that answers it.
     pub challenge: Option<(TerminalId, Nonce)>,
-    /// Terminals this session holds a grant for, until when.
     pub unlocked: HashMap<TerminalId, StdInstant>,
     /// Read through [`FlockState::screen`], which serves a shell's only under its grant.
     output: Option<TerminalRead>,

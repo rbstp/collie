@@ -22,7 +22,6 @@ use super::client::{Method, TERMINAL};
 pub(super) const HOST: &str = "1f4bd4b7-e04f-46e2-ad3b-0e2b89b5447c";
 /// This connection's client id, as `session.attach` names it.
 const CLIENT: &str = "client:1";
-/// Every data connection's channel nonce.
 pub(super) const NONCE: u64 = 422_037_677_951_212_370;
 
 /// Run once, on a request for its method (and block, when named): `after` runs once the
@@ -43,7 +42,6 @@ pub(super) struct Block {
     /// What it renders without `unwrap`, when that differs.
     pub rows: Option<String>,
     pub size: (u32, u32),
-    /// What `block.event` sent it, in order.
     pub events: Vec<Value>,
     /// The client that owns it: the one that created it, until it gives it up.
     pub owner: Option<String>,
@@ -75,7 +73,6 @@ pub(super) struct State {
     /// While set, `block.event` responses are held until an `emit` finds it cleared.
     pub stall: bool,
     held: Vec<Value>,
-    /// What `session.create` was asked, in order.
     pub created: Vec<Value>,
     /// The status the program of a created block reports first; none for `None`.
     pub start: Option<&'static str>,
@@ -104,7 +101,6 @@ pub(super) struct Data {
     pub reject: Option<u8>,
     /// Each HELLO (1) and RESUME (2), with the count a RESUME named.
     pub handshakes: Vec<(u8, u64)>,
-    /// When each handshake arrived.
     pub at: Vec<tokio::time::Instant>,
     /// Told of each handshake, with no timer: a client that loops keeps a paused clock still.
     pub shaken: Arc<tokio::sync::Notify>,
@@ -117,7 +113,6 @@ pub(super) struct Data {
     pub drop_resumed: bool,
     /// The bytes of `stream` sent, across its connections.
     sent: usize,
-    /// The latest WELCOME's reconnect token.
     token: [u8; 16],
 }
 
@@ -283,7 +278,6 @@ impl Fake {
         }
     }
 
-    /// Closes the latest data connection with `code`.
     pub(super) fn data_close(&self, code: u16) {
         if let Some(tx) = crate::lock(&self.data_push).take() {
             let _ = tx.send(DataPush::Close(code));

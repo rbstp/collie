@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           ref: master
 
-      # Only a master commit may run here: this job reads the caches that testflight and ci restore.
+      # ADR-0003
       - name: validate the source commit
         id: source
         run: |
@@ -77,7 +77,6 @@ jobs:
           key: ios-sim-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'crates/tailscale-sys/libtailscale/go.sum', 'crates/tailscale-sys/patches/**/*.patch') }}
           restore-keys: ios-sim-
 
-      # pngquant.org publishes its macOS build (3.0.3) only at this unversioned URL; a new upload fails the checksum.
       - name: install just, xcodegen and pngquant
         run: |
           bin="$RUNNER_TEMP/bin"
@@ -119,7 +118,6 @@ jobs:
           phone="$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name == "iPhone 18 Pro Max") | .udid][0] // empty')"
           [ -n "$phone" ] || xcrun simctl create 'iPhone 18 Pro Max' com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max
 
-      # The runner's watchOS runtime loses its files minutes after it is mounted (#539), so the watch shots stay as committed.
       - name: capture the screenshots
         run: just --no-deps screenshot_watch=false ios-screenshots
 
@@ -131,7 +129,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # The token stays out of the job that builds and runs the captured revision.
+  # ADR-0003
   propose:
     environment: docs-screenshots
     if: ${{ github.repository == 'rbstp/collie' && github.ref == 'refs/heads/master' }}
@@ -153,7 +151,6 @@ jobs:
           name: screenshots
           path: ${{ runner.temp }}/shots
 
-      # Pages serves whatever lands in docs/site/src/images, so only PNG files go there.
       - name: take the captured screenshots
         run: |
           for f in "$RUNNER_TEMP"/shots/*; do
@@ -166,7 +163,6 @@ jobs:
             cp "$f" docs/site/src/images/
           done
 
-      # A pull request opened with GITHUB_TOKEN starts no workflow, so the required checks and the pages deploy would never run.
       - name: open the pull request with auto-merge
         run: |
           if [ -z "$(git status --porcelain -- 'docs/site/src/images/*.png')" ]; then

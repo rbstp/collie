@@ -512,7 +512,6 @@ fn prompt(terminal: &str) -> AgentPromptParams {
 const RULE: &str = "\u{1b}[38;2;136;136;136m────────────────────────────────────────\u{1b}[39m";
 const PLACEHOLDER: &str = "❯ \u{1b}[0m\u{1b}[2mTry \"create a util logging.py that...\"\u{1b}[0m";
 
-/// Claude Code's screen with `rows` in its input box.
 fn screen(rows: &str) -> String {
     format!("⏺ Done.\r\n\r\n{RULE}\r\n{rows}\r\n{RULE}\r\n  Opus 5.5 high\r\n  ⏵⏵ auto mode on\r\n")
 }
@@ -2164,8 +2163,6 @@ async fn ultracode_tasks_prompt_only_once_it_shows() {
     }
 }
 
-// herdr's `agent.start` takes no environment and types the command into a shell whose start-up
-// files already ran, so Code Mode can only reach Claude Code as a setting.
 #[tokio::test]
 async fn code_mode_reaches_herdr_as_a_claude_code_setting_and_needs_claude_code() {
     let herdr = Mock::start();

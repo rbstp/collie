@@ -174,7 +174,6 @@ private func copilot(_ box: [String], above: String = " ~/src/demo") -> String {
     return (["\u{25CF} Done.", above, top] + rows + [bottom, " Autopilot \u{B7} Assisted Permissions"]).joined(separator: "\r\n")
 }
 
-/// Antigravity CLI's screen around its input box.
 private func agy(_ box: [String], below: [String] = ["? for shortcuts  auto \u{B7} Gemini 4 Neon \u{B7} high"]) -> String {
     (["  Done.", "", rule, "\u{1B}[38;2;99;168;248m>\u{1B}[0m " + box[0]] + box.dropFirst().map { "  " + $0 } + [rule] + below)
         .joined(separator: "\r\n")

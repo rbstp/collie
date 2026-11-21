@@ -209,7 +209,6 @@ pub fn note() -> String {
     String::new()
 }
 
-/// The end of the daemon's stderr log, and where it is.
 pub fn log_tail(data_dir: &Path) -> (String, Vec<String>) {
     let log = data_dir.join(STDERR_LOG);
     let text = std::fs::read_to_string(&log).unwrap_or_default();

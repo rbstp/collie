@@ -185,7 +185,6 @@ pub fn seal(
     Some(STANDARD.encode([nonce.as_slice(), &sealed].concat()))
 }
 
-/// `seal` under a fresh random nonce.
 pub fn seal_fresh(key: &NotificationKey, approval_id: &str, body: &str) -> Option<String> {
     let mut nonce = [0u8; 12];
     getrandom::fill(&mut nonce).ok()?;
@@ -691,7 +690,6 @@ impl Push {
         Ok(ended)
     }
 
-    /// Removes the activities registered before `cutoff_ms` and returns them.
     pub fn expire_activities(&self, cutoff_ms: u64) -> Result<Vec<Activity>, peers::Error> {
         let mut expired = Vec::new();
         self.update(|d| {
