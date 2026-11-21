@@ -1,6 +1,6 @@
 # iOS release notes
 
-Text for 0.2.6, covering everything since 0.2.2, the last version on the App Store. Confirm its final build in App Store Connect once the upload is processed.
+Text for 0.2.6, covering everything since 0.2.0, the last version on the App Store. Confirm its final build in App Store Connect once the upload is processed.
 
 ## App Store release notes
 
@@ -13,7 +13,8 @@ Text for 0.2.6, covering everything since 0.2.2, the last version on the App Sto
 - Usage shows plan limits again after an early reset, and prices Claude Fable 5.2 and Mythos 5.2.
 - The app covers its window in the app switcher, checks links before it opens them, and clears a locked shell's screen.
 - The keys that identify your phone stay in the app's own Keychain group. If a brief Secure Enclave or Keychain failure leaves a key unusable, Settings says why and lets you replace it.
-- The watch refreshes after an approval is decided elsewhere.
+- The watch shows an approval's whole command, reason and options, marks one too long for it to answer, and refreshes after an approval is decided elsewhere.
+- On Linux, Chat no longer breaks Claude Code's replies at the terminal's line ends.
 
 Update collied to 0.2.6 on each machine: most changes above need it. If a machine refuses this phone's key after the update, run `collied peers revoke` for the phone there and pair again.
 

@@ -34,7 +34,7 @@ For each gate, record the exact build, source SHA, deployment version, operator 
 
 Promotional text:
 
-> Approve a blocked Claude Code agent from your Lock Screen, review its Git changes and send keys. Now follows agents in Rex, with no VPN to switch on.
+> Approve a blocked Claude Code agent from your Lock Screen, review its Git changes and send keys. Now follows Antigravity CLI agents too, with no VPN to switch on.
 
 Description:
 
