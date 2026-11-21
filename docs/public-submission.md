@@ -48,7 +48,7 @@ WHAT YOU CAN DO
 • Approve or deny a blocked Claude Code agent from its notification, a Live Activity or the app.
 • Start a task in herdr, Herdr Core or Rex: in a folder, a new Git worktree, a fresh clone or a pull request branch.
 • Review an agent's Git changes and pull request diffs, and send it line comments.
-• Track plan limits and estimated token cost for Claude Code, Codex and Copilot.
+• Track plan limits and estimated token cost for Claude Code, Codex, Copilot and Antigravity.
 • Follow agents on the Lock Screen and in the Dynamic Island, and check agents, approvals and usage on Apple Watch.
 
 NO VPN TO SWITCH ON
@@ -66,7 +66,7 @@ PRIVACY
 Your agents, transcripts and files stay on your machine, and there is no Collie account. The phone reaches the machine over your own tailnet, inside mutual TLS. Your machine encrypts notification content so that only your phone can read it; the push service sees generic alerts and delivery metadata, as the privacy policy describes.
 
 TESTED WITH
-Collie Herd has been tested only with Claude Code CLI, Codex CLI and GitHub Copilot CLI. herdr supports more agents, but those have not been validated with Collie Herd. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on a Mac. On Linux, only Arch Linux with Omarchy has been tested. In Herdr Core and Rex, some actions are limited; collie.rbstp.dev lists them.
+Collie Herd has been tested only with Claude Code CLI, Codex CLI, GitHub Copilot CLI and Antigravity CLI. herdr supports more agents, but those have not been validated with Collie Herd. Rex support was tested with Rex 0.1.0-preview.20, a closed preview, on a Mac. On Linux, only Arch Linux with Omarchy has been tested. In Herdr Core and Rex, some actions are limited; collie.rbstp.dev lists them.
 ```
 
 Recheck these against App Store Connect and the submitted build; use the description only once relay notifications pass the release gates. Answer Apple's [age-rating questionnaire](https://developer.apple.com/help/app-store-connect/manage-app-information/set-an-app-age-rating/) from actual capabilities: agent-generated and user-controlled content, external links, terminal behavior.
