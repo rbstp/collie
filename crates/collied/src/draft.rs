@@ -333,6 +333,10 @@ impl Wrap {
         sep
     }
 
+    pub(crate) fn full(self, prev: &str, width: usize) -> bool {
+        self.last_word(prev).0 >= width
+    }
+
     /// Whether the word `prev`, the row this describes, ends with may split onto `next` and
     /// the rows `below` it.
     pub(crate) fn continues<S: AsRef<str>>(

@@ -16,8 +16,8 @@ enum Prev {
 /// pane's `cols`, as `(wraps, splits)` of a `TerminalRead`. Only prose under an indent-0 `⏺`
 /// (`●` off macOS) or `※` row counts; a row that only might continue the one above never does.
 /// A numbered item continues past its number or, as Claude Code 2.1.303 drew items with blank
-/// rows between them, under it. A shaded sent prompt, wrapped at `cols - 3`, joins only after a
-/// row Claude Code ended with a space in the text's style. The input box's unsent text joins as
+/// rows between them, under it. A shaded sent prompt, wrapped at `cols - 3` as the draft, joins
+/// after a full row or one ending in a space in the text's style. The unsent draft joins as
 /// [`draft::parse`] reads it.
 pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
@@ -73,13 +73,26 @@ pub fn soft_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         }
         if let Some(spaced) = prompt.filter(|_| shaded_start(row)) {
             let width = cols.saturating_sub(3);
-            if spaced
-                && ind == 2
+            if ind == 2
                 && matches!(prev, Prev::Row(2))
                 && tail.width() <= width
-                && separator(&tail, s, width) == " "
+                && !s.starts_with('⎿')
             {
-                wraps.push(u32::try_from(i).unwrap_or(u32::MAX));
+                let below = rows[i + 1..].iter().map_while(|r| {
+                    shaded_start(r).then(|| {
+                        let mut text = String::new();
+                        plain_text(r, &mut text);
+                        text.trim_end().get(2..).unwrap_or_default().to_owned()
+                    })
+                });
+                let full = above.full(&tail, width);
+                let at = u32::try_from(i).unwrap_or(u32::MAX);
+                match above.join(&tail, s, below, width) {
+                    " " if spaced || full => wraps.push(at),
+                    "" => splits.push(at),
+                    _ => above = Wrap::default(),
+                }
+                wrap = above;
             }
             prompt = Some(ends_in_space(row, false));
             prev = row_above(&mut tail, s, ind);
@@ -1489,6 +1502,42 @@ mod tests {
             rows[2].ends_with("her differ by every was do, one our'i first through go he out?")
         );
         assert_eq!(rows[7], format!("❯ {first}omega tail"));
+    }
+
+    #[test]
+    fn a_sent_prompt_joins_after_a_row_its_text_fills() {
+        let vt = include_bytes!(
+            "runtime/rex/fixtures/rex-0.1.0-preview.22/claude-2.1.330-sent-prompt.vt"
+        );
+        let mut screen = crate::runtime::screen::Screen::new(80, 24, 0);
+        screen.feed(vt);
+        let ansi = screen.read("recent_unwrapped", None);
+        assert_eq!(soft_wraps(&ansi, 80), (vec![6, 7, 11], vec![]));
+        let rows = reflowed(&ansi, 80);
+        assert_eq!(
+            rows[5],
+            "❯ For the reminder, for example, on the tablet, it only shows the title of the project. Could it show either the... Well, ideally, the title of the task and the folder it sits in, the same as in the detail page of the app."
+        );
+        assert_eq!(rows[6], "  A second paragraph after a typed newline.");
+    }
+
+    #[test]
+    fn a_sent_prompt_never_joins_its_attachment_row() {
+        let shade = "\u{1b}[48;2;55;55;55m";
+        let text = "\u{1b}[0m\u{1b}[38;2;255;255;255m";
+        let row = |lead: &str, s: &str| {
+            format!(
+                "\u{1b}[0m{shade}{lead}{text}{shade}{s}\u{1b}[0m{shade}{}\u{1b}[0m",
+                " ".repeat(38 - s.len())
+            )
+        };
+        let screen = [
+            row("❯ ", "alpha bravo charlie delta echo foxtro"),
+            row("  ", "golf hotel india juliett kilo limaaa"),
+            row("  ", "⎿  [Image #1]"),
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps(&screen, 40), (vec![1], vec![]));
     }
 
     #[test]
