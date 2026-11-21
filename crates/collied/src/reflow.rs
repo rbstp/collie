@@ -424,13 +424,16 @@ fn tui_structure(text: &str) -> bool {
         || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
 }
 
-/// Antigravity draws assistant prose and expanded thinking blocks at indent 2 with no
-/// column-0 marker, wrapped to the terminal width; tool output sits at indent 4, and the
-/// input box sits between full-width `─` rules around a column-0 `>` prompt at the bottom.
+/// Antigravity draws assistant prose, expanded thinking blocks and Glamour lists at indent 2
+/// with no column-0 marker, reserving 1 column for its alt-screen scrollbar plus Glamour's
+/// 2-column right margin (`cols - ind - 3`); tool output sits at indent 4, and the input box
+/// sits between full-width `─` rules around a column-0 `>` prompt at the bottom, wrapped at
+/// the rule width minus 3 (2 for the prompt/indent and 1 for the cursor).
 fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
-    let mut rows: Vec<String> = Vec::new();
+    let raw: Vec<&str> = ansi.split('\n').collect();
+    let mut rows: Vec<String> = Vec::with_capacity(raw.len());
     let mut plain = String::new();
-    for row in ansi.split('\n') {
+    for &row in &raw {
         plain_text(row, &mut plain);
         rows.push(plain.trim_end().to_owned());
     }
@@ -439,17 +442,19 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         .enumerate()
         .filter_map(|(i, r)| (!r.is_empty() && r.chars().all(|c| c == '─')).then_some(i))
         .collect();
-    let limit = rules
+    let input_box = rules
         .windows(2)
         .rev()
-        .find_map(|w| (w[1] > w[0] + 1 && rows[w[0] + 1].starts_with('>')).then_some(w[0]))
-        .unwrap_or(rows.len());
+        .find_map(|w| (w[1] > w[0] + 1 && rows[w[0] + 1].starts_with('>')).then_some((w[0], w[1])));
+    let limit = input_box.map_or(rows.len(), |(top, _)| top);
 
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut tail = String::new();
     let mut prev = Prev::Start;
+    let mut list_item: Option<(usize, String)> = None;
     let mut in_code = false;
     for (i, trimmed) in rows[..limit].iter().enumerate() {
+        let item = list_item.take();
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
         if s.starts_with("```") {
@@ -478,10 +483,11 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if let Some(len) = list_marker(s, false) {
-            if matches!(prev, Prev::Held) || (matches!(prev, Prev::Start) && ind != 2) {
+            if matches!(prev, Prev::Start | Prev::Held) && ind != 2 {
                 prev = Prev::Held;
             } else {
                 let rest = s[len..].trim_start_matches(' ');
+                list_item = Some((ind, s.to_owned()));
                 prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
             }
             continue;
@@ -494,9 +500,13 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                     Prev::Held
                 }
             }
-            Prev::Row(hang) if ind == hang => {
-                // Antigravity pads markdown prose with two columns on both sides.
-                let available = cols.saturating_sub(hang + 2);
+            Prev::Row(hang) if ind == hang || item.as_ref().is_some_and(|(at, _)| *at == ind) => {
+                if let Some((_, line)) = item.filter(|_| ind != hang) {
+                    tail = line;
+                }
+                // Antigravity's alt-screen viewport reserves 1 column for its scrollbar, and
+                // Glamour pads markdown with 2 columns on both sides.
+                let available = cols.saturating_sub(ind + 3);
                 if tail.width() <= available {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
                     match separator(&tail, s, available) {
@@ -511,6 +521,56 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             Prev::Row(_) | Prev::Held => Prev::Held,
         };
     }
+
+    if let Some((top, bottom)) = input_box
+        && (rows[top + 1] == ">"
+            || rows[top + 1].starts_with("> ")
+            || rows[top + 1].starts_with(">\u{a0}"))
+        && rows[top + 2..bottom]
+            .iter()
+            .all(|l| l.is_empty() || l.starts_with("  "))
+        && !rows[bottom + 1..].iter().any(|l| l.starts_with('>'))
+    {
+        let width = rows[bottom].width().min(cols).saturating_sub(3);
+        let box_lines: Vec<String> = raw[top + 1..bottom]
+            .iter()
+            .enumerate()
+            .map(|(j, row)| {
+                let cells = draft::cells(row);
+                let skip = if j == 0 {
+                    1 + usize::from(
+                        cells
+                            .get(1)
+                            .is_some_and(|(c, _)| matches!(c, ' ' | '\u{a0}')),
+                    )
+                } else {
+                    2
+                };
+                cells
+                    .into_iter()
+                    .skip(skip)
+                    .filter(|&(c, dim)| !dim && !c.is_control() && !protocol::is_format(c))
+                    .map(|(c, _)| c)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect();
+        for i in 1..box_lines.len() {
+            let prev = &box_lines[i - 1];
+            let next = &box_lines[i];
+            if prev.width() <= width {
+                let at = u32::try_from(top + 1 + i).unwrap_or(u32::MAX);
+                match separator(prev, next, width) {
+                    " " if wide_cut(prev, next, width) => splits.push(at),
+                    " " => wraps.push(at),
+                    "" => splits.push(at),
+                    _ => {}
+                }
+            }
+        }
+    }
+
     (wraps, splits)
 }
 
@@ -1697,9 +1757,133 @@ mod tests {
         assert_eq!(claude_rule_columns(&screen, 48), Some(46));
         assert_eq!(
             soft_wraps_for("agy", &screen, 46),
-            (vec![5, 6, 9, 10, 13, 15], vec![])
+            (vec![5, 6, 9, 10, 13, 15, 26], vec![])
         );
-        assert_eq!(soft_wraps_for("agy", &screen, 80), (vec![], vec![]));
+        assert_eq!(soft_wraps_for("agy", &screen, 80), (vec![26], vec![]));
+    }
+
+    #[test]
+    fn agy_input_box_joins_soft_wraps_and_keeps_newlines_and_hints() {
+        let rule = "─".repeat(80);
+        // 80-column terminal -> 77-column text width (2 for `> ` / `  `, 1 for cursor).
+        let wrapped = [
+            "  Done.",
+            "",
+            rule.as_str(),
+            "\u{1b}[38;2;99;168;248m>\u{1b}[0m Yeah, put in the boxes was actually ran against a cluster, so don't modify",
+            "  that. It's really the prose around it p You can use up to 2 subagents if you",
+            "  need",
+            rule.as_str(),
+            "? for shortcuts auto · Gemini 4 Neon · high",
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &wrapped, 80), (vec![4, 5], vec![]));
+        let (wraps, splits) = soft_wraps_for("agy", &wrapped, 80);
+        let read = protocol::TerminalRead {
+            terminal_id: protocol::TerminalId::new("t1").unwrap(),
+            source: protocol::ReadSource::Recent,
+            ansi: wrapped,
+            truncated: false,
+            wraps,
+            splits,
+            copilot_scrollbar: false,
+            suggestion: None,
+        };
+        let reflowed = read.reflowed().unwrap();
+        let plain: Vec<String> = reflowed
+            .split('\n')
+            .map(|r| {
+                let mut out = String::new();
+                plain_text(r, &mut out);
+                out
+            })
+            .collect();
+        assert_eq!(
+            plain[3],
+            "> Yeah, put in the boxes was actually ran against a cluster, so don't modify that. It's really the prose around it p You can use up to 2 subagents if you need"
+        );
+
+        let rule40 = "─".repeat(40);
+        // 40-column rule -> 37-column text width.
+        let newlines = [
+            rule40.as_str(),
+            "> short line",
+            "  second line after newline",
+            "  ",
+            "  after blank line",
+            "    indented after newline",
+            rule40.as_str(),
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &newlines, 40), (vec![], vec![]));
+
+        let split_word = [
+            rule40.as_str(),
+            &format!("> {}", "a".repeat(37)),
+            "  bbbb tail",
+            rule40.as_str(),
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &split_word, 40), (vec![], vec![2]));
+
+        let cjk_split = [
+            rule40.as_str(),
+            &format!("> {}", "中".repeat(18)),
+            "  文字。",
+            rule40.as_str(),
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &cjk_split, 40), (vec![], vec![2]));
+
+        let dim_placeholder = [
+            rule40.as_str(),
+            "> \u{1b}[2mAsk anything about this workspace now\u{1b}[0m",
+            "  \u{1b}[2mor press / for commands\u{1b}[0m",
+            rule40.as_str(),
+        ]
+        .join("\r\n");
+        assert_eq!(
+            soft_wraps_for("agy", &dim_placeholder, 40),
+            (vec![], vec![])
+        );
+
+        let menu_below = [
+            rule40.as_str(),
+            "> a prompt typed into the input box that",
+            "  wraps onto a second row",
+            rule40.as_str(),
+            "> 1. Allow",
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &menu_below, 40), (vec![], vec![]));
+    }
+
+    #[test]
+    fn agy_glamour_lists_wrap_flush_under_the_marker_at_scrollbar_width() {
+        // 80-column alt-screen pane: 1-col scrollbar + 2-col left/right margins -> 75 cols.
+        let rows = [
+            "  Verification",
+            "  • Technical & progress invariants: Verified across all 34 pages against",
+            "  master - zero changes to <details class=\"out\"> captured outputs or their",
+            "  preceding command blocks, zero changes to .exercise/.task data-title keys,",
+            "  section ids, data-widget attributes, or mock-exam #grading blocks, and",
+            "  curriculum/assets/drill-index.js came back byte-identical (no drill card",
+            "  IDs moved).",
+            "  • Drill & font checks: extract-drill.py --check passed (257 questions),",
+            "  subset-fonts.py --check passed (7 faces match the cut), HTML tag balance",
+            "  passed on all 34 pages, and game.html's .quest-guide sits at 85 words",
+            "  (under the 100-word browser-check ceiling).",
+            "  • Short bullet.",
+            "  Next short line.",
+            "    • Nested bullet at indent 4 that wraps onto the next row right at the",
+            "    marker indent.",
+            "  • Outer bullet after nested one that wraps onto the next row right at",
+            "  indent 2.",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 80),
+            (vec![2, 3, 4, 5, 6, 8, 9, 10, 14, 16], vec![])
+        );
     }
 
     #[test]
@@ -1707,7 +1891,7 @@ mod tests {
         let long = format!("  {}", "x".repeat(38));
         let rows = [long.as_str(), "  yyyy for the details."];
         assert_eq!(
-            soft_wraps_for("agy", &rows.join("\r\n"), 42),
+            soft_wraps_for("agy", &rows.join("\r\n"), 43),
             (vec![], vec![1])
         );
         let cjk = [
@@ -1715,7 +1899,7 @@ mod tests {
             "  后检查结果。".to_owned(),
         ];
         assert_eq!(
-            soft_wraps_for("agy", &cjk.join("\r\n"), 42),
+            soft_wraps_for("agy", &cjk.join("\r\n"), 43),
             (vec![], vec![1])
         );
     }
