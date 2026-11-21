@@ -220,12 +220,7 @@ impl Transcripts {
         found.all(|s| s == first).then_some(first)
     }
 
-    /// The session of the Claude Code process the terminal runs and when that process says it
-    /// started, for [`Transcripts::asking`]. By process only: the pane's own processes for a
-    /// herdr pane, never herdr's id or an attach target, and for a herdr-core or Rex terminal
-    /// the id the runtime read from its foreground process. Refused unless exactly one live
-    /// process claims that session: two would write one transcript. A pane's process list cut
-    /// at [`MAX_PIDS`] ties nothing, since a second Claude Code past the cut is not seen.
+    // ADR-0012
     pub(super) fn holder(&self, a: &AgentInfo) -> Result<(String, u64), Refused> {
         let sessions = self.sessions_dir().ok_or(Refused::NoSession)?;
         let session = match Owner::of(&a.terminal_id) {
@@ -1045,15 +1040,12 @@ mod tests {
         assert_eq!(asked(&t, &agent(LIVE)), untied, "herdr's id ties nothing");
         pane(&mut t, &[pid]);
         assert_eq!(asked(&t, &agent(LIVE)), mine);
-        // A process list cut at its cap may hide a second Claude Code.
         pane(&mut t, &[pid; MAX_PIDS]);
         assert_eq!(asked(&t, &agent(LIVE)), mine);
         pane(&mut t, &[pid; MAX_PIDS + 1]);
         assert_eq!(asked(&t, &agent(LIVE)), Err(Refused::Truncated));
         pane(&mut t, &[pid]);
 
-        // Two sessions in one folder: the other's question is never this terminal's, whatever
-        // herdr names, and a pane that runs both is tied to neither.
         pid_file(&sessions, other, OLD, CWD, other_started, "");
         assert_eq!(asked(&t, &agent(OLD)), mine);
         pane(&mut t, &[pid, other]);
@@ -1067,7 +1059,6 @@ mod tests {
         );
         std::fs::remove_file(sessions.join(format!("{other}.json"))).unwrap();
 
-        // The sessions folder is listed up to its cap, and not judged past it.
         let spare = |n: usize| sessions.join(format!("{}.json", 900_000_000 + n));
         for n in 1..MAX_SESSION_FILES {
             write(&spare(n), "{}");
@@ -1080,7 +1071,6 @@ mod tests {
         }
         assert_eq!(asked(&t, &agent(LIVE)), mine);
 
-        // herdr-core and Rex name the session of the terminal's foreground process.
         let mut hosted = agent(LIVE);
         hosted.terminal_id = "hc:local/t1".into();
         assert_eq!(asked(&t, &hosted), mine);
