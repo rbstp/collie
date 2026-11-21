@@ -5,7 +5,7 @@
 
 ## Context
 
-Two workflows hold a token that can write to the repository or its pull requests: `ios-test-budget.yml` comments the test budget on pull requests, and `docs-screenshots.yml` opens a pull request with new documentation screenshots. Code from a pull request, or a file it produced, must never run with those tokens.
+Three workflows hold a token that can write to the repository or its pull requests: `ios-test-budget.yml` comments the test budget on pull requests, `docs-screenshots.yml` opens a pull request with new documentation screenshots, and `prices.yml` opens one with new LiteLLM prices. Code from a pull request, or a file it produced, must never run with those tokens.
 
 ## Decision
 
@@ -14,6 +14,7 @@ Two workflows hold a token that can write to the repository or its pull requests
 - `docs-screenshots.yml`'s capture job runs only a commit on `master`, since it reads the caches that `testflight` and `ci` restore. The token stays out of that job: the `propose` job, in the `docs-screenshots` environment, never builds or runs the captured revision.
 - `propose` copies only regular PNG files (name pattern, PNG signature, no symlinks) from the artifact into `docs/site/src/images`, because Pages serves whatever lands there.
 - `propose` opens its pull request with `DOCS_SCREENSHOTS_TOKEN`: a pull request opened with `GITHUB_TOKEN` starts no workflow, so the required checks and the pages deploy would never run.
+- `prices.yml` runs on `master` only, in the `docs-screenshots` environment, and opens its pull request with the same token for the same reason. It fetches LiteLLM's price table and only filters it with `jq`: nothing from the table runs. Its `jq` is the pinned release that wrote `prices.json` (checked against its SHA-256), since `jq` releases print numbers such as `2E-7` differently.
 
 ## Consequences
 
@@ -22,5 +23,5 @@ Two workflows hold a token that can write to the repository or its pull requests
 
 ## Code
 
-- `.github/workflows/ios-test-budget.yml`, `.github/workflows/docs-screenshots.yml`
+- `.github/workflows/ios-test-budget.yml`, `.github/workflows/docs-screenshots.yml`, `.github/workflows/prices.yml`
 - `scripts/ios-test-budget.py` (`load`, `validate`, `render`)

@@ -227,7 +227,6 @@ fn check_codex_session_hook(
     }
 }
 
-/// herdr 0.9.5 writes version 4 of the Antigravity CLI hook at `<config>/hooks/herdr-agent-state.sh`.
 fn check_agy_hook(agy_data: &Path, agy_config: &Path) -> (Status, String) {
     if !agy_data.is_dir() {
         return (

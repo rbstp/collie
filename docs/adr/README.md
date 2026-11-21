@@ -14,3 +14,4 @@ A record has a status, a date, Context, Decision, Consequences and the code it g
 | [0006](0006-desktop-bars-and-the-control-socket.md) | The desktop bars speak collied's control socket and confirm pairings on the machine |
 | [0007](0007-documentation-screenshots-and-site.md) | Documentation screenshots come from the demo on a fixed simulator; the site is staged and checked |
 | [0008](0008-relay-storage-bounds-and-attestation.md) | The relay checks App Attest flags strictly and bounds its storage in guarded batches |
+| [0009](0009-antigravity-cli.md) | Antigravity CLI is read like the other agents, through its own hook, files and layout |

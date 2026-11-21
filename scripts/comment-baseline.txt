@@ -128,7 +128,7 @@
 37 crates/collied/src/flock.rs
 3 crates/collied/src/gate.rs
 61 crates/collied/src/git.rs
-9 crates/collied/src/hooks.rs
+6 crates/collied/src/hooks.rs
 12 crates/collied/src/keychain.rs
 9 crates/collied/src/lib.rs
 12 crates/collied/src/main.rs

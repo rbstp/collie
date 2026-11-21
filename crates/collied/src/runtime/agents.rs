@@ -283,7 +283,6 @@ mod tests {
             (5, 1, "hc"),
         ]);
         assert!(reported_by(10, 30, "codex", npm));
-        // collied hook under sh under the terminal's agy.
         let agy = table(&[
             (30, 20, "collied"),
             (20, 10, "sh"),

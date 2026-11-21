@@ -22,10 +22,7 @@ struct Input {
     conversation_id: Option<String>,
 }
 
-/// `collied hook`: Codex's SessionStart hook and Antigravity CLI's SessionStart/PreInvocation
-/// hook. It only reports to the daemon and never injects or blocks: for Codex it prints
-/// nothing; for Antigravity CLI (camelCase payload) it prints `{}` as required by agy's hook
-/// contract.
+// ADR-0009
 pub async fn run(control_path: &Path) {
     let mut stdin = std::io::stdin();
     let mut raw = Vec::new();
@@ -96,8 +93,6 @@ pub fn claude_dir() -> anyhow::Result<PathBuf> {
     })
 }
 
-/// Antigravity CLI's global customization dir (`hooks.json`), which honors
-/// `ANTIGRAVITY_CLI_CONFIG_DIR`.
 pub fn agy_config_dir() -> anyhow::Result<PathBuf> {
     Ok(match std::env::var_os("ANTIGRAVITY_CLI_CONFIG_DIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
@@ -105,7 +100,6 @@ pub fn agy_config_dir() -> anyhow::Result<PathBuf> {
     })
 }
 
-/// Antigravity CLI's data dir (`brain/`), which honors `ANTIGRAVITY_APP_DATA_DIR`.
 pub fn agy_data_dir() -> anyhow::Result<PathBuf> {
     Ok(match std::env::var_os("ANTIGRAVITY_APP_DATA_DIR") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
@@ -124,9 +118,6 @@ pub fn installed(settings: &Value, event: &str) -> bool {
         .any(|c| c.trim_end().ends_with("collied hook"))
 }
 
-/// Whether `collied hook` runs on any of `events` in an enabled hook of Antigravity's
-/// `hooks.json` (where top-level keys name hooks and session/invocation events hold flat
-/// handler arrays).
 pub fn agy_installed(settings: &Value, events: &[&str]) -> bool {
     settings
         .as_object()

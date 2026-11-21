@@ -966,8 +966,6 @@ fn codex(text: &str) -> Derived {
     d
 }
 
-/// Antigravity CLI wraps user prompts in `<USER_REQUEST>...</USER_REQUEST>` followed by
-/// metadata tags; unwrap it when present so Inbox and Chat show only what the user wrote.
 pub(super) fn agy_user_text(raw: &str) -> &str {
     const OPEN: &str = "<USER_REQUEST>";
     const CLOSE: &str = "</USER_REQUEST>";

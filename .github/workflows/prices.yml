@@ -27,7 +27,6 @@ jobs:
           persist-credentials: false
           ref: master
 
-      # jq releases print numbers such as 2E-7 differently, so this is the jq that wrote prices.json.
       - name: install just and jq
         run: |
           bin="$RUNNER_TEMP/bin"
@@ -41,7 +40,7 @@ jobs:
           chmod +x "$bin/jq"
           echo "$bin" >> "$GITHUB_PATH"
 
-      # jq only filters the fetched table; nothing from it runs.
+      # ADR-0003
       - name: refresh the prices
         id: refresh
         run: |
@@ -53,7 +52,6 @@ jobs:
           jq -e 'length > 0' crates/collied/data/prices.json > /dev/null
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      # A pull request opened with GITHUB_TOKEN starts no workflow, so the required checks would never run.
       - name: open the pull request
         run: |
           if [ -z "$(git status --porcelain -- crates/collied/data/prices.json)" ]; then

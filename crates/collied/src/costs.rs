@@ -373,8 +373,6 @@ impl Roots {
     }
 }
 
-/// Antigravity CLI keeps each conversation's transcript under `<brain>/<uuid>/.system_generated/logs/transcript.jsonl`,
-/// so it is scanned directly instead of through `walk` (which skips hidden directories).
 fn agy_files(root: &Path, keep: u64, out: &mut Vec<PathBuf>) {
     for e in std::fs::read_dir(root).into_iter().flatten().flatten() {
         if out.len() >= MAX_FILES {
@@ -628,7 +626,6 @@ fn copilot(text: &str) -> Option<Record> {
     })
 }
 
-/// One record per planner step; `input_tokens` excludes `cache_read_tokens`.
 fn agy(text: &str) -> Option<Record> {
     let v: Value = serde_json::from_str(text).ok()?;
     if v["type"] != "PLANNER_RESPONSE" {
