@@ -49,4 +49,4 @@ codex resume <session-id> --no-daemon
 
 ## Startup prompts
 
-When a new task meets a startup prompt, such as folder trust or the update picker, it stops without sending your prompt. Answer the startup prompt in Terminal.
+When a new task meets a startup prompt, such as folder trust or the update picker, it stops without sending your prompt. Open the session and answer the startup prompt in Terminal with the arrow keys, Return, Esc or a digit, then send your prompt.
