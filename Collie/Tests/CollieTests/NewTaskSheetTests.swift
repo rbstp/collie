@@ -294,6 +294,14 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.taskNews.last, "/Users/me/app - codeMode=false")
         XCTAssertEqual(DevicePrefs.load(from: prefs).taskCodeMode, ["m1": false])
 
+        let linux = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let other = NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2", prefsFile: prefs)
+        await other.loadOptions()
+        XCTAssertTrue(other.codeMode, "another machine keeps its own choice")
+        other.machineId = "m1"
+        await other.loadOptions()
+        XCTAssertFalse(other.codeMode)
+
         let resume = NewTaskModel(core: core, machines: [mac], prefsFile: prefs)
         await resume.loadOptions()
         XCTAssertFalse(resume.codeMode)
