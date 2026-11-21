@@ -73,7 +73,7 @@ jobs:
           body="Prices from LiteLLM $LITELLM_SHA, by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Review the changed models and rates before merging: merging ships a release."
           pr="$(gh pr list --head refresh-prices --base master --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
-            pr="$(gh pr create --base master --head refresh-prices --title "Refresh LiteLLM prices" --body "$body")"
+            pr="$(gh pr create --base master --head refresh-prices --title "Refresh LiteLLM prices [skip-release]" --body "$body")"
           else
             gh pr edit "$pr" --body "$body"
           fi
