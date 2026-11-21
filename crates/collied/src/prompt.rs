@@ -3840,6 +3840,17 @@ mod tests {
         // the screen tells the two apart, so the caller asks which version runs.
         let old = format!("Drop the database first.\n{wide}\n ☐ Cache\nContinue?");
         assert!(whole(&draw(&old)));
+        // Claude Code draws the form's cursor at column 0, where no row of an option's text
+        // starts: a form set in by a column, its own entries and all, stands for none.
+        let set_in: String = (live.lines())
+            .map(|l| match l.starts_with("❯ ") || l.starts_with("  ") {
+                true => format!(" {l}\n"),
+                false => format!("{l}\n"),
+            })
+            .collect();
+        let m = Menu::parse(&set_in).unwrap();
+        assert!(m.is_question() && m.after.is_empty() && m.own_entries().is_some());
+        assert!(!m.stands_whole());
     }
 
     #[test]

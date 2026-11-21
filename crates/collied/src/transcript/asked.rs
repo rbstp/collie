@@ -950,10 +950,14 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
         assert_ne!(built, code);
         assert_eq!(scripts(screen, &built), not_found);
         // An option is a label and a description, each a whole literal and each on rows of
-        // its own: not a label alone, and not the same characters split elsewhere.
+        // its own: not a label alone, nor one under a description the script does not hold,
+        // and not the same characters split elsewhere.
         let bare = screen.replacen("     First test choice.\n", "", 1);
         assert_ne!(bare, screen);
         assert_eq!(scripts(&bare, &code), not_found);
+        let other = code.replace("'First test choice.'", "'Another choice.'");
+        assert_ne!(other, code);
+        assert_eq!(scripts(screen, &other), not_found);
         let split = code
             .replace("'Option A'", "'Option'")
             .replace("'First test choice.'", "'A First test choice.'");
