@@ -424,10 +424,11 @@ fn tui_structure(text: &str) -> bool {
         || text.chars().any(|c| ('\u{2500}'..='\u{259f}').contains(&c))
 }
 
-/// Antigravity draws assistant prose and expanded thinking blocks at indent 2 with no
-/// column-0 marker, wrapped with a two-column right margin; tool output sits at indent 4, and
-/// the input box sits between full-width `─` rules around a column-0 `>` prompt at the bottom,
-/// wrapped at the rule width minus 3 (2 for the prompt/indent and 1 for the cursor).
+/// Antigravity draws assistant prose, expanded thinking blocks and Glamour lists at indent 2
+/// with no column-0 marker, reserving 1 column for its alt-screen scrollbar plus Glamour's
+/// 2-column right margin (`cols - ind - 3`); tool output sits at indent 4, and the input box
+/// sits between full-width `─` rules around a column-0 `>` prompt at the bottom, wrapped at
+/// the rule width minus 3 (2 for the prompt/indent and 1 for the cursor).
 fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let raw: Vec<&str> = ansi.split('\n').collect();
     let mut rows: Vec<String> = Vec::with_capacity(raw.len());
@@ -450,8 +451,10 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut tail = String::new();
     let mut prev = Prev::Start;
+    let mut list_item: Option<(usize, String)> = None;
     let mut in_code = false;
     for (i, trimmed) in rows[..limit].iter().enumerate() {
+        let item = list_item.take();
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
         if s.starts_with("```") {
@@ -480,10 +483,11 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if let Some(len) = list_marker(s, false) {
-            if matches!(prev, Prev::Held) || (matches!(prev, Prev::Start) && ind != 2) {
+            if matches!(prev, Prev::Start | Prev::Held) && ind != 2 {
                 prev = Prev::Held;
             } else {
                 let rest = s[len..].trim_start_matches(' ');
+                list_item = Some((ind, s.to_owned()));
                 prev = row_above(&mut tail, rest, ind + s[..s.len() - rest.len()].width());
             }
             continue;
@@ -496,9 +500,13 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
                     Prev::Held
                 }
             }
-            Prev::Row(hang) if ind == hang => {
-                // Antigravity pads markdown prose with two columns on both sides.
-                let available = cols.saturating_sub(hang + 2);
+            Prev::Row(hang) if ind == hang || item.as_ref().is_some_and(|(at, _)| *at == ind) => {
+                if let Some((_, line)) = item.filter(|_| ind != hang) {
+                    tail = line;
+                }
+                // Antigravity's alt-screen viewport reserves 1 column for its scrollbar, and
+                // Glamour pads markdown with 2 columns on both sides.
+                let available = cols.saturating_sub(ind + 3);
                 if tail.width() <= available {
                     let at = u32::try_from(i).unwrap_or(u32::MAX);
                     match separator(&tail, s, available) {
@@ -1851,11 +1859,39 @@ mod tests {
     }
 
     #[test]
+    fn agy_glamour_lists_wrap_flush_under_the_marker_at_scrollbar_width() {
+        // 80-column alt-screen pane: 1-col scrollbar + 2-col left/right margins -> 75 cols.
+        let rows = [
+            "  Verification",
+            "  • Technical & progress invariants: Verified across all 34 pages against",
+            "  master - zero changes to <details class=\"out\"> captured outputs or their",
+            "  preceding command blocks, zero changes to .exercise/.task data-title keys,",
+            "  section ids, data-widget attributes, or mock-exam #grading blocks, and",
+            "  curriculum/assets/drill-index.js came back byte-identical (no drill card",
+            "  IDs moved).",
+            "  • Drill & font checks: extract-drill.py --check passed (257 questions),",
+            "  subset-fonts.py --check passed (7 faces match the cut), HTML tag balance",
+            "  passed on all 34 pages, and game.html's .quest-guide sits at 85 words",
+            "  (under the 100-word browser-check ceiling).",
+            "  • Short bullet.",
+            "  Next short line.",
+            "    • Nested bullet at indent 4 that wraps onto the next row right at the",
+            "    marker indent.",
+            "  • Outer bullet after nested one that wraps onto the next row right at",
+            "  indent 2.",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 80),
+            (vec![2, 3, 4, 5, 6, 8, 9, 10, 14, 16], vec![])
+        );
+    }
+
+    #[test]
     fn agy_splits_wide_characters_and_long_words() {
         let long = format!("  {}", "x".repeat(38));
         let rows = [long.as_str(), "  yyyy for the details."];
         assert_eq!(
-            soft_wraps_for("agy", &rows.join("\r\n"), 42),
+            soft_wraps_for("agy", &rows.join("\r\n"), 43),
             (vec![], vec![1])
         );
         let cjk = [
@@ -1863,7 +1899,7 @@ mod tests {
             "  后检查结果。".to_owned(),
         ];
         assert_eq!(
-            soft_wraps_for("agy", &cjk.join("\r\n"), 42),
+            soft_wraps_for("agy", &cjk.join("\r\n"), 43),
             (vec![], vec![1])
         );
     }
