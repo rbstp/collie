@@ -47,7 +47,7 @@ struct MachinesList: View {
                 .contextMenu {
                     Button("Rename", systemImage: "pencil") { renaming = machine }
                 }
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
@@ -84,16 +84,26 @@ struct MachineRow<Destination: View>: View {
     let flock: MachineFlock?
     var now = Date.now
     @ViewBuilder let destination: () -> Destination
+    @ScaledMetric(relativeTo: .body) private var badgeSize: CGFloat = 38
 
     var body: some View {
         let reachable = flock.map { [.connected, .connecting].contains($0.link) } ?? true
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            MachineLogo(machine: machine).foregroundStyle(reachable ? .primary : .secondary)
-            VStack(alignment: .leading, spacing: 4) {
-                NavigationLink(destination: destination) {
+        let iconWell = min(badgeSize, 48)
+        VStack(alignment: .leading, spacing: 8) {
+            NavigationLink(destination: destination) {
+                HStack(alignment: .center, spacing: 12) {
+                    MachineLogo(machine: machine, size: 18, maxSize: 24)
+                        .foregroundStyle(reachable ? .primary : .secondary)
+                        .frame(width: iconWell, height: iconWell)
+                        .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        }
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 8) {
                             Text(machine.label)
+                                .font(.body.weight(.semibold))
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.85)
                                 .foregroundStyle(reachable ? .primary : .secondary)
@@ -103,26 +113,27 @@ struct MachineRow<Destination: View>: View {
                             }
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.metadata)
                         }
                         Text(machine.host)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.metadata)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
-                .navigationLinkIndicatorVisibility(.hidden)
-                if let flock, flock.link != .connecting,
-                   let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
-                    MachineConnectionDetails(message: message, error: flock.lastError ?? message)
-                }
+            }
+            .buttonStyle(.plain)
+            .navigationLinkIndicatorVisibility(.hidden)
+            if let flock, flock.link != .connecting,
+               let message = flock.reason?.label(machine: machine.label, now: now) ?? flock.lastError {
+                MachineConnectionDetails(message: message, error: flock.lastError ?? message)
             }
         }
-        .padding(12)
-        .appGlass(in: .rect(cornerRadius: 18))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .appGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .environment(\.glassPage, Color(.systemGroupedBackground))
     }
 }
@@ -134,10 +145,16 @@ private struct MachineLinkStatus: View {
     var body: some View {
         switch link {
         case .connected:
-            Image(systemName: "circle.fill")
-                .font(.system(size: 8))
-                .foregroundStyle(.green)
-                .accessibilityLabel(link.label)
+            ZStack {
+                Circle()
+                    .fill(AgentState.done.color.opacity(0.22))
+                    .frame(width: 14, height: 14)
+                Circle()
+                    .fill(AgentState.done.color)
+                    .frame(width: 8, height: 8)
+            }
+            .accessibilityElement()
+            .accessibilityLabel(link.label)
         default:
             HStack(spacing: 4) {
                 if link == .connecting {
@@ -469,17 +486,21 @@ struct MachineName: View {
 
 struct MachineLogo: View {
     let machine: Machine
-    // SF Symbols has no Linux glyph; Tux is a drawn template image, sized like the symbol.
-    @ScaledMetric(relativeTo: .body) private var tuxSize: CGFloat = 18
+    var size: CGFloat = 14
+    var maxSize: CGFloat?
+    @ScaledMetric(relativeTo: .footnote) private var scale: CGFloat = 1
 
     var body: some View {
+        let scaled = size * scale
+        let side = maxSize.map { min(scaled, $0) } ?? scaled
         Group {
             if machine.kind == .linux {
-                Image("Tux").resizable().scaledToFit().frame(width: tuxSize, height: tuxSize)
+                Image("Tux").resizable().scaledToFit()
             } else {
-                Image(systemName: "apple.logo")
+                Image(systemName: "apple.logo").resizable().scaledToFit()
             }
         }
+        .frame(width: side, height: side)
         .accessibilityLabel(machine.kind == .linux ? "Linux" : "Mac")
     }
 }

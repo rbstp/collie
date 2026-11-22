@@ -482,8 +482,12 @@ struct MachineHeader: View {
         }
         if showsLink, let link = entry.flock?.link {
             if link == .connecting {
-                ProgressView().controlSize(.mini)
-                Text(entry.flock?.details != nil ? "reconnecting" : "connecting").foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text(entry.flock?.details != nil ? "reconnecting" : "connecting")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
             } else if link != .connected {
                 StatusPill(state: .idle, title: link.label)
             }

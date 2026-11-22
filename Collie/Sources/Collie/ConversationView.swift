@@ -446,7 +446,7 @@ private struct ConversationMessage: View {
             .padding(.vertical, user ? 10 : 0)
             .background {
                 if user {
-                    RoundedRectangle(cornerRadius: 18).fill(.fill.tertiary)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.fill.tertiary)
                 }
             }
         }
@@ -589,6 +589,7 @@ struct ConversationMarkdown: View {
         return result
     }
 
+    @ViewBuilder
     private func markdownLine(_ line: String) -> some View {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         let hashes = trimmed.prefix { $0 == "#" }.count
@@ -596,13 +597,27 @@ struct ConversationMarkdown: View {
         let quote = trimmed.hasPrefix("> ")
         let bullet = trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ")
         let body = heading ? String(trimmed.dropFirst(hashes + 1)) : quote ? String(trimmed.dropFirst(2)) : bullet ? "• " + trimmed.dropFirst(2) : line
-        var rendered = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
-        if !heading { rendered = Self.inlineCode(rendered) }
-        return Text(Self.highlighted(FileLinks.linked(Self.guarded(rendered)), query: query))
+        let rendered: AttributedString = {
+            var value = (try? AttributedString(markdown: body, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(body)
+            if !heading { value = Self.inlineCode(value) }
+            return value
+        }()
+        let text = Text(Self.highlighted(FileLinks.linked(Self.guarded(rendered)), query: query))
             .font(heading ? (hashes <= 2 ? .headline : .subheadline.weight(.semibold)) : .body)
             .foregroundStyle(quote ? .secondary : .primary)
-            .padding(.leading, quote ? 10 : 0)
             .textSelection(.enabled)
+        if quote {
+            HStack(alignment: .top, spacing: 8) {
+                Capsule()
+                    .fill(.secondary.opacity(0.45))
+                    .frame(width: 2.5)
+                    .padding(.vertical, 2)
+                text
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            text
+        }
     }
 
     var body: some View {
@@ -625,9 +640,13 @@ struct ConversationMarkdown: View {
                         }
                         .labelStyle(.iconOnly).appGlassButton(dim: .never).tint(.primary).controlSize(.small)
                     }
-                    .padding(8)
-                    .padding(.leading, 4)
-                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    }
                     .contextMenu {
                         Button("Copy code", systemImage: "doc.on.doc") { copy(block.text, index) }
                         if let agent {

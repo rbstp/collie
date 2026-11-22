@@ -158,13 +158,13 @@ private struct CostsDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.semibold).monospacedDigit())
+                Text(UsageCostsCard.dollars(costs.costUsd)).font(.title2.weight(.bold).monospacedDigit())
                 Text("\(costs.scanning ? "Partial est." : "Est.") at API prices · cache saved \(UsageCostsCard.dollars(costs.cacheSavingsUsd))")
                     .font(.caption)
                     .foregroundStyle(.metadata)
             }
             .accessibilityElement(children: .combine)
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 GridRow {
                     TokenFigure(title: "Input", value: costs.tokens.input)
                     TokenFigure(title: "Output", value: costs.tokens.output)
@@ -218,13 +218,14 @@ private struct CostsDetail: View {
             if costs.models.isEmpty, !costs.scanning {
                 Text("No tokens recorded in this range").font(.subheadline).foregroundStyle(.metadata)
             }
-            ForEach(costs.models, id: \.self) { row in
+            ForEach(Array(costs.models.enumerated()), id: \.element) { index, row in
+                if index > 0 { Divider().opacity(0.4) }
                 VStack(alignment: .leading, spacing: 2) {
                     let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
                     layout {
-                        Text(row.model).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).truncationMode(.middle)
+                        Text(row.model).font(.subheadline.weight(.medium)).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).truncationMode(.middle)
                         if !dynamicTypeSize.isAccessibilitySize { Spacer() }
-                        Text(row.costText).font(.subheadline.monospacedDigit()).foregroundStyle(row.costUsd == nil ? .metadata : Color.primary)
+                        Text(row.costText).font(.subheadline.weight(.medium).monospacedDigit()).foregroundStyle(row.costUsd == nil ? .metadata : Color.primary)
                     }
                     Text("\(row.agentName) · \(UsageCostsCard.tokens(row.tokens.total)) tokens")
                         .font(.caption)
@@ -246,8 +247,8 @@ private struct TokenFigure: View {
     let value: UInt64
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(UsageCostsCard.tokens(value)).font(.subheadline.monospacedDigit())
+        VStack(alignment: .leading, spacing: 2) {
+            Text(UsageCostsCard.tokens(value)).font(.subheadline.weight(.semibold).monospacedDigit())
             Text(title).font(.caption).foregroundStyle(.metadata)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

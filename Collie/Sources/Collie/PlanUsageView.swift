@@ -217,16 +217,16 @@ private struct UsageBar: View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary).frame(height: 4)
-                Capsule().fill(used < 80 ? AnyShapeStyle(.tint) : AnyShapeStyle(ContextRing.tone(100 - used))).frame(width: width * Double(used) / 100, height: 4)
+                Capsule().fill(Color.primary.opacity(0.12)).frame(height: 6)
+                Capsule().fill(used < 80 ? AnyShapeStyle(.tint) : AnyShapeStyle(ContextRing.tone(100 - used))).frame(width: width * Double(used) / 100, height: 6)
                 Capsule()
                     .fill(.secondary)
-                    .frame(width: 2, height: 12)
-                    .offset(x: min(max(width * elapsed - 1, 0), width - 2))
+                    .frame(width: 2.5, height: 14)
+                    .offset(x: min(max(width * elapsed - 1.25, 0), width - 2.5))
             }
             .frame(maxHeight: .infinity)
         }
         .frame(minWidth: 60, maxWidth: .infinity)
-        .frame(height: 12)
+        .frame(height: 14)
     }
 }
