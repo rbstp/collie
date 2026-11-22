@@ -507,7 +507,12 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             continue;
         }
         if ind == 0 {
-            prev = if s.starts_with("▾ Thought") || s.starts_with("▸ Thought") {
+            prev = if s.starts_with("▾ Thought")
+                || s.starts_with("▸ Thought")
+                || s.starts_with("○ ")
+                || s.starts_with("• ")
+                || s.starts_with("● ")
+            {
                 Prev::Start
             } else {
                 Prev::Held
@@ -1987,6 +1992,34 @@ mod tests {
         assert_eq!(
             soft_wraps_for("agy", &rows.join("\r\n"), 80),
             (vec![2, 3, 4, 5, 6, 8, 9, 10, 14, 16], vec![])
+        );
+    }
+
+    #[test]
+    fn agy_prose_directly_after_tool_action_rows_joins_without_blank_line() {
+        let rows = [
+            "• Messaged 1 subagent",
+            "• Used Swarm (Spawned worker @reviewer-zoom) (ctrl+o to expand)",
+            "  The Preview Zoom Implementer subagent finished the slider on branch",
+            "  preview-zoom (472 CollieTests and 116 GhosttyTerminalTests passed, comment",
+            "  ratchet clean). I've kicked off a barebone Claude Opus 5.5 (Low) diff",
+            "  review while the Rex/Antigravity investigator finishes up.",
+            "• Edited 3 files (agents-tab.md, SettingsView.swift,",
+            "  AgentGrid.swift)",
+            "• Ran 3 commands (+2 · gh issue create --mi...) (ctrl+o to expand)",
+            "  Addressed the Opus 5.5 review finding for the preview zoom branch",
+            "  (documented Settings > Appearance > Preview zoom in",
+            "  docs/site/src/app/agents-tab.md plus small VoiceOver and ChatPreview",
+            "  spacing polish) and opened issue #912. Waiting for CollieTests to finish so",
+            "  I can open PR #3, and waiting on the Rex/Antigravity bug investigator",
+            "  subagent for PR #2.",
+            "● Ran (cargo nextest run)",
+            "    indented tool output that runs all the way across the terminal width",
+            "    must still never join onto the line above it.",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 80),
+            (vec![3, 4, 5, 10, 11, 12, 13, 14], vec![])
         );
     }
 
