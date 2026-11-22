@@ -19,6 +19,12 @@ struct DevicePrefs: StateFile, Equatable {
     var archiveOnMerge: Bool?
     var accent = AppAccent.blue
     var glass = AppGlass.regular
+    var previewZoom = 1.0 {
+        didSet {
+            let clamped = Self.clampedPreviewZoom(previewZoom)
+            if previewZoom != clamped { previewZoom = clamped }
+        }
+    }
     var taskRuntime = TaskRuntimeChoice.automatic
     var runtimeMarks = true
     /// Per machine id: the canonical folder collied returned when it was saved.
@@ -27,6 +33,12 @@ struct DevicePrefs: StateFile, Equatable {
     var taskCodeMode: [String: Bool] = [:]
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
+    static let previewZoomRange: ClosedRange<Double> = 0.25...1.25
+
+    static func clampedPreviewZoom(_ value: Double) -> Double {
+        guard value.isFinite else { return 1.0 }
+        return min(max(value, previewZoomRange.lowerBound), previewZoomRange.upperBound)
+    }
 
     static let file: URL? = try? StateDirectory.prepare().appending(path: "prefs.json")
 
@@ -74,6 +86,7 @@ extension DevicePrefs {
         archiveOnMerge = try? container.decodeIfPresent(Bool.self, forKey: .archiveOnMerge)
         accent = (try? container.decodeIfPresent(AppAccent.self, forKey: .accent)) ?? defaults.accent
         glass = (try? container.decodeIfPresent(AppGlass.self, forKey: .glass)) ?? defaults.glass
+        previewZoom = (try? container.decodeIfPresent(Double.self, forKey: .previewZoom)).map(Self.clampedPreviewZoom) ?? defaults.previewZoom
         taskRuntime = (try? container.decodeIfPresent(TaskRuntimeChoice.self, forKey: .taskRuntime)) ?? defaults.taskRuntime
         runtimeMarks = (try? container.decodeIfPresent(Bool.self, forKey: .runtimeMarks)) ?? defaults.runtimeMarks
         taskBases = (try? container.decodeIfPresent([String: String].self, forKey: .taskBases)) ?? defaults.taskBases
