@@ -26,8 +26,9 @@ extension WatchUsage {
         let claude = plans.filter { $0.fiveHour != nil || $0.sevenDay != nil }.max { $0.recordedMs < $1.recordedMs }
         let codex = plans.compactMap(\.codex).max { $0.recordedMs < $1.recordedMs }
         let copilot = plans.compactMap(\.copilot).max { $0.recordedMs < $1.recordedMs }
+        let agy = plans.compactMap(\.agy).max { $0.recordedMs < $1.recordedMs }
         return WatchUsage(PlanUsage(
-            fiveHour: claude?.fiveHour, sevenDay: claude?.sevenDay, recordedMs: claude?.recordedMs ?? 0, codex: codex, copilot: copilot
+            fiveHour: claude?.fiveHour, sevenDay: claude?.sevenDay, recordedMs: claude?.recordedMs ?? 0, codex: codex, copilot: copilot, agy: agy
         ))
     }
 
@@ -41,6 +42,19 @@ extension WatchUsage {
             guard usage.limit > 0 else { return nil }
             return UInt8(min(100, usage.percent))
         }
+        let agyBuckets: [AgyBucket]? = plan.agy.flatMap { usage in
+            let buckets = usage.buckets.prefix(Self.maxAgyBuckets).map { bucket in
+                AgyBucket(
+                    id: clip(bucket.id, 64),
+                    label: clip(bucket.watchLabel, 64),
+                    shortPeriod: clip(bucket.watchShortPeriod, 8),
+                    used: min(bucket.usedPercent, 100),
+                    resetsAtMs: bucket.resetsAtMs,
+                    windowSeconds: bucket.windowSeconds
+                )
+            }
+            return buckets.isEmpty ? nil : buckets
+        }
         self.init(
             fiveHourUsed: plan.fiveHour.map { min($0.usedPercent, 100) }, fiveHourResetsAtMs: plan.fiveHour?.resetsAtMs,
             sevenDayUsed: plan.sevenDay.map { min($0.usedPercent, 100) }, sevenDayResetsAtMs: plan.sevenDay?.resetsAtMs,
@@ -48,7 +62,8 @@ extension WatchUsage {
             claudeRecordedMs: plan.fiveHour != nil || plan.sevenDay != nil ? plan.recordedMs : nil,
             codexRecordedMs: plan.codex?.recordedMs,
             copilotUsed: copilot, copilotUnlimited: plan.copilot?.unlimited,
-            copilotResetsAtMs: plan.copilot?.resetsAtMs, copilotRecordedMs: plan.copilot?.recordedMs
+            copilotResetsAtMs: plan.copilot?.resetsAtMs, copilotRecordedMs: plan.copilot?.recordedMs,
+            agyBuckets: agyBuckets, agyRecordedMs: agyBuckets != nil ? plan.agy?.recordedMs : nil
         )
     }
 }

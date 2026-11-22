@@ -293,6 +293,66 @@ private func shown(_ approvals: [WatchApproval]) -> WatchState {
     #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
 }
 
+@Test func watchReceivesAgyUsageFromTheNewestReading() throws {
+    let linux = Machine(id: "m2", label: "Linux", host: "linux.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
+    let reset5h = nowMs + 7_200_000
+    let reset7d = nowMs + 302_400_000
+    let newer = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: 0,
+        agy: AgyUsage(
+            buckets: [
+                AgyQuotaBucket(id: "gemini-5h", usedPercent: 65, resetsAtMs: reset5h, windowSeconds: 18_000),
+                AgyQuotaBucket(id: "3p-weekly", usedPercent: 120, resetsAtMs: reset7d, windowSeconds: 604_800),
+                AgyQuotaBucket(id: "custom", usedPercent: 25, resetsAtMs: reset7d, windowSeconds: nil),
+                AgyQuotaBucket(id: "expired-5h", usedPercent: 90, resetsAtMs: nowMs - 1, windowSeconds: 18_000),
+            ],
+            recordedMs: nowMs
+        )
+    )
+    let older = PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: 0,
+        agy: AgyUsage(
+            buckets: [AgyQuotaBucket(id: "gemini-5h", usedPercent: 10, resetsAtMs: reset5h, windowSeconds: 18_000)],
+            recordedMs: nowMs - 60_000
+        )
+    )
+    let state = WatchState(
+        items: [], entries: [entry(linux, [], usage: newer), entry(mac, [], usage: older)],
+        allowed: false, live: true, now: now
+    )
+    let usage = try #require(state.usage)
+    #expect(usage.windows(now: now).allSatisfy { $0 == nil })
+    #expect(usage.agyRecordedMs == nowMs)
+    let buckets = try #require(usage.agyBuckets)
+    #expect(buckets.map(\.id) == ["gemini-5h", "3p-weekly", "custom", "expired-5h"])
+    #expect(buckets.map(\.label) == ["Gemini 5-hour", "Claude & GPT weekly", "Custom", "Expired 5-hour"])
+    #expect(buckets.map(\.shortPeriod) == ["5h", "7d", "", "5h"])
+    let windows = buckets.map { usage.agyWindow(for: $0, now: now) }
+    #expect(windows.map { $0?.used } == [65, 100, 25, nil])
+    #expect(windows[0]?.hasLength == true && windows[0]?.elapsed(now: now) == 0.6)
+    #expect(windows[1]?.hasLength == true && windows[1]?.elapsed(now: now) == 0.5)
+    #expect(windows[2]?.hasLength == false && windows[2]?.elapsed(now: now) == 0)
+    #expect(usage.agyWindow(for: buckets[0], now: Date(unixMs: reset5h)) == nil)
+    #expect(usage.agyWindow(for: buckets[1], now: Date(unixMs: reset5h))?.used == 100)
+
+    let refreshed = WatchState.refreshed(
+        nil, listed: [MachineApprovals(machineId: linux.id, approvals: [], planUsage: newer)],
+        machines: [linux], allowed: false, now: now
+    )
+    #expect(refreshed.usage == usage)
+    #expect(try JSONDecoder().decode(WatchUsage.self, from: JSONEncoder().encode(usage)) == usage)
+
+    let capped = WatchUsage(PlanUsage(
+        fiveHour: nil, sevenDay: nil, recordedMs: 0,
+        agy: AgyUsage(
+            buckets: (0..<20).map { AgyQuotaBucket(id: "b-\($0)-" + String(repeating: "x", count: 80), usedPercent: 10, resetsAtMs: reset5h, windowSeconds: 18_000) },
+            recordedMs: nowMs
+        )
+    ))
+    #expect(capped.agyBuckets?.count == WatchUsage.maxAgyBuckets)
+    #expect(capped.agyBuckets?.allSatisfy { $0.id.unicodeScalars.count <= 64 && $0.label.unicodeScalars.count <= 64 } == true)
+}
+
 @Test func watchKeepsClaudeWhenAnotherMachineOnlyHasCodex() throws {
     let linux = Machine(id: "m2", label: "Linux", host: "linux.ts.net", port: 8457, nodeId: "nLINUX", kind: .linux, key: "")
     let reset = nowMs + 86_400_000
@@ -497,7 +557,13 @@ func watchStateFitsInAnApplicationContext(_ character: String) throws {
     }
     let machine = Machine(id: "m1", label: wide, host: "mac.ts.net", port: 8457, nodeId: "nMAC", kind: .mac, key: "")
     let agents = (0..<200).map { agent("term_\($0)", .working, activity: nowMs, line: wide) }
-    let usage = PlanUsage(fiveHour: UsageWindow(usedPercent: 100, resetsAtMs: .max), sevenDay: nil, recordedMs: .max)
+    let usage = PlanUsage(
+        fiveHour: UsageWindow(usedPercent: 100, resetsAtMs: .max), sevenDay: nil, recordedMs: .max,
+        agy: AgyUsage(
+            buckets: (0..<20).map { AgyQuotaBucket(id: "\($0)-\(wide)", usedPercent: 100, resetsAtMs: .max, windowSeconds: 18_000) },
+            recordedMs: .max
+        )
+    )
     let state = WatchState(
         items: items.map { ApprovalItem(machine: machine, approval: $0.approval, link: .connected) },
         entries: [entry(machine, agents, usage: usage, workspace: wide)], allowed: true, live: true, now: now

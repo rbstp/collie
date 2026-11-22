@@ -497,6 +497,20 @@ extension AgyQuotaBucket {
         }
     }
 
+    var watchLabel: String {
+        title.hasSuffix(" limit") ? String(title.dropLast(" limit".count)) : title
+    }
+
+    var watchShortPeriod: String {
+        if windowSeconds == 5 * 3600 || id.hasSuffix("-5h") { return "5h" }
+        if windowSeconds == 7 * 24 * 3600 || id.hasSuffix("-weekly") { return "7d" }
+        if let seconds = windowSeconds, seconds > 0 {
+            if seconds >= 86_400, seconds % 86_400 == 0 { return "\(seconds / 86_400)d" }
+            if seconds >= 3_600, seconds % 3_600 == 0 { return "\(seconds / 3_600)h" }
+        }
+        return ""
+    }
+
     private func secondsLeft(now: Date) -> Int {
         let nowMs = now.unixMs
         return resetsAtMs > nowMs ? Int((resetsAtMs - nowMs) / 1000) : 0

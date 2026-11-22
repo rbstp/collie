@@ -41,7 +41,7 @@ struct UsageDial: View {
         ]))
         .widgetAccentable()
         .overlay {
-            if let window {
+            if let window, window.hasLength {
                 GeometryReader { geometry in
                     let diameter = min(geometry.size.width, geometry.size.height)
                     Capsule().fill(.white)
@@ -74,6 +74,9 @@ extension WatchUsage.Window {
     }
 
     func accessibilityValue(now: Date) -> String {
-        "\(unlimited ? "Unlimited" : "\(used) percent used"). \(Int((elapsed(now: now) * 100).rounded())) percent of the window elapsed. Resets \(interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
+        let usage = unlimited ? "Unlimited" : "\(used) percent used"
+        let reset = "Resets \(interval.upperBound.formatted(date: .abbreviated, time: .shortened))"
+        guard hasLength else { return "\(usage). \(reset)" }
+        return "\(usage). \(Int((elapsed(now: now) * 100).rounded())) percent of the window elapsed. \(reset)"
     }
 }
