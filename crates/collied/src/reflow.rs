@@ -455,6 +455,12 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         .rev()
         .find_map(|w| (w[1] > w[0] + 1 && rows[w[0] + 1].starts_with('>')).then_some((w[0], w[1])));
     let limit = input_box.map_or(rows.len(), |(top, _)| top);
+    let question = rules
+        .iter()
+        .copied()
+        .rev()
+        .find(|&r| r > 0 && r < limit && rows[r - 1] == "Question");
+    let body_limit = question.map_or(limit, |r| r - 1);
 
     let (mut wraps, mut splits) = (Vec::new(), Vec::new());
     let mut tail = String::new();
@@ -462,7 +468,7 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
     let mut list_item: Option<(usize, String)> = None;
     let mut in_code = false;
     let mut sent = false;
-    for (i, trimmed) in rows[..limit].iter().enumerate() {
+    for (i, trimmed) in rows[..body_limit].iter().enumerate() {
         let item = list_item.take();
         let s = trimmed.trim_start_matches(' ');
         let ind = trimmed.len() - s.len();
@@ -561,6 +567,52 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
         };
     }
 
+    if let Some(q_rule) = question {
+        let q_width = rows[q_rule].width().min(cols);
+        let mut q_prev: Option<&str> = None;
+        for (j, trimmed) in rows[q_rule + 1..limit].iter().enumerate() {
+            let i = q_rule + 1 + j;
+            let s = trimmed.trim_start_matches(' ');
+            let ind = trimmed.len() - s.len();
+            if s.is_empty() {
+                q_prev = None;
+                continue;
+            }
+            if ind == 2 && (s.starts_with("↑/↓") || s.starts_with("←/→")) {
+                break;
+            }
+            if ind == 0 && (s.starts_with("> ") || s.starts_with(">\u{a0}")) {
+                q_prev = Some(trimmed.as_str());
+                continue;
+            }
+            if ind == 2
+                && (list_marker(s, false).is_some()
+                    || s.starts_with("[ ] ")
+                    || s.starts_with("[x] ")
+                    || s.starts_with("[X] "))
+            {
+                q_prev = Some(trimmed.as_str());
+                continue;
+            }
+            if ind == 0 && !s.chars().all(|c| c == '─') {
+                if let Some(prev) = q_prev
+                    && prev.width() <= q_width
+                {
+                    let at = u32::try_from(i).unwrap_or(u32::MAX);
+                    match separator(prev, s, q_width) {
+                        " " if wide_cut(prev, s, q_width) => splits.push(at),
+                        " " => wraps.push(at),
+                        "" => splits.push(at),
+                        _ => {}
+                    }
+                }
+                q_prev = Some(trimmed.as_str());
+            } else {
+                q_prev = None;
+            }
+        }
+    }
+
     if let Some((top, bottom)) = input_box
         && (rows[top + 1] == ">"
             || rows[top + 1].starts_with("> ")
@@ -570,7 +622,7 @@ fn agy_wraps(ansi: &str, cols: usize) -> (Vec<u32>, Vec<u32>) {
             .all(|l| l.is_empty() || l.starts_with("  "))
         && !rows[bottom + 1..].iter().any(|l| l.starts_with('>'))
     {
-        let width = rows[bottom].width().min(cols).saturating_sub(3);
+        let width = rows[bottom].width().min(cols).saturating_sub(4);
         let box_lines: Vec<String> = raw[top + 1..bottom]
             .iter()
             .enumerate()
@@ -1892,12 +1944,21 @@ mod tests {
 
         let split_word = [
             rule40.as_str(),
-            &format!("> {}", "a".repeat(37)),
+            &format!("> {}", "a".repeat(36)),
             "  bbbb tail",
             rule40.as_str(),
         ]
         .join("\r\n");
         assert_eq!(soft_wraps_for("agy", &split_word, 40), (vec![], vec![2]));
+
+        let boundary_76 = [
+            rule.as_str(),
+            "> One more issue to work on. When we start a session and the agent doesn't",
+            "  have access, well, it wasn't enabled to run there yet.",
+            rule.as_str(),
+        ]
+        .join("\r\n");
+        assert_eq!(soft_wraps_for("agy", &boundary_76, 80), (vec![2], vec![]));
 
         let cjk_split = [
             rule40.as_str(),
@@ -2020,6 +2081,49 @@ mod tests {
         assert_eq!(
             soft_wraps_for("agy", &rows.join("\r\n"), 80),
             (vec![3, 4, 5, 10, 11, 12, 13, 14], vec![])
+        );
+    }
+
+    #[test]
+    fn agy_question_prompt_and_options_join_column_zero_wraps() {
+        let rule = "─".repeat(80);
+        let rows = [
+            "Question",
+            rule.as_str(),
+            "",
+            "Question 1/1: None of Claude Code, Codex, Copilot CLI (interactive mode) or",
+            "Antigravity have a safe folder-trust-only CLI flag (only full permission-bypass",
+            "flags), and collied deliberately never answers folder trust on your behalf. How",
+            "should New task handle a startup/trust prompt?",
+            "",
+            "> 1. (Recommended) Open the new session immediately on Terminal with my prompt",
+            "and attachments pre-filled in the composer, so I approve there and tap Send",
+            "  2. Open the new session on Terminal with my prompt queued, and auto-send it as",
+            "soon as I finish approving the startup prompt",
+            "  3. Stay in the New task sheet and show inline approval/terminal controls there",
+            "before sending the prompt and opening the session",
+            "  4. Write-in...",
+            "",
+            "  ↑/↓ Navigate · enter Select · esc Skip · ctrl+r Review",
+            "auto · Gemini 4 Neon (High) · ctx 19% · 5h 20% (4h 24m) · 7d 41% (5d 21h)",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &rows.join("\r\n"), 80),
+            (vec![4, 5, 6, 9, 11, 13], vec![])
+        );
+
+        let multi = [
+            "Question",
+            rule.as_str(),
+            "",
+            "> [x] First choice whose label wraps onto the next row right at the pane width",
+            "to keep going here",
+            "  [ ] Second choice that stays short",
+            "  ↑/↓ Navigate · space Toggle · enter Submit",
+        ];
+        assert_eq!(
+            soft_wraps_for("agy", &multi.join("\r\n"), 80),
+            (vec![4], vec![])
         );
     }
 
