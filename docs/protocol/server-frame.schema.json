@@ -1828,6 +1828,10 @@
         },
         {
           "properties": {
+            "startup_blocked": {
+              "description": "The agent started in the terminal but stopped at a startup prompt before the\ninitial prompt was sent.",
+              "type": "boolean"
+            },
             "terminal_id": {
               "$ref": "#/$defs/TerminalId"
             },

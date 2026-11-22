@@ -1367,6 +1367,10 @@ pub enum Response {
     TaskStarted {
         workspace_id: WorkspaceId,
         terminal_id: TerminalId,
+        /// The agent started in the terminal but stopped at a startup prompt before the
+        /// initial prompt was sent.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        startup_blocked: bool,
     },
     TaskArchived {
         message: String,
@@ -3678,5 +3682,28 @@ mod tests {
         };
         let json = serde_json::to_string(&nested).unwrap();
         assert!(json.ends_with(r#""parent_call_id":"task1"}"#), "{json}");
+    }
+
+    #[test]
+    fn task_started_startup_blocked_is_additive() {
+        let older = r#"{"type":"task_started","workspace_id":"w1","terminal_id":"t1"}"#;
+        let r: Response = serde_json::from_str(older).unwrap();
+        assert_eq!(
+            r,
+            Response::TaskStarted {
+                workspace_id: WorkspaceId::new("w1").unwrap(),
+                terminal_id: TerminalId::new("t1").unwrap(),
+                startup_blocked: false,
+            }
+        );
+        assert_eq!(serde_json::to_string(&r).unwrap(), older);
+        let blocked = Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w1").unwrap(),
+            terminal_id: TerminalId::new("t1").unwrap(),
+            startup_blocked: true,
+        };
+        let json = serde_json::to_string(&blocked).unwrap();
+        assert!(json.ends_with(r#""startup_blocked":true}"#), "{json}");
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), blocked);
     }
 }

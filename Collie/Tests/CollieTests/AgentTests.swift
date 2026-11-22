@@ -1634,6 +1634,60 @@ func worktreeFolderNamesCompleteAndStartInsideTheBase(action: NewTaskModel.Workt
 }
 
 @MainActor
+@Test func aStartupBlockedNewTaskSavesPromptAndAttachmentsForAgentScreen() async throws {
+    let dir = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let drafts = dir.appending(path: "drafts.json")
+    let core = FakeCore()
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let route = AgentRoute(machineId: "m1", terminalId: "term_new")
+
+    core.state.withLock {
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new", startupBlocked: true)
+    }
+    let blocked = NewTaskModel(core: core, machines: [mac], prefsFile: nil, draftsFile: drafts)
+    await blocked.loadOptions()
+    blocked.cwd = "/Users/me/app"
+    await blocked.attach([PendingAttachment(name: "notes.txt") { _ in Data("notes".utf8) }])?.value
+    blocked.prompt = "  review this  \n"
+    #expect(await blocked.start() == route)
+    #expect(blocked.startupBlocked)
+
+    let saved = try #require(AgentDrafts.load(from: drafts).drafts[route])
+    #expect(saved.text == "review this")
+    #expect(saved.attachments.map(\.name) == ["notes.txt"])
+    #expect(saved.attachments.map(\.path) == [core.snapshot.uploadPath])
+    #expect(!saved.shell)
+
+    let screen = AgentModel(core: core, route: route, prefsFile: nil, draftsFile: drafts)
+    #expect(screen.draft == "review this")
+    #expect(screen.attachments.map(\.name) == ["notes.txt"])
+    #expect(screen.attachments.map(\.path) == [core.snapshot.uploadPath])
+
+    AgentDrafts().save(to: drafts)
+    let resume = NewTaskModel(core: core, machines: [mac], prefsFile: nil, draftsFile: drafts)
+    await resume.loadOptions()
+    resume.location = .resume
+    resume.cwd = "/Users/me/app"
+    await resume.loadSessions()
+    resume.session = resume.sessions?.first
+    #expect(await resume.start() == route)
+    #expect(resume.startupBlocked)
+    #expect(AgentDrafts.load(from: drafts).drafts[route] == nil)
+
+    core.state.withLock {
+        $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new", startupBlocked: false)
+    }
+    let normal = NewTaskModel(core: core, machines: [mac], prefsFile: nil, draftsFile: drafts)
+    await normal.loadOptions()
+    normal.cwd = "/Users/me/app"
+    normal.prompt = "sent immediately"
+    #expect(await normal.start() == route)
+    #expect(!normal.startupBlocked)
+    #expect(AgentDrafts.load(from: drafts).drafts[route] == nil)
+}
+
+@MainActor
 @Test func newTaskRejectsAnOversizedAttachmentWithoutStarting() async {
     let core = FakeCore()
     core.state.withLock { $0.maxAttachmentBytes = 2 }

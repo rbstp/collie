@@ -1663,7 +1663,7 @@ impl Driver {
                 ),
             )
         };
-        let name = self
+        let name = match self
             .start_agent(
                 pane,
                 &p.agent,
@@ -1674,14 +1674,30 @@ impl Driver {
                 auth,
             )
             .await
-            .map_err(left_open)?;
-        self.prompt_started(p, pane, &name, &name, auth)
-            .await
-            .map_err(left_open)?;
-        Ok(Response::TaskStarted {
-            workspace_id,
-            terminal_id,
-        })
+        {
+            Ok(Some(name)) => name,
+            Ok(None) => {
+                return Ok(Response::TaskStarted {
+                    workspace_id,
+                    terminal_id,
+                    startup_blocked: true,
+                });
+            }
+            Err(e) => return Err(left_open(e)),
+        };
+        match self.prompt_started(p, pane, &name, &name, auth).await {
+            Ok(()) => Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+                startup_blocked: false,
+            }),
+            Err((ErrorCode::AgentBlocked, _)) => Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+                startup_blocked: true,
+            }),
+            Err(e) => Err(left_open(e)),
+        }
     }
 
     /// The started agent must still be the one in `pane`; then ultracode is checked and the
@@ -1774,8 +1790,20 @@ impl Driver {
             )
             .await
             .map_err(herdr_fail)?;
+        self.finish_host_task(host, p, &id, &name, cwd, auth).await
+    }
+
+    pub(crate) async fn finish_host_task(
+        &self,
+        host: &TaskHost,
+        p: &TaskNewParams,
+        id: &str,
+        name: &str,
+        cwd: &Cwd,
+        auth: &Authorized,
+    ) -> Reply {
         let left = |(code, message): Fail| {
-            let state = if host.finished(&id) {
+            let state = if host.finished(id) {
                 "exited"
             } else {
                 "was left running"
@@ -1785,23 +1813,36 @@ impl Driver {
                 format!("{} agent {id} {state}: {message}", host.name()),
             )
         };
-        let pane = self
-            .host_agent_ready(host, &id, &name, &p.agent, cwd)
+        let (pane, startup_blocked) = self
+            .host_agent_ready(host, id, name, &p.agent, cwd)
             .await
             .map_err(left)?;
         let (Ok(workspace_id), Ok(terminal_id)) = (
             WorkspaceId::new(pane.workspace_id.clone()),
-            TerminalId::new(id.clone()),
+            TerminalId::new(id.to_owned()),
         ) else {
             return Err(left(invalid("the runtime returned an invalid id")));
         };
-        self.prompt_started(p, &pane, &name, &id, auth)
-            .await
-            .map_err(left)?;
-        Ok(Response::TaskStarted {
-            workspace_id,
-            terminal_id,
-        })
+        if startup_blocked {
+            return Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+                startup_blocked: true,
+            });
+        }
+        match self.prompt_started(p, &pane, name, id, auth).await {
+            Ok(()) => Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+                startup_blocked: false,
+            }),
+            Err((ErrorCode::AgentBlocked, _)) => Ok(Response::TaskStarted {
+                workspace_id,
+                terminal_id,
+                startup_blocked: true,
+            }),
+            Err(e) => Err(left(e)),
+        }
     }
 
     pub(crate) async fn start_host_worktree_task(
@@ -1852,7 +1893,7 @@ impl Driver {
         name: &str,
         kind: &AgentKind,
         cwd: &Cwd,
-    ) -> Result<PaneInfo, Fail> {
+    ) -> Result<(PaneInfo, bool), Fail> {
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let mut listed = false;
         let mut since: Option<(u64, tokio::time::Instant)> = None;
@@ -1875,7 +1916,11 @@ impl Driver {
             if let Some(a) = &a {
                 listed = true;
                 let pane = runtime::pane(a);
-                self.started_check(a, &pane, name, kind).await?;
+                match self.started_check(a, &pane, name, kind).await {
+                    Ok(()) => {}
+                    Err((ErrorCode::AgentBlocked, _)) => return Ok((pane, true)),
+                    Err(e) => return Err(e),
+                }
                 if matches!(
                     flock::status(&a.agent_status),
                     AgentStatus::Idle | AgentStatus::Done
@@ -1886,7 +1931,7 @@ impl Driver {
                                 if pane.foreground_cwd.as_deref() != Some(cwd.as_str()) {
                                     return fail(ErrorCode::AgentNotReady, ELSEWHERE);
                                 }
-                                return Ok(pane);
+                                return Ok((pane, false));
                             }
                         }
                         _ => since = Some((a.state_change_seq, tokio::time::Instant::now())),
@@ -1907,6 +1952,9 @@ impl Driver {
             if kind.as_str() == "claude"
                 && let Some(menu) = prompt::Menu::parse(&screen)
             {
+                if let Some(a) = a {
+                    return Ok((runtime::pane(&a), true));
+                }
                 return fail(
                     ErrorCode::AgentBlocked,
                     if menu.is_trust_prompt() {
@@ -1917,6 +1965,9 @@ impl Driver {
                 );
             }
             if kind.as_str() == "codex" && prompt::startup_dialog(&screen) {
+                if let Some(a) = a {
+                    return Ok((runtime::pane(&a), true));
+                }
                 return fail(ErrorCode::AgentBlocked, startup_prompt(kind, Some(&screen)));
             }
         }
@@ -1960,7 +2011,7 @@ impl Driver {
         code_mode: Option<bool>,
         retry_busy: bool,
         auth: &Authorized,
-    ) -> Result<String, Fail> {
+    ) -> Result<Option<String>, Fail> {
         let resume = resume.map(SessionId::as_str);
         let deadline = tokio::time::Instant::now() + START_TIMEOUT;
         let name = agent_name()?;
@@ -2008,10 +2059,14 @@ impl Driver {
                     Err(_) => continue,
                 },
             };
-            self.started_check(&a, pane, &name, kind).await?;
+            match self.started_check(&a, pane, &name, kind).await {
+                Ok(()) => {}
+                Err((ErrorCode::AgentBlocked, _)) => return Ok(None),
+                Err(e) => return Err(e),
+            }
             match (flock::status(&a.agent_status), a.interactive_ready) {
-                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(name),
-                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(name),
+                (AgentStatus::Idle | AgentStatus::Done, true) => return Ok(Some(name)),
+                (AgentStatus::Unknown, true) if kind.as_str() == "codex" => return Ok(Some(name)),
                 (AgentStatus::Idle | AgentStatus::Done, false) if !a.launch_pending => {
                     return fail(
                         ErrorCode::AgentNotReady,
@@ -3532,15 +3587,16 @@ mod tests {
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentNotReady, ELSEWHERE.to_owned()));
         let sub = Cwd::new("/w/sub").unwrap();
-        let pane = drive
+        let (pane, startup_blocked) = drive
             .host_agent_ready(&host, &core_id(), NAME, &kind, &sub)
             .await
             .unwrap();
+        assert!(!startup_blocked);
         assert_eq!(pane.foreground_cwd.as_deref(), Some("/w/sub"));
     }
 
     #[tokio::test]
-    async fn a_claude_code_with_no_status_and_a_menu_on_screen_fails_its_start() {
+    async fn a_claude_code_with_no_status_and_a_menu_on_screen_returns_startup_blocked() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         core_tests::fake_core(&root.join("core.sock"), |method| match method {
@@ -3553,11 +3609,91 @@ mod tests {
         let core = core_tests::core_of(&root, serde_json::json!([t]));
         let drive = core_driver(&root, core.clone());
         let kind = AgentKind::new("claude").unwrap();
+        let (pane, startup_blocked) = drive
+            .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
+            .await
+            .unwrap();
+        assert!(startup_blocked);
+        assert_eq!(pane.workspace_id, format!("hc:{}", core_tests::ID));
+        assert_eq!(pane.terminal_id, core_id());
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_host_agent_at_a_startup_dialog_still_fails_blocked() {
+        fn node() -> serde_json::Value {
+            let mut t = core_tests::terminal("t1", serde_json::Value::Null, "node");
+            t["name"] = serde_json::json!(NAME);
+            t["state"] = serde_json::json!("live");
+            t["cwd"] = serde_json::json!("/w");
+            t
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => node(),
+            "terminal.read" => serde_json::json!({"text": DIALOG}),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let core = core_tests::core_of(&root, serde_json::json!([node()]));
+        let drive = core_driver(&root, core.clone());
+        let kind = AgentKind::new("claude").unwrap();
         let failed = drive
             .host_agent_ready(&TaskHost::Core(core.clone()), &core_id(), NAME, &kind, &w())
             .await
             .unwrap_err();
         assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn a_herdr_core_task_at_a_startup_prompt_returns_startup_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let seen = core_tests::fake_core(&root.join("core.sock"), |method| match method {
+            "terminal.get" => claude(
+                Path::new("/w"),
+                serde_json::json!({"state": "blocked", "app": "claude-code"}),
+                "live",
+            ),
+            "terminal.read" => serde_json::json!({"text": DIALOG}),
+            _ => serde_json::Value::Null,
+        })
+        .await;
+        let t = claude(Path::new("/w"), serde_json::Value::Null, "live");
+        let core = core_tests::core_of(&root, serde_json::json!([t]));
+        let drive = core_driver(&root, core.clone());
+        let p = TaskNewParams {
+            op_id: OpId::new("n".repeat(22)).unwrap(),
+            cwd: w(),
+            agent: AgentKind::new("claude").unwrap(),
+            prompt: Some(protocol::PromptText::new("go".to_owned()).unwrap()),
+            label: None,
+            new_folder: None,
+            worktree: None,
+            clone: None,
+            resume: None,
+            ultracode: false,
+            code_mode: None,
+            runtime: None,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let reply = drive
+            .finish_host_task(&TaskHost::Core(core), &p, &core_id(), NAME, &w(), &yes)
+            .await;
+        assert_eq!(
+            reply,
+            Ok(Response::TaskStarted {
+                workspace_id: WorkspaceId::new(format!("hc:{}", core_tests::ID)).unwrap(),
+                terminal_id: TerminalId::new(core_id()).unwrap(),
+                startup_blocked: true,
+            })
+        );
+        assert!(
+            !crate::lock(&seen)
+                .calls
+                .iter()
+                .any(|c| c["method"] == "terminal.send")
+        );
     }
 
     /// Only Claude Code and Codex report `blocked` at their dialogs; Copilot CLI reports

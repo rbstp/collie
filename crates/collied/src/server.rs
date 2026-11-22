@@ -2860,10 +2860,16 @@ fn outcome(reply: &Reply) -> String {
         Ok(Response::TaskStarted {
             workspace_id,
             terminal_id,
+            startup_blocked,
         }) => format!(
-            "ok workspace={} terminal={}",
+            "ok workspace={} terminal={}{}",
             workspace_id.as_str(),
-            terminal_id.as_str()
+            terminal_id.as_str(),
+            if *startup_blocked {
+                " startup_blocked"
+            } else {
+                ""
+            }
         ),
         Ok(Response::TerminalGranted { ttl_ms, .. }) => format!("granted ttl={}s", ttl_ms / 1000),
         Ok(Response::TaskFolders {
@@ -3495,6 +3501,7 @@ mod tests {
                     Ok(Response::TaskStarted {
                         workspace_id: protocol::WorkspaceId::new("w9").unwrap(),
                         terminal_id: TerminalId::new("term_new").unwrap(),
+                        startup_blocked: false,
                     }),
                     Some("/cwd".to_owned()),
                 )

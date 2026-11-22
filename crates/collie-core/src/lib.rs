@@ -764,6 +764,8 @@ pub struct TaskFolders {
 pub struct TaskStarted {
     pub workspace_id: String,
     pub terminal_id: String,
+    #[uniffi(default = false)]
+    pub startup_blocked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1046,9 +1048,11 @@ async fn task_new_inner(
         Response::TaskStarted {
             workspace_id,
             terminal_id,
+            startup_blocked,
         } => Ok(TaskStarted {
             workspace_id: workspace_id.into(),
             terminal_id: terminal_id.into(),
+            startup_blocked,
         }),
         other => Err(unexpected(&other).into()),
     }
@@ -5694,6 +5698,7 @@ mod tailnet_tests {
                             Ok(Response::TaskStarted {
                                 workspace_id: WorkspaceId::new("w2").unwrap(),
                                 terminal_id: TerminalId::new("term_2").unwrap(),
+                                startup_blocked: false,
                             })
                         }
                         Request::PaneClose(p) if !p.confirm => Err(ErrorCode::ConfirmRequired),

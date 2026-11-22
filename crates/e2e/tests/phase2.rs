@@ -403,6 +403,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         TaskStarted {
             workspace_id: "w9".into(),
             terminal_id: NEW_TERMINAL.into(),
+            startup_blocked: false,
         }
     );
     let calls = herdr.mutation_calls();

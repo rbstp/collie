@@ -2012,6 +2012,7 @@ async fn task_new_starts_waits_and_prompts() {
         Ok(Response::TaskStarted {
             workspace_id: WorkspaceId::new("w9").unwrap(),
             terminal_id: tid("term_new"),
+            startup_blocked: false,
         })
     );
     assert_eq!(
@@ -2068,6 +2069,7 @@ async fn worktree_create_uses_returned_pane_and_keeps_checkout_on_start_failure(
         Ok(Response::TaskStarted {
             workspace_id: WorkspaceId::new("w9").unwrap(),
             terminal_id: tid("term_new"),
+            startup_blocked: false,
         })
     );
     assert_eq!(
@@ -2645,16 +2647,16 @@ async fn task_new_refusals() {
     assert!(herdr.methods().is_empty());
 
     herdr.with(|h| h.gets.push_back(started_agent("blocked", false, true)));
-    let (code, message) = drive
+    let (reply, _) = drive
         .task_new(task(&base.join("root/a"), "claude"), &yes())
-        .await
-        .0
-        .unwrap_err();
-    assert_eq!(code, ErrorCode::AgentBlocked);
-    assert!(
-        message.contains("workspace w9 was created and left open")
-            && message.contains("startup prompt"),
-        "{message}"
+        .await;
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+            startup_blocked: true,
+        })
     );
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
@@ -2672,19 +2674,34 @@ async fn task_new_refusals() {
                 started_agent("blocked", true, false),
             ]);
         });
-        let (code, message) = drive
+        let (reply, _) = drive
             .task_new(task(&base.join("root/a"), "claude"), &yes())
-            .await
-            .0
-            .unwrap_err();
-        assert_eq!(code, ErrorCode::AgentBlocked);
-        assert!(message.contains("trust this folder"), "{message}");
+            .await;
+        assert_eq!(
+            reply,
+            Ok(Response::TaskStarted {
+                workspace_id: WorkspaceId::new("w9").unwrap(),
+                terminal_id: tid("term_new"),
+                startup_blocked: true,
+            })
+        );
         assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
         assert_eq!(
             herdr.params("pane.read"),
             vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
         );
     }
+
+    herdr.with(|h| h.calls.clear());
+    herdr.fail_next("agent.start", &["agent_blocked"]);
+    let (code, message) = drive
+        .task_new(task(&base.join("root/a"), "claude"), &yes())
+        .await
+        .0
+        .unwrap_err();
+    assert_eq!(code, ErrorCode::AgentBlocked);
+    assert!(message.contains("left open"), "{message}");
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
     herdr.with(|h| h.calls.clear());
     herdr.with(|h| h.gets.push_back(started_agent("idle", false, false)));
@@ -2764,15 +2781,19 @@ async fn task_new_refusals() {
 }
 
 #[tokio::test]
-async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
+async fn codex_copilot_and_agy_startup_prompts_are_left_to_the_terminal() {
     let herdr = Mock::start();
     let (_d, base) = root();
-    let drive = herdr.driver(&["claude", "codex", "copilot"], &base.join("root"));
+    let drive = herdr.driver(&["claude", "codex", "copilot", "agy"], &base.join("root"));
     for (kind, text) in [
         ("codex", include_str!("fixtures/codex/trust.detection.txt")),
         (
             "copilot",
             include_str!("fixtures/copilot/trust.detection.txt"),
+        ),
+        (
+            "agy",
+            "Do you trust the files in this folder?\n❯ 1. Yes\n  2. No\n",
         ),
     ] {
         herdr.with(|h| {
@@ -2782,13 +2803,17 @@ async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
             blocked["agent"] = json!(kind);
             h.gets.push_back(blocked);
         });
-        let (code, message) = drive
+        let (reply, _) = drive
             .task_new(task(&base.join("root/a"), kind), &yes())
-            .await
-            .0
-            .unwrap_err();
-        assert_eq!(code, ErrorCode::AgentBlocked);
-        assert!(message.contains("answer it in the terminal"), "{message}");
+            .await;
+        assert_eq!(
+            reply,
+            Ok(Response::TaskStarted {
+                workspace_id: WorkspaceId::new("w9").unwrap(),
+                terminal_id: tid("term_new"),
+                startup_blocked: true,
+            })
+        );
         assert_eq!(herdr.params("agent.start")[0]["kind"], kind);
         assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
         assert_eq!(
@@ -2799,7 +2824,7 @@ async fn codex_and_copilot_startup_prompts_are_left_to_the_terminal() {
 }
 
 #[tokio::test]
-async fn a_codex_update_picker_fails_the_task_with_its_own_message() {
+async fn a_codex_update_picker_returns_startup_blocked_without_sending_the_prompt() {
     let herdr = Mock::start();
     let (_d, base) = root();
     let drive = herdr.driver(&["codex"], &base.join("root"));
@@ -2824,18 +2849,16 @@ async fn a_codex_update_picker_fails_the_task_with_its_own_message() {
             h.text = text.into();
             h.gets.extend([agent.clone(), agent]);
         });
-        let (code, message) = drive
+        let (reply, _) = drive
             .task_new(task(&base.join("root/a"), "codex"), &yes())
-            .await
-            .0
-            .unwrap_err();
-        assert_eq!(code, ErrorCode::AgentBlocked);
+            .await;
         assert_eq!(
-            message,
-            format!(
-                "workspace w9 was created and left open: {}",
-                collied::drive::CODEX_UPDATE
-            )
+            reply,
+            Ok(Response::TaskStarted {
+                workspace_id: WorkspaceId::new("w9").unwrap(),
+                terminal_id: tid("term_new"),
+                startup_blocked: true,
+            })
         );
         assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
     }
@@ -2875,13 +2898,17 @@ async fn a_codex_startup_prompt_herdr_does_not_rule_blocked_gets_no_prompt() {
         h.text = include_str!("fixtures/codex/update.detection.txt").into();
         h.gets.extend([unknown.clone(), unknown.clone()]);
     });
-    let (code, message) = drive
+    let (reply, _) = drive
         .task_new(task(&base.join("root/a"), "codex"), &yes())
-        .await
-        .0
-        .unwrap_err();
-    assert_eq!(code, ErrorCode::AgentBlocked);
-    assert!(message.ends_with(collied::drive::CODEX_UPDATE), "{message}");
+        .await;
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+            startup_blocked: true,
+        })
+    );
     assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 
     herdr.with(|h| {
@@ -2892,7 +2919,14 @@ async fn a_codex_startup_prompt_herdr_does_not_rule_blocked_gets_no_prompt() {
     let (reply, _) = drive
         .task_new(task(&base.join("root/a"), "codex"), &yes())
         .await;
-    assert!(reply.is_ok(), "{reply:?}");
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+            startup_blocked: false,
+        })
+    );
     assert_eq!(
         herdr.params("pane.read"),
         vec![json!({"pane_id": "w9:p1", "source": "detection", "format": "text"})]
@@ -2901,6 +2935,30 @@ async fn a_codex_startup_prompt_herdr_does_not_rule_blocked_gets_no_prompt() {
         herdr.mutations(),
         vec!["workspace.create", "agent.start", "agent.prompt"]
     );
+}
+
+#[tokio::test]
+async fn new_folder_at_a_startup_prompt_returns_startup_blocked() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["claude"], &base.join("root"));
+    herdr.with(|h| h.gets.push_back(started_agent("blocked", false, true)));
+    let mut p = task(&base.join("root"), "claude");
+    p.new_folder = Some(FolderName::new("fresh").unwrap());
+    let (reply, cwd) = drive.task_new(p, &yes()).await;
+    assert_eq!(
+        cwd.unwrap().as_str(),
+        base.join("root/fresh").to_str().unwrap()
+    );
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+            startup_blocked: true,
+        })
+    );
+    assert_eq!(herdr.mutations(), vec!["workspace.create", "agent.start"]);
 }
 
 #[tokio::test]
