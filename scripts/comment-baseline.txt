@@ -47,7 +47,7 @@
 5 Collie/Sources/Collie/Identity.swift
 2 Collie/Sources/Collie/KeyboardSwipe.swift
 25 Collie/Sources/Collie/KeychainItem.swift
-2 Collie/Sources/Collie/MachinesView.swift
+1 Collie/Sources/Collie/MachinesView.swift
 11 Collie/Sources/Collie/NewTaskModel.swift
 18 Collie/Sources/Collie/NewTaskSheet.swift
 16 Collie/Sources/Collie/Notifications.swift

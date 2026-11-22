@@ -233,10 +233,24 @@ struct AgentScreen: View {
                 // Typing, the terminal keeps Claude Code's input box above the composer, which puts the rows under the box
                 // behind the key strip and the composer, where they showed between and through the controls. No feather:
                 // the box's bottom rule ends at this edge, and a feather showed half of the row under it.
-                if typing && (!showingChat || model.isTerminal) {
-                    Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                if !showingChat || model.isTerminal {
+                    let terminal = Color(uiColor: GhosttyTerminalUIView.backgroundColor)
+                    if typing {
+                        terminal
+                            .ignoresSafeArea(edges: .bottom)
+                            .allowsHitTesting(false)
+                    } else {
+                        LinearGradient(
+                            stops: [
+                                .init(color: terminal.opacity(0), location: 0),
+                                .init(color: terminal.opacity(0.65), location: 0.35),
+                                .init(color: terminal.opacity(0.92), location: 1),
+                            ],
+                            startPoint: .top, endPoint: .bottom
+                        )
                         .ignoresSafeArea(edges: .bottom)
                         .allowsHitTesting(false)
+                    }
                 }
             }
             // Without a band, touches in the gaps between controls would reach the terminal's swipe and tap gestures.
@@ -521,20 +535,21 @@ private struct AgentHeader: View {
             }
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     private func statusRow(split: Bool) -> some View {
         let row = split ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))
         return row {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 if let agent = model.agent {
                     HStack(spacing: 6) {
                         StatusIcon(state: agent.status, dimsIdle: false)
                         if !approving {
                             TimelineView(.periodic(from: .now, by: 1)) { context in
                                 Text(Elapsed.string(sinceMs: agent.statusSinceMs, now: context.date))
-                                    .font(.caption.monospacedDigit())
+                                    .font(.caption.weight(.medium).monospacedDigit())
                                     .foregroundStyle(.primary)
                             }
                         }
@@ -542,6 +557,12 @@ private struct AgentHeader: View {
                     .fixedSize()
                 }
                 if let machineLabel {
+                    if model.agent != nil && !approving {
+                        Text(verbatim: "·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
                     Text(verbatim: machineLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -602,9 +623,11 @@ private struct SessionBarGlass: View {
     @Environment(\.appGlass) private var glass
     @Environment(\.glassPage) private var page
     // Grows with the text: a fixed 8 points cut large text running under the edge in half, blurred above and sharp below.
-    @ScaledMetric private var feather: CGFloat = 8
+    @ScaledMetric private var feather: CGFloat = 12
 
     var body: some View {
+        let dark = colorScheme == .dark
+        let scrim: Color = dark ? .black : .white
         // The glass rim along the bottom edge drew a hairline seam over the content: it lies past the mask,
         // and the glass fades out over its last points rather than ending on a hard cut.
         // Light glass over a white chat is nearly white itself: a faint gray tint gives the band a visible edge.
@@ -612,9 +635,24 @@ private struct SessionBarGlass: View {
             // Clear: the dimming color under clear glass let a full chat run through the status row in dark mode and hid nearly
             // everything in light mode; dimming what shows through the glass keeps the content visible and the header readable.
             .overlay {
-                if glass == .clear { (colorScheme == .dark ? Color.black : .white).opacity(0.75) }
+                if glass == .clear {
+                    LinearGradient(
+                        stops: [
+                            .init(color: scrim.opacity(dark ? 0.92 : 0.94), location: 0),
+                            .init(color: scrim.opacity(dark ? 0.86 : 0.90), location: 0.58),
+                            .init(color: scrim.opacity(dark ? 0.78 : 0.84), location: 1),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                } else if glass == .regular {
+                    LinearGradient(
+                        colors: dark ? [Color.black.opacity(0.24), .clear] : [Color.black.opacity(0.06), Color.black.opacity(0.04)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                } else if !dark {
+                    Color.black.opacity(0.04)
+                }
             }
-            .overlay(colorScheme == .light ? Color.black.opacity(0.04) : .clear)
             .padding(.bottom, -feather)
             .mask {
                 VStack(spacing: 0) {
@@ -898,23 +936,24 @@ private struct KeyStrip: View {
 
     var body: some View {
         // The chips' touch targets fill most of the gaps above and below them.
-        VStack(spacing: 1) {
+        VStack(spacing: 2) {
             HStack(spacing: 8) {
                 mainKeys
                 CursorJoystick(model: model)
             }
+            .padding(.horizontal)
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     // shift-left answers a queued Codex question; other agents never take it.
                     ForEach(AgentKey.combos.filter { $0 != .shiftLeft || model.accepts($0) }, id: \.self) { key in
-                        StripChip { model.run(StripShortcut(key: key.name)) } label: { KeyGlyphs(key: key).font(.system(size: 20)) }
+                        StripChip { model.run(StripShortcut(key: key.name)) } label: { KeyGlyphs(key: key).font(.system(size: 16, weight: .medium)) }
                             .accessibilityLabel(key.accessibilityName)
                             .disabled(!model.canTap(key))
                     }
                     ForEach(shortcuts.items.filter { $0.applies(to: model.shortcutKind) }) { shortcut in
                         StripChip(literal: shortcut.name.isEmpty && shortcut.agentKey == nil) { model.run(shortcut) } label: {
                             if shortcut.name.isEmpty, let key = shortcut.agentKey {
-                                KeyGlyphs(key: key).font(.system(size: 20))
+                                KeyGlyphs(key: key).font(.system(size: 16, weight: .medium))
                             } else {
                                 Text(shortcut.name.isEmpty ? shortcut.text : shortcut.name)
                             }
@@ -922,16 +961,16 @@ private struct KeyStrip: View {
                         .accessibilityLabel(shortcut.name.isEmpty ? shortcut.agentKey?.accessibilityName ?? shortcut.text : shortcut.name)
                         .disabled(!model.canRun(shortcut))
                     }
-                    StripChip { editingShortcuts = true } label: { Image(systemName: "plus") }
+                    StripChip { editingShortcuts = true } label: { Image(systemName: "plus").font(.system(size: 15, weight: .medium)) }
                         .disabled(!model.savesPreferences)
                         .accessibilityLabel("Edit key shortcuts")
                 }
             }
+            .contentMargins(.horizontal, 16, for: .scrollContent)
             .scrollIndicators(.hidden)
         }
-        .padding(.horizontal)
         .padding(.top, 8)
-        .padding(.bottom, -7)
+        .padding(.bottom, -6)
         // At accessibility sizes even six keys to a row cut glyphs and pushed the screen past both edges.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .sensoryFeedback(.impact(weight: .light), trigger: model.keyTaps)
@@ -953,7 +992,7 @@ private struct KeyStrip: View {
                 .accessibilityLabel(modifier.accessibilityName)
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .disabled(!model.acceptsKeys)
-                Divider().frame(height: 18)
+                keyDivider
             }
             ForEach(AgentKey.strip, id: \.self) { key in
                 KeyCap {
@@ -962,11 +1001,15 @@ private struct KeyStrip: View {
                 } label: { KeyGlyphs(key: key) }
                 .accessibilityLabel(key.accessibilityName)
                 .disabled(!model.canPress(key))
-                if key != AgentKey.strip.last { Divider().frame(height: 18) }
+                if key != AgentKey.strip.last { keyDivider }
             }
         }
         .padding(.horizontal, 4)
         .appGlass(interactive: true, dim: .always, in: .capsule)
+    }
+
+    private var keyDivider: some View {
+        Color.primary.opacity(0.14).frame(width: 0.5, height: 20)
     }
 }
 
@@ -981,7 +1024,7 @@ private struct KeyCap<Label: View>: View {
     var body: some View {
         Button(action: action) {
             label
-                .font(.system(size: 22))
+                .font(.system(size: 19, weight: .medium))
                 .lineLimit(1)
                 .foregroundStyle(selected ? appAccent : .primary)
                 .padding(.horizontal, 6)
@@ -1009,12 +1052,12 @@ private struct StripChip<Label: View>: View {
             label
                 .font(literal ? .callout.monospaced().weight(.medium) : .callout.weight(.medium))
                 .lineLimit(1)
-                .padding(.horizontal, 11)
-                .frame(minHeight: 30)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 32)
                 .opacity(isEnabled ? 1 : 0.4)
                 .appGlass(interactive: true, dim: .always, in: .capsule)
                 // A 44-point target around the compact capsule, inside the scroll view, which takes no touches past its bounds.
-                .padding(.vertical, 7)
+                .padding(.vertical, 6)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -1241,7 +1284,7 @@ private struct PromptBar: View {
                         typing.toggle()
                     } label: {
                         Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
-                            .font(.system(size: 20))
+                            .font(.system(size: 18, weight: .medium))
                             .frame(width: 28, height: 28)
                     }
                     .appGlassButton(dim: .always)
@@ -1321,7 +1364,7 @@ private struct PromptBar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .appGlass(interactive: true, dim: .always, in: .rect(cornerRadius: 18))
+                    .appGlass(interactive: true, dim: .always, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     ZStack {
                         DictationControl(dictation: model.dictation, disabled: model.sendingPrompt || !model.savesPreferences, dim: .always, shown: $dictationShown) {
                             dictationExpanded = model.startDictation(at: editing ? selection : nil) != nil
@@ -1334,7 +1377,7 @@ private struct PromptBar: View {
                                 editing = false
                             } label: {
                                 Image(systemName: "keyboard.chevron.compact.down")
-                                    .font(.system(size: 20))
+                                    .font(.system(size: 18, weight: .medium))
                                     .frame(width: 28, height: 28)
                             }
                             .appGlassButton(dim: .always)
@@ -1437,7 +1480,7 @@ private struct PromptBar: View {
             model.keysShown.toggle()
         } label: {
             Image(systemName: "command")
-                .font(.system(size: 20))
+                .font(.system(size: 18, weight: .medium))
                 .frame(width: 28, height: 28)
         }
         .appGlassButton(dim: .always)
@@ -1454,7 +1497,7 @@ private struct PromptBar: View {
             model.acceptSuggestion()
         } label: {
             Image(systemName: "arrow.right.to.line")
-                .font(.system(size: 20))
+                .font(.system(size: 18, weight: .medium))
                 .frame(width: 28, height: 28)
         }
         .appGlassButton(dim: .always)
@@ -1473,7 +1516,7 @@ private struct PromptBar: View {
             if !model.keepsKeyboard(after: "\n") { typing = false }
         } label: {
             Image(systemName: "return")
-                .font(.system(size: 20))
+                .font(.system(size: 18, weight: .medium))
                 .frame(width: 28, height: 28)
         }
         .appGlassButton(dim: .always)
@@ -1533,7 +1576,7 @@ struct DictationButton: View {
             .tint(.primary)
         } label: {
             Image(systemName: "waveform")
-                .font(.system(size: 20))
+                .font(.system(size: 18, weight: .medium))
                 .frame(width: 28, height: 28)
         } primaryAction: {
             if dictation.isActive {
@@ -1636,7 +1679,7 @@ struct DictationBar: View {
             .allowsHitTesting(revealed)
             Button(action: dictation.stop) {
                 Image(systemName: "waveform")
-                    .font(.system(size: 20))
+                    .font(.system(size: 18, weight: .medium))
                     .frame(width: 28, height: 28)
                     .foregroundStyle(.tint)
                     .symbolEffect(.breathe, isActive: dictation.isActive && dictation.phase != .finishing)

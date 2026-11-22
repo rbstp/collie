@@ -185,7 +185,11 @@ extension AgentGrid {
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
             .frame(maxHeight: .infinity)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -217,6 +221,12 @@ struct AgentCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
     @Environment(\.runtimeMarks) private var runtimeMarks
+
+    private static let starColor = Color(uiColor: UIColor {
+        $0.userInterfaceStyle == .dark
+            ? UIColor(red: 0.90, green: 0.72, blue: 0.28, alpha: 1)
+            : UIColor(red: 0.66, green: 0.46, blue: 0.04, alpha: 1)
+    })
 
     @ViewBuilder private var preview: some View {
         if let conversation {
@@ -260,28 +270,32 @@ struct AgentCard: View {
                         .foregroundStyle(.white)
                         .padding(6)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12))
-                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 12))
+                        .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background(SessionBarDim(), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .environment(\.colorScheme, .dark)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.5)
+                }
                 .allowsHitTesting(false)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     StatusIcon(state: agent.status, size: 16)
                         .accessibilityHidden(true)
                     Text(agent.displayTitle)
-                        .font(.footnote.weight(.semibold))
+                        .font((starred ? Font.subheadline : .footnote).weight(.semibold))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    if let pullRequest = agent.pullRequest {
+                    if starred, let pullRequest = agent.pullRequest {
                         PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
                     }
                     if starred {
                         Image(systemName: "star.fill")
                             .font(.caption2)
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(Self.starColor)
                             .accessibilityLabel("Starred")
                     }
                 }
@@ -315,19 +329,37 @@ struct AgentCard: View {
                     .foregroundStyle(.metadata)
                     .lineLimit(1)
                     Spacer(minLength: 0)
+                    if !starred, let pullRequest = agent.pullRequest {
+                        PullRequestBadge(pullRequest: pullRequest, watch: agent.prWatch, compact: true)
+                    }
                     if let left = agent.contextLeft, ContextRing.shows(left) {
                         ContextRing(left: left, font: .caption2)
                     }
                 }
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 4)
             .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.bottom, 2)
         }
         // Cards in a row share its height; any extra goes below the text, never between preview and title.
         .frame(maxHeight: .infinity, alignment: .top)
-        .padding(6)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+        .padding(8)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            if agent.status == .blocked {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(AgentState.blocked.color.opacity(0.55), lineWidth: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.primary.opacity(0.11), Color.primary.opacity(0.04)],
+                            startPoint: .top, endPoint: .bottom
+                        ),
+                        lineWidth: 0.5
+                    )
+            }
+        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityActions {
