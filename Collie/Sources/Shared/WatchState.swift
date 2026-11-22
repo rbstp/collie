@@ -92,6 +92,16 @@ struct WatchUsage: Codable, Equatable, Sendable {
     static let widgetKind = "CollieUsage"
     static let detailsURL = URL(string: "collie-watch://usage")!
     static let staleAfter: TimeInterval = 30 * 60
+    static let maxAgyBuckets = 16
+
+    struct AgyBucket: Codable, Equatable, Sendable, Identifiable {
+        let id: String
+        let label: String
+        let shortPeriod: String
+        let used: UInt8
+        let resetsAtMs: UInt64
+        let windowSeconds: UInt64?
+    }
 
     let fiveHourUsed: UInt8?
     let fiveHourResetsAtMs: UInt64?
@@ -106,6 +116,8 @@ struct WatchUsage: Codable, Equatable, Sendable {
     var copilotUnlimited: Bool? = nil
     var copilotResetsAtMs: UInt64? = nil
     var copilotRecordedMs: UInt64? = nil
+    var agyBuckets: [AgyBucket]? = nil
+    var agyRecordedMs: UInt64? = nil
 
     struct Window {
         let used: UInt8
@@ -115,6 +127,10 @@ struct WatchUsage: Codable, Equatable, Sendable {
 
         var recordedAt: Date? {
             recordedMs.map(Date.init(unixMs:))
+        }
+
+        var hasLength: Bool {
+            interval.upperBound > interval.lowerBound
         }
 
         func isStale(now: Date) -> Bool {
@@ -139,6 +155,13 @@ struct WatchUsage: Codable, Equatable, Sendable {
             window(used: copilotUsed, reset: copilotResetsAtMs, length: nil, recordedMs: copilotRecordedMs, now: now,
                    unlimited: copilotUnlimited == true),
         ]
+    }
+
+    func agyWindow(for bucket: AgyBucket, now: Date) -> Window? {
+        guard bucket.resetsAtMs > now.unixMs else { return nil }
+        let end = Date(unixMs: bucket.resetsAtMs)
+        let start = bucket.windowSeconds.flatMap { $0 > 0 ? end.addingTimeInterval(-TimeInterval($0)) : nil } ?? end
+        return Window(used: min(bucket.used, 100), interval: start...end, recordedMs: agyRecordedMs)
     }
 
     private func window(used: UInt8?, reset: UInt64?, length: TimeInterval?, recordedMs: UInt64?, now: Date, unlimited: Bool = false) -> Window? {

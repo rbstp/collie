@@ -18,25 +18,25 @@ struct WatchUsageDetail: View {
                                               window: model.usage?.windows(now: detail.date)[index], now: detail.date)
                         }
                     } label: {
-                        HStack(spacing: 10) {
-                            UsageDial(logo: logo, window: window, now: context.date, showsPercentage: false)
-                                .frame(width: 54, height: 54)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("\(period) · \(window.map { $0.unlimited ? "Unlimited" : "\($0.used)%" } ?? "--")")
-                                    .font(.headline)
-                                if let window {
-                                    Text("\(window.remaining(now: context.date)) left")
-                                } else {
-                                    Text("No data")
-                                }
-                            }
-                            .font(.footnote)
+                        UsageWindowRow(logo: logo, period: period, window: window, now: context.date)
+                    }
+                }
+            }
+            ForEach(model.usage?.agyBuckets ?? []) { bucket in
+                TimelineView(.everyMinute) { context in
+                    let window = model.usage?.agyWindow(for: bucket, now: context.date)
+                    let shortPeriod = bucket.shortPeriod.isEmpty ? nil : bucket.shortPeriod
+                    NavigationLink {
+                        TimelineView(.everyMinute) { detail in
+                            let current = model.usage?.agyBuckets?.first { $0.id == bucket.id }
+                            UsageWindowDetail(
+                                logo: "Antigravity", period: bucket.label, shortPeriod: shortPeriod,
+                                window: current.flatMap { model.usage?.agyWindow(for: $0, now: detail.date) },
+                                now: detail.date
+                            )
                         }
-                        .padding(.vertical, 4)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("\(logo) \(period)")
-                        .accessibilityValue(window?.accessibilityValue(now: context.date) ?? "Usage unavailable")
+                    } label: {
+                        UsageWindowRow(logo: "Antigravity", period: bucket.label, window: window, now: context.date)
                     }
                 }
             }
@@ -58,10 +58,39 @@ struct WatchUsageDetail: View {
     }
 }
 
+private struct UsageWindowRow: View {
+    let logo: String
+    let period: String
+    let window: WatchUsage.Window?
+    let now: Date
+
+    var body: some View {
+        HStack(spacing: 10) {
+            UsageDial(logo: logo, window: window, now: now, showsPercentage: false)
+                .frame(width: 54, height: 54)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(period) · \(window.map { $0.unlimited ? "Unlimited" : "\($0.used)%" } ?? "--")")
+                    .font(.headline)
+                if let window {
+                    Text("\(window.remaining(now: now)) left")
+                } else {
+                    Text("No data")
+                }
+            }
+            .font(.footnote)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(logo) \(period)")
+        .accessibilityValue(window?.accessibilityValue(now: now) ?? "Usage unavailable")
+    }
+}
+
 private struct UsageWindowDetail: View {
     let logo: String
     let period: String
-    let shortPeriod: String
+    let shortPeriod: String?
     let window: WatchUsage.Window?
     let now: Date
 
@@ -79,8 +108,10 @@ private struct UsageWindowDetail: View {
                     Text("\(remaining) left")
                     Text("Resets \(window.interval.upperBound.formatted(.dateTime.month(.abbreviated).day().hour().minute()))")
                         .foregroundStyle(.secondary)
-                    Text("\(Int((window.elapsed(now: now) * 100).rounded()))% of window elapsed")
-                        .foregroundStyle(.secondary)
+                    if window.hasLength {
+                        Text("\(Int((window.elapsed(now: now) * 100).rounded()))% of window elapsed")
+                            .foregroundStyle(.secondary)
+                    }
                     if let recordedAt = window.recordedAt {
                         Text("Updated \(recordedAt.formatted(.relative(presentation: .numeric)))")
                             .foregroundStyle(.secondary)

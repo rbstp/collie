@@ -4,7 +4,7 @@ CollieWatch installs with the iPhone app, holds no keys and never talks to `coll
 
 ## In the watch app
 
-- **Plan usage**: each window's percentage and reset countdown.
+- **Plan usage**: each window's percentage and reset countdown, including Antigravity quota buckets when recorded.
 - **Approvals**: pending approvals with countdowns; open one for its command, why the agent asks, the output and the options.
 - **Working** and **Done**: your agents as the iPhone last saw them.
 
