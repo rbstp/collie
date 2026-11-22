@@ -22,6 +22,17 @@ const MAX_ENTRIES: usize = 256;
 pub(super) struct Live {
     copilot: HashMap<String, Scan>,
     codex: HashMap<String, HashMap<String, Scan>>,
+    agy: HashMap<String, HashMap<String, AgyChild>>,
+}
+
+#[derive(Default)]
+struct AgyChild {
+    meta_len: u64,
+    meta_modified: Option<SystemTime>,
+    meta_inode: Option<(u64, u64)>,
+    meta_valid: bool,
+    alive: bool,
+    scan: Scan,
 }
 
 #[derive(Default)]
@@ -49,6 +60,7 @@ struct Running {
     turn: Option<String>,
     running: bool,
     final_response: bool,
+    output: u64,
     summary: Subagent,
 }
 
@@ -56,6 +68,7 @@ impl Live {
     pub(super) fn retain(&mut self, live: impl Fn(&String) -> bool) {
         self.copilot.retain(|id, _| live(id));
         self.codex.retain(|id, _| live(id));
+        self.agy.retain(|id, _| live(id));
     }
 
     pub(super) fn copilot(&mut self, root: &Path, session: &str) -> (Vec<Subagent>, bool) {
@@ -247,6 +260,187 @@ impl Live {
         old.retain(|id, _| listed_truncated || alive.contains(id));
         ordered(summaries, truncated)
     }
+
+    pub(super) fn agy(&mut self, root: &Path, session: &str) -> (Vec<Subagent>, bool) {
+        if !is_session_id(session) {
+            self.agy.remove(session);
+            return (Vec::new(), false);
+        }
+        let parent = root.join(session);
+        let sys = parent.join(".system_generated");
+        let subagents = sys.join("subagents");
+        for path in [root, &parent, &sys, &subagents] {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_dir() => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.agy.remove(session);
+                    return (Vec::new(), false);
+                }
+                _ => return (Vec::new(), true),
+            }
+        }
+        let (files, mut truncated) = entries(&subagents);
+        let listed_truncated = truncated;
+        let old = self.agy.entry(session.to_owned()).or_default();
+        let mut present = HashSet::new();
+        let mut opened = 0;
+        let mut summaries = Vec::new();
+        for file in files {
+            let Some(id) = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".json"))
+                .filter(|id| is_session_id(id) && *id != session)
+            else {
+                continue;
+            };
+            present.insert(id.to_owned());
+            if old.len() == MAX_ENTRIES && !old.contains_key(id) {
+                truncated = true;
+                continue;
+            }
+            let child = old.entry(id.to_owned()).or_insert_with(|| AgyChild {
+                scan: Scan {
+                    path: root
+                        .join(id)
+                        .join(".system_generated/logs/transcript.jsonl"),
+                    ..Scan::default()
+                },
+                ..AgyChild::default()
+            });
+            match child.refresh_meta(&file, id) {
+                Some(true) => {}
+                Some(false) => continue,
+                None => {
+                    truncated = true;
+                    continue;
+                }
+            }
+            let child_dir = root.join(id);
+            let child_sys = child_dir.join(".system_generated");
+            let child_logs = child_sys.join("logs");
+            if !directory(&child_dir) || !directory(&child_sys) || !directory(&child_logs) {
+                child.scan.inode = None;
+                child.scan.agents.clear();
+                truncated = true;
+                continue;
+            }
+            if !child.scan.current() {
+                if opened == MAX_FILES {
+                    truncated = true;
+                    continue;
+                }
+                opened += 1;
+            }
+            if child
+                .scan
+                .read(READ_BYTES, |s, v, ordinal| s.agy(v, ordinal, id))
+            {
+                summaries.extend(
+                    child
+                        .scan
+                        .agents
+                        .iter()
+                        .filter(|(_, a)| a.running)
+                        .map(|(key, a)| (key.clone(), a.summary.clone())),
+                );
+                truncated |= child.scan.truncated || !child.scan.trusted;
+            } else {
+                truncated = true;
+            }
+        }
+        old.retain(|id, _| listed_truncated || present.contains(id));
+        ordered(summaries, truncated)
+    }
+}
+
+impl AgyChild {
+    fn clear_meta(&mut self, valid: bool) {
+        self.meta_len = 0;
+        self.meta_modified = None;
+        self.meta_inode = None;
+        self.meta_valid = valid;
+        self.alive = false;
+        self.scan.inode = None;
+        self.scan.agents.clear();
+    }
+
+    fn refresh_meta(&mut self, path: &Path, id: &str) -> Option<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta)
+                if meta.is_file()
+                    && meta.len() == self.meta_len
+                    && meta.modified().ok() == self.meta_modified
+                    && Some((meta.dev(), meta.ino())) == self.meta_inode =>
+            {
+                return self.meta_valid.then_some(self.alive);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.clear_meta(true);
+                return Some(false);
+            }
+            _ => {}
+        }
+        let Some((file, len, modified)) = open(path) else {
+            self.clear_meta(false);
+            return None;
+        };
+        self.meta_len = len;
+        self.meta_modified = Some(modified);
+        self.meta_inode = file.metadata().ok().map(|m| (m.dev(), m.ino()));
+        let mut bytes = Vec::new();
+        if file
+            .take(LINE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() > LINE_BYTES
+        {
+            self.meta_valid = false;
+            self.alive = false;
+            self.scan.inode = None;
+            self.scan.agents.clear();
+            return None;
+        }
+        let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
+            self.meta_valid = false;
+            self.alive = false;
+            self.scan.inode = None;
+            self.scan.agents.clear();
+            return None;
+        };
+        let Some(state) = v["state"].as_str().filter(|_| v["conversationId"] == id) else {
+            self.meta_valid = false;
+            self.alive = false;
+            self.scan.inode = None;
+            self.scan.agents.clear();
+            return None;
+        };
+        let alive = state == "SUBAGENT_STATE_ALIVE";
+        let desc = &v["subagentDescriptor"];
+        let agent_type = desc["typeName"]
+            .as_str()
+            .and_then(|s| bounded(s, 64))
+            .unwrap_or_else(|| "agy".into());
+        let title = desc["role"]
+            .as_str()
+            .map(agy_role)
+            .and_then(|s| bounded(s, 120))
+            .unwrap_or_else(|| agent_type.clone());
+        self.meta_valid = true;
+        self.alive = alive;
+        self.scan.agent_type = agent_type.clone();
+        self.scan.title = title.clone();
+        if alive {
+            for running in self.scan.agents.values_mut() {
+                running.summary.agent_type = agent_type.clone();
+                running.summary.title = title.clone();
+            }
+        } else {
+            self.scan.inode = None;
+            self.scan.agents.clear();
+        }
+        Some(alive)
+    }
 }
 
 impl Scan {
@@ -265,6 +459,7 @@ impl Scan {
             return true;
         }
         let Some((mut file, len, modified)) = open(&self.path) else {
+            self.inode = None;
             self.agents.clear();
             return false;
         };
@@ -385,6 +580,7 @@ impl Scan {
                             turn: None,
                             running: true,
                             final_response: false,
+                            output: 0,
                             summary: Subagent {
                                 agent_type,
                                 activity: title.clone(),
@@ -531,6 +727,7 @@ impl Scan {
                             turn: Some(turn.to_owned()),
                             running: true,
                             final_response: false,
+                            output: 0,
                             summary: Subagent {
                                 agent_type: self.agent_type.clone(),
                                 title: self.title.clone(),
@@ -569,6 +766,149 @@ impl Scan {
             }
         }
     }
+
+    fn agy(&mut self, v: &Value, ordinal: u64, id: &str) {
+        if ordinal == 0 {
+            self.trusted = v["type"].is_string();
+        }
+        if !self.trusted {
+            return;
+        }
+        let started = v["created_at"].as_str().and_then(timestamp_ms);
+        match v["type"].as_str() {
+            Some("SYSTEM_MESSAGE" | "USER_INPUT") => {
+                let wakeup = v["type"] == "USER_INPUT"
+                    || ordinal == 0
+                    || v["content"]
+                        .as_str()
+                        .is_some_and(|c| c.contains("[Message]"));
+                if !wakeup {
+                    return;
+                }
+                let Some(started) = started else {
+                    return;
+                };
+                let entry = self.agents.entry(id.to_owned()).or_insert_with(|| Running {
+                    call: String::new(),
+                    turn: None,
+                    running: false,
+                    final_response: false,
+                    output: 0,
+                    summary: Subagent {
+                        agent_type: self.agent_type.clone(),
+                        title: self.title.clone(),
+                        activity: self.title.clone(),
+                        started_at_ms: started,
+                        tokens: 0,
+                        called_tools: false,
+                    },
+                });
+                if !entry.running {
+                    entry.running = true;
+                    entry.output = 0;
+                    entry.summary.agent_type = self.agent_type.clone();
+                    entry.summary.title = self.title.clone();
+                    entry.summary.activity = self.title.clone();
+                    entry.summary.started_at_ms = started;
+                    entry.summary.tokens = 0;
+                    entry.summary.called_tools = false;
+                }
+            }
+            Some("PLANNER_RESPONSE") => {
+                let tools = v["tool_calls"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let active = !tools.is_empty()
+                    && !tools.iter().any(|c| c["name"] == "swarm_wait")
+                    && !matches!(v["status"].as_str(), Some("ERROR" | "CANCELLED"));
+                if !active {
+                    if let Some(a) = self.agents.get_mut(id) {
+                        a.running = false;
+                    }
+                    return;
+                }
+                let entry = match self.agents.entry(id.to_owned()) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        let Some(started) = started else {
+                            return;
+                        };
+                        e.insert(Running {
+                            call: String::new(),
+                            turn: None,
+                            running: true,
+                            final_response: false,
+                            output: 0,
+                            summary: Subagent {
+                                agent_type: self.agent_type.clone(),
+                                title: self.title.clone(),
+                                activity: self.title.clone(),
+                                started_at_ms: started,
+                                tokens: 0,
+                                called_tools: false,
+                            },
+                        })
+                    }
+                };
+                entry.running = true;
+                let input = v["input_tokens"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .saturating_add(v["cache_read_tokens"].as_u64().unwrap_or(0));
+                let out = v["output_tokens"].as_u64().unwrap_or(0);
+                entry.output = entry.output.saturating_add(out);
+                if input > 0 || out > 0 {
+                    entry.summary.tokens = input.saturating_add(entry.output);
+                }
+                entry.summary.called_tools = true;
+                for call in tools {
+                    if let Some(activity) = agy_activity(call) {
+                        entry.summary.activity = activity;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn agy_role(role: &str) -> &str {
+    role.strip_prefix("Swarm Worker (")
+        .and_then(|s| s.strip_suffix(')'))
+        .filter(|s| !s.is_empty())
+        .unwrap_or(role)
+}
+
+fn agy_arg(args: &Value, key: &str) -> Option<String> {
+    let raw = args[key].as_str()?;
+    serde_json::from_str::<String>(raw)
+        .ok()
+        .or_else(|| Some(raw.to_owned()))
+}
+
+fn agy_activity(call: &Value) -> Option<String> {
+    let name = call["name"].as_str()?;
+    let args = &call["args"];
+    let file = || {
+        let path = agy_arg(args, "Path")?;
+        bounded(path.rsplit('/').next().unwrap_or(&path), 120)
+    };
+    let text = match name {
+        "run_command" => agy_arg(args, "toolSummary")
+            .or_else(|| agy_arg(args, "CommandLine"))
+            .and_then(|s| bounded(&s, 120))
+            .map(|s| format!("Running {s}")),
+        "read_file" => file().map(|f| format!("Reading {f}")),
+        "edit_file" => file().map(|f| format!("Editing {f}")),
+        "write_file" => file().map(|f| format!("Writing {f}")),
+        "search_web" => agy_arg(args, "query")
+            .and_then(|q| bounded(&q, 120))
+            .map(|q| format!("Searching {q}")),
+        _ => None,
+    };
+    text.and_then(|t| bounded(&t, 120))
+        .or_else(|| bounded(name, 120))
 }
 
 fn ordered(mut agents: Vec<(String, Subagent)>, truncated: bool) -> (Vec<Subagent>, bool) {
@@ -701,6 +1041,9 @@ mod tests {
         include_str!("../../tests/fixtures/transcripts/codex-subagents-interrupted.jsonl");
     const INHERITED: &str =
         include_str!("../../tests/fixtures/transcripts/codex-subagents-inherited.jsonl");
+    const AGY: &str = include_str!("../../tests/fixtures/transcripts/agy-subagents.jsonl");
+    const AGY_PARENT: &str = "30000000-0000-4000-8000-000000000001";
+    const AGY_CHILD: &str = "30000000-0000-4000-8000-000000000002";
 
     struct Setup {
         dir: tempfile::TempDir,
@@ -1305,5 +1648,283 @@ mod tests {
             1
         );
         assert!(!transcripts.quiet(&agent));
+    }
+
+    fn write_agy_meta(root: &Path, parent: &str, child: &str, kind: &str, role: &str, state: &str) {
+        let dir = root.join(parent).join(".system_generated/subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{child}.json")),
+            serde_json::json!({
+                "conversationId": child,
+                "subagentDescriptor": { "typeName": kind, "role": role },
+                "state": state,
+                "spawnStepIndex": 1
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    fn agy_log(root: &Path, id: &str) -> PathBuf {
+        let path = root
+            .join(id)
+            .join(".system_generated/logs/transcript.jsonl");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn agy_real_tools_reminders_and_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let brain = dir.path().join("brain");
+        let mut live = Live::default();
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+
+        write_agy_meta(
+            &brain,
+            AGY_PARENT,
+            AGY_CHILD,
+            "research",
+            "Workspace Checker",
+            "SUBAGENT_STATE_ALIVE",
+        );
+        let log = agy_log(&brain, AGY_CHILD);
+        std::fs::write(&log, prefix(AGY, 1)).unwrap();
+
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].title, "Workspace Checker");
+        assert_eq!(agents[0].agent_type, "research");
+        assert_eq!(agents[0].activity, "Workspace Checker");
+        assert!(!agents[0].called_tools);
+        assert_eq!(agents[0].tokens, 0);
+        let started = timestamp_ms("2026-10-18T12:30:10Z").unwrap();
+        assert_eq!(agents[0].started_at_ms, started);
+
+        append(&log, &format!("{}\n", AGY.lines().nth(1).unwrap()));
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents[0].activity, "Reading Cargo.toml");
+        assert!(agents[0].called_tools);
+        assert_eq!(agents[0].tokens, 6895);
+        assert_eq!(agents[0].started_at_ms, started);
+
+        for line in AGY.lines().skip(2).take(4) {
+            append(&log, &format!("{line}\n"));
+        }
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].activity, "Running Run unit tests");
+        assert_eq!(agents[0].tokens, 7350);
+        assert_eq!(agents[0].started_at_ms, started);
+        assert_eq!(live.agy(&brain, AGY_PARENT), (agents, false));
+
+        append(&log, &format!("{}\n", AGY.lines().nth(6).unwrap()));
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+
+        append(&log, &format!("{}\n", AGY.lines().nth(3).unwrap()));
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+    }
+
+    #[test]
+    fn agy_swarm_worker_parks_on_swarm_wait_wakes_and_clears_on_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        let brain = dir.path().join("brain");
+        let mut live = Live::default();
+        write_agy_meta(
+            &brain,
+            AGY_PARENT,
+            AGY_CHILD,
+            "worker",
+            "Swarm Worker (reviewer)",
+            "SUBAGENT_STATE_ALIVE",
+        );
+        let log = agy_log(&brain, AGY_CHILD);
+        std::fs::write(&log, prefix(AGY, 2)).unwrap();
+
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].title, "reviewer");
+        assert_eq!(agents[0].agent_type, "worker");
+        assert!(agents[0].called_tools);
+
+        append(
+            &log,
+            concat!(
+                r#"{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-18T12:30:20Z","input_tokens":7000,"cache_read_tokens":0,"output_tokens":50,"tool_calls":[{"name":"post_message","args":{"text":"\"LGTM\""}},{"name":"swarm_wait","args":{"since":"1"}}]}"#,
+                "\n",
+                r#"{"step_index":3,"source":"MODEL","type":"GENERIC","status":"DONE","created_at":"2026-10-18T12:30:21Z","content":"Waiting for a message."}"#,
+                "\n",
+            ),
+        );
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+
+        append(
+            &log,
+            concat!(
+                r#"{"step_index":4,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-10-18T12:31:00Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-18T12:31:00Z sender=30000000-0000-4000-8000-000000000001 content=[swarm] new board message #2\n</SYSTEM_MESSAGE>"}"#,
+                "\n",
+            ),
+        );
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert!(!agents[0].called_tools);
+        assert_eq!(agents[0].tokens, 0);
+        assert_eq!(agents[0].activity, "reviewer");
+        assert_eq!(
+            agents[0].started_at_ms,
+            timestamp_ms("2026-10-18T12:31:00Z").unwrap()
+        );
+
+        std::fs::remove_file(&log).unwrap();
+        write_agy_meta(
+            &brain,
+            AGY_PARENT,
+            AGY_CHILD,
+            "worker",
+            "Swarm Worker (reviewer)",
+            "SUBAGENT_STATE_KILLED",
+        );
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+    }
+
+    #[test]
+    fn agy_fails_closed_on_symlinks_bad_metadata_and_missing_live_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let brain = dir.path().join("brain");
+        let mut live = Live::default();
+        assert_eq!(live.agy(&brain, "../invalid"), (Vec::new(), false));
+
+        write_agy_meta(
+            &brain,
+            AGY_PARENT,
+            AGY_CHILD,
+            "self",
+            "Implementer",
+            "SUBAGENT_STATE_ALIVE",
+        );
+        assert!(live.agy(&brain, AGY_PARENT).1);
+
+        let log = agy_log(&brain, AGY_CHILD);
+        std::fs::write(&log, "").unwrap();
+        assert!(live.agy(&brain, AGY_PARENT).1);
+
+        std::fs::write(&log, prefix(AGY, 2)).unwrap();
+        assert_eq!(live.agy(&brain, AGY_PARENT).0.len(), 1);
+
+        let moved = log.with_extension("moved");
+        std::fs::rename(&log, &moved).unwrap();
+        symlink(&moved, &log).unwrap();
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(agents.is_empty());
+        assert!(truncated);
+        std::fs::remove_file(&log).unwrap();
+        std::fs::rename(&moved, &log).unwrap();
+        assert_eq!(live.agy(&brain, AGY_PARENT).0.len(), 1);
+
+        let meta = brain
+            .join(AGY_PARENT)
+            .join(".system_generated/subagents")
+            .join(format!("{AGY_CHILD}.json"));
+        let moved_meta = meta.with_extension("moved");
+        std::fs::rename(&meta, &moved_meta).unwrap();
+        symlink(&moved_meta, &meta).unwrap();
+        assert!(live.agy(&brain, AGY_PARENT).1);
+        std::fs::remove_file(&meta).unwrap();
+        std::fs::rename(&moved_meta, &meta).unwrap();
+        assert_eq!(live.agy(&brain, AGY_PARENT).0.len(), 1);
+
+        std::fs::write(
+            &meta,
+            serde_json::json!({
+                "conversationId": SESSION,
+                "subagentDescriptor": { "typeName": "self", "role": "Implementer" },
+                "state": "SUBAGENT_STATE_ALIVE"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(agents.is_empty());
+        assert!(truncated);
+    }
+
+    #[test]
+    fn agy_budget_catches_up_and_derive_and_quiet_track_live_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let brain = dir.path().join("brain");
+        let mut live = Live::default();
+        for n in 10..19 {
+            let id = format!("30000000-0000-4000-8000-{n:012}");
+            write_agy_meta(
+                &brain,
+                AGY_PARENT,
+                &id,
+                "research",
+                &format!("Worker {n}"),
+                "SUBAGENT_STATE_ALIVE",
+            );
+            std::fs::write(agy_log(&brain, &id), prefix(AGY, 2)).unwrap();
+        }
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert_eq!(agents.len(), MAX_FILES);
+        assert!(truncated);
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert_eq!(agents.len(), 9);
+        assert!(!truncated);
+        live.retain(|_| false);
+        assert!(live.agy.is_empty());
+
+        let parent_log = agy_log(&brain, AGY_PARENT);
+        std::fs::write(
+            &parent_log,
+            include_str!("../../tests/fixtures/transcripts/agy.jsonl"),
+        )
+        .unwrap();
+        let mut transcripts =
+            super::super::Transcripts::new(None, None).with_agy_brain(Some(brain.clone()));
+        let agent = serde_json::from_value(serde_json::json!({
+            "terminal_id": "agy_1",
+            "workspace_id": "w1",
+            "pane_id": "w1:p1",
+            "agent": "agy",
+            "agent_status": "done",
+            "agent_session": {"value": AGY_PARENT}
+        }))
+        .unwrap();
+        assert_eq!(
+            transcripts.derive(&agent, true).unwrap().subagents.len(),
+            MAX_FILES
+        );
+        assert_eq!(
+            transcripts.derive(&agent, false).unwrap().subagents.len(),
+            9
+        );
+        assert!(!transcripts.quiet(&agent));
+
+        for n in 10..19 {
+            let id = format!("30000000-0000-4000-8000-{n:012}");
+            write_agy_meta(
+                &brain,
+                AGY_PARENT,
+                &id,
+                "research",
+                &format!("Worker {n}"),
+                "SUBAGENT_STATE_KILLED",
+            );
+        }
+        assert!(
+            transcripts
+                .derive(&agent, false)
+                .unwrap()
+                .subagents
+                .is_empty()
+        );
+        assert!(transcripts.quiet(&agent));
     }
 }

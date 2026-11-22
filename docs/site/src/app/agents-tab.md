@@ -34,7 +34,7 @@ Once a Claude Code or Codex agent has less than 70% of its context left, a chip 
 
 ## Running subagents
 
-Claude Code, Copilot CLI and Codex agents show their running subagents, each with a title and elapsed time; Codex needs [herdr's hook](../agents/codex.md#set-up). In a session with a large event log, subagents can take a few refreshes to appear.
+Claude Code, Copilot CLI, Codex and Antigravity CLI agents show their running subagents, each with a title and elapsed time; Codex needs [herdr's hook](../agents/codex.md#set-up), and Antigravity CLI needs [its hook](../agents/antigravity.md#set-up). In a session with a large event log, subagents can take a few refreshes to appear.
 
 ## Agent actions
 
