@@ -551,7 +551,7 @@ impl Runtime {
         match Owner::of(target) {
             Owner::Herdr => herdr::agent_get(&self.herdr, target).await,
             Owner::Core => self.followed()?.get(target).await,
-            Owner::Rex => self.followed_rex()?.get(target),
+            Owner::Rex => self.followed_rex()?.get_fresh(target).await,
         }
     }
 

@@ -303,6 +303,22 @@ impl Rex {
             .ok_or_else(not_found)
     }
 
+    pub async fn get_fresh(&self, id: &str) -> Result<AgentInfo, Error> {
+        let stale = self.live(|live| {
+            live.model
+                .stale_target(id)
+                .map(|(s, b)| (live.client.clone(), s, b))
+        });
+        if let Ok(Some((client, session, block))) = stale
+            && let Ok((seq, process)) = client
+                .terminal::<Process>(Method::Process, &session, &block, json!({}))
+                .await
+        {
+            let _ = self.live(|live| live.model.process(&session, &block, seq, process));
+        }
+        self.get(id)
+    }
+
     fn target(&self, id: &str) -> Result<Target, Error> {
         let inner = self.lock();
         let live = inner
@@ -494,7 +510,8 @@ impl Rex {
             return;
         };
         let read = live.model.event(seq, e);
-        let dirty = read.map(|session| live.dirty.insert(session)).is_some();
+        let dirty = read.map(|session| live.dirty.insert(session)).is_some()
+            || live.model.has_stale_process();
         drop(inner);
         if dirty {
             self.wake.notify_one();
@@ -579,12 +596,27 @@ impl Rex {
                     None
                 }
             })?;
-            let Some((session, attach)) = next else {
+            if let Some((session, attach)) = next {
+                match self.read_session(client, &session, attach).await {
+                    Err(e) if !gone(&e) => return Err(e),
+                    _ => {}
+                }
+                continue;
+            }
+            let stale = self.live(|live| live.model.take_stale_process())?;
+            let Some((session, block)) = stale else {
                 return Ok(());
             };
-            match self.read_session(client, &session, attach).await {
+            match client
+                .terminal::<Process>(Method::Process, &session, &block, json!({}))
+                .await
+            {
+                Ok((seq, process)) => {
+                    self.live(|live| live.model.process(&session, &block, seq, process))?;
+                    self.read_sessions(&session, &block);
+                }
                 Err(e) if !gone(&e) => return Err(e),
-                _ => {}
+                Err(_) => {}
             }
         }
     }
