@@ -759,7 +759,7 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     #expect(DevicePrefs.load(from: file).previewZoom == 1.0)
 
     try Data(#"{"previewZoom":0.2}"#.utf8).write(to: file)
-    #expect(DevicePrefs.load(from: file).previewZoom == 0.5)
+    #expect(DevicePrefs.load(from: file).previewZoom == 0.25)
     try Data(#"{"previewZoom":2.0}"#.utf8).write(to: file)
     #expect(DevicePrefs.load(from: file).previewZoom == 1.25)
 
@@ -769,7 +769,7 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     #expect(DevicePrefs.load(from: file).previewZoom == 0.75)
 
     prefs.previewZoom = 0.1
-    #expect(prefs.previewZoom == 0.5)
+    #expect(prefs.previewZoom == 0.25)
     prefs.previewZoom = 3.0
     #expect(prefs.previewZoom == 1.25)
     prefs.previewZoom = .nan
@@ -780,21 +780,21 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
 @Test func previewZoomScalesTerminalAndChatPreviews() {
     #expect(AgentCard.terminalFontSize(starred: false, zoom: 1.0) == 10)
     #expect(AgentCard.terminalFontSize(starred: true, zoom: 1.0) == 11)
-    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.5) == 5)
-    #expect(AgentCard.terminalFontSize(starred: true, zoom: 0.5) == 5.5)
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.25) == 2.5)
+    #expect(AgentCard.terminalFontSize(starred: true, zoom: 0.25) == 2.75)
     #expect(AgentCard.terminalFontSize(starred: false, zoom: 1.25) == 12.5)
     #expect(AgentCard.terminalFontSize(starred: true, zoom: 1.25) == 13.75)
-    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.1) == 5)
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.1) == 2.5)
     #expect(AgentCard.terminalFontSize(starred: true, zoom: 2.0) == 13.75)
 
     #expect(ChatPreview.lineLimit(starred: false, zoom: 1.0) == 3)
     #expect(ChatPreview.lineLimit(starred: true, zoom: 1.0) == 2)
-    #expect(ChatPreview.lineLimit(starred: false, zoom: 0.5) == 6)
-    #expect(ChatPreview.lineLimit(starred: true, zoom: 0.5) == 4)
+    #expect(ChatPreview.lineLimit(starred: false, zoom: 0.25) == 12)
+    #expect(ChatPreview.lineLimit(starred: true, zoom: 0.25) == 8)
     #expect(ChatPreview.messageCount(starred: false, zoom: 1.0) == 2)
     #expect(ChatPreview.messageCount(starred: true, zoom: 1.0) == 4)
-    #expect(ChatPreview.messageCount(starred: false, zoom: 0.5) == 4)
-    #expect(ChatPreview.messageCount(starred: true, zoom: 0.5) == 8)
+    #expect(ChatPreview.messageCount(starred: false, zoom: 0.25) == 8)
+    #expect(ChatPreview.messageCount(starred: true, zoom: 0.25) == 16)
 
     let view = GhosttyTerminalUIView(fontSize: 10)
     view.wraps = true
@@ -802,7 +802,7 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
     view.layoutIfNeeded()
     view.show(ansiSnapshot: Array(repeating: String(repeating: "a", count: 40), count: 8).joined(separator: "\r\n"))
     let normalHeight = view.contentSize.height
-    view.fontSize = AgentCard.terminalFontSize(starred: false, zoom: 0.5)
-    #expect(view.fontSize == 5)
+    view.fontSize = AgentCard.terminalFontSize(starred: false, zoom: 0.25)
+    #expect(view.fontSize == 2.5)
     #expect(view.contentSize.height < normalHeight)
 }

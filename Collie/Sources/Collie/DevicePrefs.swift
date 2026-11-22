@@ -33,7 +33,7 @@ struct DevicePrefs: StateFile, Equatable {
     var taskCodeMode: [String: Bool] = [:]
 
     static let historyChoices: [UInt16] = [200, 500, 1000]
-    static let previewZoomRange: ClosedRange<Double> = 0.5...1.25
+    static let previewZoomRange: ClosedRange<Double> = 0.25...1.25
 
     static func clampedPreviewZoom(_ value: Double) -> Double {
         guard value.isFinite else { return 1.0 }
