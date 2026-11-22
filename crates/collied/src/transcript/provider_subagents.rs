@@ -61,6 +61,7 @@ struct Running {
     running: bool,
     final_response: bool,
     output: u64,
+    tasks: HashSet<String>,
     summary: Subagent,
 }
 
@@ -581,6 +582,7 @@ impl Scan {
                             running: true,
                             final_response: false,
                             output: 0,
+                            tasks: HashSet::new(),
                             summary: Subagent {
                                 agent_type,
                                 activity: title.clone(),
@@ -728,6 +730,7 @@ impl Scan {
                             running: true,
                             final_response: false,
                             output: 0,
+                            tasks: HashSet::new(),
                             summary: Subagent {
                                 agent_type: self.agent_type.clone(),
                                 title: self.title.clone(),
@@ -777,11 +780,17 @@ impl Scan {
         let started = v["created_at"].as_str().and_then(timestamp_ms);
         match v["type"].as_str() {
             Some("SYSTEM_MESSAGE" | "USER_INPUT") => {
+                if let Some(content) = v["content"].as_str()
+                    && let Some(task) = agy_task_id(content, "sender=", id)
+                    && let Some(entry) = self.agents.get_mut(id)
+                {
+                    entry.tasks.remove(task);
+                }
                 let wakeup = v["type"] == "USER_INPUT"
                     || ordinal == 0
-                    || v["content"]
-                        .as_str()
-                        .is_some_and(|c| c.contains("[Message]"));
+                    || v["content"].as_str().is_some_and(|c| {
+                        c.contains("[Message]") && !c.contains("priority=MESSAGE_PRIORITY_LOW")
+                    });
                 if !wakeup {
                     return;
                 }
@@ -794,6 +803,7 @@ impl Scan {
                     running: false,
                     final_response: false,
                     output: 0,
+                    tasks: HashSet::new(),
                     summary: Subagent {
                         agent_type: self.agent_type.clone(),
                         title: self.title.clone(),
@@ -806,6 +816,7 @@ impl Scan {
                 if !entry.running {
                     entry.running = true;
                     entry.output = 0;
+                    entry.tasks.clear();
                     entry.summary.agent_type = self.agent_type.clone();
                     entry.summary.title = self.title.clone();
                     entry.summary.activity = self.title.clone();
@@ -814,16 +825,43 @@ impl Scan {
                     entry.summary.called_tools = false;
                 }
             }
+            Some("GENERIC") => {
+                let Some(content) = v["content"].as_str() else {
+                    return;
+                };
+                let Some(entry) = self.agents.get_mut(id) else {
+                    return;
+                };
+                if v["status"] == "RUNNING" {
+                    if let Some(task) = agy_task_id(content, "with task id: ", id)
+                        && entry.tasks.len() < MAX_ENTRIES
+                    {
+                        entry.tasks.insert(task.to_owned());
+                    }
+                } else if content.contains("\" cancelled.")
+                    && let Some(task) = agy_task_id(content, "Task \"", id)
+                {
+                    entry.tasks.remove(task);
+                }
+            }
             Some("PLANNER_RESPONSE") => {
                 let tools = v["tool_calls"]
                     .as_array()
                     .map(Vec::as_slice)
                     .unwrap_or_default();
-                let active = !tools.is_empty()
-                    && !tools.iter().any(|c| c["name"] == "swarm_wait")
-                    && !matches!(v["status"].as_str(), Some("ERROR" | "CANCELLED"));
-                if !active {
+                let ended = tools.iter().any(|c| c["name"] == "swarm_wait")
+                    || matches!(v["status"].as_str(), Some("ERROR" | "CANCELLED"));
+                if ended {
                     if let Some(a) = self.agents.get_mut(id) {
+                        a.tasks.clear();
+                        a.running = false;
+                    }
+                    return;
+                }
+                if tools.is_empty() {
+                    if let Some(a) = self.agents.get_mut(id)
+                        && a.tasks.is_empty()
+                    {
                         a.running = false;
                     }
                     return;
@@ -840,6 +878,7 @@ impl Scan {
                             running: true,
                             final_response: false,
                             output: 0,
+                            tasks: HashSet::new(),
                             summary: Subagent {
                                 agent_type: self.agent_type.clone(),
                                 title: self.title.clone(),
@@ -878,6 +917,14 @@ fn agy_role(role: &str) -> &str {
         .and_then(|s| s.strip_suffix(')'))
         .filter(|s| !s.is_empty())
         .unwrap_or(role)
+}
+
+fn agy_task_id<'a>(content: &'a str, marker: &str, id: &str) -> Option<&'a str> {
+    let rest = content.split_once(marker)?.1;
+    let task = rest.split(|c: char| c.is_whitespace() || c == '"').next()?;
+    let suffix = task.strip_prefix(id)?.strip_prefix("/task-")?;
+    (!suffix.is_empty() && suffix.len() <= 16 && suffix.bytes().all(|b| b.is_ascii_digit()))
+        .then_some(task)
 }
 
 fn agy_arg(args: &Value, key: &str) -> Option<String> {
@@ -1926,5 +1973,76 @@ mod tests {
                 .is_empty()
         );
         assert!(transcripts.quiet(&agent));
+    }
+
+    #[test]
+    fn agy_subagent_stays_running_while_waiting_on_background_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let brain = dir.path().join("brain");
+        let mut live = Live::default();
+        write_agy_meta(
+            &brain,
+            AGY_PARENT,
+            AGY_CHILD,
+            "self",
+            "Long Runner",
+            "SUBAGENT_STATE_ALIVE",
+        );
+        let log = agy_log(&brain, AGY_CHILD);
+        std::fs::write(&log, prefix(AGY, 2)).unwrap();
+        let started = timestamp_ms("2026-10-18T12:30:10Z").unwrap();
+
+        append(
+            &log,
+            &format!(
+                concat!(
+                    r#"{{"step_index":2,"source":"MODEL","type":"GENERIC","status":"RUNNING","created_at":"2026-10-18T12:30:20Z","content":"Tool is running as a background task with task id: {id}/task-2\nTask Description: sleep 200"}}"#,
+                    "\n",
+                    r#"{{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-18T12:30:21Z","input_tokens":7000,"cache_read_tokens":0,"output_tokens":20,"content":"Waiting for background command."}}"#,
+                    "\n"
+                ),
+                id = AGY_CHILD
+            ),
+        );
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].started_at_ms, started);
+
+        append(
+            &log,
+            &format!(
+                concat!(
+                    r#"{{"step_index":4,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-10-18T12:33:40Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-18T12:33:40Z sender={id}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Task finished.\n</SYSTEM_MESSAGE>"}}"#,
+                    "\n"
+                ),
+                id = AGY_CHILD
+            ),
+        );
+        let (agents, truncated) = live.agy(&brain, AGY_PARENT);
+        assert!(!truncated);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].started_at_ms, started);
+
+        append(
+            &log,
+            concat!(
+                r#"{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-10-18T12:33:41Z","input_tokens":7200,"cache_read_tokens":0,"output_tokens":30,"content":"All done."}"#,
+                "\n"
+            ),
+        );
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
+
+        append(
+            &log,
+            &format!(
+                concat!(
+                    r#"{{"step_index":6,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","created_at":"2026-10-18T12:34:00Z","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-18T12:34:00Z sender={id}/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id \"{id}/task-2\" was canceled.\n</SYSTEM_MESSAGE>"}}"#,
+                    "\n"
+                ),
+                id = AGY_CHILD
+            ),
+        );
+        assert_eq!(live.agy(&brain, AGY_PARENT), (Vec::new(), false));
     }
 }
