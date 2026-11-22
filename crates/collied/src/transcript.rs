@@ -188,10 +188,12 @@ impl Transcripts {
                 agents.is_empty() && !truncated
             });
         }
-        !matches!(a.agent.as_deref(), Some("claude" | "copilot" | "codex"))
-            || self
-                .derive(a, true)
-                .is_some_and(|d| d.subagents.is_empty() && !d.subagents_truncated)
+        !matches!(
+            a.agent.as_deref(),
+            Some("claude" | "copilot" | "codex" | "agy")
+        ) || self
+            .derive(a, true)
+            .is_some_and(|d| d.subagents.is_empty() && !d.subagents_truncated)
     }
 
     /// Cached by size and mtime, so an unchanged transcript costs one open and fstat. A
@@ -265,7 +267,10 @@ impl Transcripts {
                     self.providers.codex(self.codex_sessions.as_deref()?, id);
                 (None, false, subagents, truncated)
             }
-            Kind::Agy => (None, false, Vec::new(), false),
+            Kind::Agy => {
+                let (subagents, truncated) = self.providers.agy(self.agy_brain.as_deref()?, id);
+                (None, false, subagents, truncated)
+            }
             Kind::Copilot => return None,
         };
         if let Some(c) = self.cache.get(id).filter(|c| {

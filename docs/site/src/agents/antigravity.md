@@ -6,7 +6,8 @@
 |---|---|
 | Grid preview, status and Inbox | Yes |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes; Chat needs the [hook](#set-up) |
-| [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | No |
+| [Running subagents](../app/agents-tab.md#running-subagents) | Yes; needs the [hook](#set-up) |
+| [Remaining context](../app/agents-tab.md#remaining-context) | No |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Yes; needs the [status line tap](#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
