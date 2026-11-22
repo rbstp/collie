@@ -646,3 +646,100 @@ async fn a_copilot_trust_box_takes_keys_until_copilot_reports_blocked() {
     );
     assert_eq!(events(&fake, B1), Vec::<Value>::new());
 }
+
+#[tokio::test]
+async fn agy_prompt_splits_leading_media_paths_into_their_own_paste_before_text_and_enter() {
+    let fake = Fake::start().await;
+    let agy_record = json!({
+        "state": "idle", "app": "antigravity", "updated_at": T0,
+        "owner": { "pid": 10, "name": "agy" },
+    });
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        s.add(
+            S1,
+            B1,
+            fake::process(10, "/Users/me/.local/bin/agy", "agy"),
+            vec![agy_record],
+        );
+    }
+    let (_rex, rt, dir) = followed(&fake).await;
+    let shot1 = dir.path().join("screen1.png");
+    let shot2 = dir.path().join("screen2.jpg");
+    std::fs::write(&shot1, b"png").unwrap();
+    std::fs::write(&shot2, b"jpg").unwrap();
+    let enter = key("enter", "", "\r", 13);
+
+    let combined = format!("{} {} fix the bug", shot1.display(), shot2.display());
+    rt.agent_prompt(&id(B1), &combined, "idle").await.unwrap();
+    assert_eq!(
+        events(&fake, B1),
+        [
+            paste(&format!("{} {}", shot1.display(), shot2.display())),
+            paste("fix the bug"),
+            enter.clone(),
+        ]
+    );
+
+    let only_media = shot1.display().to_string();
+    rt.agent_prompt(&id(B1), &only_media, "idle").await.unwrap();
+    assert_eq!(events(&fake, B1), [paste(&only_media), enter.clone()]);
+
+    let plain = "just text without attachments";
+    rt.agent_prompt(&id(B1), plain, "idle").await.unwrap();
+    assert_eq!(events(&fake, B1), [paste(plain), enter]);
+}
+
+#[tokio::test]
+async fn stale_foreground_refreshes_process_when_status_owner_disagrees() {
+    let fake = Fake::start().await;
+    let agy_record = |pid: u32, state: &str, at: &str| {
+        json!({
+            "state": state, "app": "antigravity", "updated_at": at,
+            "owner": { "pid": pid, "name": "agy" },
+        })
+    };
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        s.add(
+            S1,
+            B1,
+            fake::process(10, "/Users/me/.local/bin/agy", "agy"),
+            vec![agy_record(10, "idle", T0)],
+        );
+    }
+    let (rex, rt, dir) = followed(&fake).await;
+    assert!(!rex.get(&id(B1)).unwrap().read_only);
+
+    let updated_process = fake::process(20, "/Users/me/.local/bin/agy", "agy");
+    let updated_record = agy_record(20, "idle", "2026-11-12T16:47:05.000001Z");
+    fake.emit(move |s| {
+        let block = s.block(B1);
+        block.process = updated_process;
+        block.records = vec![updated_record.clone()];
+        vec![fake::status_changed(S1, B1, updated_record)]
+    });
+    super::eventually("stale foreground refreshed from Rex", || {
+        rex.get(&id(B1))
+            .is_ok_and(|a| !a.read_only && a.agent_status == "idle")
+    })
+    .await;
+
+    let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+        .unwrap()
+        .with_rex(Some(rex.clone()));
+    let yes: Authorized = Arc::new(|| true);
+    let send = SendTextParams {
+        op_id: OpId::new("T".repeat(22)).unwrap(),
+        terminal_id: TerminalId::new(id(B1)).unwrap(),
+        text: TypedText::new("hello".to_owned()).unwrap(),
+    };
+    assert_eq!(
+        drive.send_text(send, &yes).await.0,
+        Ok(protocol::Response::Ok)
+    );
+    assert_eq!(events(&fake, B1), [paste("hello")]);
+    assert!(!rt.agent_get(&id(B1)).await.unwrap().read_only);
+}

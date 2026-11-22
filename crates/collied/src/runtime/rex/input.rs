@@ -2,6 +2,9 @@
 //! follower's control connection: the server takes them only from a connection attached to
 //! the block's session, and runs them in the order sent.
 
+use std::path::Path;
+use std::time::Duration;
+
 use serde::Serialize;
 use serde_json::json;
 
@@ -147,6 +150,64 @@ pub struct Seen<'a> {
     pub seq: Option<u64>,
 }
 
+const AGY_MEDIA_SETTLE: Duration = Duration::from_millis(400);
+const AGY_ENTER_DELAY: Duration = Duration::from_millis(100);
+
+fn is_agy_media_file(token: &str) -> bool {
+    let path = Path::new(token);
+    if !path.is_absolute() {
+        return false;
+    }
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "heic"
+            | "heif"
+            | "bmp"
+            | "tif"
+            | "tiff"
+            | "svg"
+            | "pdf"
+            | "mp4"
+            | "mov"
+            | "mp3"
+            | "wav"
+            | "m4a"
+    ) && path.is_file()
+}
+
+fn split_agy_media(text: &str) -> (Vec<&str>, &str) {
+    let mut media = Vec::new();
+    let mut rest = text;
+    loop {
+        let trimmed = rest.trim_start();
+        let Some(end) = trimmed
+            .find(char::is_whitespace)
+            .or((!trimmed.is_empty()).then_some(trimmed.len()))
+        else {
+            break;
+        };
+        let token = &trimmed[..end];
+        if !is_agy_media_file(token) {
+            break;
+        }
+        media.push(token);
+        rest = &trimmed[end..];
+    }
+    if media.is_empty() {
+        (media, text)
+    } else {
+        (media, rest.trim_start())
+    }
+}
+
 impl Rex {
     /// From the model, with no call: the pump applies every report Rex pushed before an
     /// event's response before that response returns.
@@ -161,6 +222,27 @@ impl Rex {
         Ok(())
     }
 
+    async fn send_one(
+        &self,
+        id: &str,
+        listed: Listed,
+        event: &Event<'_>,
+        seen: Option<&Seen<'_>>,
+    ) -> Result<(), Error> {
+        let (client, session, block, _, now) = self.target(id)?;
+        if now != listed {
+            return Err(super::not_found());
+        }
+        if let Some(seen) = seen {
+            self.still(id, seen)?;
+        }
+        let payload = json!({ "session_id": session, "block_id": block, "event": event });
+        client
+            .call::<serde_json::Value>(Method::BlockEvent, payload, TIMEOUT)
+            .await?;
+        Ok(())
+    }
+
     /// Each event goes only while the block is still listed as `listed`: input meant for an
     /// agent never reaches a shell, nor a shell's an agent.
     async fn send(
@@ -172,17 +254,7 @@ impl Rex {
     ) -> Result<(), Error> {
         let _one = self.input.lock().await;
         for event in events {
-            let (client, session, block, _, now) = self.target(id)?;
-            if now != listed {
-                return Err(super::not_found());
-            }
-            if let Some(seen) = seen {
-                self.still(id, seen)?;
-            }
-            let payload = json!({ "session_id": session, "block_id": block, "event": event });
-            client
-                .call::<serde_json::Value>(Method::BlockEvent, payload, TIMEOUT)
-                .await?;
+            self.send_one(id, listed, event, seen).await?;
         }
         Ok(())
     }
@@ -195,6 +267,33 @@ impl Rex {
         enter: bool,
         seen: Option<&Seen<'_>>,
     ) -> Result<(), Error> {
+        if self.get(id).ok().and_then(|a| a.agent).as_deref() == Some("agy") {
+            let (media, rest) = split_agy_media(text);
+            let _one = self.input.lock().await;
+            let mut waited_media = false;
+            if !media.is_empty() {
+                let paths = media.join(" ");
+                self.send_one(id, Listed::Agent, &Event::Paste { text: &paths }, seen)
+                    .await?;
+                if !rest.is_empty() || enter {
+                    tokio::time::sleep(AGY_MEDIA_SETTLE).await;
+                    waited_media = true;
+                }
+            }
+            if !rest.is_empty() || media.is_empty() {
+                self.send_one(id, Listed::Agent, &Event::Paste { text: rest }, seen)
+                    .await?;
+                waited_media = false;
+            }
+            if enter {
+                if !waited_media {
+                    tokio::time::sleep(AGY_ENTER_DELAY).await;
+                }
+                self.send_one(id, Listed::Agent, &Event::Key(press("enter")?), seen)
+                    .await?;
+            }
+            return Ok(());
+        }
         let mut events = vec![Event::Paste { text }];
         if enter {
             events.push(Event::Key(press("enter")?));

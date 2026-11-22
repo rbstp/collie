@@ -70,6 +70,7 @@ pub(super) struct Model {
     failed: HashSet<String>,
     /// Blocks whose process or status changed since `touched` last ran, by session and id.
     touched: BTreeSet<(String, String)>,
+    stale_process: BTreeSet<(String, String)>,
 }
 
 /// Rex's ids are `session:<uuid>` and `block:<uuid>`; anything else is skipped, so every id
@@ -148,14 +149,16 @@ impl Model {
             }
             "block_event" => {
                 let be: BlockEvent = serde_json::from_value(e.payload).ok()?;
-                let moved = matches!(
-                    be.name.as_str(),
-                    "process_changed" | "program_status_changed"
-                );
+                let status_changed = be.name == "program_status_changed";
+                let moved = status_changed || be.name == "process_changed";
                 match session.blocks.get_mut(&be.block_id) {
                     Some(b) => {
                         let id = be.block_id.clone();
                         b.event(seq, be);
+                        if status_changed && b.stale_foreground() {
+                            self.stale_process
+                                .insert((se.session_id.clone(), id.clone()));
+                        }
                         if moved {
                             self.touched.insert((se.session_id, id));
                         }
@@ -388,6 +391,23 @@ impl Model {
         })
     }
 
+    pub(super) fn has_stale_process(&self) -> bool {
+        !self.stale_process.is_empty()
+    }
+
+    pub(super) fn take_stale_process(&mut self) -> Option<(String, String)> {
+        self.stale_process.pop_first()
+    }
+
+    pub(super) fn stale_target(&self, id: &str) -> Option<(String, String)> {
+        let block = id.strip_prefix(PREFIX)?;
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = s.blocks.get(block)?;
+            b.stale_foreground()
+                .then(|| (session.clone(), block.to_owned()))
+        })
+    }
+
     pub(super) fn has(&self, block: &str) -> bool {
         self.sessions.values().any(|s| s.blocks.contains_key(block))
     }
@@ -442,6 +462,17 @@ impl Block {
             }
             _ => {}
         }
+    }
+
+    fn stale_foreground(&self) -> bool {
+        let Some(owner) = self.status.value.as_ref().and_then(|r| r.owner.as_ref()) else {
+            return false;
+        };
+        !self
+            .foreground
+            .value
+            .as_ref()
+            .is_some_and(|fg| fg.pid == owner.pid && fg.name == owner.name)
     }
 
     /// A block that is no agent is a terminal while a shell runs in it, in front or above the
