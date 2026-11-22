@@ -26,6 +26,7 @@ final class NewTaskModel {
 
     private let core: any AgentCore
     private let prefsFile: URL?
+    private let draftsFile: URL?
     private let runtimeChoice: TaskRuntimeChoice
     var machineId: String? {
         didSet {
@@ -121,13 +122,16 @@ final class NewTaskModel {
     private(set) var phase = Phase.editing
     private(set) var error: String?
     private(set) var cancelled = false
+    private(set) var startupBlocked = false
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil,
-        prefsFile: URL? = DevicePrefs.file, dictationEngine: any DictationEngine = SpeechDictationEngine()
+        prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
+        dictationEngine: any DictationEngine = SpeechDictationEngine()
     ) {
         self.core = core
         self.prefsFile = prefsFile
+        self.draftsFile = draftsFile
         let prefs = DevicePrefs.load(from: prefsFile)
         runtimeChoice = prefs.taskRuntime
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
@@ -327,6 +331,7 @@ final class NewTaskModel {
         if runtime != nil, options?.runtimes == nil { return nil }
         phase = .starting
         error = nil
+        startupBlocked = false
         let started: TaskStarted
         do {
             if location == .worktree {
@@ -405,7 +410,11 @@ final class NewTaskModel {
             return nil
         }
         phase = .waitingForAgent
+        startupBlocked = started.startupBlocked
         let route = AgentRoute(machineId: machineId, terminalId: started.terminalId)
+        if started.startupBlocked {
+            saveStartupDraft(for: route)
+        }
         for _ in 0..<30 where !cancelled {
             if let flock = try? await core.flock(machineId: machineId),
                 flock.agents.contains(where: { $0.terminalId == route.terminalId })
@@ -417,6 +426,15 @@ final class NewTaskModel {
         phase = .startedNotVisible
         error = "The task started, but its agent has not appeared yet. It will show in the flock."
         return nil
+    }
+
+    private func saveStartupDraft(for route: AgentRoute) {
+        guard let draftsFile else { return }
+        let typed = trimmed(prompt)
+        guard !typed.isEmpty || !attachments.isEmpty else { return }
+        var saved = AgentDrafts.load(from: draftsFile)
+        saved.drafts[route] = AgentDrafts.Draft(text: typed, attachments: attachments, shell: false)
+        saved.save(to: draftsFile)
     }
 
     func cancel() {

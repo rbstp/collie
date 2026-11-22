@@ -14,6 +14,7 @@ struct FlockScreen: View {
     var viewing: (AgentRoute?) -> Void = { _ in }
     @State private var model = FlockModel()
     @State private var path: [AgentRoute] = []
+    @State private var openInTerminal: AgentRoute?
     @State private var newTask = false
     @State private var previews = PreviewModel()
     @State private var layout = DevicePrefs.load(from: DevicePrefs.file).agentsLayout
@@ -115,7 +116,7 @@ struct FlockScreen: View {
             .navigationDestination(for: AgentRoute.self) { route in
                 if let core {
                     AgentScreen(
-                        core: core, route: route, persistsState: persistsState, approvals: approvals, follows: follows,
+                        core: core, route: route, persistsState: persistsState, openInTerminal: openInTerminal == route, approvals: approvals, follows: follows,
                         machineLabel: machines.first { $0.id == route.machineId }?.label, showsMachine: machines.count > 1,
                         neighbor: { offset in
                             // model.entries stops refreshing under a pushed agent; the core's cache follows events.
@@ -145,7 +146,10 @@ struct FlockScreen: View {
                         core: core, machines: machines,
                         preferredMachineId: model.entries.first { $0.flock?.link == .connected }?.id,
                         planUsage: model.entries.reduce(into: [:]) { usage, entry in usage[entry.id] = entry.flock?.planUsage }
-                    ) { path.append($0) }
+                    ) { route, startupBlocked in
+                        openInTerminal = startupBlocked ? route : nil
+                        path.append(route)
+                    }
                 }
             }
             .onAppear {
@@ -207,6 +211,7 @@ struct FlockScreen: View {
             .onChange(of: path) { old, new in
                 // A swipe replaces the route, so it keeps the order the session opened with.
                 if old.isEmpty, let route = new.last { snapshotOrder(opening: route) }
+                if let route = openInTerminal, !new.contains(route) { openInTerminal = nil }
                 navigationChanged()
             }
             .onChange(of: reselected) { showsUsage = false }

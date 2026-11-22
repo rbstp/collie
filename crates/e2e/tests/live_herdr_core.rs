@@ -1346,6 +1346,7 @@ async fn tasks_scenario(core: &CoreSession, bin: &Path) {
             Ok(Response::TaskStarted {
                 workspace_id,
                 terminal_id,
+                startup_blocked: false,
             }),
             _,
         ) => (workspace_id, terminal_id),

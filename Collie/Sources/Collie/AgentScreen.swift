@@ -15,7 +15,8 @@ struct AgentScreen: View {
     let archived: (String) -> Void
     @State private var recordedOpen = false
     @State private var showingChanges = false
-    @State private var showingChat = DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat
+    @State private var showingChat: Bool
+    @State private var startupBlocked: Bool
     @State private var searchingChat = false
     @State private var keyboardShown = false
     @State private var typing = false
@@ -33,12 +34,14 @@ struct AgentScreen: View {
     @Environment(\.neutralAccent) private var neutralAccent
 
     init(
-        core: any AgentCore, route: AgentRoute, persistsState: Bool = true, approvals: ApprovalsModel?, follows: FollowModel?,
+        core: any AgentCore, route: AgentRoute, persistsState: Bool = true, openInTerminal: Bool = false, approvals: ApprovalsModel?, follows: FollowModel?,
         machineLabel: String?, showsMachine: Bool, neighbor: ((Int) -> AgentRoute?)?,
         switchAgent: @escaping (AgentRoute) -> Void, opened: @escaping (AgentSummary) -> Void,
         archived: @escaping (String) -> Void
     ) {
         _model = State(initialValue: AgentModel(core: core, route: route, prefsFile: persistsState ? DevicePrefs.file : nil, draftsFile: persistsState ? AgentDrafts.file : nil, viewedFile: persistsState ? GitViewed.file : nil, machineLabel: machineLabel, resends: persistsState ? .shared : PromptResends()))
+        _showingChat = State(initialValue: !openInTerminal && DevicePrefs.load(from: DevicePrefs.file).defaultSessionView == .chat)
+        _startupBlocked = State(initialValue: openInTerminal)
         self.approvals = approvals
         self.follows = follows
         self.machineLabel = machineLabel
@@ -204,9 +207,10 @@ struct AgentScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 let continueInTerminal = showingChat && !model.isTerminal && approvalItems.allSatisfy(\.approval.answeredInTerminal) && (model.codexQuestionQueued || model.codexQuestionOpen || model.agent?.status == .blocked || !model.noticeOptions.isEmpty || model.commandShown)
+                let startupPromptInChat = !showingChat && !model.isTerminal && startupBlocked && (!model.draft.isEmpty || !model.attachments.isEmpty)
                 // Typing in landscape, the hint's row is what the keyboard's predictions bar leaves the approval card.
                 // The approval cards and Continue in Terminal already say how to answer.
-                if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty || continueInTerminal ? nil : model.blockedHint) {
+                if let notice = model.notice ?? (typingInLandscape || !approvalItems.isEmpty || continueInTerminal || startupPromptInChat ? nil : model.blockedHint) {
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.warning)
@@ -217,6 +221,13 @@ struct AgentScreen: View {
                 }
                 if continueInTerminal {
                     Button("Continue in Terminal", systemImage: "terminal") { showingChat = false }
+                        .font(.footnote).appGlassButton(dim: .always)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.top, 6)
+                }
+                if startupPromptInChat && !typingInLandscape {
+                    Button("Answer here, then send in Chat", systemImage: "bubble.left.and.bubble.right") { showingChat = true }
                         .font(.footnote).appGlassButton(dim: .always)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)

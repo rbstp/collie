@@ -1080,11 +1080,34 @@ async fn a_rex_agent_running_in_another_folder_takes_no_prompt() {
         )
         .await
         .unwrap();
-    let pane = drive
+    let (pane, startup_blocked) = drive
         .host_agent_ready(&host, &there, NAME, &claude_kind(), &w)
         .await
         .unwrap();
+    assert!(!startup_blocked);
     assert_eq!(pane.foreground_cwd.as_deref(), Some("/w"));
+
+    fake.state().start = Some("blocked");
+    let blocked = host
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    let (pane, startup_blocked) = drive
+        .host_agent_ready(&host, &blocked, NAME, &claude_kind(), &w)
+        .await
+        .unwrap();
+    assert!(startup_blocked);
+    assert!(pane.workspace_id.starts_with("rex:session:"));
+    assert_eq!(pane.terminal_id, blocked);
 }
 
 #[tokio::test]
@@ -1135,11 +1158,23 @@ async fn no_prompt_reaches_an_idle_rex_claude_code_that_shows_a_menu() {
         runtime: None,
     };
     let yes: Authorized = Arc::new(|| true);
-    let failed = drive_in(dir.path(), rex.clone())
+    let drive = drive_in(dir.path(), rex.clone());
+    let failed = drive
         .prompt_started(&p, &pane(&a), NAME, &task, &yes)
         .await
         .unwrap_err();
     assert_eq!(failed, (ErrorCode::AgentBlocked, STARTUP_PROMPT.to_owned()));
+    let reply = drive
+        .finish_host_task(&host(&rt).await, &p, &task, NAME, &p.cwd, &yes)
+        .await;
+    assert_eq!(
+        reply,
+        Ok(protocol::Response::TaskStarted {
+            workspace_id: protocol::WorkspaceId::new(a.workspace_id).unwrap(),
+            terminal_id: protocol::TerminalId::new(task).unwrap(),
+            startup_blocked: true,
+        })
+    );
     assert!(!fake.calls().iter().any(|c| c == "block.event"));
 }
 

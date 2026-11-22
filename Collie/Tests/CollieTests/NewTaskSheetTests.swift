@@ -12,7 +12,7 @@ final class NewTaskSheetTests: XCTestCase {
         await model.loadOptions()
         model.prompt = "keep this prompt"
         model.cwd = "/Users/me/app"
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _, _ in })
         try await hosting(host) { _ in
             _ = try await waitFor("prompt field") {
                 host.view.layoutIfNeeded()
@@ -157,7 +157,7 @@ final class NewTaskSheetTests: XCTestCase {
         model.agent = "claude"
         model.prompt = "set it up"
         model.location = .clone
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _, _ in })
         try await hosting(host) { _ in
             let field = try await waitFor("repository field") {
                 host.view.layoutIfNeeded()
@@ -192,7 +192,7 @@ final class NewTaskSheetTests: XCTestCase {
         await model.loadOptions()
         model.location = .resume
         model.cwd = "/Users/me/app"
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _, _ in })
         try await hosting(host) { _ in
             let sessions = try await waitFor("sessions listed by the sheet") { model.sessions }
             XCTAssertEqual(sessions.map(\.firstPrompt), ["add approval tests", "fix the flaky test"])
@@ -229,7 +229,7 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertFalse(model.ultracode)
         model.prompt = "go"
         model.cwd = "/Users/me/app"
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [mac, linux]) { _ in })
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [mac, linux]) { _, _ in })
         try await hosting(host) { _ in
             let switches = {
                 host.view.layoutIfNeeded()
@@ -328,7 +328,7 @@ final class NewTaskSheetTests: XCTestCase {
         model.location = .worktree
         model.worktreeAction = .pullRequest
         model.source = "/Users/me/app"
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _ in })
+        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [machine]) { _, _ in })
         try await hosting(host) { _ in
             let field = try await waitFor("pull request number field") {
                 host.view.layoutIfNeeded()
@@ -349,6 +349,26 @@ final class NewTaskSheetTests: XCTestCase {
             XCTAssertEqual(core.snapshot.worktreeCalls, ["list /Users/me/app", "pull_request /Users/me/app 282 claude codeMode=true"])
             XCTAssertEqual(core.snapshot.taskPrompts, ["fix it"])
         }
+    }
+
+    func testStartupBlockedTaskSignalsOpenInTerminal() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let drafts = FileManager.default.temporaryDirectory.appending(path: "drafts-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: drafts) }
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil, draftsFile: drafts)
+        await model.loadOptions()
+        model.cwd = "/Users/me/app"
+        model.prompt = "check the trust flow"
+        core.state.withLock {
+            $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new", startupBlocked: true)
+        }
+        let route = await model.start()
+        XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
+        XCTAssertTrue(model.startupBlocked)
+        let saved = AgentDrafts.load(from: drafts).drafts[AgentRoute(machineId: "m1", terminalId: "term_new")]
+        XCTAssertEqual(saved?.text, "check the trust flow")
+        XCTAssertEqual(saved?.shell, false)
     }
 
     private func controllers(_ controller: UIViewController) -> [UIViewController] {

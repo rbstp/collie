@@ -4,7 +4,7 @@ import SwiftUI
 struct NewTaskSheet: View {
     let machines: [Machine]
     let planUsage: [String: PlanUsage]
-    let onStarted: (AgentRoute) -> Void
+    let onStarted: (AgentRoute, Bool) -> Void
     @State private var model: NewTaskModel
     @State private var startTask: Task<Void, Never>?
     @State private var pickingPhoto = false
@@ -27,15 +27,15 @@ struct NewTaskSheet: View {
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String?, planUsage: [String: PlanUsage],
-        onStarted: @escaping (AgentRoute) -> Void
+        onStarted: @escaping (AgentRoute, Bool) -> Void
     ) {
         self.init(
-            model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId),
+            model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId, draftsFile: AgentDrafts.file),
             machines: machines, planUsage: planUsage, onStarted: onStarted
         )
     }
 
-    init(model: NewTaskModel, machines: [Machine], planUsage: [String: PlanUsage] = [:], onStarted: @escaping (AgentRoute) -> Void) {
+    init(model: NewTaskModel, machines: [Machine], planUsage: [String: PlanUsage] = [:], onStarted: @escaping (AgentRoute, Bool) -> Void) {
         self.machines = machines
         self.planUsage = planUsage
         self.onStarted = onStarted
@@ -377,7 +377,7 @@ struct NewTaskSheet: View {
                         startTask = Task {
                             if let route = await model.start() {
                                 dismiss()
-                                onStarted(route)
+                                onStarted(route, model.startupBlocked)
                             }
                         }
                     } label: {

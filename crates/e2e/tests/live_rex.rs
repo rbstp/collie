@@ -1687,6 +1687,7 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
             Ok(Response::TaskStarted {
                 workspace_id,
                 terminal_id,
+                startup_blocked: false,
             }),
             _,
         ) => (workspace_id, terminal_id),
