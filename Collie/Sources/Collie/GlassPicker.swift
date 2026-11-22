@@ -5,6 +5,7 @@ extension EnvironmentValues {
     @Entry var appAccent: Color = .accentColor
     @Entry var neutralAccent = false
     @Entry var appGlass = AppGlass.regular
+    @Entry var previewZoom: Double = 1.0
     @Entry var runtimeMarks = true
     /// What Opaque glass shows instead of the content under it.
     @Entry var glassPage = Color(.systemBackground)

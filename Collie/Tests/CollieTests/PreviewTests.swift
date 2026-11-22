@@ -1,5 +1,6 @@
 import CollieCore
 import Foundation
+import GhosttyTerminal
 import Testing
 
 @testable import Collie
@@ -746,4 +747,62 @@ func gridCardsMoveBothWaysWithinTheirGroup(starred: Bool) throws {
         #expect(GridDropEdge.nearest(to: CGPoint(x: 20, y: y), size: size, axes: .horizontal) == .leading)
         #expect(GridDropEdge.nearest(to: CGPoint(x: 140, y: y), size: size, axes: .horizontal) == .trailing)
     }
+}
+
+@Test func previewZoomDefaultsRoundTripsAndClampsToSupportedRange() throws {
+    let dir = try makeTemporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let file = dir.appending(path: "prefs.json")
+
+    #expect(DevicePrefs().previewZoom == 1.0)
+    try Data(#"{"wrapLines":false}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file).previewZoom == 1.0)
+
+    try Data(#"{"previewZoom":0.2}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file).previewZoom == 0.5)
+    try Data(#"{"previewZoom":2.0}"#.utf8).write(to: file)
+    #expect(DevicePrefs.load(from: file).previewZoom == 1.25)
+
+    var prefs = DevicePrefs()
+    prefs.previewZoom = 0.75
+    prefs.save(to: file)
+    #expect(DevicePrefs.load(from: file).previewZoom == 0.75)
+
+    prefs.previewZoom = 0.1
+    #expect(prefs.previewZoom == 0.5)
+    prefs.previewZoom = 3.0
+    #expect(prefs.previewZoom == 1.25)
+    prefs.previewZoom = .nan
+    #expect(prefs.previewZoom == 1.0)
+}
+
+@MainActor
+@Test func previewZoomScalesTerminalAndChatPreviews() {
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 1.0) == 10)
+    #expect(AgentCard.terminalFontSize(starred: true, zoom: 1.0) == 11)
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.5) == 5)
+    #expect(AgentCard.terminalFontSize(starred: true, zoom: 0.5) == 5.5)
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 1.25) == 12.5)
+    #expect(AgentCard.terminalFontSize(starred: true, zoom: 1.25) == 13.75)
+    #expect(AgentCard.terminalFontSize(starred: false, zoom: 0.1) == 5)
+    #expect(AgentCard.terminalFontSize(starred: true, zoom: 2.0) == 13.75)
+
+    #expect(ChatPreview.lineLimit(starred: false, zoom: 1.0) == 3)
+    #expect(ChatPreview.lineLimit(starred: true, zoom: 1.0) == 2)
+    #expect(ChatPreview.lineLimit(starred: false, zoom: 0.5) == 6)
+    #expect(ChatPreview.lineLimit(starred: true, zoom: 0.5) == 4)
+    #expect(ChatPreview.messageCount(starred: false, zoom: 1.0) == 2)
+    #expect(ChatPreview.messageCount(starred: true, zoom: 1.0) == 4)
+    #expect(ChatPreview.messageCount(starred: false, zoom: 0.5) == 4)
+    #expect(ChatPreview.messageCount(starred: true, zoom: 0.5) == 8)
+
+    let view = GhosttyTerminalUIView(fontSize: 10)
+    view.wraps = true
+    view.frame = CGRect(x: 0, y: 0, width: 160, height: 84)
+    view.layoutIfNeeded()
+    view.show(ansiSnapshot: Array(repeating: String(repeating: "a", count: 40), count: 8).joined(separator: "\r\n"))
+    let normalHeight = view.contentSize.height
+    view.fontSize = AgentCard.terminalFontSize(starred: false, zoom: 0.5)
+    #expect(view.fontSize == 5)
+    #expect(view.contentSize.height < normalHeight)
 }

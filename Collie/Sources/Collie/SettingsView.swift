@@ -36,6 +36,19 @@ struct SettingsView: View {
                         ForEach(AppGlass.allCases, id: \.self) { Text($0.label) }
                     }
                     .tint(.primary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Preview zoom")
+                            Spacer()
+                            Text("\(Int((app.previewZoom * 100).rounded()))%")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        .accessibilityHidden(true)
+                        Slider(value: $app.previewZoom, in: DevicePrefs.previewZoomRange, step: 0.05)
+                            .accessibilityLabel("Preview zoom")
+                            .accessibilityValue("\(Int((app.previewZoom * 100).rounded()))%")
+                    }
                 }
                 Section {
                     LabeledContent("Push", value: app.pushStatus)

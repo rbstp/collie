@@ -20,7 +20,7 @@ private func object(_ data: Data) throws -> NSDictionary {
 
 @Test func prefsFileLoadsAndSavesTheSameJSON() throws {
     let json = #"""
-        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","taskRuntime":"rex","runtimeMarks":false,"taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true},"taskCodeMode":{"m1":false}}
+        {"wrapLines":false,"keepKeyboard":true,"keysShown":true,"gestures":{"doubleTap":"escape","tripleTap":"paste","pinchResizesText":false,"swipeSwitchesAgents":true},"fontSize":13,"dictationLanguage":"fr-CA","agentsLayout":"inbox","historyLines":500,"defaultSessionView":"terminal","watchDecisions":true,"doneAlerts":false,"archiveOnMerge":true,"accent":"blue","glass":"opaque","previewZoom":0.75,"taskRuntime":"rex","runtimeMarks":false,"taskBases":{"m1":"/Users/me/git"},"taskUltracode":{"m1":true},"taskCodeMode":{"m1":false}}
         """#
     let file = try write(json, as: "prefs.json")
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
@@ -31,7 +31,7 @@ private func object(_ data: Data) throws -> NSDictionary {
                 wrapLines: false, keepKeyboard: true, keysShown: true,
                 gestures: TerminalGestures(doubleTap: .escape, tripleTap: .paste, pinchResizesText: false, swipeSwitchesAgents: true),
                 fontSize: 13, dictationLanguage: .french, agentsLayout: .inbox, historyLines: 500, defaultSessionView: .terminal, watchDecisions: true,
-                doneAlerts: false, archiveOnMerge: true, glass: .opaque, taskRuntime: .rex, runtimeMarks: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true],
+                doneAlerts: false, archiveOnMerge: true, glass: .opaque, previewZoom: 0.75, taskRuntime: .rex, runtimeMarks: false, taskBases: ["m1": "/Users/me/git"], taskUltracode: ["m1": true],
                 taskCodeMode: ["m1": false]
             )
     )
@@ -49,7 +49,7 @@ func prefsWithoutAKnownSessionViewKeepChatAndOtherPreferences(_ json: String) th
 @Test(arguments: [
     #""wrapLines":"yes""#, #""fontSize":"big""#, #""historyLines":70000"#,
     #""watchDecisions":"true""#, #""doneAlerts":0"#, #""archiveOnMerge":"on""#, #""taskBases":[]"#,
-    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#, #""taskRuntime":2"#, #""runtimeMarks":"off""#,
+    #""gestures":{"doubleTap":"later"}"#, #""glass":3"#, #""previewZoom":"big""#, #""taskRuntime":2"#, #""runtimeMarks":"off""#,
 ])
 func prefsWithOneWrongTypedFieldKeepTheOthers(_ wrong: String) throws {
     let file = try write(#"{"keepKeyboard":true,"accent":"red",\#(wrong)}"#, as: "prefs.json")

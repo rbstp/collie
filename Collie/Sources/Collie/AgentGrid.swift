@@ -220,6 +220,7 @@ struct AgentCard: View {
     @ScaledMetric(relativeTo: .caption2) private var subagentPreviewHeight: CGFloat = 120
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.openURL) private var openURL
+    @Environment(\.previewZoom) private var previewZoom
     @Environment(\.runtimeMarks) private var runtimeMarks
 
     private static let starColor = Color(uiColor: UIColor {
@@ -228,11 +229,19 @@ struct AgentCard: View {
             : UIColor(red: 0.66, green: 0.46, blue: 0.04, alpha: 1)
     })
 
+    static func terminalFontSize(starred: Bool, zoom: Double) -> CGFloat {
+        CGFloat(starred ? 11 : 10) * DevicePrefs.clampedPreviewZoom(zoom)
+    }
+
     @ViewBuilder private var preview: some View {
         if let conversation {
-            ChatPreview(messages: conversation.suffix(starred ? 4 : 2), lines: starred ? 2 : 3)
+            ChatPreview(
+                messages: conversation.suffix(ChatPreview.messageCount(starred: starred, zoom: previewZoom)),
+                lines: ChatPreview.lineLimit(starred: starred, zoom: previewZoom),
+                zoom: previewZoom
+            )
         } else {
-            TerminalPreview(ansi: screen ?? "", fontSize: starred ? 11 : 10)
+            TerminalPreview(ansi: screen ?? "", fontSize: Self.terminalFontSize(starred: starred, zoom: previewZoom))
                 .overlay(alignment: .top) {
                     // Hides the row cut at the top: solid first, then a fade.
                     let background = Color(uiColor: TerminalPreview.panel)
@@ -374,9 +383,20 @@ struct AgentCard: View {
 struct ChatPreview: View {
     let messages: ArraySlice<HistoryMessage>
     let lines: Int
+    var zoom: Double = 1.0
+    @ScaledMetric(relativeTo: .caption2) private var baseFontSize: CGFloat = 11
+
+    static func messageCount(starred: Bool, zoom: Double) -> Int {
+        max(2, Int((Double(starred ? 4 : 2) / DevicePrefs.clampedPreviewZoom(zoom)).rounded()))
+    }
+
+    static func lineLimit(starred: Bool, zoom: Double) -> Int {
+        max(1, Int((Double(starred ? 2 : 3) / DevicePrefs.clampedPreviewZoom(zoom)).rounded()))
+    }
 
     var body: some View {
-        let content = VStack(alignment: .leading, spacing: 4) {
+        let scale = DevicePrefs.clampedPreviewZoom(zoom)
+        let content = VStack(alignment: .leading, spacing: 4 * scale) {
             ForEach(messages, id: \.id) { message in
                 let user = message.role == "user"
                 Group {
@@ -389,18 +409,18 @@ struct ChatPreview: View {
                     }
                 }
                 .foregroundStyle(user ? AnyShapeStyle(.metadata) : AnyShapeStyle(.primary))
-                .padding(user ? 6 : 0)
+                .padding(user ? 6 * scale : 0)
                 .background {
                     if user {
                         // The card's own fill, on which `.metadata` reads at 4.5:1 or more; on the preview's gray it did not.
-                        RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemGroupedBackground))
+                        RoundedRectangle(cornerRadius: max(6, 12 * scale), style: .continuous).fill(Color(.secondarySystemGroupedBackground))
                     }
                 }
-                .padding(.leading, user ? 16 : 0)
+                .padding(.leading, user ? 16 * scale : 0)
                 .frame(maxWidth: .infinity, alignment: user ? .trailing : .leading)
             }
         }
-        .font(.caption2)
+        .font(.system(size: baseFontSize * scale))
         .fixedSize(horizontal: false, vertical: true)
         // Vertically 6: the 84-point preview fits a bubble and three lines.
         .padding(.horizontal, 10)

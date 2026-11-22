@@ -48,6 +48,16 @@ final class AppModel {
     var glass = DevicePrefs.load(from: DevicePrefs.file).glass {
         didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.glass = glass } }
     }
+    var previewZoom = DevicePrefs.clampedPreviewZoom(DevicePrefs.load(from: DevicePrefs.file).previewZoom) {
+        didSet {
+            let clamped = DevicePrefs.clampedPreviewZoom(previewZoom)
+            if previewZoom != clamped {
+                previewZoom = clamped
+                return
+            }
+            DevicePrefs.update(in: DevicePrefs.file) { $0.previewZoom = clamped }
+        }
+    }
     var runtimeMarks = DevicePrefs.load(from: DevicePrefs.file).runtimeMarks {
         didSet { DevicePrefs.update(in: DevicePrefs.file) { $0.runtimeMarks = runtimeMarks } }
     }
