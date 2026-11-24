@@ -321,6 +321,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             code_mode: true,
             issues: true,
             schedule: true,
+            edit_schedule: true,
         }
     );
     let before = herdr.mutations();
@@ -509,16 +510,50 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     let cancelled = schedule(s(&app), "claude", now_ms() + 3_600_000, None)
         .await
         .unwrap();
+    let too_far = core
+        .task_reschedule(
+            m.clone(),
+            cancelled.schedule_id.clone(),
+            now_ms() + 25 * 3_600_000,
+            "Write the edited tests".into(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&too_far, CoreError::InvalidInput { message, .. } if message.contains("at most 24 hours")),
+        "{too_far:?}"
+    );
     core.task_unschedule(m.clone(), cancelled.schedule_id.clone())
         .await
         .unwrap();
     assert!(matches!(
-        core.task_unschedule(m.clone(), cancelled.schedule_id).await,
+        core.task_unschedule(m.clone(), cancelled.schedule_id.clone())
+            .await,
         Err(CoreError::NotFound)
     ));
-    let soon = schedule(s(&app), "claude", now_ms() + 2000, None)
+    assert!(matches!(
+        core.task_reschedule(
+            m.clone(),
+            cancelled.schedule_id,
+            now_ms() + 60_000,
+            "x".into()
+        )
+        .await,
+        Err(CoreError::NotFound)
+    ));
+    let first = schedule(s(&app), "claude", now_ms() + 60_000, None)
         .await
         .unwrap();
+    let soon = core
+        .task_reschedule(
+            m.clone(),
+            first.schedule_id.clone(),
+            now_ms() + 2000,
+            "Write the edited tests".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(soon.schedule_id, first.schedule_id);
     assert_eq!(
         core.task_scheduled(m.clone()).await.unwrap(),
         vec![soon.clone()]
@@ -541,10 +576,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     assert_eq!(calls[before.len()].0, "workspace.create");
     assert_eq!(calls[before.len()].1["cwd"], json!(s(&app_real)));
     assert_eq!(calls[before.len() + 2].0, "agent.prompt");
-    assert_eq!(
-        calls[before.len() + 2].1["text"],
-        "Write the scheduled tests"
-    );
+    assert_eq!(calls[before.len() + 2].1["text"], "Write the edited tests");
     while !core.task_scheduled(m.clone()).await.unwrap().is_empty() {
         assert!(Instant::now() < deadline, "the started task stayed listed");
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -554,6 +586,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         .iter()
         .filter(|l| {
             l["method"] == "task.schedule"
+                || l["method"] == "task.reschedule"
                 || l["target"]
                     .as_str()
                     .is_some_and(|t| t.contains("schedule="))
@@ -562,7 +595,8 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
     assert!(
         scheduled
             .iter()
-            .all(|l| !l.to_string().contains("Write the scheduled tests")),
+            .all(|l| !l.to_string().contains("Write the scheduled tests")
+                && !l.to_string().contains("Write the edited tests")),
         "{scheduled:?}"
     );
     assert_eq!(
@@ -581,6 +615,13 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             .filter(|l| l["method"] == "task.unschedule")
             .count(),
         2
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l["method"] == "task.reschedule")
+            .count(),
+        3
     );
 
     println!("task.folders lists names only, task.new creates one new folder");

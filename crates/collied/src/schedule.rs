@@ -55,6 +55,15 @@ pub enum Due {
 }
 
 #[derive(Debug, PartialEq)]
+pub enum Edit {
+    Done(ScheduledTask),
+    Missing,
+    Started,
+    Refused(&'static str),
+    Unsaved,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Cancel {
     Done,
     Missing,
@@ -116,6 +125,32 @@ impl Schedule {
             return Err("could not save the task");
         }
         Ok(shown)
+    }
+
+    pub fn task(&self, id: &ScheduleId) -> Option<&Entry> {
+        self.tasks.get(id)
+    }
+
+    pub fn edit(&mut self, id: &ScheduleId, edited: Entry, now_ms: u64) -> Edit {
+        match self.tasks.get(id) {
+            None => return Edit::Missing,
+            Some(e) if !e.waiting() => return Edit::Started,
+            Some(_) => {}
+        }
+        if edited.start_at_ms <= now_ms {
+            return Edit::Refused("the start time has passed");
+        }
+        if edited.start_at_ms > now_ms + MAX_AHEAD_MS {
+            return Edit::Refused("a task can start at most 24 hours from now");
+        }
+        let Some(previous) = self.tasks.insert(id.clone(), edited) else {
+            return Edit::Missing;
+        };
+        if !self.save() {
+            self.tasks.insert(id.clone(), previous);
+            return Edit::Unsaved;
+        }
+        Edit::Done(shown(id, &self.tasks[id]))
     }
 
     pub fn cancel(&mut self, id: &ScheduleId) -> Cancel {
@@ -410,6 +445,50 @@ mod tests {
         assert_eq!(restarted.list(), vec![waiting]);
         assert!(matches!(restarted.claim(NOW + 5000), Some(Due::Start(..))));
         assert_eq!(restarted.claim(NOW + 5000), None);
+    }
+
+    #[test]
+    fn an_edit_replaces_a_waiting_task_and_is_refused_once_it_starts() {
+        let (_dir, path, mut schedule) = store();
+        let added = schedule.add(entry("nA", NOW + 1000, "go"), NOW).unwrap();
+        let id = added.schedule_id.clone();
+        let edit = |at: u64, prompt: &str| {
+            let mut e = entry("nA", NOW + 1000, "go");
+            e.start_at_ms = at;
+            e.task.prompt = Some(PromptText::new(prompt).unwrap());
+            e
+        };
+        assert_eq!(
+            schedule.edit(&id, edit(NOW + MAX_AHEAD_MS + 1, "later"), NOW),
+            Edit::Refused("a task can start at most 24 hours from now")
+        );
+        assert_eq!(
+            schedule.edit(&id, edit(NOW, "later"), NOW),
+            Edit::Refused("the start time has passed")
+        );
+        let Edit::Done(shown) = schedule.edit(&id, edit(NOW + 5000, "later"), NOW) else {
+            panic!("not edited");
+        };
+        assert_eq!(
+            (shown.schedule_id.clone(), shown.start_at_ms),
+            (id.clone(), NOW + 5000)
+        );
+        let reloaded = Schedule::load(path);
+        assert_eq!(reloaded.list(), vec![shown]);
+        assert_eq!(
+            reloaded.task(&id).and_then(|e| e.task.prompt.clone()),
+            Some(PromptText::new("later").unwrap())
+        );
+        assert!(matches!(schedule.claim(NOW + 5000), Some(Due::Start(..))));
+        assert_eq!(
+            schedule.edit(&id, edit(NOW + 9000, "too late"), NOW + 5000),
+            Edit::Started
+        );
+        let missing = ScheduleId::new("0".repeat(32)).unwrap();
+        assert_eq!(
+            schedule.edit(&missing, edit(NOW + 9000, "x"), NOW),
+            Edit::Missing
+        );
     }
 
     #[test]

@@ -25,10 +25,10 @@ use protocol::{
     PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
     PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, ScheduleId,
     SendTextParams, SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams,
-    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskScheduleParams, TaskSessionsParams,
-    TaskUnscheduleParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId,
-    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, TypedText,
-    WorkspaceCloseParams, WorkspaceId, limits,
+    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskRescheduleParams, TaskScheduleParams,
+    TaskSessionsParams, TaskUnscheduleParams, TaskWorktree, TaskWorktreesParams,
+    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
+    TerminalWatchParams, TypedText, WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -723,6 +723,9 @@ pub struct TaskOptions {
     /// False from a collied too old to schedule a task.
     #[uniffi(default = false)]
     pub schedule: bool,
+    /// False from a collied too old to edit a scheduled task.
+    #[uniffi(default = false)]
+    pub edit_schedule: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -2126,6 +2129,7 @@ impl CollieCore {
                 code_mode: o.code_mode,
                 issues: o.issues,
                 schedule: o.schedule,
+                edit_schedule: o.edit_schedule,
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -2709,6 +2713,30 @@ impl CollieCore {
                 .map_err(|_| invalid("schedule_id", "invalid scheduled task"))?,
         });
         expect_ok(self.mutate(&machine_id, request, CALL_TIMEOUT).await?)
+    }
+
+    /// Replaces a waiting task's start time and prompt; an empty prompt only for a resumed
+    /// session. Only for a machine whose `TaskOptions` says `edit_schedule`.
+    pub async fn task_reschedule(
+        &self,
+        machine_id: String,
+        schedule_id: String,
+        start_at_ms: u64,
+        prompt: String,
+    ) -> Result<ScheduledTask, CoreError> {
+        let request = Request::TaskReschedule(TaskRescheduleParams {
+            op_id: new_op_id(),
+            schedule_id: ScheduleId::new(schedule_id)
+                .map_err(|_| invalid("schedule_id", "invalid scheduled task"))?,
+            start_at_ms,
+            prompt: (!prompt.trim().is_empty())
+                .then(|| prompt_text(prompt))
+                .transpose()?,
+        });
+        match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+            Response::TaskScheduled { task } => Ok(task.into()),
+            other => Err(unexpected(&other).into()),
+        }
     }
 
     /// Fails with `ConfirmRequired` unless `confirm` is true.
@@ -4153,6 +4181,7 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::TaskNew(p) => Some(&mut p.op_id),
         Request::TaskSchedule(p) => Some(&mut p.task.op_id),
         Request::TaskUnschedule(p) => Some(&mut p.op_id),
+        Request::TaskReschedule(p) => Some(&mut p.op_id),
         Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
         Request::TerminalSendKeys(p) => Some(&mut p.op_id),
@@ -5896,6 +5925,7 @@ mod tailnet_tests {
                                 code_mode: true,
                                 issues: true,
                                 schedule: true,
+                                edit_schedule: true,
                             }))
                         }
                         Request::TaskSchedule(p) => {
@@ -5911,6 +5941,19 @@ mod tailnet_tests {
                                     start_at_ms: p.start_at_ms,
                                     cwd: p.task.cwd,
                                     agent: p.task.agent,
+                                    label: None,
+                                    blocked: None,
+                                },
+                            })
+                        }
+                        Request::TaskReschedule(p) => {
+                            assert_eq!(p.prompt.unwrap().as_str(), "fix it now");
+                            Ok(Response::TaskScheduled {
+                                task: protocol::ScheduledTask {
+                                    schedule_id: p.schedule_id,
+                                    start_at_ms: p.start_at_ms,
+                                    cwd: Cwd::new("/src/collie").unwrap(),
+                                    agent: AgentKind::new("claude").unwrap(),
                                     label: None,
                                     blocked: None,
                                 },
@@ -6384,6 +6427,7 @@ mod tailnet_tests {
         assert!(options.code_mode);
         assert!(options.issues);
         assert!(options.schedule);
+        assert!(options.edit_schedule);
         assert_eq!(
             options.runtime_agents,
             [RuntimeAgents {
@@ -6439,6 +6483,18 @@ mod tailnet_tests {
                 scheduled.blocked
             ),
             (32, "/src/collie", None)
+        );
+        let edited = rt
+            .block_on(core.task_reschedule(
+                id(),
+                scheduled.schedule_id.clone(),
+                1_800_000_060_000,
+                "fix it now".into(),
+            ))
+            .unwrap();
+        assert_eq!(
+            (edited.schedule_id, edited.start_at_ms),
+            (scheduled.schedule_id, 1_800_000_060_000)
         );
         assert!(matches!(
             rt.block_on(core.task_schedule(
