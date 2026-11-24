@@ -60,6 +60,7 @@ final class FakeCore: AgentCore {
         var schedules: [String] = []
         var scheduled: [ScheduledTask] = []
         var unscheduled: [String] = []
+        var reschedules: [String] = []
         var cloneError: CoreError?
         var sessions = [
             TaskSession(agent: "codex", sessionId: "01a10f07-b5ed-79a3-989d-fa10b96c5cab", firstPrompt: "add approval tests", modifiedMs: 1_790_000_000_000),
@@ -423,6 +424,16 @@ final class FakeCore: AgentCore {
             $0.unscheduled.append(scheduleId)
             $0.scheduled.removeAll { $0.scheduleId == scheduleId }
         }
+    }
+    func taskReschedule(machineId: String, scheduleId: String, startAtMs: UInt64, prompt: String) async throws -> ScheduledTask {
+        try await call { $0.reschedules.append("\(scheduleId) \(startAtMs) \(prompt)") }
+        let edited = state.withLock { s -> ScheduledTask? in
+            guard let i = s.scheduled.firstIndex(where: { $0.scheduleId == scheduleId }) else { return nil }
+            s.scheduled[i].startAtMs = startAtMs
+            return s.scheduled[i]
+        }
+        guard let edited else { throw CoreError.NotFound }
+        return edited
     }
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
         progress.onProgress(sent: UInt64(data.count / 2), total: UInt64(data.count))

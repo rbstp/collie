@@ -473,6 +473,7 @@ final class DemoAgentCore: ActivityCore, ApprovalCore {
     func taskSchedule(machineId: String, startAtMs: UInt64, place: TaskPlace, cwd: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> ScheduledTask { throw CoreError.NotImplemented }
     func taskScheduled(machineId: String) async throws -> [ScheduledTask] { throw CoreError.NotImplemented }
     func taskUnschedule(machineId: String, scheduleId: String) async throws { throw CoreError.NotImplemented }
+    func taskReschedule(machineId: String, scheduleId: String, startAtMs: UInt64, prompt: String) async throws -> ScheduledTask { throw CoreError.NotImplemented }
 
     func flock(machineId: String) async throws -> MachineFlock { demoFlock }
 

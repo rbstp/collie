@@ -1220,6 +1220,7 @@ impl Driver {
             code_mode: true,
             issues: true,
             schedule: true,
+            edit_schedule: true,
         }))
     }
 

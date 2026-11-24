@@ -16,7 +16,8 @@ use protocol::{
     AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams, Cwd,
     ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams,
     PairingCode, PairingInvite, PullRequest, PullState, Request, Response, ServerFrame,
-    TaskScheduleParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
+    TaskRescheduleParams, TaskScheduleParams, TerminalGrantParams, TerminalId, TerminalKey,
+    TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -1259,6 +1260,42 @@ async fn schedule_task(
     Ok(Response::TaskScheduled { task })
 }
 
+async fn reschedule_task(
+    state: &State,
+    p: TaskRescheduleParams,
+    by: String,
+    auth: &Authorized,
+) -> Reply {
+    const STARTED: &str = "the task is starting or started and can no longer be edited";
+    let (current, replayed) = {
+        let schedule = lock(&state.schedule);
+        let replayed = schedule.replayed(&p.schedule_id, &p.op_id, p.start_at_ms, &p.prompt);
+        (schedule.task(&p.schedule_id).cloned(), replayed)
+    };
+    let edited = match (current, replayed) {
+        (_, Some(replayed)) => replayed,
+        (None, None) => schedule::Edit::Missing,
+        (Some(e), None) if e.by != by => schedule::Edit::Refused(schedule::NOT_YOURS),
+        (Some(e), None) if e.starting || e.blocked.is_some() => schedule::Edit::Started,
+        (Some(mut entry), None) => {
+            entry.start_at_ms = p.start_at_ms;
+            entry.task.prompt = p.prompt;
+            state.drive.schedule_check(&entry.task).await?;
+            if !auth() {
+                return err(ErrorCode::NotPaired, "peer is no longer authorized");
+            }
+            lock(&state.schedule).edit(&p.schedule_id, &by, &p.op_id, entry, crate::now_ms())
+        }
+    };
+    match edited {
+        schedule::Edit::Done(task) => Ok(Response::TaskScheduled { task }),
+        schedule::Edit::Missing => err(ErrorCode::NotFound, "no such scheduled task"),
+        schedule::Edit::Started => err(ErrorCode::AgentNotReady, STARTED),
+        schedule::Edit::Refused(m) => err(ErrorCode::InvalidParams, m),
+        schedule::Edit::Unsaved => err(ErrorCode::Internal, "could not save the scheduled tasks"),
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TlsKeyFile {
@@ -2075,6 +2112,14 @@ impl Session<'_> {
                         }
                     };
                     (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::TaskReschedule(p) => {
+                let (op_id, state, by) = (p.op_id.clone(), self.state.clone(), peer.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (reschedule_task(&state, p, by, &auth).await, None)
                 });
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))
@@ -2950,6 +2995,13 @@ fn audit_target(request: &Request) -> Option<String> {
             return Some(format!("{task} start_at_ms={}", p.start_at_ms));
         }
         Request::TaskUnschedule(p) => p.schedule_id.as_str(),
+        Request::TaskReschedule(p) => {
+            return Some(format!(
+                "{} start_at_ms={}",
+                p.schedule_id.as_str(),
+                p.start_at_ms
+            ));
+        }
         Request::TaskFolders(p) => p.path.as_str(),
         Request::TaskWorktrees(p) | Request::TaskIssues(p) => p.cwd.as_str(),
         Request::TaskSessions(p) => p.cwd.as_str(),

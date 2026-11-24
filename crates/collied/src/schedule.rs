@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use protocol::{ScheduleId, ScheduledTask, TaskNewParams, TerminalId};
+use protocol::{OpId, PromptText, ScheduleId, ScheduledTask, TaskNewParams, TerminalId};
 use serde::{Deserialize, Serialize};
 
 use crate::peers;
@@ -11,6 +11,8 @@ pub const MAX_TASKS: usize = 10;
 pub const MAX_AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
 pub const LATE_MS: u64 = 60 * 60 * 1000;
 const MAX_FILE: u64 = 1024 * 1024;
+const EDITS_KEPT: usize = 10;
+pub const NOT_YOURS: &str = "only the phone that scheduled the task can edit it";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -22,6 +24,8 @@ pub struct Entry {
     pub starting: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked: Option<TerminalId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<OpId>,
 }
 
 impl Entry {
@@ -32,6 +36,7 @@ impl Entry {
             task,
             starting: false,
             blocked: None,
+            edits: Vec::new(),
         }
     }
 
@@ -52,6 +57,15 @@ impl Entry {
 pub enum Due {
     Start(ScheduleId, Entry),
     Late(ScheduleId, Entry),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Edit {
+    Done(ScheduledTask),
+    Missing,
+    Started,
+    Refused(&'static str),
+    Unsaved,
 }
 
 #[derive(Debug, PartialEq)]
@@ -82,6 +96,14 @@ impl Schedule {
         };
         match peers::save_json(path, &self.tasks) {
             Ok(()) => true,
+            Err(peers::Error::Io { path: failed, .. })
+                if Some(failed.as_path()) == path.parent() =>
+            {
+                tracing::warn!(
+                    "the scheduled tasks were replaced, but their folder was not flushed"
+                );
+                true
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "could not save the scheduled tasks");
                 false
@@ -116,6 +138,68 @@ impl Schedule {
             return Err("could not save the task");
         }
         Ok(shown)
+    }
+
+    pub fn task(&self, id: &ScheduleId) -> Option<&Entry> {
+        self.tasks.get(id)
+    }
+
+    pub fn replayed(
+        &self,
+        id: &ScheduleId,
+        op_id: &OpId,
+        start_at_ms: u64,
+        prompt: &Option<PromptText>,
+    ) -> Option<Edit> {
+        let e = self.tasks.get(id)?;
+        let at = e.edits.iter().position(|o| o == op_id)?;
+        let same =
+            e.start_at_ms == start_at_ms && (e.blocked.is_some() || &e.task.prompt == prompt);
+        Some(if at + 1 != e.edits.len() {
+            Edit::Refused("a newer edit replaced this one")
+        } else if same {
+            Edit::Done(shown(id, e))
+        } else {
+            Edit::Refused("this request already made another edit")
+        })
+    }
+
+    pub fn edit(
+        &mut self,
+        id: &ScheduleId,
+        by: &str,
+        op_id: &OpId,
+        mut edited: Entry,
+        now_ms: u64,
+    ) -> Edit {
+        if let Some(replayed) = self.replayed(id, op_id, edited.start_at_ms, &edited.task.prompt) {
+            return replayed;
+        }
+        match self.tasks.get(id) {
+            None => return Edit::Missing,
+            Some(e) if e.by != by => return Edit::Refused(NOT_YOURS),
+            Some(e) if !e.waiting() => return Edit::Started,
+            Some(e) => edited.edits = e.edits.clone(),
+        }
+        edited.by = by.to_owned();
+        edited.edits.push(op_id.clone());
+        if edited.edits.len() > EDITS_KEPT {
+            edited.edits.remove(0);
+        }
+        if edited.start_at_ms <= now_ms {
+            return Edit::Refused("the start time has passed");
+        }
+        if edited.start_at_ms > now_ms + MAX_AHEAD_MS {
+            return Edit::Refused("a task can start at most 24 hours from now");
+        }
+        let Some(previous) = self.tasks.insert(id.clone(), edited) else {
+            return Edit::Missing;
+        };
+        if !self.save() {
+            self.tasks.insert(id.clone(), previous);
+            return Edit::Unsaved;
+        }
+        Edit::Done(shown(id, &self.tasks[id]))
     }
 
     pub fn cancel(&mut self, id: &ScheduleId) -> Cancel {
@@ -410,6 +494,87 @@ mod tests {
         assert_eq!(restarted.list(), vec![waiting]);
         assert!(matches!(restarted.claim(NOW + 5000), Some(Due::Start(..))));
         assert_eq!(restarted.claim(NOW + 5000), None);
+    }
+
+    #[test]
+    fn an_edit_replaces_a_waiting_task_and_is_refused_once_it_starts() {
+        let (_dir, path, mut schedule) = store();
+        let added = schedule.add(entry("nA", NOW + 1000, "go"), NOW).unwrap();
+        let id = added.schedule_id.clone();
+        let op = |s: &str| OpId::new(s.repeat(22)).unwrap();
+        let edit = |at: u64, prompt: &str| {
+            let mut e = entry("nA", NOW + 1000, "go");
+            e.start_at_ms = at;
+            e.task.prompt = Some(PromptText::new(prompt).unwrap());
+            e
+        };
+        assert_eq!(
+            schedule.edit(
+                &id,
+                "nA",
+                &op("A"),
+                edit(NOW + MAX_AHEAD_MS + 1, "later"),
+                NOW
+            ),
+            Edit::Refused("a task can start at most 24 hours from now")
+        );
+        assert_eq!(
+            schedule.edit(&id, "nA", &op("B"), edit(NOW, "later"), NOW),
+            Edit::Refused("the start time has passed")
+        );
+        assert_eq!(
+            schedule.edit(&id, "nB", &op("C"), edit(NOW + 5000, "theirs"), NOW),
+            Edit::Refused(NOT_YOURS)
+        );
+        let Edit::Done(shown) = schedule.edit(&id, "nA", &op("D"), edit(NOW + 4000, "sooner"), NOW)
+        else {
+            panic!("not edited");
+        };
+        assert_eq!(shown.start_at_ms, NOW + 4000);
+        let Edit::Done(shown) = schedule.edit(&id, "nA", &op("E"), edit(NOW + 5000, "later"), NOW)
+        else {
+            panic!("not edited");
+        };
+        let mut schedule = Schedule::load(path);
+        assert_eq!(schedule.list(), vec![shown.clone()]);
+        assert_eq!(
+            schedule.task(&id).and_then(|e| e.task.prompt.clone()),
+            Some(PromptText::new("later").unwrap())
+        );
+        assert_eq!(
+            schedule.edit(&id, "nA", &op("E"), edit(NOW + 5000, "later"), NOW + 4000),
+            Edit::Done(shown.clone()),
+            "a resent edit replays after a restart"
+        );
+        assert_eq!(
+            schedule.edit(&id, "nA", &op("E"), edit(NOW + 5000, "other"), NOW),
+            Edit::Refused("this request already made another edit")
+        );
+        assert_eq!(
+            schedule.edit(&id, "nA", &op("D"), edit(NOW + 4000, "sooner"), NOW),
+            Edit::Refused("a newer edit replaced this one")
+        );
+        assert!(matches!(schedule.claim(NOW + 5000), Some(Due::Start(..))));
+        assert_eq!(
+            schedule.edit(
+                &id,
+                "nA",
+                &op("F"),
+                edit(NOW + 9000, "too late"),
+                NOW + 5000
+            ),
+            Edit::Started
+        );
+        assert_eq!(
+            schedule.edit(&id, "nA", &op("E"), edit(NOW + 5000, "later"), NOW + 5000),
+            Edit::Done(shown),
+            "a resent edit replays once the task starts"
+        );
+        let missing = ScheduleId::new("0".repeat(32)).unwrap();
+        assert_eq!(
+            schedule.edit(&missing, "nA", &op("G"), edit(NOW + 9000, "x"), NOW),
+            Edit::Missing
+        );
     }
 
     #[test]

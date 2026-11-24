@@ -422,6 +422,8 @@ pub enum Request {
     TaskScheduled(Empty),
     #[serde(rename = "task.unschedule")]
     TaskUnschedule(TaskUnscheduleParams),
+    #[serde(rename = "task.reschedule")]
+    TaskReschedule(TaskRescheduleParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -502,6 +504,7 @@ impl Request {
         "task.schedule",
         "task.scheduled",
         "task.unschedule",
+        "task.reschedule",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -560,6 +563,7 @@ impl Request {
             Self::TaskSchedule(_) => "task.schedule",
             Self::TaskScheduled(_) => "task.scheduled",
             Self::TaskUnschedule(_) => "task.unschedule",
+            Self::TaskReschedule(_) => "task.reschedule",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -618,6 +622,7 @@ impl Request {
             | Self::TaskArchiveOnMerge(_)
             | Self::TaskSchedule(_)
             | Self::TaskUnschedule(_)
+            | Self::TaskReschedule(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -1108,6 +1113,32 @@ pub struct TaskScheduleParams {
 pub struct TaskUnscheduleParams {
     pub op_id: OpId,
     pub schedule_id: ScheduleId,
+}
+
+/// Replaces a waiting task's start time and prompt, after the checks `task.schedule` makes;
+/// its folder, agent and place stay. Sent only to a collied whose `TaskOptions` says
+/// `edit_schedule`. Answers `task_scheduled`.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TaskRescheduleParams {
+    pub op_id: OpId,
+    pub schedule_id: ScheduleId,
+    pub start_at_ms: u64,
+    /// Required unless the task resumes a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<PromptText>,
+}
+
+impl std::fmt::Debug for TaskRescheduleParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskRescheduleParams")
+            .field("op_id", &self.op_id)
+            .field("schedule_id", &self.schedule_id)
+            .field("start_at_ms", &self.start_at_ms)
+            .field("prompt", &self.prompt.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1951,6 +1982,9 @@ pub struct TaskOptions {
     /// false from an older one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub schedule: bool,
+    /// Whether this collied takes `task.reschedule`; false from an older one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edit_schedule: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2244,6 +2278,19 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reschedule_never_shows_its_prompt_in_debug() {
+        let request = Request::TaskReschedule(TaskRescheduleParams {
+            op_id: OpId::new("A".repeat(22)).unwrap(),
+            schedule_id: ScheduleId::new("0".repeat(32)).unwrap(),
+            start_at_ms: 1,
+            prompt: Some(PromptText::new("sentinel-7f3a").unwrap()),
+        });
+        let shown = format!("{request:?}");
+        assert!(!shown.contains("sentinel-7f3a"), "{shown}");
+        assert!(shown.contains("<redacted>"));
+    }
 
     fn parse(s: &str) -> Result<ClientFrame, FrameError> {
         parse_client_frame(s.as_bytes())

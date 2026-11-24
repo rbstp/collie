@@ -233,6 +233,7 @@ impl NegotiatedProtocol {
             | Request::TaskSchedule(_)
             | Request::TaskScheduled(_)
             | Request::TaskUnschedule(_)
+            | Request::TaskReschedule(_)
             | Request::WorkspaceClose(_)
             | Request::PaneClose(_)
             | Request::ApprovalList(_)

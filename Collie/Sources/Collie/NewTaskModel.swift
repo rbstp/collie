@@ -45,6 +45,8 @@ final class NewTaskModel {
             sessionsError = nil
             session = nil
             scheduled = []
+            editing = nil
+            stashed = nil
         }
     }
     private(set) var options: TaskOptions?
@@ -139,6 +141,10 @@ final class NewTaskModel {
     var startLater = false
     var startAt = Date.now.addingTimeInterval(3600)
     private(set) var scheduled: [ScheduledTask] = []
+    private(set) var editing: ScheduledTask?
+    private var stashed: (prompt: String, attachments: [AttachedFile], startAt: Date)?
+    private var draftGeneration = 0
+    private var editingResume = false
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil,
@@ -212,6 +218,7 @@ final class NewTaskModel {
     static let collieTooOld = "collied on this computer is too old to choose where tasks start. Update it, or set Start tasks in to Automatic in Settings."
 
     var offersSchedule: Bool { options?.schedule == true }
+    var offersEdit: Bool { options?.editSchedule == true }
     var scheduleUnsupported: Bool { startLater && options != nil && !offersSchedule }
     static let scheduleAhead: TimeInterval = 24 * 3600
     static let scheduleTooOld = "collied on this computer is too old to schedule tasks. Update it, or turn off Start later."
@@ -251,14 +258,20 @@ final class NewTaskModel {
     @discardableResult
     func startDictation(at selection: TextSelection? = nil) -> Task<Void, Never>? {
         guard phase == .editing else { return nil }
-        return dictation.start(in: prompt, at: selection) { [weak self] in self?.prompt = $0 }
+        let generation = draftGeneration
+        return dictation.start(in: prompt, at: selection) { [weak self] text in
+            guard let self, self.draftGeneration == generation else { return }
+            self.prompt = text
+        }
     }
 
     @discardableResult
     func attach(_ items: [PendingAttachment]) -> Task<Void, Never>? {
         guard phase == .editing, upload == nil, !items.isEmpty, let machineId else { return nil }
         attachmentError = nil
+        let generation = draftGeneration
         return uploads.start(items, slots: attachmentSlots, core: core, machineId: machineId) { file in
+            guard self.draftGeneration == generation else { return }
             self.attachments.append(file)
         } failed: { message in
             self.attachmentError = message
@@ -528,9 +541,9 @@ final class NewTaskModel {
                 agent: agent, prompt: text, label: trimmed(label).nilIfEmpty,
                 ultracode: location != .resume && agent == "claude" && ultracode, codeMode: codeMode, runtime: runtimeChoice.runtime
             )
-            if !trimmed(prompt).isEmpty || !attachments.isEmpty {
+            if !trimmed(prompt).isEmpty || !attachments.isEmpty || location == .resume {
                 let draft = AgentDrafts.Draft(text: trimmed(prompt), attachments: attachments, shell: false)
-                ScheduledDrafts.keep(draft, for: task, machineId: machineId, file: scheduledFile)
+                ScheduledDrafts.keep(draft, for: task, machineId: machineId, resume: location == .resume, file: scheduledFile)
             }
             phase = .editing
             return true
@@ -571,6 +584,67 @@ final class NewTaskModel {
         var saved = AgentDrafts.load(from: draftsFile)
         saved.drafts[route] = AgentDrafts.Draft(text: typed, attachments: attachments, shell: false)
         saved.save(to: draftsFile)
+    }
+
+    func canEdit(_ task: ScheduledTask) -> Bool {
+        guard offersEdit, phase == .editing, editing == nil, upload == nil, !dictation.isActive, let machineId else { return false }
+        return ScheduledDrafts.kept(machineId: machineId, file: scheduledFile)[task.scheduleId] != nil
+    }
+
+    func edit(_ task: ScheduledTask) {
+        guard canEdit(task), let machineId, let kept = ScheduledDrafts.kept(machineId: machineId, file: scheduledFile)[task.scheduleId] else { return }
+        stashed = (prompt, attachments, startAt)
+        draftGeneration += 1
+        editing = task
+        editingResume = kept.resume == true
+        prompt = kept.draft.text
+        attachments = kept.draft.attachments.filter { $0.uploaded.timeIntervalSinceNow > -Attachment.keptOnMachine }
+        startAt = Date(timeIntervalSince1970: Double(task.startAtMs) / 1000)
+        error = nil
+    }
+
+    func stopEditing() {
+        guard let stashed, !(phase == .starting) else { return }
+        dictation.cancel()
+        cancelUpload()
+        draftGeneration += 1
+        editing = nil
+        (prompt, attachments, startAt) = stashed
+        self.stashed = nil
+        error = nil
+    }
+
+    var canSave: Bool {
+        guard editing != nil, phase == .editing, upload == nil, !dictation.isActive else { return false }
+        guard (Date.now...Date.now.addingTimeInterval(Self.scheduleAhead)).contains(startAt) else { return false }
+        return editingResume || !trimmed(prompt).isEmpty || !attachments.isEmpty
+    }
+
+    func saveEdit() async -> Bool {
+        guard canSave, let task = editing, let machineId else { return false }
+        let draft = AgentDrafts.Draft(text: trimmed(prompt), attachments: attachments, shell: false)
+        let text = (draft.attachments.map(\.path) + [draft.text].filter { !$0.isEmpty }).joined(separator: " ")
+        let (generation, resume) = (draftGeneration, editingResume)
+        phase = .starting
+        error = nil
+        ScheduledDrafts.saving.insert(task.scheduleId)
+        defer { ScheduledDrafts.saving.remove(task.scheduleId) }
+        do {
+            let edited = try await core.taskReschedule(
+                machineId: machineId, scheduleId: task.scheduleId, startAtMs: UInt64(startAt.timeIntervalSince1970 * 1000), prompt: text
+            )
+            ScheduledDrafts.keep(draft, for: edited, machineId: machineId, resume: resume, file: scheduledFile)
+            phase = .editing
+            guard generation == draftGeneration, machineId == self.machineId else { return true }
+            if let index = scheduled.firstIndex(where: { $0.scheduleId == edited.scheduleId }) { scheduled[index] = edited }
+            stopEditing()
+            return true
+        } catch {
+            phase = .editing
+            guard generation == draftGeneration, machineId == self.machineId else { return false }
+            self.error = AgentModel.message(for: error)
+            return false
+        }
     }
 
     func cancel() {
