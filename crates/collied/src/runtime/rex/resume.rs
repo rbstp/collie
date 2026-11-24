@@ -17,6 +17,8 @@ use crate::runtime::screen::Screen;
 use crate::runtime::{Error, TASK_KINDS, agents, herdr};
 
 const GRACE: Duration = Duration::from_secs(15);
+const CONFIRM: Duration = Duration::from_millis(if cfg!(test) { 200 } else { 3000 });
+const START_LIMIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 30 });
 const WINDOW: Duration = Duration::from_secs(90);
 const MAX_AGENTS: usize = 256;
 const MAX_FILE: u64 = 256 << 10;
@@ -46,6 +48,18 @@ pub(super) struct Resume {
     pending: BTreeMap<String, Agent>,
     until: Option<Instant>,
     typed: BTreeSet<String>,
+    starting: BTreeMap<String, Starting>,
+}
+
+#[derive(Clone)]
+struct Starting {
+    session: String,
+    new: String,
+    kind: String,
+    conversation: String,
+    shell: (u32, (u16, u16)),
+    since: Instant,
+    running: Option<Instant>,
 }
 
 fn uuid(id: &str) -> bool {
@@ -92,7 +106,14 @@ fn read(path: &Path) -> Record {
     }
 }
 
-fn recorded(listing: &Listing) -> BTreeMap<String, Agent> {
+fn transcript(claude: Option<&Path>, agent: &Agent) -> bool {
+    agent.kind != "claude"
+        || claude.is_some_and(|c| {
+            crate::transcript::claude_transcript(c, &agent.folder, &agent.conversation)
+        })
+}
+
+fn recorded(listing: &Listing, claude: Option<&Path>) -> BTreeMap<String, Agent> {
     (listing.agents.iter())
         .filter_map(|a| {
             let block = a.terminal_id.strip_prefix(PREFIX)?;
@@ -101,7 +122,7 @@ fn recorded(listing: &Listing) -> BTreeMap<String, Agent> {
                 conversation: a.agent_session.as_ref()?.value.clone(),
                 folder: a.foreground_cwd.clone()?,
             };
-            fits(block, &agent).then(|| (block.to_owned(), agent))
+            (fits(block, &agent) && transcript(claude, &agent)).then(|| (block.to_owned(), agent))
         })
         .collect()
 }
@@ -153,6 +174,7 @@ impl Resume {
         self.pending.clear();
         self.missing.clear();
         self.typed.clear();
+        self.starting.clear();
         self.until = None;
         let earlier = self.record.instance.replace(instance.to_owned()).is_some();
         let agents = std::mem::take(&mut self.record.agents);
@@ -162,6 +184,9 @@ impl Resume {
             .map(Duration::from_millis)
             .filter(|age| *age < WINDOW);
         if let Some(age) = age.filter(|_| saved && earlier) {
+            for (block, agent) in &agents {
+                tracing::warn!(block, kind = %agent.kind, "Rex resume: planned");
+            }
             self.pending = agents;
             self.until = Some(now + (WINDOW - age));
         }
@@ -202,7 +227,9 @@ impl Resume {
 
     pub(super) fn due(&mut self, now: Instant) -> Vec<(String, Agent)> {
         if !self.open(now) {
-            self.pending.clear();
+            for (block, agent) in std::mem::take(&mut self.pending) {
+                tracing::warn!(block, kind = %agent.kind, "Rex resume: window ended before its shell was ready");
+            }
         }
         (self.pending.iter())
             .map(|(b, a)| (b.clone(), a.clone()))
@@ -250,8 +277,8 @@ impl Resume {
 
 enum Step {
     Wait,
-    Drop,
-    Done,
+    Drop(&'static str),
+    Started,
 }
 
 impl Rex {
@@ -273,6 +300,10 @@ impl Rex {
         let inner = self.lock();
         inner.live.as_ref().filter(|l| l.synced)?;
         inner.server.as_ref()?.instance.clone()
+    }
+
+    fn claude_dir(&self) -> Option<&Path> {
+        self.claude_sessions.as_deref()?.parent()
     }
 
     pub(super) fn plan_resume(&self) {
@@ -297,14 +328,25 @@ impl Rex {
             return;
         };
         let instance = self.instance();
-        let due = {
+        let (due, starting) = {
             let mut resume = crate::lock(&self.resume);
-            resume.observe(instance.as_deref(), &recorded(&listing), Instant::now());
-            resume.due(Instant::now())
+            let current = recorded(&listing, self.claude_dir());
+            resume.observe(instance.as_deref(), &current, Instant::now());
+            (resume.due(Instant::now()), resume.starting.clone())
         };
+        for (block, start) in starting {
+            self.advance(&block, start, &listing).await;
+        }
         for (block, agent) in due {
-            if let Step::Drop = self.resume_one(&block, &agent, &cli).await {
-                crate::lock(&self.resume).pending.remove(&block);
+            match self.resume_one(&block, &agent, &cli).await {
+                Step::Wait => {}
+                Step::Drop(why) => {
+                    tracing::warn!(block, kind = %agent.kind, "Rex resume: not started, {why}");
+                    crate::lock(&self.resume).pending.remove(&block);
+                }
+                Step::Started => {
+                    tracing::warn!(block, kind = %agent.kind, "Rex resume: started beside its restored shell");
+                }
             }
         }
     }
@@ -317,10 +359,13 @@ impl Rex {
         cli: &impl Fn(&str) -> Option<String>,
     ) -> Step {
         let (Some(args), Some(cli)) = (args(agent), cli(&agent.kind)) else {
-            return Step::Drop;
+            return Step::Drop("no command for its kind");
         };
         if !Path::new(&agent.folder).is_dir() {
-            return Step::Drop;
+            return Step::Drop("its folder is gone");
+        }
+        if !transcript(self.claude_dir(), agent) {
+            return Step::Drop("its conversation has no transcript");
         }
         let shell = self.live(|l| {
             (l.model.shell_block(block)).map(|(session, size)| (l.client.clone(), session, size))
@@ -334,74 +379,130 @@ impl Rex {
         if !untouched(&client, &session, block, size).await {
             return Step::Wait;
         }
+        let held = agent.kind == "claude"
+            && (self.claude_sessions.as_deref())
+                .is_some_and(|s| crate::transcript::claude_holds(s, &agent.conversation));
+        if held {
+            return Step::Wait;
+        }
         let Some(listing) = self.listing() else {
             return Step::Wait;
         };
-        if running(&listing, &agent.conversation)
-            || !crate::lock(&self.resume).claim(block, &agent.conversation, Instant::now())
-        {
-            return Step::Drop;
+        if running(&listing, &agent.conversation) {
+            return Step::Drop("its conversation runs elsewhere");
+        }
+        if !crate::lock(&self.resume).claim(block, &agent.conversation, Instant::now()) {
+            return Step::Drop("claimed already, or resuming stopped");
         }
         let argv = agents::task_argv(&cli, &args, None);
-        match self
-            .replace(&client, &session, block, (pid, size), &agent.folder, argv)
-            .await
-        {
+        match start(&client, &session, block, &agent.folder, argv).await {
             Ok(new) => {
-                tracing::info!(block, new, kind = %agent.kind, "resumed an agent in place of its restored Rex shell")
+                let starting = Starting {
+                    session,
+                    new,
+                    kind: agent.kind.clone(),
+                    conversation: agent.conversation.clone(),
+                    shell: (pid, size),
+                    since: Instant::now(),
+                    running: None,
+                };
+                crate::lock(&self.resume)
+                    .starting
+                    .insert(block.to_owned(), starting);
+                Step::Started
             }
             Err(e) => {
-                tracing::warn!(block, error = %e, "did not resume an agent in its restored Rex block")
+                tracing::warn!(block, error = %e, "Rex resume: could not start the agent");
+                Step::Drop("Rex refused the new block")
             }
         }
-        Step::Done
     }
 
-    async fn replace(
-        &self,
-        client: &Client,
-        session: &str,
-        block: &str,
-        (pid, size): (u32, (u16, u16)),
-        cwd: &str,
-        argv: Vec<String>,
-    ) -> Result<String, Error> {
-        let layout =
-            json!({ "block": { "flavor": FLAVOR, "options": { "command": argv, "cwd": cwd } } });
-        let payload = json!({
-            "session_id": session, "anchor_id": block, "direction": "horizontal",
-            "side": "before", "layout": layout,
+    async fn advance(&self, block: &str, mut start: Starting, listing: &Listing) {
+        let id = format!("{PREFIX}{}", start.new);
+        let runs = (listing.agents.iter()).any(|a| {
+            a.terminal_id == id
+                && (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation)
         });
-        let (_, split): (_, Split) = client
-            .call(Method::SessionNewSplit, payload, TIMEOUT)
-            .await?;
-        let new = (split.block_ids.into_iter().flatten().flatten())
-            .find(|b| model::valid(b, "block"))
-            .ok_or_else(|| {
-                Error::Unsupported(
-                    "Rex split the block without a block collied can name".to_owned(),
-                )
-            })?;
-        let _ = disown(client, session, &new).await;
-        let still = idle(client, session, block).await == Some(pid)
-            && untouched(client, session, block, size).await
-            && crate::lock(&self.resume).open(Instant::now());
-        if still {
-            self.move_task(block, &new);
+        let ended =
+            (self.live(|l| !l.model.has(&start.new) || l.model.exited(&start.new))).unwrap_or(true);
+        let kind = start.kind.clone();
+        let outcome = if runs {
+            let since = *start.running.get_or_insert_with(Instant::now);
+            if since.elapsed() < CONFIRM {
+                crate::lock(&self.resume)
+                    .starting
+                    .insert(block.to_owned(), start);
+                return;
+            }
+            self.finish(block, &start).await
+        } else if ended {
+            let _ = self.close_block(&start.session, &start.new).await;
+            "the agent exited before it ran its conversation; its restored shell stays"
+        } else if start.since.elapsed() >= START_LIMIT {
+            "the agent did not show its conversation in time; its block and the restored shell stay"
+        } else {
+            start.running = None;
+            crate::lock(&self.resume)
+                .starting
+                .insert(block.to_owned(), start);
+            return;
+        };
+        crate::lock(&self.resume).starting.remove(block);
+        tracing::warn!(block, kind = %kind, "Rex resume: {outcome}");
+    }
+
+    async fn finish(&self, block: &str, start: &Starting) -> &'static str {
+        let Ok(client) = self.live(|l| l.client.clone()) else {
+            return "resumed; the connection ended before its restored shell closed";
+        };
+        let (pid, size) = start.shell;
+        let still = idle(&client, &start.session, block).await == Some(pid)
+            && untouched(&client, &start.session, block, size).await
+            && !crate::lock(&self.resume).off;
+        if !still {
+            return "resumed beside its restored shell, which changed or resuming stopped";
         }
-        let close = if still { block } else { new.as_str() };
-        let payload = json!({ "session_id": session, "block_id": close });
+        self.move_task(block, &start.new);
+        match self.close_block(&start.session, block).await {
+            Ok(()) => "resumed in place of its restored shell",
+            Err(_) => "resumed; its restored shell could not be closed",
+        }
+    }
+
+    async fn close_block(&self, session: &str, block: &str) -> Result<(), Error> {
+        let client = self.live(|l| l.client.clone())?;
+        let payload = json!({ "session_id": session, "block_id": block });
         client
             .call::<Value>(Method::BlockClose, payload, CLOSE_TIMEOUT)
             .await?;
-        match still {
-            true => Ok(new),
-            false => Err(Error::Unsupported(
-                "the restored shell changed or resuming stopped, so the new block was closed"
-                    .to_owned(),
-            )),
-        }
+        Ok(())
     }
+}
+
+async fn start(
+    client: &Client,
+    session: &str,
+    block: &str,
+    cwd: &str,
+    argv: Vec<String>,
+) -> Result<String, Error> {
+    let layout =
+        json!({ "block": { "flavor": FLAVOR, "options": { "command": argv, "cwd": cwd } } });
+    let payload = json!({
+        "session_id": session, "anchor_id": block, "direction": "horizontal",
+        "side": "before", "layout": layout,
+    });
+    let (_, split): (_, Split) = client
+        .call(Method::SessionNewSplit, payload, TIMEOUT)
+        .await?;
+    let new = (split.block_ids.into_iter().flatten().flatten())
+        .find(|b| model::valid(b, "block"))
+        .ok_or_else(|| {
+            Error::Unsupported("Rex split the block without a block collied can name".to_owned())
+        })?;
+    let _ = disown(client, session, &new).await;
+    Ok(new)
 }
 
 async fn idle(client: &Client, session: &str, block: &str) -> Option<u32> {
@@ -450,6 +551,7 @@ mod tests {
     const THIRD: &str = "0a0a0a0a-0000-4000-8000-000000000003";
     const FOURTH: &str = "0a0a0a0a-0000-4000-8000-000000000004";
     const FIFTH: &str = "0a0a0a0a-0000-4000-8000-000000000005";
+    const SIXTH: &str = "0a0a0a0a-0000-4000-8000-000000000006";
     const PROMPT: &str = "user@host app % \x1b[1;17H";
 
     fn agent(kind: &str, conversation: &str, folder: &str) -> Agent {
@@ -511,41 +613,6 @@ mod tests {
 
     fn cli(kind: &str) -> Option<String> {
         Some(format!("/opt/bin/{kind}"))
-    }
-
-    async fn restarted(
-        dir: &Path,
-        agents: &[(&str, Agent)],
-        blocks: &[(&str, serde_json::Value, &str)],
-    ) -> (Fake, Arc<Rex>, PathBuf) {
-        let record = dir.join("rex-resume.json");
-        let saved = Record {
-            instance: Some("one".to_owned()),
-            agents: (agents.iter())
-                .map(|(b, a)| ((*b).to_owned(), a.clone()))
-                .collect(),
-        };
-        crate::peers::save_json(&record, &saved).unwrap();
-        let fake = Fake::start().await;
-        {
-            let mut s = fake.state();
-            s.instance = "two";
-            s.started_at = rfc3339(crate::now_ms());
-            s.sessions.push((S.to_owned(), "work".to_owned()));
-            for (block, process, screen) in blocks {
-                s.add(S, block, process.clone(), Vec::new());
-                s.block(block).screen = (*screen).to_owned();
-            }
-        }
-        let rex =
-            Rex::new(fake.socket.clone()).with_resume(record.clone(), dir.join("rex-resume-off"));
-        (fake, Arc::new(rex), record)
-    }
-
-    fn anchors(fake: &Fake) -> Vec<String> {
-        (fake.state().splits.iter())
-            .map(|s| s["anchor_id"].as_str().unwrap_or_default().to_owned())
-            .collect()
     }
 
     #[test]
@@ -773,6 +840,13 @@ mod tests {
         );
         rex.resume_with(cli).await;
         let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert!(
+            saved.agents.is_empty(),
+            "a conversation with no transcript yet"
+        );
+        transcribe(dir.path(), "/work/app", FIRST);
+        rex.resume_with(cli).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
         assert_eq!(saved.instance.as_deref(), Some("one"));
         assert_eq!(
             saved.agents,
@@ -780,12 +854,106 @@ mod tests {
         );
     }
 
+    fn key(folder: &str) -> String {
+        folder
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
+    }
+
+    fn transcribe(claude: &Path, folder: &str, conversation: &str) {
+        let dir = claude.join("projects").join(key(folder));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{conversation}.jsonl")), "{}\n").unwrap();
+    }
+
+    fn pid_file(sessions: &Path, conversation: &str) {
+        let me = std::process::id();
+        let claim = serde_json::json!({"pid": me, "sessionId": conversation, "cwd": "/w", "startedAt": crate::now_ms()});
+        std::fs::write(sessions.join(format!("{me}.json")), claim.to_string()).unwrap();
+    }
+
+    struct Restarted {
+        fake: Fake,
+        rex: Arc<Rex>,
+        record: PathBuf,
+        sessions: PathBuf,
+    }
+
+    async fn restarted(
+        dir: &Path,
+        agents: &[(&str, Agent)],
+        blocks: &[(&str, serde_json::Value, &str)],
+        untranscribed: &[&str],
+    ) -> Restarted {
+        let record = dir.join("rex-resume.json");
+        let claude = dir.join("claude");
+        let sessions = claude.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        for (_, a) in agents {
+            if !untranscribed.contains(&a.conversation.as_str()) {
+                transcribe(&claude, &a.folder, &a.conversation);
+            }
+        }
+        let saved = Record {
+            instance: Some("one".to_owned()),
+            agents: (agents.iter())
+                .map(|(b, a)| ((*b).to_owned(), a.clone()))
+                .collect(),
+        };
+        crate::peers::save_json(&record, &saved).unwrap();
+        let fake = Fake::start().await;
+        {
+            let mut s = fake.state();
+            s.instance = "two";
+            s.started_at = rfc3339(crate::now_ms());
+            s.split_pid = Some(std::process::id());
+            s.sessions.push((S.to_owned(), "work".to_owned()));
+            for (block, process, screen) in blocks {
+                s.add(S, block, process.clone(), Vec::new());
+                s.block(block).screen = (*screen).to_owned();
+            }
+        }
+        let rex = Rex::new(fake.socket.clone())
+            .with_claude_sessions(Some(sessions.clone()))
+            .with_resume(record.clone(), dir.join("rex-resume-off"));
+        Restarted {
+            fake,
+            rex: Arc::new(rex),
+            record,
+            sessions,
+        }
+    }
+
+    fn anchors(fake: &Fake) -> Vec<String> {
+        (fake.state().splits.iter())
+            .map(|s| s["anchor_id"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    fn blocks(fake: &Fake) -> Vec<String> {
+        fake.state().blocks.iter().map(|b| b.id.clone()).collect()
+    }
+
+    async fn ticks(rex: &Rex, until: impl Fn() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            rex.reread_sessions();
+            rex.resume_with(cli).await;
+            if until() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
     #[tokio::test]
-    async fn a_restarted_server_gets_each_agent_back_once_in_place_of_its_untouched_shell() {
+    async fn only_untouched_shells_of_transcribed_conversations_get_an_agent_once() {
         let dir = tempfile::tempdir().unwrap();
         let folder = std::fs::canonicalize(dir.path()).unwrap();
         let folder = folder.to_str().unwrap();
-        let (fake, rex, record) = restarted(
+        let r = restarted(
             dir.path(),
             &[
                 (READY, agent("claude", FIRST, folder)),
@@ -794,6 +962,7 @@ mod tests {
                 (BUSY, agent("claude", THIRD, folder)),
                 (GONE, agent("claude", FOURTH, "/no/such/folder")),
                 (NESTED, agent("claude", FIFTH, folder)),
+                (OTHER, agent("claude", SIXTH, folder)),
             ],
             &[
                 (READY, login_shell(), PROMPT),
@@ -802,18 +971,16 @@ mod tests {
                 (BUSY, in_vim(), PROMPT),
                 (GONE, login_shell(), PROMPT),
                 (NESTED, nested(), PROMPT),
+                (OTHER, login_shell(), PROMPT),
             ],
+            &[SIXTH],
         )
         .await;
-        let _task = follow(&rex).await;
-        rex.resume_with(cli).await;
-        rex.resume_with(cli).await;
-        assert_eq!(
-            anchors(&fake),
-            [READY],
-            "one block per conversation, untouched shells only"
-        );
-        let split = fake.state().splits[0].clone();
+        let _task = follow(&r.rex).await;
+        r.rex.resume_with(cli).await;
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
+        let split = r.fake.state().splits[0].clone();
         assert_eq!(split["side"], "before");
         assert_eq!(
             split["layout"]["block"]["options"],
@@ -822,93 +989,147 @@ mod tests {
                 "cwd": folder,
             })
         );
+        let on_disk: Record = crate::peers::load_json(&r.record).unwrap();
+        assert_eq!(on_disk.instance.as_deref(), Some("two"));
+        assert!(on_disk.agents.is_empty());
+        r.fake.state().block(TYPED).screen = PROMPT.to_owned();
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY, TYPED]);
+    }
+
+    #[tokio::test]
+    async fn the_restored_shell_closes_only_once_the_agent_runs_its_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        let _task = follow(&r.rex).await;
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
+        for _ in 0..5 {
+            r.rex.resume_with(cli).await;
+        }
         assert!(
-            fake.state().blocks.iter().all(|b| b.id != READY),
-            "the restored shell closed"
+            blocks(&r.fake).contains(&READY.to_owned()),
+            "not before the agent runs it"
         );
-        let new = fake.state().blocks.last().unwrap().id.clone();
+        pid_file(&r.sessions, FIRST);
+        assert!(ticks(&r.rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        let new = blocks(&r.fake);
+        assert_eq!(new.len(), 1);
         assert_eq!(
-            fake.state().block(&new).owner,
+            r.fake.state().block(&new[0]).owner,
             None,
             "the new block was given up"
         );
-        let on_disk: Record = crate::peers::load_json(&record).unwrap();
-        assert_eq!(on_disk.instance.as_deref(), Some("two"));
-        assert!(on_disk.agents.is_empty());
-        fake.state().block(TYPED).screen = PROMPT.to_owned();
-        rex.resume_with(cli).await;
-        assert_eq!(anchors(&fake), [READY, TYPED]);
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_exits_at_once_leaves_the_restored_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        r.fake.state().split_exits = true;
+        let _task = follow(&r.rex).await;
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
+        assert!(
+            ticks(&r.rex, || blocks(&r.fake) == [READY]).await,
+            "{:?}",
+            blocks(&r.fake)
+        );
+        assert!(crate::lock(&r.rex.resume).starting.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_conversation_a_live_claude_holds_waits_until_it_lets_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        pid_file(&r.sessions, FIRST);
+        let _task = follow(&r.rex).await;
+        for _ in 0..3 {
+            r.rex.resume_with(cli).await;
+        }
+        assert!(anchors(&r.fake).is_empty(), "held by a live process");
+        std::fs::remove_file(r.sessions.join(format!("{}.json", std::process::id()))).unwrap();
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
     }
 
     #[tokio::test]
     async fn a_conversation_running_in_another_block_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let folder = std::fs::canonicalize(dir.path()).unwrap();
-        let sessions = dir.path().join("sessions");
-        std::fs::create_dir(&sessions).unwrap();
-        let (me, now) = (std::process::id(), crate::now_ms());
-        let claim = serde_json::json!({"pid": me, "sessionId": FIRST, "cwd": "/work/app", "startedAt": now});
-        std::fs::write(sessions.join(format!("{me}.json")), claim.to_string()).unwrap();
-        let (fake, _, record) = restarted(
+        let exe = dir.path().join("codex");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let mut codex = std::process::Command::new(&exe).arg("600").spawn().unwrap();
+        let r = restarted(
             dir.path(),
-            &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+            &[(READY, agent("codex", FIRST, folder.to_str().unwrap()))],
             &[
                 (READY, login_shell(), PROMPT),
-                (OTHER, fake::process(me, "claude", "2.1.322"), ""),
+                (OTHER, fake::process(codex.id(), "codex", "codex"), ""),
             ],
+            &[],
         )
         .await;
-        let rex = Rex::new(fake.socket.clone())
-            .with_claude_sessions(Some(sessions))
-            .with_resume(record, dir.path().join("rex-resume-off"));
-        let rex = Arc::new(rex);
-        let _task = follow(&rex).await;
-        assert_eq!(
-            rex.get(&id(OTHER))
-                .unwrap()
-                .agent_session
-                .map(|s| s.value)
-                .as_deref(),
-            Some(FIRST)
-        );
-        rex.resume_with(cli).await;
-        assert!(anchors(&fake).is_empty());
+        let _task = follow(&r.rex).await;
+        assert!(r.rex.bind(&id(OTHER), FIRST, codex.id()));
+        r.rex.resume_with(cli).await;
+        let _ = codex.kill();
+        let _ = codex.wait();
+        assert!(anchors(&r.fake).is_empty());
     }
 
     #[tokio::test]
-    async fn a_shell_that_changes_or_a_resume_turned_off_while_the_agent_starts_keeps_its_block() {
+    async fn a_shell_that_changes_or_a_resume_turned_off_before_the_close_keeps_both() {
         for change in ["process", "screen", "off"] {
             let dir = tempfile::tempdir().unwrap();
             let folder = std::fs::canonicalize(dir.path()).unwrap();
-            let (fake, rex, _) = restarted(
+            let r = restarted(
                 dir.path(),
                 &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
                 &[(READY, login_shell(), PROMPT)],
+                &[],
             )
             .await;
-            let during = rex.clone();
-            fake.state().hook(
-                Method::SessionNewSplit,
-                None,
-                true,
-                Box::new(move |s| {
-                    match change {
-                        "process" => s.block(READY).process = in_vim(),
-                        "screen" => s.block(READY).screen = "user@host app % ls".to_owned(),
-                        _ => during.set_resumes(false).unwrap(),
-                    }
-                    Vec::new()
-                }),
+            let _task = follow(&r.rex).await;
+            r.rex.resume_with(cli).await;
+            assert_eq!(anchors(&r.fake), [READY], "{change}");
+            match change {
+                "process" => r.fake.state().block(READY).process = in_vim(),
+                "screen" => r.fake.state().block(READY).screen = "user@host app % ls".to_owned(),
+                _ => r.rex.set_resumes(false).unwrap(),
+            }
+            pid_file(&r.sessions, FIRST);
+            assert!(
+                ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await,
+                "{change}"
             );
-            let _task = follow(&rex).await;
-            rex.resume_with(cli).await;
-            assert_eq!(anchors(&fake), [READY], "{change}");
-            let ids: Vec<String> = fake.state().blocks.iter().map(|b| b.id.clone()).collect();
             assert_eq!(
-                ids,
-                [READY],
-                "{change}: the new block closed, the user's stayed"
+                blocks(&r.fake).len(),
+                2,
+                "{change}: the agent and the user's shell stay"
             );
+            assert!(blocks(&r.fake).contains(&READY.to_owned()), "{change}");
         }
     }
 
@@ -919,20 +1140,23 @@ mod tests {
         let tasks = dir.path().join("rex-tasks.json");
         let task = serde_json::json!({ READY: { "name": "collie-0a1b2c3d", "session": S } });
         crate::peers::save_json(&tasks, &task).unwrap();
-        let (fake, _, record) = restarted(
+        let r = restarted(
             dir.path(),
             &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
             &[(READY, login_shell(), PROMPT)],
+            &[],
         )
         .await;
-        let rex = Rex::new(fake.socket.clone())
+        let rex = Rex::new(r.fake.socket.clone())
             .with_tasks(tasks.clone())
-            .with_resume(record, dir.path().join("rex-resume-off"));
+            .with_claude_sessions(Some(r.sessions.clone()))
+            .with_resume(r.record.clone(), dir.path().join("rex-resume-off"));
         let rex = Arc::new(rex);
         let _task = follow(&rex).await;
         rex.resume_with(cli).await;
-        let new = fake.state().blocks.last().unwrap().id.clone();
-        assert_ne!(new, READY);
+        pid_file(&r.sessions, FIRST);
+        assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        let new = blocks(&r.fake)[0].clone();
         super::super::tests::eventually("the resumed task listed", || {
             rex.get(&id(&new))
                 .is_ok_and(|a| a.name.as_deref() == Some("collie-0a1b2c3d"))

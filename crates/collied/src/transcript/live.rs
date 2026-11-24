@@ -542,6 +542,21 @@ pub(crate) fn claude_session(sessions: &Path, pid: u32) -> Option<String> {
     claim(sessions, i32::try_from(pid).ok()?).map(|c| c.session)
 }
 
+pub(crate) fn claude_holds(sessions: &Path, session: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(sessions) else {
+        return false;
+    };
+    (entries.flatten().take(4096))
+        .filter_map(|e| {
+            e.file_name()
+                .to_str()?
+                .strip_suffix(".json")?
+                .parse::<i32>()
+                .ok()
+        })
+        .any(|pid| claim(sessions, pid).is_some_and(|c| c.session == session))
+}
+
 /// Trusted only while that pid is alive and started before the file says it did, so a file
 /// left by a process whose pid was reused is refused.
 fn claim(sessions: &Path, pid: i32) -> Option<Claim> {

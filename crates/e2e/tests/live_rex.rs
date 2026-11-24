@@ -2095,8 +2095,18 @@ async fn resume_scenario(server: &RexServer, bin: &Path) {
         .open(&record)
         .and_then(|mut f| std::io::Write::write_all(&mut f, saved.to_string().as_bytes()))
         .unwrap();
+    let sessions = server.root.join("claude/sessions");
+    let key: String = (work.to_str().unwrap().chars())
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let project = server.root.join("claude/projects").join(key);
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join(format!("{conversation}.jsonl")), "{}\n").unwrap();
     let rex = Arc::new(
-        Rex::new(server.socket.clone()).with_resume(record, server.root.join("rex-resume-off")),
+        Rex::new(server.socket.clone())
+            .with_claude_sessions(Some(sessions.clone()))
+            .with_resume(record, server.root.join("rex-resume-off")),
     );
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(rex.clone().run(stopped));
@@ -2116,17 +2126,48 @@ async fn resume_scenario(server: &RexServer, bin: &Path) {
         env.contains(&home),
         "the stand-in ran with the scratch home"
     );
-    let agent = until("the resumed agent listed", async || {
+    let ids = || -> Vec<String> {
+        (blocks_of(server, &session).iter())
+            .filter_map(|b| b["block_id"].as_str().map(str::to_owned))
+            .collect()
+    };
+    for _ in 0..3 {
+        rex.resume().await;
+    }
+    assert_eq!(
+        ids().len(),
+        3,
+        "the shell stays until the agent runs its conversation"
+    );
+    let started = until("the resumed agent listed", async || {
         let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
         (rt.agent_list().await.ok()?.into_iter()).find(|a| a.agent.as_deref() == Some("claude"))
     })
     .await;
+    let new = started.terminal_id.strip_prefix("rex:").unwrap().to_owned();
+    let pid = process_of(server, &session, &new)["foreground"]["pid"]
+        .as_u64()
+        .unwrap();
+    let claim = serde_json::json!({
+        "pid": pid, "sessionId": conversation, "cwd": work, "startedAt": collied::now_ms(),
+    });
+    std::fs::write(sessions.join(format!("{pid}.json")), claim.to_string()).unwrap();
+    until("the restored shell closed", async || {
+        rex.reread_sessions();
+        rex.resume().await;
+        (!ids().contains(&block)).then_some(())
+    })
+    .await;
+    let agent = until("the resumed agent with its conversation", async || {
+        let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+        (rt.agent_list().await.ok()?.into_iter())
+            .find(|a| a.agent_session.as_ref().map(|s| s.value.as_str()) == Some(conversation))
+    })
+    .await;
     assert_eq!(agent.workspace_id, format!("rex:{session}"));
     assert_eq!(agent.foreground_cwd.as_deref(), work.to_str());
-    let new = agent.terminal_id.strip_prefix("rex:").unwrap().to_owned();
-    let blocks: Vec<String> = (blocks_of(server, &session).iter())
-        .filter_map(|b| b["block_id"].as_str().map(str::to_owned))
-        .collect();
+    assert_eq!(agent.terminal_id, format!("rex:{new}"));
+    let blocks = ids();
     assert_eq!(blocks.len(), 2, "{blocks:?}");
     assert!(blocks.contains(&new) && blocks.contains(&other) && !blocks.contains(&block));
     let after = layout_of(server, &session);

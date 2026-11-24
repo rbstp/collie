@@ -20,7 +20,7 @@ use crate::prompt;
 use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
-pub(crate) use live::claude_session;
+pub(crate) use live::{claude_holds, claude_session};
 pub(crate) use subagents::timestamp_ms;
 
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.
@@ -705,6 +705,16 @@ pub(crate) fn is_session_id(id: &str) -> bool {
 }
 
 /// Claude Code's project directory name for a working directory.
+pub(crate) fn claude_transcript(claude: &Path, cwd: &str, session: &str) -> bool {
+    is_session_id(session)
+        && is_file(
+            &claude
+                .join("projects")
+                .join(project_dir(cwd))
+                .join(format!("{session}.jsonl")),
+        )
+}
+
 fn project_dir(cwd: &str) -> String {
     cwd.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })

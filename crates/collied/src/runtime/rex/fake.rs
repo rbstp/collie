@@ -92,6 +92,8 @@ pub(super) struct State {
     pub instance: &'static str,
     pub started_at: String,
     pub splits: Vec<Value>,
+    pub split_pid: Option<u32>,
+    pub split_exits: bool,
     pub data: Data,
 }
 
@@ -229,6 +231,8 @@ impl Fake {
             unanswered: None,
             instance: "i",
             splits: Vec::new(),
+            split_pid: None,
+            split_exits: false,
             started_at: "2026-11-12T16:47:01.264128Z".to_owned(),
             data: Data::default(),
         }));
@@ -789,14 +793,13 @@ fn split(
         i += 2;
     }
     let program = command.get(i).copied().unwrap_or_default();
-    let pid = 950 + n as u32;
+    let pid = s.split_pid.unwrap_or(950 + n as u32);
     let proc = json!({ "pid": pid, "user_id": 501, "name": "2.1.322", "argv0": program, "cwd": options["cwd"] });
-    s.add(
-        session,
-        &block,
-        json!({ "last_exit": null, "child": proc, "foreground": proc }),
-        Vec::new(),
-    );
+    let process = match s.split_exits {
+        true => json!({ "last_exit": { "exit_code": 1 }, "child": null, "foreground": null }),
+        false => json!({ "last_exit": null, "child": proc, "foreground": proc }),
+    };
+    s.add(session, &block, process, Vec::new());
     s.block(&block).owner = Some(CLIENT.to_owned());
     let created = json!({ "type": "block_created", "payload": { "block_id": block } });
     deliver(s, seq, out, session_event(session, created));
