@@ -150,10 +150,10 @@
 59 crates/collied/src/runtime/rex/fake.rs
 28 crates/collied/src/runtime/rex/input.rs
 48 crates/collied/src/runtime/rex/mod.rs
-71 crates/collied/src/runtime/rex/model.rs
+68 crates/collied/src/runtime/rex/model.rs
 38 crates/collied/src/runtime/rex/screen.rs
 26 crates/collied/src/runtime/rex/screen_tests.rs
-25 crates/collied/src/runtime/rex/sessions.rs
+21 crates/collied/src/runtime/rex/sessions.rs
 76 crates/collied/src/runtime/rex/stream.rs
 30 crates/collied/src/runtime/rex/tasks.rs
 26 crates/collied/src/runtime/rex/tests.rs

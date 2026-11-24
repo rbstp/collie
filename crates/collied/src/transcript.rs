@@ -112,6 +112,11 @@ impl Transcripts {
         self
     }
 
+    pub fn with_copilot_sessions(mut self, dir: Option<PathBuf>) -> Self {
+        self.copilot_sessions = dir;
+        self
+    }
+
     pub fn with_usage(mut self, path: PathBuf) -> Self {
         self.usage = Usage::new(path);
         self

@@ -1881,6 +1881,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_agy_is_recorded_from_the_one_presence_lock_its_process_has_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("rex-resume.json");
+        let fake = Fake::start().await;
+        {
+            let mut s = fake.state();
+            s.instance = "one";
+            s.sessions.push((S.to_owned(), "work".to_owned()));
+            let me = std::process::id();
+            s.add(S, READY, fake::process(me, "agy", "agy"), Vec::new());
+        }
+        let roots = crate::costs::Roots {
+            agy: Some(dir.path().join("agy/brain")),
+            ..crate::costs::Roots::default()
+        };
+        let rex = Rex::new(fake.socket.clone())
+            .with_agent_roots(roots)
+            .with_resume(record.clone(), dir.path().join("rex-resume-off"));
+        let rex = Arc::new(rex);
+        let _task = follow(&rex).await;
+        agy_transcript(dir.path(), FIRST);
+        let own = presence_lock(dir.path(), FIRST);
+        let other = presence_lock(dir.path(), SECOND);
+        rex.reread_sessions();
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert!(saved.agents.is_empty(), "two presence locks record nothing");
+        drop(other);
+        rex.reread_sessions();
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        let expected = BTreeMap::from([(READY.to_owned(), agent("agy", FIRST, "/work/app"))]);
+        assert_eq!(saved.agents, expected);
+        drop(own);
+    }
+
+    #[tokio::test]
     async fn a_conversation_a_live_codex_copilot_or_agy_holds_waits_until_it_lets_go() {
         for kind in ["codex", "copilot", "agy"] {
             let dir = tempfile::tempdir().unwrap();

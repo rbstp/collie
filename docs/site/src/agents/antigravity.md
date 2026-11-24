@@ -6,7 +6,7 @@
 |---|---|
 | Grid preview, status and Inbox | Yes |
 | [Chat](../app/chat-terminal.md) and Terminal | Yes; in herdr Chat needs herdr's [hook](#set-up) |
-| [Running subagents](../app/agents-tab.md#running-subagents) | Yes; needs the [hook](#set-up) |
+| [Running subagents](../app/agents-tab.md#running-subagents) | Yes; in herdr needs herdr's [hook](#set-up) |
 | [Remaining context](../app/agents-tab.md#remaining-context) | No |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Yes; needs the [status line tap](#plan-usage) |

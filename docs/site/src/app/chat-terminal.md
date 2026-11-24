@@ -24,7 +24,7 @@ With the largest text sizes (**Settings > Accessibility > Display & Text Size > 
 - When an interactive prompt needs terminal keys, tap **Continue in Terminal**.
 
 > [!NOTE]
-> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core and Rex also [collied's](../agents/codex.md#herdr-core-and-rex). Antigravity CLI needs [herdr's hook](../agents/antigravity.md#set-up), and in Herdr Core and Rex also [collied's](../agents/antigravity.md#herdr-core-and-rex). In Herdr Core and Rex, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI has Chat in herdr only, where it needs no hook, but Chat waits until it can tell which conversation the pane shows: see [Copilot CLI](../agents/copilot.md).
+> Chat needs the session ID that herdr's SessionStart integration reports, and retries until it arrives. Codex needs [herdr's hook](../agents/codex.md#set-up), and in Herdr Core and Rex also [collied's](../agents/codex.md#herdr-core-and-rex). Antigravity CLI needs [herdr's hook](../agents/antigravity.md#set-up); in Herdr Core and Rex, Chat finds its conversation from the lock file it keeps open, and [collied's hook](../agents/antigravity.md#herdr-core-and-rex) settles it when the lock does not. In Herdr Core and Rex, Chat finds a Claude Code session from the file Claude Code keeps for its process, with no hook. Copilot CLI needs no hook: in herdr, Chat waits until it can tell which conversation the pane shows, and in Herdr Core and Rex it shows the one conversation Copilot CLI marks as its own, none after `/new`. See [Copilot CLI](../agents/copilot.md).
 
 ### Open a file
 

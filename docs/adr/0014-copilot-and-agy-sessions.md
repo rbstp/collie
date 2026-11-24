@@ -5,7 +5,7 @@
 
 ## Context
 
-In herdr, collied finds a Copilot CLI conversation from the pane's processes and title, and herdr's own hooks report an Antigravity CLI (`agy`) conversation. Herdr Core and Rex have neither: herdr's hooks exit outside herdr, and collied lists a Herdr Core terminal or a Rex block by its foreground process only. Without a session, a Copilot CLI or agy agent there had no Chat, no costs, and was left out of nothing in `task.sessions` and `task.new`'s resume check, so a running conversation could be resumed a second time.
+In herdr, collied finds a Copilot CLI conversation from the pane's processes and title, and herdr's own hooks report an Antigravity CLI (`agy`) conversation. Herdr Core and Rex have neither: herdr's hooks exit outside herdr, and collied lists a Herdr Core terminal or a Rex block by its foreground process only. Without a session, a Copilot CLI or agy agent there had no Chat and no running subagents, and was left out of nothing in `task.sessions` and `task.new`'s resume check, so a running conversation could be resumed a second time.
 
 What the CLIs leave (checked in #741 and #932, and on the owner's machine by file name only):
 
@@ -22,7 +22,7 @@ What the CLIs leave (checked in #741 and #932, and on the owner's machine by fil
 
 ## Consequences
 
-- A new Copilot CLI session binds with its first prompt, when `events.jsonl` appears; a resumed one binds at once. After `/new`, a Copilot CLI agent in Herdr Core or Rex has no Chat or costs until it exits; Terminal works.
+- A new Copilot CLI session binds with its first prompt, when `events.jsonl` appears; a resumed one binds at once. After `/new`, a Copilot CLI agent in Herdr Core or Rex has no Chat or running subagents until it exits; Terminal works.
 - An agy agent whose hook is not installed gets Chat from its lock alone. An agy that keeps several presence locks open has Chat only once its hook names one of them.
 - An agy conversation started outside the CLI, or whose prompts are older than the last 1 MiB of its history, is not listed for Resume.
 - Each tick reads one listing of `session-state` per Copilot CLI agent and one of `presence` per agy agent; a listing reads none.
