@@ -1,0 +1,24 @@
+  ←   +                     │ Timeline  ← use sidebar · → close sidebar
+ Sorted: Recent             │ Sidebar   ↑/↓ navigate · enter open · n new
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ │           s sort · x close
+  ●  ASKME x                │           ↑ buttons (tab cycles)
+     ⎇ master               │ Mouse     click card switch
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ │           double-click focus card
+                            │           click sidebar focus
+                            │           hover + wheel scroll
+                            │           drag divider resize
+                            │ Status    ● idle (steady, mode-colored)
+                            │           ● working (pulses, mode-colored)
+                            │           ● unread · ● error / attention
+                            │           ! needs permission · ? waiting for you
+                            │           ○ resumable
+                            │ Settings  /settings · sidebar.enabled
+                            │           sidebar.showResumableSessions
+                            │           sidebar.showHeaderButtons
+                            │           sidebar.showCloseButton
+                            │           sidebar.hoverFocus
+                            │           sidebar.coloredHints
+                            │           sidebar.accentActiveSession
+                            │╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                            │┃
+                            │

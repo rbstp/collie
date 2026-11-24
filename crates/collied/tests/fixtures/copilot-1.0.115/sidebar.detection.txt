@@ -1,0 +1,24 @@
+  ←   +                     │  Current   Sessions   Issues   Pull requests  →
+ Sorted: Recent             │
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ │                                                  ┃
+  ●  ASKME x                │ ● Done.                                          ┃
+     ⎇ master               │ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ┃
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ │  ❯ RUNCMD x                              12:38   ┃
+                            │ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ┃
+                            │ ✗ Shell Create a prob… Operation aborted by user ┃
+                            │   touch probe.txt                                ┃
+                            │   Approval check                                 ┃
+                            │     └ - Confirmation cancelled for shell command ┃
+                            │       (touch)                                    ┃
+                            │                                                  ┃
+                            │ ● Operation cancelled by user                    ┃
+                            │ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ ┃
+                            │  ❯ SLOW x                                12:39   ┃
+                            │ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ ┃
+                            │ ● OK                                             ┃
+                            │                                                  ┃
+                            │ /private/tmp/cpd/work/app [⎇ master]
+                            │╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                            │┃
+                            │╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                            │ ← use sidebar · → close sidebar              fake

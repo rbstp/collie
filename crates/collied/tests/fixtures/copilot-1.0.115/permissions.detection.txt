@@ -1,0 +1,24 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+   them.                                                                       ┃
+                                                                               ┃
+ ! Model "fake" is not in the built-in catalog. Using defaults for: prompt     ┃
+   tokens (COPILOT_PROVIDER_MAX_PROMPT_TOKENS), output tokens                  ┃
+   (COPILOT_PROVIDER_MAX_OUTPUT_TOKENS). Run  copilot help providers  for      ┃
+   configuration details.                                                      ┃
+                                                                               ┃
+ ● MCP Servers reloaded: 0 servers connected                                   ┃
+                                                                               ┃
+Select Permission Mode
+
+❯ 1. Manual Approval ✓         Require approval for each request
+  2. Assisted Permissions      Approve requests an LLM safety check deems safe;
+                               handle others according to the execution mode
+  3. Allow All                 Auto-approve all tool, path, and URL requests
+
+Assisted Permissions use a probabilistic LLM review to reduce approval prompts.
+They are not a security boundary and may approve dangerous or unintended
+actions. Use managed restrictions, sandboxing, least-privilege credentials, and
+egress controls for enforceable protection.
+
+1-3 to select · ↑/↓ to navigate · enter to confirm · esc to cancel

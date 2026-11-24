@@ -1,0 +1,24 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+                                                                               ┃
+ ❯ SLOW reply                                                            12:30 ┃
+                                                                               ┃
+ ● OK                                                                          ┃
+                                                                               ┃
+────────────────────────────────────────────────────────────────────────────────
+ Session only. Auto chooses a model; it does not change Autopilot or Assisted
+ Permissions. Use `/config model` for future sessions.
+ The COPILOT_MODEL environment variable will be overridden.
+
+                                                                              ┃
+   New models                                                                 ┃
+ ❯ fake ✓                                                                     ┃
+                                                                              ┃
+   Unavailable models                                                         ┃
+   claude-sonnet-5.5                                                          ┃
+
+ ──────────────────────────────────────────────────────────────────────────────
+ ❯  Search models…
+ ──────────────────────────────────────────────────────────────────────────────
+ ↑/↓ to navigate · shift+tab group: recommended · ctrl+r rescan providers ·
+ ctrl+x → a add · ctrl+x → m manage · enter to select · esc to cancel

@@ -1071,6 +1071,43 @@ async fn other_kinds_never_read_the_screen() {
 }
 
 #[tokio::test]
+async fn a_copilot_takes_input_only_under_its_input_box() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base);
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/copilot-1.0.115/plain-model.detection.txt").into();
+        h.snapshot["agents"][0]["agent"] = json!("copilot");
+    });
+    let attempt = |c: char| AgentPromptParams {
+        op_id: op(c),
+        ..prompt(CLAUDE)
+    };
+    assert_eq!(
+        code(drive.prompt(attempt('A'), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    let down = || AgentSendKeysParams {
+        keys: vec![Key::Down],
+        ..keys(CLAUDE)
+    };
+    assert_eq!(
+        code(drive.send_keys(down(), &yes()).await.0),
+        ErrorCode::AgentNotReady
+    );
+    assert!(herdr.params("agent.prompt").is_empty());
+    assert!(herdr.params("agent.send_keys").is_empty());
+
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/copilot-1.0.115/plain-idle.detection.txt").into()
+    });
+    assert_eq!(drive.prompt(attempt('B'), &yes()).await, Ok(Response::Ok));
+    assert_eq!(drive.send_keys(down(), &yes()).await.0, Ok(Response::Ok));
+    assert_eq!(herdr.params("agent.prompt").len(), 1);
+    assert_eq!(herdr.params("agent.send_keys").len(), 1);
+}
+
+#[tokio::test]
 async fn op_id_replays_the_first_outcome() {
     let herdr = Mock::start();
     let (_d, base) = root();
@@ -2887,6 +2924,34 @@ async fn codex_copilot_and_agy_startup_prompts_are_left_to_the_terminal() {
             usize::from(kind == "codex")
         );
     }
+}
+
+#[tokio::test]
+async fn a_copilot_task_prompts_once_its_input_box_follows_its_banner() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base.join("root"));
+    let idle = include_str!("fixtures/copilot-1.0.115/plain-idle.detection.txt");
+    herdr.with(|h| {
+        h.screens = ["  ▄▄ ▄▄\n  Copilot v1.0.115\n", idle]
+            .map(str::to_owned)
+            .into();
+        let mut started = started_agent("idle", true, false);
+        started["agent"] = json!("copilot");
+        h.gets.extend([started.clone(), started.clone(), started]);
+    });
+    let (reply, _) = drive
+        .task_new(task(&base.join("root/a"), "copilot"), &yes())
+        .await;
+    assert_eq!(
+        reply,
+        Ok(Response::TaskStarted {
+            workspace_id: WorkspaceId::new("w9").unwrap(),
+            terminal_id: tid("term_new"),
+            startup_blocked: false,
+        })
+    );
+    assert_eq!(herdr.params("agent.prompt").len(), 1);
 }
 
 #[tokio::test]

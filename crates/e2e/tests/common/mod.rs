@@ -67,6 +67,72 @@ pub fn copilot_stand_in() {
     std::thread::sleep(Duration::from_secs(600));
 }
 
+pub fn copilot_box_stand_in() {
+    let exe = std::env::current_exe().unwrap();
+    if exe.file_name().and_then(|n| n.to_str()) != Some("copilot") {
+        return;
+    }
+    let draw = |name: &str| {
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{dir}/../collied/tests/fixtures/copilot-1.0.115/{name}.detection.txt");
+        let screen = std::fs::read_to_string(path).unwrap();
+        print!("\x1b[2J\x1b[H{}", screen.trim_end().replace('\n', "\r\n"));
+        std::io::stdout().flush().unwrap();
+    };
+    print!("\x1b]7501;state=idle:app=copilot\x1b\\");
+    draw("model");
+    while !Path::new("copilot-close").exists() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    draw("idle");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).unwrap();
+    std::fs::write("copilot-typed", line).unwrap();
+    std::thread::sleep(Duration::from_secs(600));
+}
+
+pub async fn copilot_takes_input_only_under_its_box(
+    drive: &collied::drive::Driver,
+    rt: &collied::runtime::Runtime,
+    work: &Path,
+    terminal: &str,
+) {
+    let yes: collied::drive::Authorized = Arc::new(|| true);
+    let prompt = |c: char| protocol::AgentPromptParams {
+        op_id: protocol::OpId::new(c.to_string().repeat(22)).unwrap(),
+        terminal_id: protocol::TerminalId::new(terminal).unwrap(),
+        text: protocol::PromptText::new("hello copilot".to_owned()).unwrap(),
+        expected_draft: None,
+    };
+    let shows = async |text: &str| {
+        for _ in 0..100 {
+            if rt
+                .detection_text(terminal)
+                .await
+                .is_ok_and(|s| s.contains(text))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the stand-in never showed {text}");
+    };
+    shows("Search models").await;
+    let refused = drive.prompt(prompt('A'), &yes).await.unwrap_err();
+    assert_eq!(refused.0, ErrorCode::AgentNotReady, "{refused:?}");
+    std::fs::write(work.join("copilot-close"), "").unwrap();
+    shows("/ commands").await;
+    assert_eq!(drive.prompt(prompt('B'), &yes).await, Ok(Response::Ok));
+    for _ in 0..100 {
+        let typed = std::fs::read_to_string(work.join("copilot-typed")).unwrap_or_default();
+        if typed.contains("hello copilot") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the prompt never reached the stand-in");
+}
+
 pub async fn chat_until(
     phone: &CollieCore,
     m: &str,

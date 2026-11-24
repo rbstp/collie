@@ -1,0 +1,24 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+ Source:  All   Local   Remote
+
+       Session                       Status            Last updated Created
+   ❯ ● Session 1 (master)            —                 4m ago       4m ago
+     ○ ASKME please (master)         In use            7m ago       13m ago
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ / search · ↑/↓ navigate · enter open · r refresh · s sort:relevance · n new
+ session · e environments · esc cancel

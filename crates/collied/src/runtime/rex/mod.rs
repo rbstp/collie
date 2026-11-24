@@ -394,6 +394,13 @@ impl Rex {
         Ok(self.read(id, screen::DETECTION, None).await?.text)
     }
 
+    pub async fn polled_screen_text(&self, id: &str) -> Result<String, Error> {
+        let (client, session, block, size, _) = self.target(id)?;
+        (self.screens)
+            .read(&client, &session, &block, size, screen::DETECTION, None)
+            .await
+    }
+
     pub fn explain(&self, id: &str) -> Result<Explain, Error> {
         let inner = self.lock();
         let kind = (inner.live.as_ref().filter(|l| l.synced))

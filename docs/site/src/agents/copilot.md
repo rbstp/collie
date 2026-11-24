@@ -11,7 +11,7 @@
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | In herdr only, Resume included; in [Herdr Core](../app/new-task.md#herdr-core) and [Rex](../app/new-task.md#rex), you can only watch Copilot CLI |
+| [New task](../app/new-task.md) | Yes, Resume included; in [Herdr Core](../app/new-task.md#herdr-core) and [Rex](../app/new-task.md#rex), Copilot CLI 1.0.106 or later |
 
 ## Set up
 
@@ -24,10 +24,18 @@ In herdr, Chat follows `/new`. Copilot names a session after your first prompt; 
 
 In Herdr Core and Rex, Chat shows the conversation Copilot CLI marks as its own when it starts or resumes. After `/new`, Copilot CLI keeps both conversations until it exits, so Chat says it cannot tell which one you see; use Terminal, or quit and [resume](../app/new-task.md#resume-a-session) the one you want.
 
+## Prompts and keys
+
+While Copilot CLI works or waits for you, your prompts, typed answers, keys and typed text reach it only while it shows its input box, one key at a time. While a picker such as `/model` or another dialog is open, collie refuses them and says to answer the dialog in Terminal on the machine; this holds in herdr, Herdr Core and Rex. A prompt also needs the input box to be empty: send or clear what is typed there first. A picker you open from the phone's keyboard can only be closed on the machine, and so can Copilot's sidebar, its Sessions tab and its help, which Left on an empty input box, Tab and `?` open.
+
+Two dialogs still take your input from the phone. When Copilot asks for permission or asks you a question, it reports that it is blocked, and Terminal's keys and typed answers reach that dialog as they do for other agents, with an approval alert that has no Approve or Deny. Copilot's folder trust prompt takes its own keys, as [Startup prompts](#startup-prompts) says.
+
+In Herdr Core and Rex, Copilot CLI takes your input only from version 1.0.106, which reports its own status, and only while the `copilot` program itself leads the terminal; an older one, or one started through another program such as an npm install's `node`, is shown but read-only.
+
 ## Plan usage
 
 `collied` reads premium usage from GitHub every five minutes with your own `gh` login; the token stays with `gh`. The row clears when `gh` is signed out or the account has no premium quota. A seat assigned by a GitHub Enterprise Cloud account with data residency (`*.ghe.com`) does not show.
 
 ## Startup prompts
 
-When a new task meets Copilot's folder trust prompt, it stops without sending your prompt. Answer the trust prompt in Terminal. In Herdr Core and Rex, where you only watch Copilot CLI, Terminal's arrow keys, Return, Esc and a digit still answer that prompt: move with the arrow keys and press Return, press a digit to pick its option at once, or press Esc.
+When a new task meets Copilot's folder trust prompt, it stops without sending your prompt. Answer the trust prompt in Terminal: move with the arrow keys and press Return, press a digit to pick its option at once, or press Esc. Then send your prompt from Chat.

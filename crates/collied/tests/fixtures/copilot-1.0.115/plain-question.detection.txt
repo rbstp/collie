@@ -1,0 +1,24 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+                                                                               ┃
+ ● Operation cancelled by user                                                 ┃
+                                                                               ┃
+ ❯ SLOW reply                                                            12:30 ┃
+                                                                               ┃
+ ● OK                                                                          ┃
+                                                                               ┃
+ ❯ ASKME x                                                               12:38 ┃
+                                                                               ┃
+ ○ Asking user Which color should the probe use?                            5s ┃
+                                                                               ┃
+────────────────────────────────────────────────────────────────────────────────
+ Copilot needs information.
+ Which color should the probe use?
+
+ Color:
+ ❯ Red
+   Blue
+   Other (type your answer)
+
+ ↑/↓ select · enter accept · ctrl+d decline · esc cancel
+────────────────────────────────────────────────────────────────────────────────
