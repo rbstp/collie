@@ -52,6 +52,7 @@ struct Block {
     /// The agent's session, with the pid it was found for: it holds only while that process
     /// leads the terminal.
     session: Option<(u32, String)>,
+    scan: u64,
     /// Its program exited; the block stays until it is closed.
     exited: bool,
 }
@@ -355,6 +356,20 @@ impl Model {
 
     /// Kept only while `pid` still leads the block: refused when another process leads it
     /// already, as when it changed while a pid file was read outside the lock.
+    pub(super) fn scan(&mut self, session: &str, block: &str) -> u64 {
+        self.block(session, block).map_or(0, |b| {
+            b.scan += 1;
+            b.scan
+        })
+    }
+
+    pub(super) fn bind_scan(&mut self, read: (&str, &str, u32, u64), value: Option<String>) {
+        let (session, block, pid, scan) = read;
+        if self.block(session, block).is_some_and(|b| b.scan == scan) {
+            self.bind(session, block, pid, value);
+        }
+    }
+
     pub(super) fn bind(&mut self, session: &str, block: &str, pid: u32, value: Option<String>) {
         if let Some(b) = self.block(session, block)
             && b.foreground.value.as_ref().is_some_and(|f| f.pid == pid)

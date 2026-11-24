@@ -439,9 +439,8 @@ impl Rex {
             "copilot" => (roots.copilot.as_deref())
                 .is_some_and(|r| crate::transcript::copilot_held(r, id) != Some(false)),
             "agy" => {
-                let locked = (self.presence_dir()).is_some_and(|d| {
-                    crate::transcript::held(&d.join(format!("{id}.lock"))) != Some(false)
-                });
+                let locked = (self.presence_dir())
+                    .is_some_and(|d| agents::agy_held(&d, id, agents::agy_holders().as_ref()));
                 let open = || {
                     let listing = self.listing();
                     (listing.iter().flat_map(|l| &l.agents))
@@ -465,7 +464,9 @@ impl Rex {
         let roots = &self.agent_roots;
         match kind {
             "codex" => roots.codex.as_deref().is_some_and(|s| {
-                let open = agents::open_files(pid);
+                let Some(open) = agents::open_files(pid) else {
+                    return false;
+                };
                 let has = |p: &Path| {
                     std::fs::metadata(p).is_ok_and(|m| open.contains(&(m.dev(), m.ino())))
                 };

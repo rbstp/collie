@@ -58,11 +58,23 @@ impl Rex {
         {
             let mut inner = self.lock();
             let Inner { live, codex, .. } = &mut *inner;
-            if let (Some(live), Some((pid, value))) = (live.as_mut(), codex.get(block)) {
+            if let (Some(live), Some((pid, value))) = (live.as_mut(), codex.get(block))
+                && live
+                    .model
+                    .hook_agent(block)
+                    .is_some_and(|(_, _, kind)| kind == "codex")
+            {
                 live.model.bind(session, block, *pid, Some(value.clone()));
             }
         }
-        self.read_files(Model::touched);
+        let (session, block) = (session.to_owned(), block.to_owned());
+        self.read_files(move |m| {
+            let mut reads = m.touched();
+            if !reads.iter().any(|r| r.1 == block) {
+                reads.extend(m.read_of(session, block));
+            }
+            reads
+        });
     }
 
     /// Once per reconcile tick, never per listing: `/clear` rewrites Claude Code's pid file
@@ -83,37 +95,52 @@ impl Rex {
                     let hook = (codex.get(&r.1))
                         .filter(|(pid, _)| *pid == r.2)
                         .map(|(_, s)| s.clone());
-                    (r, hook)
+                    let scan = live.model.scan(&r.0, &r.1);
+                    (r, hook, scan)
                 })
                 .collect()
         };
+        if wanted.is_empty() {
+            return;
+        }
         let roots = &self.agent_roots;
+        let pids: Vec<u32> = (wanted.iter())
+            .filter(|(r, _, _)| r.3 == "copilot")
+            .map(|(r, _, _)| r.2)
+            .collect();
+        let marked = (roots.copilot.as_deref())
+            .filter(|_| !pids.is_empty())
+            .and_then(|root| crate::lock(&self.copilot_marks).marked(root, &pids));
+        let locks = (wanted.iter().any(|(r, _, _)| r.3 == "agy")).then(|| {
+            self.presence_dir()
+                .map_or(Some(Vec::new()), |d| agents::presence_locks(&d))
+        });
         let found: Vec<_> = (wanted.into_iter())
-            .filter_map(|((session, block, pid, kind, cwd), hook)| {
+            .filter_map(|((session, block, pid, kind, cwd), hook, scan)| {
                 let value = match kind {
                     "claude" => Some(crate::transcript::claude_session(
                         self.claude_sessions.as_deref()?,
                         pid,
                     )?),
-                    "copilot" => (roots.copilot.as_deref())
-                        .zip(cwd.as_deref())
-                        .and_then(|(root, cwd)| crate::transcript::copilot_session(root, pid, cwd)),
-                    _ => agents::agy_session(
-                        hook.as_deref(),
-                        &(self.presence_dir())
-                            .and_then(|d| agents::presence(&d, &agents::open_files(pid)))
-                            .unwrap_or_default(),
-                    ),
+                    "copilot" => (roots.copilot.as_deref()).zip(cwd).and_then(|(root, cwd)| {
+                        crate::transcript::copilot_bound(root, marked.as_ref()?.get(&pid), &cwd)
+                    }),
+                    _ => {
+                        let open = (locks.as_ref())
+                            .and_then(Option::as_ref)
+                            .and_then(|l| agents::agy_open(l, pid));
+                        agents::agy_session(hook.as_deref(), open.as_deref())
+                    }
                 };
-                Some((session, block, pid, value))
+                Some((session, block, pid, scan, value))
             })
             .collect();
         if found.is_empty() {
             return;
         }
         if let Some(live) = self.lock().live.as_mut() {
-            for (session, block, pid, value) in found {
-                live.model.bind(&session, &block, pid, value);
+            for (session, block, pid, scan, value) in found {
+                live.model.bind_scan((&session, &block, pid, scan), value);
             }
         }
     }
@@ -391,7 +418,26 @@ mod tests {
         );
         rex.lock().codex.remove(&block);
         assert_eq!(read(STALE), None, "two locks and no hook");
-        drop((own, other));
+        drop(other);
+
+        rex.read_files(Model::touched);
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, CLEARED.to_owned()));
+        rex.read_sessions(S, STALE);
+        assert_eq!(
+            session_of(&rex, STALE),
+            None,
+            "a remembered hook shows only once checked"
+        );
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, FIRST.to_owned()));
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let found = read(STALE);
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found, None, "a presence folder it cannot read");
+        drop(own);
     }
 
     #[tokio::test]
@@ -468,5 +514,13 @@ mod tests {
         model.bind(S, CLAUDE, 10, Some(FIRST.to_owned()));
         let session = |m: &Model| m.listing().agents[0].agent_session.clone().map(|s| s.value);
         assert_eq!(session(&model).as_deref(), Some(CLEARED));
+        let (older, newer) = (model.scan(S, CLAUDE), model.scan(S, CLAUDE));
+        model.bind_scan((S, CLAUDE, 20, newer), Some(FIRST.to_owned()));
+        model.bind_scan((S, CLAUDE, 20, older), Some(CLEARED.to_owned()));
+        assert_eq!(
+            session(&model).as_deref(),
+            Some(FIRST),
+            "an older scan of the same process"
+        );
     }
 }

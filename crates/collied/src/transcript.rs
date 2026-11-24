@@ -20,7 +20,10 @@ use crate::prompt;
 use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
-pub(crate) use live::{claude_holds, claude_session, copilot_held, copilot_holds, copilot_session};
+pub(crate) use live::{
+    CopilotMarks, claude_holds, claude_session, copilot_bound, copilot_held, copilot_holds,
+    copilot_session,
+};
 pub(crate) use provider_subagents::held;
 pub(crate) use subagents::timestamp_ms;
 
@@ -412,7 +415,6 @@ impl Transcripts {
             out.extend(self.agy_listed(cwd));
         }
         out.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
-        out.truncate(MAX_SESSIONS);
         out
     }
 
@@ -451,11 +453,14 @@ impl Transcripts {
         match agent {
             "copilot" => (self.copilot_sessions.as_deref())
                 .is_some_and(|root| copilot_held(root, id) != Some(false)),
-            "agy" => (self.agy_brain.as_deref().and_then(Path::parent)).is_some_and(|d| {
-                held(&d.join("presence").join(format!("{id}.lock"))) != Some(false)
-            }),
+            "agy" => self.agy_in_use(id, crate::runtime::agy_holders().as_ref()),
             _ => false,
         }
+    }
+
+    fn agy_in_use(&self, id: &str, holders: Option<&crate::runtime::Files>) -> bool {
+        (self.agy_brain.as_deref().and_then(Path::parent))
+            .is_some_and(|d| crate::runtime::agy_held(&d.join("presence"), id, holders))
     }
 
     fn copilot_listed(&self, cwd: &str) -> Vec<Session> {
@@ -470,7 +475,8 @@ impl Transcripts {
             .filter_map(|e| {
                 let name = e.file_name();
                 let id = name.to_str().filter(|id| is_session_id(id))?;
-                Some((e.path().join("events.jsonl"), id.to_owned()))
+                let (wid, wcwd) = live::copilot_workspace(&e.path())?;
+                (wid == id && wcwd == cwd).then(|| (e.path().join("events.jsonl"), wid))
             })
             .collect();
         recent("copilot", files, |path, file, id| {
@@ -526,8 +532,9 @@ impl Transcripts {
                 (path, id)
             })
             .collect();
+        let holders = crate::runtime::agy_holders();
         recent("agy", files, |_, file, id| {
-            if self.in_use("agy", id) {
+            if self.agy_in_use(id, holders.as_ref()) {
                 return None;
             }
             let text = head(file, HEAD_BYTES)?;
@@ -1861,7 +1868,10 @@ mod tests {
             );
         }
         let many = listed(&["claude", "codex"]);
-        assert_eq!(many.len(), MAX_SESSIONS);
+        assert_eq!(
+            many.iter().filter(|s| s.0 == "claude").count(),
+            MAX_SESSIONS
+        );
         assert_eq!(many[0].1, uuid(39));
         assert!(many.windows(2).all(|w| w[0].3 >= w[1].3));
 
@@ -2008,6 +2018,75 @@ mod tests {
         std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(unknown, "a folder it cannot read");
         drop((hold, presence));
+
+        let lock = agy.join("presence").join(format!("{}.lock", uuid(4)));
+        File::create(&lock).unwrap();
+        let named = dir.path().join("agy-bin/agy");
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), &named).unwrap();
+        let mut holder = std::process::Command::new(&named)
+            .args([
+                "--exact",
+                "transcript::tests::agy_holding_a_lock",
+                "--nocapture",
+            ])
+            .env("COLLIE_TEST_AGY_LOCK", &lock)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let open = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            t.in_use("agy", &uuid(4))
+        });
+        let listed = t.sessions(cwd, &["agy"]);
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        assert!(open, "an agy process has its presence lock open, unlocked");
+        assert!(listed.iter().all(|s| s.id != uuid(4)));
+        assert!(!t.in_use("agy", &uuid(4)));
+    }
+
+    #[test]
+    fn agy_holding_a_lock() {
+        let Some(lock) = std::env::var_os("COLLIE_TEST_AGY_LOCK") else {
+            return;
+        };
+        let exe = std::env::current_exe().unwrap();
+        if exe.file_name().and_then(|n| n.to_str()) != Some("agy") {
+            return;
+        }
+        let _open = File::open(lock).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_folder_keeps_its_sessions_of_each_kind_past_newer_ones_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let copilot = dir.path().join("copilot/session-state");
+        t.copilot_sessions = Some(copilot.clone());
+        let cwd = "/Users/me/src/collie";
+        let session = |n: u32, folder: &str, secs: u64| {
+            let (id, d) = (uuid(n), copilot.join(uuid(n)));
+            write(
+                &d.join("workspace.yaml"),
+                &format!("id: {id}\ncwd: {folder}\n"),
+            );
+            let start = serde_json::json!({"type": "session.start", "data": {"sessionId": id}});
+            let prompt = serde_json::json!({"type": "user.message", "data": {"content": "go"}});
+            aged(&d.join("events.jsonl"), &format!("{start}\n{prompt}"), secs);
+        };
+        for n in 0..=MAX_CANDIDATES as u32 {
+            session(1000 + n, "/Users/me/src/other", 100);
+        }
+        for n in 0..=MAX_SESSIONS as u32 {
+            session(n, cwd, 50);
+        }
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        aged(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE, 10);
+        let listed = t.sessions(cwd, &["claude", "copilot"]);
+        let kinds = |kind: &str| listed.iter().filter(|s| s.agent == kind).count();
+        assert_eq!((kinds("copilot"), kinds("claude")), (MAX_SESSIONS, 1));
     }
 
     #[test]

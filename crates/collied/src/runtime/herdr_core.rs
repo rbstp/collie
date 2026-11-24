@@ -538,7 +538,7 @@ struct Inner {
     /// with the foreground pid they were reported under: a session holds only while that
     /// process leads the terminal.
     codex: BTreeMap<String, (u32, String)>,
-    files: BTreeMap<String, (u32, Vec<String>)>,
+    files: BTreeMap<String, (u32, Option<Vec<String>>)>,
 }
 
 /// One core, followed through `events.subscribe`. collied never starts a core: an absent
@@ -547,6 +547,7 @@ pub struct Core {
     socket: PathBuf,
     claude_sessions: Option<PathBuf>,
     agent_roots: crate::costs::Roots,
+    copilot_marks: Mutex<crate::transcript::CopilotMarks>,
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
     pub(super) herdr: Arc<HerdrSeen>,
@@ -577,6 +578,7 @@ impl Core {
             socket,
             claude_sessions: None,
             agent_roots: crate::costs::Roots::default(),
+            copilot_marks: Mutex::default(),
             inner: Mutex::default(),
             settled: watch::channel(false).0,
             herdr: Arc::default(),
@@ -641,14 +643,14 @@ impl Core {
                 .files
                 .get(address)
                 .filter(|(bound, _)| *bound == pid)
-                .and_then(|(_, found)| found.first().cloned()),
+                .and_then(|(_, found)| found.as_ref()?.first().cloned()),
             "agy" => {
                 let hook = (inner.codex.get(address))
                     .filter(|(bound, _)| *bound == pid)
                     .map(|(_, session)| session.as_str());
                 let open = (inner.files.get(address))
                     .filter(|(bound, _)| *bound == pid)
-                    .map_or(&[][..], |(_, open)| open.as_slice());
+                    .and_then(|(_, open)| open.as_deref());
                 agents::agy_session(hook, open)
             }
             _ => None,
@@ -672,21 +674,29 @@ impl Core {
                 .collect()
         };
         let roots = &self.agent_roots;
-        let presence = roots
-            .agy
-            .as_deref()
-            .and_then(Path::parent)
-            .map(|d| d.join("presence"));
+        let pids: Vec<u32> = (wanted.iter())
+            .filter(|(_, _, kind, _)| kind == "copilot")
+            .map(|(_, pid, _, _)| *pid)
+            .collect();
+        let marked = (roots.copilot.as_deref())
+            .filter(|_| !pids.is_empty())
+            .and_then(|root| crate::lock(&self.copilot_marks).marked(root, &pids));
+        let locks = match roots.agy.as_deref().and_then(Path::parent) {
+            Some(data) => agents::presence_locks(&data.join("presence")),
+            None => Some(Vec::new()),
+        };
         let found = (wanted.into_iter())
             .map(|(address, pid, kind, cwd)| {
                 let value = match kind.as_str() {
-                    "copilot" => (roots.copilot.as_deref())
-                        .and_then(|root| crate::transcript::copilot_session(root, pid, &cwd))
-                        .into_iter()
-                        .collect(),
-                    _ => (presence.as_deref())
-                        .and_then(|d| agents::presence(d, &agents::open_files(pid)))
-                        .unwrap_or_default(),
+                    "copilot" => (roots.copilot.as_deref()).and_then(|root| {
+                        let marked = marked.as_ref()?.get(&pid);
+                        Some(
+                            crate::transcript::copilot_bound(root, marked, &cwd)
+                                .into_iter()
+                                .collect(),
+                        )
+                    }),
+                    _ => locks.as_ref().and_then(|l| agents::agy_open(l, pid)),
                 };
                 (address, (pid, value))
             })
@@ -2295,6 +2305,10 @@ pub(crate) mod tests {
             Some(OTHER),
             "no lock open: the hook"
         );
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let found = sessions(&core)[1].clone();
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found, None, "a presence folder it cannot read");
     }
 
     #[tokio::test]
