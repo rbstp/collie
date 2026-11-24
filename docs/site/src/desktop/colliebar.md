@@ -36,7 +36,7 @@ When the Rex server restarts or the Mac reboots, Rex brings back your sessions, 
 
 `collied` types nothing into your shell. It leaves alone a terminal where something runs, or whose screen changes more than 2 seconds after `collied` first looks at it, about a second after the Rex server starts. Text you type into a restored terminal before that first look, or in the 2 seconds after it while the prompt settles, counts as part of the prompt: `collied` can still replace that shell with the agent, and what you typed goes with the shell. Each conversation reopens once, never one that already runs elsewhere, and `collied` stops trying 90 seconds after the Rex server started. A conversation you quit stays closed, unless you quit it less than 15 seconds before the server stopped. A conversation you never sent a prompt to has nothing to reopen and is skipped.
 
-`collied` reopens a Codex conversation only if Codex ran with `--no-daemon`: under Codex's shared background server, `collied` cannot tell which terminal runs which conversation. An Antigravity CLI conversation can take its shell's place only once Antigravity CLI reports it to `collied`; until then, both stay. Your login shell must be zsh or bash.
+`collied` reopens a Codex conversation only if Codex ran with `--no-daemon`: under Codex's shared background server, `collied` cannot tell which terminal runs which conversation.  Your login shell must be zsh or bash.
 
 When a resumed agent exits, its terminal closes, as a task's does. If `collied` starts more than 90 seconds after the Rex server, nothing is reopened.
 

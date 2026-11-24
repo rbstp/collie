@@ -24,6 +24,7 @@ const WINDOW: Duration = Duration::from_secs(90);
 const MAX_AGENTS: usize = 256;
 const MAX_FILE: u64 = 256 << 10;
 const MAX_FOLDER: usize = 4096;
+const MAX_PRESENCE: usize = 4096;
 const SHELLS: [&str; 2] = ["zsh", "bash"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -445,8 +446,26 @@ impl Rex {
                 .is_some_and(|l| crate::transcript::held(&l) != Some(false)),
             "copilot" => (roots.copilot.as_deref())
                 .is_some_and(|r| crate::transcript::copilot_held(r, id) != Some(false)),
+            "agy" => {
+                let locked = (self.presence_dir()).is_some_and(|d| {
+                    crate::transcript::held(&d.join(format!("{id}.lock"))) != Some(false)
+                });
+                let open = || {
+                    let listing = self.listing();
+                    (listing.iter().flat_map(|l| &l.agents))
+                        .filter(|a| a.agent.as_deref() == Some("agy"))
+                        .filter_map(|a| a.terminal_id.strip_prefix(PREFIX))
+                        .filter_map(|b| self.live(|l| l.model.foreground(b)).ok().flatten())
+                        .any(|pid| self.holds("agy", pid, id))
+                };
+                locked || open()
+            }
             _ => false,
         }
+    }
+
+    fn presence_dir(&self) -> Option<PathBuf> {
+        Some(self.agent_roots.agy.as_deref()?.parent()?.join("presence"))
     }
 
     // ADR-0013
@@ -464,6 +483,9 @@ impl Rex {
             }),
             "copilot" => (roots.copilot.as_deref())
                 .is_some_and(|r| crate::transcript::copilot_holds(r, pid, conversation)),
+            "agy" => (self.presence_dir()).is_some_and(|d| {
+                presence(&d, &agents::open_files(pid)).is_some_and(|ids| ids == [conversation])
+            }),
             _ => false,
         }
     }
@@ -508,12 +530,14 @@ impl Rex {
         let there = a.agent.as_deref() == Some(start.kind.as_str())
             && a.foreground_cwd.as_deref() == Some(start.folder.as_str());
         let bound = (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation);
+        let proof = || {
+            (self.live(|l| l.model.foreground(&start.new)).ok().flatten())
+                .is_some_and(|pid| self.holds(&start.kind, pid, &start.conversation))
+        };
         there
             && match start.kind.as_str() {
-                "codex" | "copilot" => {
-                    (self.live(|l| l.model.foreground(&start.new)).ok().flatten())
-                        .is_some_and(|pid| self.holds(&start.kind, pid, &start.conversation))
-                }
+                "codex" | "copilot" => proof(),
+                "agy" => bound || proof(),
                 _ => bound,
             }
     }
@@ -756,6 +780,28 @@ async fn start(
         })?;
     let _ = disown(client, session, &new).await;
     Ok(new)
+}
+
+fn presence(dir: &Path, open: &[(u64, u64)]) -> Option<Vec<String>> {
+    let mut ids = Vec::new();
+    for (listed, entry) in std::fs::read_dir(dir).ok()?.enumerate() {
+        if listed == MAX_PRESENCE {
+            return None;
+        }
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        let Some(id) = (name.to_str())
+            .and_then(|n| n.strip_suffix(".lock"))
+            .filter(|id| uuid(id))
+        else {
+            continue;
+        };
+        let m = std::fs::symlink_metadata(entry.path()).ok()?;
+        if open.contains(&(m.dev(), m.ino())) {
+            ids.push(id.to_owned());
+        }
+    }
+    Some(ids)
 }
 
 async fn idle(client: &Client, session: &str, block: &str) -> Option<u32> {
@@ -1789,6 +1835,36 @@ mod tests {
         assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
     }
 
+    fn presence_lock(dir: &Path, id: &str) -> std::fs::File {
+        let presence = dir.join("agy/presence");
+        std::fs::create_dir_all(&presence).unwrap();
+        std::fs::File::create(presence.join(format!("{id}.lock"))).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_resumed_agy_replaces_the_shell_once_its_process_has_only_its_presence_lock_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("agy", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        agy_transcript(dir.path(), FIRST);
+        drop(presence_lock(dir.path(), THIRD));
+        let rex = with_roots(&r, dir.path());
+        let _task = follow(&rex).await;
+        assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await);
+        let own = presence_lock(dir.path(), FIRST);
+        let other = presence_lock(dir.path(), SECOND);
+        assert!(still_there(&rex, &r.fake).await, "two presence locks open");
+        drop(other);
+        assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        drop(own);
+    }
+
     #[tokio::test]
     async fn a_copilot_is_recorded_from_the_one_session_its_process_marks() {
         let dir = tempfile::tempdir().unwrap();
@@ -1836,8 +1912,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_conversation_a_live_codex_or_copilot_holds_waits_until_it_lets_go() {
-        for kind in ["codex", "copilot"] {
+    async fn a_conversation_a_live_codex_copilot_or_agy_holds_waits_until_it_lets_go() {
+        for kind in ["codex", "copilot", "agy"] {
             let dir = tempfile::tempdir().unwrap();
             let folder = std::fs::canonicalize(dir.path()).unwrap();
             let folder = folder.to_str().unwrap();
@@ -1856,7 +1932,13 @@ mod tests {
                     lock.lock().unwrap();
                     lock
                 }
-                _ => copilot_marks(&copilot_session(dir.path(), &id, folder)),
+                "copilot" => copilot_marks(&copilot_session(dir.path(), &id, folder)),
+                _ => {
+                    agy_transcript(dir.path(), &id);
+                    let lock = presence_lock(dir.path(), &id);
+                    lock.lock().unwrap();
+                    lock
+                }
             };
             let rex = with_roots(&r, dir.path());
             let _task = follow(&rex).await;
