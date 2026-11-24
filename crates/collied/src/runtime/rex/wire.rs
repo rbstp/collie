@@ -304,6 +304,10 @@ pub(super) struct Version {
 pub(super) struct ServerStatus {
     pub pid: u32,
     #[serde(default)]
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
     pub host_id: Option<String>,
     #[serde(default)]
     pub tailscale: Option<Tailscale>,

@@ -30,7 +30,7 @@ Read, not run:
 
 Verified later, in #707 (Rex 0.1.0-preview.19, build 1972, API revision 14): Codex 0.167.1 in a Rex block against a scratch server, and collied's own lookup of Claude Code's session file in a one-off manual check on the owner's Rex.app server, with the owner's permission ([Shape](#shape)). Tests still run a server of their own (AGENTS.md).
 
-Not verified: a program with a keyboard protocol, Linux, Rex.app (whether, already showing a session, it follows an active window change made on the server; that it neither switches to the session nor comes forward was checked in #709, [Focus](#9-focus); the size it gives a block it owns was checked in #705, [Screen](#4-screen)), a server started by `--autostart` (what environment it passes on; Rex.app's own server was checked in #707), sessions restored after a server restart, builds other than 1940 and, for what #707 and #708 checked, 1972, and whether Rex.app claims and sizes a task block collied gave up when it shows it (on the owner's server the block had no owner and stayed 80x24, #708).
+Not verified: a program with a keyboard protocol, Linux, Rex.app (whether, already showing a session, it follows an active window change made on the server; that it neither switches to the session nor comes forward was checked in #709, [Focus](#9-focus); the size it gives a block it owns was checked in #705, [Screen](#4-screen)), a server started by `--autostart` (what environment it passes on; Rex.app's own server was checked in #707), Rex.app's own sessions restored after a restart (a scratch server's were checked in #927, [Resume after a restart](#resume-after-a-restart-927)), builds other than 1940 and, for what #707 and #708 checked, 1972, and whether Rex.app claims and sizes a task block collied gave up when it shows it (on the owner's server the block had no owner and stayed 80x24, #708).
 
 ## What Rex is
 
@@ -374,6 +374,16 @@ poll:       1,000 lines: 0.04 MB vt, poll 0.9 to 1.2 ms, snapshot 0.05 MB in 1 m
            10,000 lines: 0.45 MB vt, poll 10.1 to 14.0 ms, snapshot 0.46 MB in 2 ms
           100,000 lines: 4.43 MB vt, poll 38.7 to 45.7 ms, snapshot 4.53 MB in 65 ms
 ```
+
+## Resume after a restart (#927)
+
+Checked for [#927](https://github.com/rbstp/collie/issues/927), 2026-11-23, on a scratch server started with restore on (its own state folder, so restoring touched nothing of the owner's), sandboxed and from a clean environment as in [Evidence](#evidence), with the `rex` of Rex.app 0.1.0 build 2104 (API revision 19). Nothing ran against the owner's server, Rex.app or agents; the "agents" were `sleep`.
+
+- A restart keeps every session id, window id and block id, and `server.status` names a new `instance_id` and `started_at`.
+- Each block comes back as a new shell (`/bin/zsh`, `argv0` without a leading `-` on this server, with no `ancestors`), in the folder its shell was last in (a shell that `cd`'d into `work/sub` came back there), not running the program it ran. A block created with a command (`rex new --shell none -- /bin/sleep 601`, as `session.create` starts a task) also comes back as a shell, in the block's own folder.
+- SIGTERM to the server while a program ran in a shell sent no `process_changed` or `child_exited` before the connection closed: collied sees the agent until the server is gone. A shutdown or logout ends programs first (Rexume's design says so; not checked here), so collied keeps a record 15 s after its agent leaves.
+- `format` with `extra_cursor: true` ends the VT rendering with the cursor position (`ESC [ 1 ; 32 H` after a 31-column prompt), which collied's emulator reads; `live_rex_resume` checks it at the revision 13 collied speaks, typing into a `zsh -f` block of a scratch server (restore off) from a seeded record.
+- Prior art: [Rexume](https://github.com/Entwining/rexume) (MIT) types a gate command into restored login shells by the same restored ids and an empty-prompt check from the cursor; [rex-agent-resume](https://github.com/YangJonghun/rex-agent-resume) was read only. No code was taken from either. What collied does is in [architecture.md](architecture.md#rex) and [ADR-0013](https://github.com/rbstp/collie/blob/master/docs/adr/0013-rex-resume.md).
 
 ## Copilot CLI (#741)
 

@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod common;
 
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -2016,6 +2017,63 @@ async fn tasks_scenario(server: &RexServer, bin: &Path) {
     assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
     closer.abort();
 
+    stop.send_replace(true);
+    task.await.unwrap();
+}
+
+#[test]
+fn live_rex_resume() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "z");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(resume_scenario(&server));
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+async fn resume_scenario(server: &RexServer) {
+    let (_, block) = new_session(server, "collie-resume", &["/bin/zsh", "-f", "-i"]);
+    let folder = std::fs::canonicalize(&server.work).unwrap();
+    let conversation = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    let record = server.root.join("rex-resume.json");
+    let saved = serde_json::json!({
+        "instance": "an-earlier-run",
+        "agents": { &block: { "kind": "claude", "conversation": conversation, "folder": folder } },
+    });
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&record)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, saved.to_string().as_bytes()))
+        .unwrap();
+    let rex = Arc::new(
+        Rex::new(server.socket.clone()).with_resume(record, server.root.join("rex-resume-off")),
+    );
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(rex.clone().run(stopped));
+    tokio::time::timeout(Duration::from_secs(5), rex.settled())
+        .await
+        .unwrap();
+    let id = format!("rex:{block}");
+    let line = format!("claude --resume {conversation}");
+    let screen = until("the resume command in the shell", async || {
+        rex.resume().await;
+        let text = rex.screen_text(&id).await.ok()?;
+        text.contains(&line).then_some(text)
+    })
+    .await;
+    assert_eq!(screen.matches(&line).count(), 1, "{screen:?}");
+    for _ in 0..5 {
+        rex.resume().await;
+    }
+    let again = rex.screen_text(&id).await.unwrap();
+    assert_eq!(again.matches(&line).count(), 1, "{again:?}");
     stop.send_replace(true);
     task.await.unwrap();
 }

@@ -408,6 +408,14 @@ impl Model {
         })
     }
 
+    pub(super) fn idle_shell(&self, block: &str) -> Option<(String, String, (u16, u16))> {
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = s.blocks.get(block).filter(|b| !b.exited)?;
+            let fg = b.foreground.value.as_ref().filter(|f| shell(f))?;
+            Some((session.clone(), fg.cwd.clone()?, b.size.value))
+        })
+    }
+
     pub(super) fn has(&self, block: &str) -> bool {
         self.sessions.values().any(|s| s.blocks.contains_key(block))
     }

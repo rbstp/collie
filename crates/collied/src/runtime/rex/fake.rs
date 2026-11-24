@@ -89,6 +89,8 @@ pub(super) struct State {
     pub bare_windows: Vec<String>,
     /// A method whose requests are never answered, the connection left open.
     pub unanswered: Option<&'static str>,
+    pub instance: &'static str,
+    pub started_at: String,
     pub data: Data,
 }
 
@@ -224,6 +226,8 @@ impl Fake {
             hang_up: None,
             bare_windows: Vec::new(),
             unanswered: None,
+            instance: "i",
+            started_at: "2026-11-12T16:47:01.264128Z".to_owned(),
             data: Data::default(),
         }));
         let push = Pushes::default();
@@ -545,8 +549,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             "api_revision": 13, "api_min_revision": 0,
         })),
         ("server.status", _) => Ok(json!({
-            "pid": std::process::id(), "instance_id": "i", "host_id": HOST,
-            "started_at": "2026-11-12T16:47:01.264128Z", "exit_empty": false,
+            "pid": std::process::id(), "instance_id": s.instance, "host_id": HOST,
+            "started_at": s.started_at, "exit_empty": false,
             "session_count": s.sessions.len(), "config": {"generation": 1, "hash": ""},
             "tailscale": {"state": s.tailscale, "allow_tailnet_members": false},
             "listeners": s.listeners.clone(),

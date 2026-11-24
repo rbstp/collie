@@ -3,12 +3,16 @@ import Testing
 
 struct ControlWireTests {
     @Test func requestsAreTheLinesColliedExpects() {
-        let lines = [Request.pair, .peersList, .watch, .confirm(accept: true), .confirm(accept: false)]
+        let lines = [
+            Request.pair, .peersList, .watch, .confirm(accept: true), .confirm(accept: false),
+            .rexResume(on: nil), .rexResume(on: false),
+        ]
             .map { String(decoding: $0.line, as: UTF8.self) }
         #expect(
             lines == [
                 "{\"cmd\":\"pair\"}\n", "{\"cmd\":\"peers_list\"}\n", "{\"cmd\":\"watch\"}\n",
                 "{\"cmd\":\"confirm\",\"accept\":true}\n", "{\"cmd\":\"confirm\",\"accept\":false}\n",
+                "{\"cmd\":\"rex_resume\"}\n", "{\"cmd\":\"rex_resume\",\"on\":false}\n",
             ])
     }
 
@@ -28,6 +32,7 @@ struct ControlWireTests {
             try decode(#"{"type":"error","message":"a pairing window is already open"}"#)
                 == .error("a pairing window is already open"))
         #expect(try decode(#"{"type":"noted"}"#) == .other)
+        #expect(try decode(#"{"type":"rex_resume","on":true}"#) == .rexResume(on: true))
         let peers = try decode(
             #"{"type":"peers","owner_user_id":7,"peers":[{"stable_id":"nP","user_id":7,"login":"me@example.com","#
                 + #""label":"iPhone","paired_at":1700000000000,"tls_key":"k","terminal_key":null}]}"#)

@@ -22,3 +22,4 @@ To update, run `git pull`, then `just tray-install` again.
 - The menu shows the status and version, turns `collied` off and on, pairs a phone, lists the paired phones and opens the audit log. **Quit** also stops `collied` and takes the widget off the bar; `omarchy plugin enable rbstp.collie` brings it back.
 - To set up the machine or sign in again, run `collied setup` in a terminal.
 - While enabled, it loads at every login.
+- It has no **Resume Rex Agents After Restart** item, which [CollieBar](colliebar.md#resume-rex-agents) has: collie follows Rex only on the Mac.

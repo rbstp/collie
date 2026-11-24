@@ -14,6 +14,7 @@ final class Daemon {
     private(set) var lastError: String?
     private(set) var auditLogExists = false
     private(set) var openAtLogin = false
+    private(set) var rexResume: Bool?
 
     let socketPath: String
     private let dataDir: URL
@@ -50,6 +51,7 @@ final class Daemon {
         if new != .off { starting = false }
         if state != new { state = new }
         if new == .off, !peers.isEmpty { peers = [] }
+        if new == .off { rexResume = nil }
     }
 
     private func menuOpened() {
@@ -57,6 +59,34 @@ final class Daemon {
         auditLogExists = FileManager.default.fileExists(atPath: auditLog.path(percentEncoded: false))
         openAtLogin = SMAppService.mainApp.status == .enabled
         refreshPeers()
+        refreshRexResume()
+    }
+
+    private func refreshRexResume() {
+        guard running else { return }
+        let socket = socketPath
+        Task {
+            if case .rexResume(let on) = try? await request(.rexResume(on: nil), socket: socket) {
+                rexResume = on
+            } else {
+                rexResume = nil
+            }
+        }
+    }
+
+    func setRexResume(_ on: Bool) {
+        let socket = socketPath
+        Task {
+            switch try? await request(.rexResume(on: on), socket: socket) {
+            case .rexResume(let now):
+                rexResume = now
+                lastError = nil
+            case .error(let message):
+                lastError = "Resume Rex Agents: \(printable(message))"
+            default:
+                lastError = "Resume Rex Agents: collied did not answer"
+            }
+        }
     }
 
     func refreshPeers() {

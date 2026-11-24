@@ -131,6 +131,20 @@ impl Screen {
     }
 }
 
+impl Screen {
+    pub fn at_empty_prompt(&self) -> bool {
+        let grid = self.term.grid();
+        let at = grid.cursor.point;
+        let Some(before) = at.column.0.checked_sub(1) else {
+            return false;
+        };
+        let row = &grid[at.line];
+        row[Column(before)].c == ' '
+            && (0..before).any(|c| row[Column(c)].c != ' ')
+            && (at.line.0 + 1..grid.screen_lines() as i32).all(|l| blank(&grid[Line(l)]))
+    }
+}
+
 fn style(cell: &Cell) -> Style {
     (cell.flags & STYLE, cell.fg, cell.bg)
 }
@@ -267,6 +281,17 @@ mod tests {
              \x1b[0m\x1b[2mdim\x1b[0m \x1b[0m\x1b[7mrev\x1b[0m \x1b[0m\x1b[3mit\x1b[0m \x1b[0m\x1b[4mul\x1b[0m \x1b[0m\x1b[9mst\x1b[0m \x1b[0m\x1b[8mhid\x1b[0m \x1b[0m\x1b[38;5;11mbright\x1b[0m \x1b[0m\x1b[1m\x1b[2mbd\x1b[0m\r\n\
              wide \u{6f22}\u{5b57} x"
         );
+    }
+
+    #[test]
+    fn an_empty_prompt_is_a_cursor_after_a_blank_with_a_prompt_before_and_nothing_below() {
+        let at = |bytes: &str| screen(40, 4, bytes).at_empty_prompt();
+        assert!(at("user@host app % \x1b[1;17H"));
+        assert!(at("Last login: today\r\nuser@host app % "));
+        assert!(!at("user@host app % ls"));
+        assert!(!at("user@host app % \r\nmore\x1b[1;17H"));
+        assert!(!at("    "));
+        assert!(!at(""));
     }
 
     #[test]
