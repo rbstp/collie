@@ -1,0 +1,24 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+                                                                               ┃
+ ● Done.                                                                       ┃
+                                                                               ┃
+ ❯ RUNCMD touch                                                          12:27 ┃
+                                                                               ┃
+ ✗ Shell Create a probe file Operation aborted by user                         ┃
+   touch probe.txt                                                             ┃
+   Approval check                                                              ┃
+     └ - Confirmation cancelled for shell command (touch)                      ┃
+                                                                               ┃
+ ● Operation cancelled by user                                                 ┃
+                                                                               ┃
+ ❯ SLOW reply                                                            12:30 ┃
+                                                                               ┃
+ ● OK                                                                          ┃
+                                                                               ┃
+ /private/tmp/cpd/work/app [⎇ master]
+────────────────────────────────────────────────────────────────────────────────
+❯ This is a long draft typed on purpose so that it wraps over more than one
+  row of the input box in an eighty column terminal, and a bit more.
+────────────────────────────────────────────────────────────────────────────────
+ Interactive · Manual Approval · @ files/sessions · # issues               fake

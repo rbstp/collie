@@ -1071,6 +1071,40 @@ async fn other_kinds_never_read_the_screen() {
 }
 
 #[tokio::test]
+async fn a_copilot_takes_input_only_under_its_input_box() {
+    let herdr = Mock::start();
+    let (_d, base) = root();
+    let drive = herdr.driver(&["copilot"], &base);
+    herdr.with(|h| {
+        h.text = include_str!("fixtures/copilot-1.0.115/model.detection.txt").into();
+        h.snapshot["agents"][0]["agent"] = json!("copilot");
+    });
+    let attempt = |c: char| AgentPromptParams {
+        op_id: op(c),
+        ..prompt(CLAUDE)
+    };
+    assert_eq!(
+        code(drive.prompt(attempt('A'), &yes()).await),
+        ErrorCode::AgentNotReady
+    );
+    assert_eq!(
+        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        ErrorCode::AgentNotReady
+    );
+    assert!(herdr.params("agent.prompt").is_empty());
+    assert!(herdr.params("agent.send_keys").is_empty());
+
+    herdr.with(|h| h.text = include_str!("fixtures/copilot-1.0.115/idle.detection.txt").into());
+    assert_eq!(drive.prompt(attempt('B'), &yes()).await, Ok(Response::Ok));
+    assert_eq!(
+        drive.send_keys(keys(CLAUDE), &yes()).await.0,
+        Ok(Response::Ok)
+    );
+    assert_eq!(herdr.params("agent.prompt").len(), 1);
+    assert_eq!(herdr.params("agent.send_keys").len(), 1);
+}
+
+#[tokio::test]
 async fn op_id_replays_the_first_outcome() {
     let herdr = Mock::start();
     let (_d, base) = root();

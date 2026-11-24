@@ -1,0 +1,120 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                                                                                                    │
+│  ╭─╮╭─╮                             │  Getting started                                                                                                                                             │
+│  ╰─╯╰─╯  Copilot v1.0.115 uses AI.  │  Use the tabs above to explore your sessions and pull requests                                                                                               │
+│  █ ▘▝ █  Check for mistakes.        │  /init — Initialize Copilot instructions for this repository                                                                                                 │
+│   ▔▔▔▔                              │  /model — Switch models across providers, or use Auto                                                                                                        │
+│                                                                                                                                                                                                    │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ● No Copilot instructions found for this repository. Run /init to generate them.
+
+ ! Model "fake" is not in the built-in catalog. Using defaults for: prompt tokens (COPILOT_PROVIDER_MAX_PROMPT_TOKENS), output tokens (COPILOT_PROVIDER_MAX_OUTPUT_TOKENS). Run  copilot help
+   providers  for configuration details.
+
+ ● MCP Servers reloaded: 0 servers connected
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Session only. Auto chooses a model; it does not change Autopilot or Assisted Permissions. Use `/config model` for future sessions.
+ The COPILOT_MODEL environment variable will be overridden.
+
+
+   New models
+ ❯ fake ✓
+
+   Unavailable models
+   claude-sonnet-5.5
+   claude-sonnet-5
+   claude-fable-5.2
+   claude-fable-5.1
+   claude-fable-5
+   claude-opus-5.5
+   claude-opus-4.8
+   claude-opus-4.8-fast
+   claude-sonnet-4.6
+   claude-haiku-5.5
+   claude-haiku-4.5
+   gpt-6.2-sol
+   gpt-6.2-astra
+   gpt-6.1-sol
+   gpt-6.1-terra
+   gpt-6-sol
+   gpt-6-luna
+   gpt-6-astra
+   gpt-5.6-sol
+   gpt-5.6-luna
+   gpt-5.3-codex
+   mai-code-2
+   mai-code-2-flash
+   mai-code-1.1-flash
+   gemini-4-neon
+   gemini-4-hydrogen
+   gemini-4-carbon
+   gemini-4-argon
+   gemini-3.8-flash
+   grok-4.7
+   grok-4.6
+   kimi-k3
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+  ❯  Search models…
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ↑/↓ to navigate · shift+tab group: recommended · ctrl+r rescan providers · ctrl+x → a add · ctrl+x → m manage · enter to select · esc to cancel

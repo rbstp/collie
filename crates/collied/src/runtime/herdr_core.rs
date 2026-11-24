@@ -2478,7 +2478,7 @@ pub(crate) mod tests {
             super::super::herdr::agent_args("agy", Some(SESSION), false, None),
             ["--conversation", SESSION]
         );
-        assert!(agents::task_cli("copilot").is_none());
+        assert!(agents::task_cli("pi").is_none());
     }
 
     /// A herdr that answers `ping`, `answer`'s methods, and an error for anything else.
@@ -3084,7 +3084,7 @@ pub(crate) mod tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let drive = crate::drive::Driver::new(
             root.join("herdr.sock"),
-            vec![protocol::AgentKind::new("copilot").unwrap()],
+            vec![protocol::AgentKind::new("pi").unwrap()],
             std::slice::from_ref(&root),
         )
         .unwrap()
@@ -3093,7 +3093,7 @@ pub(crate) mod tests {
         let p = protocol::TaskNewParams {
             op_id: protocol::OpId::new("n".repeat(22)).unwrap(),
             cwd: protocol::Cwd::new(root.to_str().unwrap()).unwrap(),
-            agent: protocol::AgentKind::new("copilot").unwrap(),
+            agent: protocol::AgentKind::new("pi").unwrap(),
             prompt: Some(protocol::PromptText::new("hi".to_owned()).unwrap()),
             label: None,
             new_folder: Some(protocol::FolderName::new("made").unwrap()),

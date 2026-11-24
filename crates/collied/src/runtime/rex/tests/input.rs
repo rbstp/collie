@@ -103,32 +103,20 @@ async fn keys_rex_cannot_send_as_herdr_does_send_nothing_at_all() {
     assert!(!fake.calls().iter().any(|c| c == "block.event"));
 }
 
-/// Copilot CLI reports `idle` at its folder trust prompt and with a picker open (#741).
 #[tokio::test]
-async fn an_agent_with_no_status_or_copilot_takes_no_prompt_answer_or_key() {
+async fn an_agent_with_no_status_takes_no_prompt_answer_or_key() {
     let fake = Fake::start().await;
-    let copilot = |state: &str, pid| {
-        json!({
-            "state": state, "app": "copilot", "updated_at": T0,
-            "owner": { "pid": pid, "name": "copilot" },
-        })
-    };
-    let process = |pid| fake::process(pid, "/opt/homebrew/bin/copilot", "copilot");
     {
         let mut s = fake.state();
         s.sessions.push((S1.to_owned(), "work".to_owned()));
-        s.add(S1, B1, process(10), vec![copilot("idle", 10)]);
-        s.add(S1, B2, process(20), vec![copilot("blocked", 20)]);
         s.add(S1, B3, fake::process(30, "claude", "2.1.322"), vec![]);
     }
     let (rex, _rt, dir) = followed(&fake).await;
-    let shown = |b: &str| {
-        let a = rex.get(&id(b)).unwrap();
-        (a.agent, a.agent_status, a.read_only)
-    };
-    assert_eq!(shown(B1), (Some("copilot".into()), "idle".into(), true));
-    assert_eq!(shown(B2), (Some("copilot".into()), "blocked".into(), true));
-    assert_eq!(shown(B3), (Some("claude".into()), "unknown".into(), true));
+    let a = rex.get(&id(B3)).unwrap();
+    assert_eq!(
+        (a.agent, a.agent_status, a.read_only),
+        (Some("claude".into()), "unknown".into(), true)
+    );
     let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
         .unwrap()
         .with_rex(Some(rex));
@@ -136,11 +124,7 @@ async fn an_agent_with_no_status_or_copilot_takes_no_prompt_answer_or_key() {
     let op = || OpId::new("P".repeat(22)).unwrap();
     let refused = |r: Result<protocol::Response, (ErrorCode, String)>| r.unwrap_err().0;
 
-    for (block, prompt_error) in [
-        (B1, ErrorCode::AgentNotReady),
-        (B2, ErrorCode::AgentBlocked),
-        (B3, ErrorCode::AgentNotReady),
-    ] {
+    for (block, prompt_error) in [(B3, ErrorCode::AgentNotReady)] {
         let terminal = TerminalId::new(id(block)).unwrap();
         let prompt = AgentPromptParams {
             op_id: op(),
@@ -603,7 +587,7 @@ async fn a_silent_codex_takes_only_its_startup_dialogs_own_keys_up_to_the_answer
 }
 
 #[tokio::test]
-async fn a_copilot_trust_box_takes_keys_until_copilot_reports_blocked() {
+async fn a_copilot_trust_box_takes_its_keys_and_a_blocked_copilot_takes_any() {
     let wide =
         include_str!("../../../../tests/fixtures/copilot-1.0.112/trust-wide-char.detection.txt");
     let fake = Fake::start().await;
@@ -639,12 +623,123 @@ async fn a_copilot_trust_box_takes_keys_until_copilot_reports_blocked() {
         rex.get(&id(B1)).is_ok_and(|a| a.agent_status == "blocked")
     })
     .await;
-    let (sent, audited) = drive.send_keys(keys(vec![Key::Down]), &yes).await;
-    assert_eq!(
-        (sent.unwrap_err().0, audited),
-        (ErrorCode::AgentNotReady, None)
+    let (sent, audited) = drive.send_keys(keys(vec![Key::Tab]), &yes).await;
+    assert_eq!(sent, Ok(protocol::Response::Ok));
+    assert_eq!(audited, Some(format!("{} blocked keys=tab", id(B1))));
+    assert_eq!(events(&fake, B1), [key("tab", "", "\t", 9)]);
+}
+
+#[tokio::test]
+async fn a_copilot_takes_input_only_while_its_input_box_shows() {
+    let fixture = |name: &str| {
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{dir}/tests/fixtures/copilot-1.0.115/{name}.detection.txt");
+        std::fs::read_to_string(path).unwrap().replace('\n', "\r\n")
+    };
+    let fake = Fake::start().await;
+    {
+        let mut s = fake.state();
+        s.sessions.push((S1.to_owned(), "work".to_owned()));
+        let copilot = fake::process(10, "/opt/homebrew/bin/copilot", "copilot");
+        let record = json!({
+            "state": "idle", "app": "copilot", "updated_at": T0,
+            "owner": { "pid": 10, "name": "copilot" },
+        });
+        s.add(S1, B1, copilot, vec![record]);
+    }
+    let show = |name: &str| fake.state().block(B1).screen = fixture(name);
+    show("model");
+    let (rex, _rt, dir) = followed(&fake).await;
+    assert!(!rex.get(&id(B1)).unwrap().read_only);
+    let drive = Driver::new(dir.path().join("no-herdr.sock"), vec![], &[])
+        .unwrap()
+        .with_rex(Some(rex));
+    let yes: Authorized = Arc::new(|| true);
+    let op = || OpId::new("C".repeat(22)).unwrap();
+    let terminal = TerminalId::new(id(B1)).unwrap();
+    let prompt = || AgentPromptParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new("hi".to_owned()).unwrap(),
+        expected_draft: None,
+    };
+    let typed = || AgentTypeTextParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        text: PromptText::new("yes".to_owned()).unwrap(),
+    };
+    let keys = || AgentSendKeysParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        keys: vec![Key::Down],
+    };
+    let text = || SendTextParams {
+        op_id: op(),
+        terminal_id: terminal.clone(),
+        text: TypedText::new("x".to_owned()).unwrap(),
+    };
+    let dialog = (
+        ErrorCode::AgentNotReady,
+        "Copilot CLI does not show its input box; answer its dialog in the terminal".to_owned(),
     );
+    for name in ["model", "theme", "permissions", "resume"] {
+        show(name);
+        assert_eq!(
+            drive.prompt(prompt(), &yes).await,
+            Err(dialog.clone()),
+            "{name}"
+        );
+        assert_eq!(
+            drive.type_text(typed(), &yes).await,
+            Err(dialog.clone()),
+            "{name}"
+        );
+        assert_eq!(
+            drive.send_keys(keys(), &yes).await.0,
+            Err(dialog.clone()),
+            "{name}"
+        );
+        assert_eq!(
+            drive.send_text(text(), &yes).await.0,
+            Err(dialog.clone()),
+            "{name}"
+        );
+    }
     assert_eq!(events(&fake, B1), Vec::<Value>::new());
+
+    show("trust");
+    assert_eq!(drive.prompt(prompt(), &yes).await, Err(dialog.clone()));
+    let (sent, audited) = drive.send_keys(keys(), &yes).await;
+    assert_eq!(sent, Ok(protocol::Response::Ok));
+    assert_eq!(audited, Some(format!("{} blocked keys=down", id(B1))));
+    assert_eq!(events(&fake, B1), [key("arrow_down", "", "", 0)]);
+
+    show("draft");
+    let busy = (
+        ErrorCode::AgentNotReady,
+        "the input box is not empty".to_owned(),
+    );
+    assert_eq!(drive.prompt(prompt(), &yes).await, Err(busy.clone()));
+    assert_eq!(drive.type_text(typed(), &yes).await, Err(busy));
+    assert_eq!(
+        drive.send_keys(keys(), &yes).await.0,
+        Ok(protocol::Response::Ok)
+    );
+    assert_eq!(
+        drive.send_text(text(), &yes).await.0,
+        Ok(protocol::Response::Ok)
+    );
+    assert_eq!(
+        events(&fake, B1),
+        [key("arrow_down", "", "", 0), paste("x")]
+    );
+
+    show("idle");
+    assert_eq!(
+        drive.prompt(prompt(), &yes).await,
+        Ok(protocol::Response::Ok)
+    );
+    assert_eq!(events(&fake, B1), [paste("hi"), key("enter", "", "\r", 13)]);
 }
 
 #[tokio::test]

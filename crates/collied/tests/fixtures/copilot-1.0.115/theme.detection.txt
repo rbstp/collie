@@ -1,0 +1,24 @@
+  Current   Sessions   Issues   Pull requests   Gists
+
+                                                                               ┃
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Select a Color Mode                                                          │
+│ Color modes control Copilot's semantic colors.                               │
+│ ──────────────────────────────────────────────────────────────────────────── │
+│  1 -   function getUser(id: string): User {                                  │
+│  1 +   function getUserProfile(id: string): UserProfile {                    │
+│  2     return db.find(id); // selected                                       │
+│  3     }                                                                     │
+│  4                                                                           │
+│  5 -   export default getUser;                                               │
+│  5 +   export default getUserProfile;                                        │
+│                                                                              │
+│    1. Default                                                                │
+│  ❯ 2. GitHub ✓                                                               │
+│    3. Dim                                                                    │
+│    4. Contrast                                                               │
+│    5. Colorblind                                                             │
+│                                                                              │
+│  GitHub Dark & Light theme                                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ ↑/↓ to navigate · enter to select · esc to cancel

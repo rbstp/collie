@@ -63,6 +63,8 @@ pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
 const STARTUP_KEYS: &str = "a startup prompt takes only arrows, Enter, Esc or one digit, and nothing after the key that answers it; nothing was sent";
 pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
+const COPILOT_DIALOG: &str =
+    "Copilot CLI does not show its input box; answer its dialog in the terminal";
 const UNFOCUSED: &str =
     "a background task or agent below the input box is selected on the machine; nothing was sent";
 pub(crate) const ELSEWHERE: &str =
@@ -426,7 +428,7 @@ impl Driver {
         let codex = current.unreported && kind == Some("codex");
         let copilot = current.reported.as_deref() == Some("copilot")
             && current.cli.as_deref() == Some("copilot");
-        if ready.is_ok() && current.read_only && (codex || copilot) {
+        if ready.is_ok() && ((current.read_only && codex) || copilot) {
             let screen = self.runtime.detection_text(&current.pane_id).await.ok();
             let size = self.runtime.pane_size(&current.pane_id).ok().flatten();
             let shown = |s: &String| match size {
@@ -464,6 +466,21 @@ impl Driver {
             .await
             .map_err(herdr_fail)?;
         Ok(protocol::jump_banner(&sanitize_ansi(&read.text)))
+    }
+
+    // ADR-0015
+    async fn copilot_input(&self, a: &AgentInfo, enter: bool) -> Result<(), Fail> {
+        if a.agent.as_deref() != Some("copilot")
+            || flock::status(&a.agent_status) == AgentStatus::Blocked
+        {
+            return Ok(());
+        }
+        let screen = self.runtime.detection_text(&a.pane_id).await.ok();
+        match screen.as_deref().and_then(prompt::copilot_box) {
+            None => fail(ErrorCode::AgentNotReady, COPILOT_DIALOG),
+            Some(false) if enter => fail(ErrorCode::AgentNotReady, "the input box is not empty"),
+            Some(_) => Ok(()),
+        }
     }
 
     async fn input_safeguards(&self, a: &AgentInfo) -> Result<(), Fail> {
@@ -748,6 +765,7 @@ impl Driver {
             let expected = p.expected_draft.as_ref().map(|d| d.as_str());
             self.replace_draft(&a.pane_id, expected, auth).await?;
         }
+        self.copilot_input(&a, true).await?;
         authorized(auth)?;
         self.runtime
             .agent_prompt(&a.pane_id, p.text.as_str(), &a.agent_status)
@@ -837,6 +855,8 @@ impl Driver {
             if answers.is_some() {
                 self.answer(&p.terminal_id, screen);
             }
+        } else if let Err(e) = self.copilot_input(&a, false).await {
+            return (Err(e), None);
         }
         let target =
             blocked.then(|| format!("{} blocked keys={}", p.terminal_id.as_str(), keys.join(" ")));
@@ -855,6 +875,7 @@ impl Driver {
         let _box = self.box_writes.lock().await;
         let a = self.writable_agent(&p.terminal_id).await?;
         self.input_safeguards(&a).await?;
+        self.copilot_input(&a, true).await?;
         authorized(auth)?;
         self.runtime
             .type_text(
@@ -884,6 +905,9 @@ impl Driver {
         let target = blocked.then(|| format!("{} blocked text", p.terminal_id.as_str()));
         let sent = async {
             self.input_safeguards(&a).await?;
+            if !digit {
+                self.copilot_input(&a, false).await?;
+            }
             authorized(auth)?;
             if digit {
                 self.runtime.notice_digit(&a.pane_id, p.text.as_str()).await
@@ -1108,7 +1132,7 @@ impl Driver {
                 ErrorCode::NotFound,
                 match elsewhere {
                     Some(name) => format!(
-                        "no allowed agent kind that {name} starts (Claude Code, Codex, Antigravity) is installed"
+                        "no allowed agent kind that {name} starts (Claude Code, Codex, Copilot CLI, Antigravity) is installed"
                     ),
                     None => "no allowed agent kind is known to herdr".to_owned(),
                 },
@@ -1723,7 +1747,11 @@ impl Driver {
             // Enter would answer it.
             if p.agent.as_str() != "claude" {
                 let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
-                if screen.as_deref().is_none_or(prompt::shows_dialog) {
+                let dialog = match p.agent.as_str() {
+                    "copilot" => screen.as_deref().and_then(prompt::copilot_box) != Some(true),
+                    _ => screen.as_deref().is_none_or(prompt::shows_dialog),
+                };
+                if dialog {
                     let message = startup_prompt(&p.agent, screen.as_deref());
                     return fail(ErrorCode::AgentBlocked, message);
                 }
@@ -1934,7 +1962,11 @@ impl Driver {
                                 if pane.foreground_cwd.as_deref() != Some(cwd.as_str()) {
                                     return fail(ErrorCode::AgentNotReady, ELSEWHERE);
                                 }
-                                return Ok((pane, false));
+                                let input = kind.as_str() != "copilot"
+                                    || (self.runtime.detection_text(id).await.ok().as_deref())
+                                        .and_then(prompt::copilot_box)
+                                        == Some(true);
+                                return Ok((pane, !input));
                             }
                         }
                         _ => since = Some((a.state_change_seq, tokio::time::Instant::now())),
@@ -2736,7 +2768,7 @@ async fn git_worktree(dir: &Cwd, args: &[&str], limit: Duration) -> Result<(), S
 
 fn host_kinds(host: &TaskHost) -> String {
     format!(
-        "{} starts Claude Code, Codex and Antigravity, and only once found on the machine",
+        "{} starts Claude Code, Codex, Copilot CLI and Antigravity, and only once found on the machine",
         host.name()
     )
 }
@@ -3599,6 +3631,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_copilot_task_at_its_trust_prompt_returns_startup_blocked() {
+        const TRUST: &str = include_str!("../tests/fixtures/copilot-1.0.115/trust.detection.txt");
+        const IDLE: &str = include_str!("../tests/fixtures/copilot-1.0.115/idle.detection.txt");
+        fn copilot() -> serde_json::Value {
+            let status = serde_json::json!({"state": "idle", "app": "copilot"});
+            let mut t = core_tests::terminal("t1", status, "/opt/homebrew/bin/copilot");
+            t["name"] = serde_json::json!(NAME);
+            t["state"] = serde_json::json!("live");
+            t["cwd"] = serde_json::json!("/w");
+            t
+        }
+        type Answer = fn(&str) -> serde_json::Value;
+        let cases: [(Answer, bool); 2] = [
+            (
+                |m| match m {
+                    "terminal.read" => serde_json::json!({ "text": TRUST }),
+                    m => core_get(m, copilot),
+                },
+                true,
+            ),
+            (
+                |m| match m {
+                    "terminal.read" => serde_json::json!({ "text": IDLE }),
+                    m => core_get(m, copilot),
+                },
+                false,
+            ),
+        ];
+        for (answer, blocked) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(dir.path()).unwrap();
+            core_tests::fake_core(&root.join("core.sock"), answer).await;
+            let core = core_tests::core_of(&root, serde_json::json!([copilot()]));
+            let drive = core_driver(&root, core.clone());
+            let kind = AgentKind::new("copilot").unwrap();
+            let sub = Cwd::new("/w/sub").unwrap();
+            let (_, startup_blocked) = drive
+                .host_agent_ready(&TaskHost::Core(core), &core_id(), NAME, &kind, &sub)
+                .await
+                .unwrap();
+            assert_eq!(startup_blocked, blocked);
+        }
+    }
+
+    #[tokio::test]
     async fn a_claude_code_with_no_status_and_a_menu_on_screen_returns_startup_blocked() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
@@ -3699,19 +3776,11 @@ mod tests {
         );
     }
 
-    /// Only Claude Code and Codex report `blocked` at their dialogs; Copilot CLI reports
-    /// `idle` at its folder trust prompt (#741), and a core keeps a report after its program
-    /// exits (0.1.16).
+    /// A core keeps a report after its program exits (0.1.16).
     #[tokio::test]
     async fn a_herdr_core_agent_takes_no_input_unless_a_verified_cli_reports() {
         fn term(app: &str, state: &str, argv0: &str) -> serde_json::Value {
             core_tests::terminal("t1", serde_json::json!({"state": state, "app": app}), argv0)
-        }
-        fn copilot_idle() -> serde_json::Value {
-            term("copilot", "idle", "/opt/homebrew/bin/copilot")
-        }
-        fn copilot_blocked() -> serde_json::Value {
-            term("copilot", "blocked", "/opt/homebrew/bin/copilot")
         }
         fn stale_claude() -> serde_json::Value {
             term("claude-code", "idle", "/opt/homebrew/bin/copilot")
@@ -3721,21 +3790,7 @@ mod tests {
         }
         type Terminal = fn() -> serde_json::Value;
         type Answer = fn(&str) -> serde_json::Value;
-        let cases: [(Terminal, Answer, &str, &str, ErrorCode); 4] = [
-            (
-                copilot_idle,
-                |m| core_get(m, copilot_idle),
-                "copilot",
-                "idle",
-                ErrorCode::AgentNotReady,
-            ),
-            (
-                copilot_blocked,
-                |m| core_get(m, copilot_blocked),
-                "copilot",
-                "blocked",
-                ErrorCode::AgentBlocked,
-            ),
+        let cases: [(Terminal, Answer, &str, &str, ErrorCode); 2] = [
             (
                 stale_claude,
                 |m| core_get(m, stale_claude),
@@ -3956,9 +4011,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_read_only_copilot_takes_its_trust_boxs_keys_only() {
+    async fn a_copilot_takes_its_trust_boxs_keys_only() {
         const TRUST: &str = include_str!("../tests/fixtures/copilot-1.0.112/trust.detection.txt");
-        const IDLE: &str = include_str!("../tests/fixtures/copilot-1.0.112/idle.detection.txt");
         fn copilot(status: serde_json::Value, argv0: &str) -> serde_json::Value {
             core_tests::terminal("t1", status, argv0)
         }
@@ -3970,12 +4024,6 @@ mod tests {
             let mut t = idle();
             t["rows"] = serde_json::json!(30);
             t
-        }
-        fn asking() -> serde_json::Value {
-            copilot(
-                serde_json::json!({"state": "blocked", "app": "copilot"}),
-                BIN,
-            )
         }
         fn stale() -> serde_json::Value {
             let report = serde_json::json!({"state": "idle", "app": "copilot"});
@@ -3996,11 +4044,9 @@ mod tests {
         }
         type Terminal = fn() -> serde_json::Value;
         type Answer = fn(&str) -> serde_json::Value;
-        let cases: [(Answer, Terminal, bool, bool); 7] = [
+        let cases: [(Answer, Terminal, bool, bool); 5] = [
             (|m| screen(m, idle, TRUST), idle, true, true),
-            (|m| screen(m, idle, IDLE), idle, false, true),
             (|m| screen(m, taller, TRUST), taller, false, true),
-            (|m| screen(m, asking, TRUST), asking, false, false),
             (|m| screen(m, stale, TRUST), stale, false, false),
             (|m| screen(m, silent, TRUST), silent, false, false),
             (|m| screen(m, nameless, TRUST), nameless, false, false),
@@ -4010,7 +4056,7 @@ mod tests {
             let root = std::fs::canonicalize(dir.path()).unwrap();
             let seen = core_tests::fake_core(&root.join("core.sock"), answer).await;
             let core = core_tests::core_of(&root, serde_json::json!([listed()]));
-            assert!(core.agents().unwrap()[0].read_only);
+            assert_eq!(core.agents().unwrap()[0].read_only, !reads);
             let drive = core_driver(&root, core);
             let yes: Authorized = Arc::new(|| true);
             let op = || OpId::new("P".repeat(22)).unwrap();

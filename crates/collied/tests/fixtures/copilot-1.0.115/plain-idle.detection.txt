@@ -1,0 +1,24 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+   echo collie-probe                                                           ┃
+                                                                               ┃
+ ● Done.                                                                       ┃
+                                                                               ┃
+ ❯ RUNCMD touch                                                          12:27 ┃
+                                                                               ┃
+ ✗ Shell Create a probe file Operation aborted by user                         ┃
+   touch probe.txt                                                             ┃
+   Approval check                                                              ┃
+     └ - Confirmation cancelled for shell command (touch)                      ┃
+                                                                               ┃
+ ● Operation cancelled by user                                                 ┃
+                                                                               ┃
+ ❯ SLOW reply                                                            12:30 ┃
+                                                                               ┃
+ ● OK                                                                          ┃
+                                                                               ┃
+ /private/tmp/cpd/work/app [⎇ master]
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+ ← open sidebar · Interactive · Manual Approval · / commands               fake

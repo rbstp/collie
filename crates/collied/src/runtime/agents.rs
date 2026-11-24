@@ -56,11 +56,11 @@ pub(super) fn title(raw: &str) -> &str {
         .trim_end()
 }
 
-/// `reported` is the kind a status's `app` names. Claude Code's, Codex's and Antigravity's
-/// reports were checked: they report `blocked` at their permission and question dialogs.
-/// Copilot CLI 1.0.106 and later reports `idle` at its folder trust prompt and pickers
-/// (#741), and other programs were never checked. A report naming another CLI than the one
-/// leading the terminal is a previous program's.
+/// `reported` is the kind a status's `app` names. Claude Code's, Codex's, Copilot CLI's and
+/// Antigravity's reports were checked: they report `blocked` at their permission and question
+/// dialogs, and Copilot CLI `idle` at its trust prompt and pickers, so its screen is read
+/// before every write (ADR-0015). Other programs were never checked. A report naming another
+/// CLI than the one leading the terminal is a previous program's.
 pub(super) fn read_only(reported: Option<&str>, cli: Option<&str>) -> bool {
     !reported.is_some_and(|k| TASK_KINDS.contains(&k) && cli.is_none_or(|c| c == k))
 }
@@ -416,7 +416,7 @@ pub const STRIPPED: [&str; 17] = [
 ];
 /// The kinds a task starts in herdr-core or Rex: those that report OSC 7501, without which
 /// nothing says the agent is ready or what dialog it shows.
-pub const TASK_KINDS: [&str; 3] = ["claude", "codex", "agy"];
+pub const TASK_KINDS: [&str; 4] = ["claude", "codex", "copilot", "agy"];
 
 /// A task kind's CLI by absolute path: `terminal.run` starts a template for a bare name that
 /// matches one. A path holding `=` would be read as a variable by `env`.

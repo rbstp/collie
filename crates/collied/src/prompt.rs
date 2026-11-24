@@ -361,6 +361,40 @@ pub fn copilot_trust(text: &str, columns: u16, rows: u16) -> bool {
         && inner.iter().filter(|r| r.starts_with(" ❯ ")).count() == 1
 }
 
+// ADR-0015
+pub fn copilot_box(text: &str) -> Option<bool> {
+    use unicode_width::UnicodeWidthStr;
+    type Row = fn(usize, &str) -> bool;
+    const BOXES: [(char, char, char, char, Row); 2] = [
+        ('╻', '▄', '╹', '▀', |_, l| l.starts_with('┃')),
+        ('─', '─', '─', '─', |i, l| match i {
+            0 => l.starts_with('❯'),
+            _ => l.starts_with("  "),
+        }),
+    ];
+    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+    let lines = &lines[..=lines.iter().rposition(|l| !l.is_empty())?];
+    let width = lines.iter().map(|l| l.width()).max()?;
+    let rule = |l: &str, edge: char, fill: char| {
+        l.width() == width
+            && l.strip_prefix(edge)
+                .is_some_and(|r| r.chars().all(|c| c == fill))
+    };
+    BOXES.iter().find_map(|&(top, over, bottom, under, input)| {
+        let end = lines.iter().rposition(|l| rule(l, bottom, under))?;
+        let start = lines[..end].iter().rposition(|l| rule(l, top, over))?;
+        let rows = &lines[start + 1..end];
+        let footer = &lines[end + 1..];
+        let shown = !rows.is_empty()
+            && rows.iter().enumerate().all(|(i, l)| input(i, l))
+            && (1..=3).contains(&footer.len())
+            && footer
+                .iter()
+                .all(|l| l.starts_with(' ') && !l.contains("cancel"));
+        shown.then(|| rows.len() == 1 && rows[0].chars().count() == 1)
+    })
+}
+
 /// Whether Claude Code shows ultracode on: the rule directly above its last `❯` row, the
 /// input box's top rule, carries the `ultracode` tag (`─── ultracode ─` in 2.1.299).
 pub fn ultracode_on(text: &str) -> bool {
@@ -2925,6 +2959,66 @@ mod tests {
         }
         for (_, screen) in &COPILOT {
             assert!(!copilot_trust(screen, 80, 24), "{screen}");
+        }
+    }
+
+    #[test]
+    fn copilot_takes_input_only_under_its_input_box() {
+        let fixture = |name: &str| {
+            let dir = env!("CARGO_MANIFEST_DIR");
+            std::fs::read_to_string(format!("{dir}/tests/fixtures/{name}.detection.txt")).unwrap()
+        };
+        for (name, empty) in [
+            ("copilot-1.0.112/idle", true),
+            ("copilot-1.0.115/idle", true),
+            ("copilot-1.0.115/working", true),
+            ("copilot-1.0.115/narrow-idle", true),
+            ("copilot-1.0.115/core-idle", true),
+            ("copilot-1.0.115/plain-idle", true),
+            ("copilot-1.0.115/draft", false),
+            ("copilot-1.0.115/slash", false),
+            ("copilot-1.0.115/plain-draft", false),
+            ("copilot-1.0.115/plain-slash", false),
+        ] {
+            assert_eq!(copilot_box(&fixture(name)), Some(empty), "{name}");
+        }
+        for name in [
+            "copilot-1.0.112/trust",
+            "copilot-1.0.112/trust-core",
+            "copilot-1.0.115/trust",
+            "copilot-1.0.115/narrow-trust",
+            "copilot-1.0.115/model",
+            "copilot-1.0.115/core-model",
+            "copilot-1.0.115/plain-model",
+            "copilot-1.0.115/theme",
+            "copilot-1.0.115/permissions",
+            "copilot-1.0.115/resume",
+            "copilot-1.0.115/question",
+            "copilot-1.0.115/core-question",
+            "copilot-1.0.115/plain-question",
+            "copilot-1.0.115/permission",
+        ] {
+            assert_eq!(copilot_box(&fixture(name)), None, "{name}");
+        }
+        for (_, screen) in &COPILOT {
+            assert_eq!(copilot_box(screen), None, "{screen}");
+        }
+        let idle = fixture("copilot-1.0.115/idle");
+        let rows: Vec<&str> = idle.lines().collect();
+        let footerless = rows[..rows.len() - 1].join("\n");
+        let indented: String = rows.iter().map(|r| format!(" {r}\n")).collect();
+        let edited = |start: char, row: &str| {
+            let mut rows = rows.clone();
+            let at = rows.iter().rposition(|r| r.starts_with(start)).unwrap();
+            rows[at] = row;
+            rows.join("\n")
+        };
+        let top = rows.iter().rfind(|r| r.starts_with('╻')).unwrap();
+        let short = edited('╻', top.trim_end().strip_suffix('▄').unwrap());
+        let text = edited('┃', "x");
+        let cancel = idle.replace("/ commands", "esc to cancel");
+        for screen in [&footerless, &indented, &short, &text, &cancel, ""] {
+            assert_eq!(copilot_box(screen), None, "{screen}");
         }
     }
 

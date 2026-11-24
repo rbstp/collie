@@ -1,0 +1,24 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+                                                                               ┃
+ ✗ Shell Create a probe file Operation aborted by user                         ┃
+   touch probe.txt                                                             ┃
+   Approval check                                                              ┃
+     └ - Confirmation cancelled for shell command (touch)                      ┃
+                                                                               ┃
+ ● Operation cancelled by user                                                 ┃
+                                                                               ┃
+ ❯ SLOW reply                                                            12:30 ┃
+                                                                               ┃
+ ● OK                                                                          ┃
+                                                                               ┃
+┃ ❯ /add-dir                            Allow file access to a directory and lo…
+┃   /after                              Schedule a one-shot prompt, skill, or s…
+┃   /agent                              Browse and select agents: /agent [name]
+┃   /ahp                                Agent Host Protocol: manage the hosts y…
+┃   /allow-all                          Enable all permissions (tools, paths, a…
+┃   /app                                Prefer a visual workspace? Try out the …
+────────────────────────────────────────────────────────────────────────────────
+❯ /add-dir
+────────────────────────────────────────────────────────────────────────────────
+ Interactive · Manual Approval · /help show help                           fake

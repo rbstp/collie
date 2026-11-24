@@ -383,7 +383,7 @@ async fn a_blocked_copilot_raises_an_approval_with_no_option_and_takes_no_decisi
     let (tx, mut events) = broadcast::channel(64);
     let approvals = Approvals::new(none, "nMAC".into(), tx, audit, None).with_rex(Some(rex));
     let agents = rt.agent_list().await.unwrap();
-    assert!(agents[0].read_only);
+    assert!(!agents[0].read_only);
     approvals.observe(&agents, &[] as &[WorkspaceInfo]).await;
     let raised: Vec<Approval> = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|e| match e {
