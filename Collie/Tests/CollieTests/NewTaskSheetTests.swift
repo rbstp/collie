@@ -105,6 +105,68 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(model.prompt, "a new task", "the sheet's own draft comes back")
     }
 
+    func testASaveKeepsWhatItSentAndReconcileWaitsForIt() async throws {
+        let core = FakeCore()
+        core.state.withLock { $0.options.schedule = true; $0.options.editSchedule = true }
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let dir = FileManager.default.temporaryDirectory.appending(path: "edit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (drafts, kept) = (dir.appending(path: "drafts.json"), dir.appending(path: "scheduled.json"))
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil, draftsFile: drafts, scheduledFile: kept)
+        await model.loadOptions()
+        model.startLater = true
+        model.cwd = "/Users/me/app"
+        model.prompt = "run the nightly"
+        let scheduled = await model.schedule()
+        XCTAssertTrue(scheduled)
+        await model.loadScheduled()
+        model.prompt = "a new task"
+        model.edit(try XCTUnwrap(model.scheduled.first))
+        model.prompt = "the edit"
+
+        core.set(hold: true)
+        let save = Task { await model.saveEdit() }
+        await core.waitHeld(1)
+        model.stopEditing()
+        XCTAssertNotNil(model.editing, "Cancel waits for Save")
+        model.prompt = "typed while saving"
+        core.state.withLock { $0.scheduled[0].blocked = "term_new" }
+        let startAt = model.startAt
+        await ScheduledDrafts.settle(
+            core.snapshot.scheduled, kept: ScheduledDrafts.kept(machineId: "m1", file: kept), machineId: "m1", core: core, file: kept, draftsFile: drafts
+        )
+        XCTAssertNil(AgentDrafts.load(from: drafts).drafts[AgentRoute(machineId: "m1", terminalId: "term_new")], "no restore while the edit is unresolved")
+        XCTAssertNotNil(ScheduledDrafts.kept(machineId: "m1", file: kept)["s1"])
+        core.release()
+        let saved = await save.value
+        XCTAssertTrue(saved)
+        XCTAssertEqual(ScheduledDrafts.kept(machineId: "m1", file: kept)["s1"]?.draft.text, "the edit", "the copy is what was sent")
+
+        await ScheduledDrafts.reconcile(machineId: "m1", core: core, now: startAt.addingTimeInterval(1), file: kept, draftsFile: drafts)
+        XCTAssertEqual(AgentDrafts.load(from: drafts).drafts[AgentRoute(machineId: "m1", terminalId: "term_new")]?.text, "the edit")
+    }
+
+    func testAPromptlessResumeCanBeEditedAndStayPromptless() async throws {
+        let core = FakeCore()
+        core.state.withLock { $0.options.schedule = true; $0.options.editSchedule = true }
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let kept = FileManager.default.temporaryDirectory.appending(path: "scheduled-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: kept) }
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil, scheduledFile: kept)
+        await model.loadOptions()
+        let task = ScheduledTask(scheduleId: "s9", startAtMs: UInt64((Date.now.timeIntervalSince1970 + 3600) * 1000), cwd: "/Users/me/app", agent: "codex", label: nil, blocked: nil)
+        core.state.withLock { $0.scheduled = [task] }
+        ScheduledDrafts.keep(AgentDrafts.Draft(text: "", attachments: [], shell: false), for: task, machineId: "m1", resume: true, file: kept)
+        await model.loadScheduled()
+        model.edit(task)
+        XCTAssertEqual(model.editing?.scheduleId, "s9")
+        XCTAssertTrue(model.canSave, "a resumed session needs no prompt")
+        let saved = await model.saveEdit()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(core.snapshot.reschedules.last?.hasSuffix(" "), true, "sent without a prompt")
+    }
+
     func testACancelledOrStartedTaskLeavesNoKeptPrompt() async throws {
         let core = FakeCore()
         core.state.withLock { $0.options.schedule = true }

@@ -1260,22 +1260,33 @@ async fn schedule_task(
     Ok(Response::TaskScheduled { task })
 }
 
-async fn reschedule_task(state: &State, p: TaskRescheduleParams, auth: &Authorized) -> Reply {
+async fn reschedule_task(
+    state: &State,
+    p: TaskRescheduleParams,
+    by: String,
+    auth: &Authorized,
+) -> Reply {
     const STARTED: &str = "the task is starting or started and can no longer be edited";
-    let current = lock(&state.schedule).task(&p.schedule_id).cloned();
-    let Some(mut entry) = current else {
-        return err(ErrorCode::NotFound, "no such scheduled task");
+    let (current, replayed) = {
+        let schedule = lock(&state.schedule);
+        let replayed = schedule.replayed(&p.schedule_id, &p.op_id, p.start_at_ms, &p.prompt);
+        (schedule.task(&p.schedule_id).cloned(), replayed)
     };
-    if entry.starting || entry.blocked.is_some() {
-        return err(ErrorCode::AgentNotReady, STARTED);
-    }
-    entry.start_at_ms = p.start_at_ms;
-    entry.task.prompt = p.prompt;
-    state.drive.schedule_check(&entry.task).await?;
-    if !auth() {
-        return err(ErrorCode::NotPaired, "peer is no longer authorized");
-    }
-    let edited = lock(&state.schedule).edit(&p.schedule_id, entry, crate::now_ms());
+    let edited = match (current, replayed) {
+        (_, Some(replayed)) => replayed,
+        (None, None) => schedule::Edit::Missing,
+        (Some(e), None) if e.by != by => schedule::Edit::Refused(schedule::NOT_YOURS),
+        (Some(e), None) if e.starting || e.blocked.is_some() => schedule::Edit::Started,
+        (Some(mut entry), None) => {
+            entry.start_at_ms = p.start_at_ms;
+            entry.task.prompt = p.prompt;
+            state.drive.schedule_check(&entry.task).await?;
+            if !auth() {
+                return err(ErrorCode::NotPaired, "peer is no longer authorized");
+            }
+            lock(&state.schedule).edit(&p.schedule_id, &by, &p.op_id, entry, crate::now_ms())
+        }
+    };
     match edited {
         schedule::Edit::Done(task) => Ok(Response::TaskScheduled { task }),
         schedule::Edit::Missing => err(ErrorCode::NotFound, "no such scheduled task"),
@@ -2106,9 +2117,9 @@ impl Session<'_> {
                 (reply, Some(origin))
             }
             Request::TaskReschedule(p) => {
-                let (op_id, state) = (p.op_id.clone(), self.state.clone());
+                let (op_id, state, by) = (p.op_id.clone(), self.state.clone(), peer.clone());
                 let op = self.audited(method, target.clone(), async move {
-                    (reschedule_task(&state, p, &auth).await, None)
+                    (reschedule_task(&state, p, by, &auth).await, None)
                 });
                 let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
                 (reply, Some(origin))

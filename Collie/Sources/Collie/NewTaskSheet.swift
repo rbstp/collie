@@ -94,7 +94,7 @@ struct NewTaskSheet: View {
                                 TextField(placeholder, text: $model.prompt, selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical)
                                     .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
                                     .focused($editingPrompt)
-                                    .disabled(model.dictation.isActive)
+                                    .disabled(model.dictation.isActive || (model.editing != nil && model.phase == .starting))
                                 if expandedPrompt && !model.prompt.isEmpty {
                                     Button {
                                         model.prompt = ""
@@ -458,6 +458,7 @@ struct NewTaskSheet: View {
                             dismiss()
                         }
                     }
+                    .disabled(model.editing != nil && model.phase == .starting)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
