@@ -198,7 +198,8 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
 #[cfg(target_os = "linux")]
 fn mine(pid: u32) -> bool {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(format!("/proc/{pid}")).is_ok_and(|m| m.uid() == unsafe { libc::getuid() })
+    std::fs::metadata(format!("/proc/{pid}"))
+        .is_ok_and(|m| m.uid() == rustix::process::getuid().as_raw())
 }
 
 #[cfg(target_os = "linux")]
