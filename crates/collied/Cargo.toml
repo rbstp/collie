@@ -24,7 +24,7 @@ hyper = { version = "1.12.0", features = ["client", "http1"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "http2", "ring", "rustls-platform-verifier", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "http2", "tokio"] }
 protocol.workspace = true
-qrcode = { version = "0.15.0", default-features = false }
+qrcode = { version = "0.15.0", default-features = false, features = ["std"] }
 rustix = { version = "1.1.5", features = ["fs", "param", "process", "system", "termios"] }
 ruzstd = "0.9.1"
 serde.workspace = true
