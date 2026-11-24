@@ -652,9 +652,11 @@ pub(super) fn copilot_workspace(dir: &Path) -> Option<(String, String)> {
     ))
 }
 
+type Stamp = (SystemTime, i64, i64);
+
 #[derive(Default)]
 pub(crate) struct CopilotMarks {
-    dirs: HashMap<String, ((SystemTime, i64, i64), Vec<u32>)>,
+    dirs: HashMap<String, (Stamp, Vec<u32>)>,
 }
 
 impl CopilotMarks {
