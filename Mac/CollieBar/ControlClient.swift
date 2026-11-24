@@ -6,6 +6,7 @@ enum Request: Equatable, Sendable {
     case peersList
     case watch
     case confirm(accept: Bool)
+    case rexResume(on: Bool?)
 
     var line: Data {
         let json = switch self {
@@ -13,6 +14,8 @@ enum Request: Equatable, Sendable {
         case .peersList: #"{"cmd":"peers_list"}"#
         case .watch: #"{"cmd":"watch"}"#
         case .confirm(let accept): #"{"cmd":"confirm","accept":\#(accept)}"#
+        case .rexResume(nil): #"{"cmd":"rex_resume"}"#
+        case .rexResume(let on?): #"{"cmd":"rex_resume","on":\#(on)}"#
         }
         return Data((json + "\n").utf8)
     }
@@ -66,6 +69,7 @@ enum Reply: Equatable, Sendable {
     case pairDone(paired: Bool, detail: String)
     case peers([Peer])
     case watch(pendingApprovals: Int, colliedVersion: String? = nil)
+    case rexResume(on: Bool)
     case error(String)
     case other
 
@@ -79,7 +83,7 @@ enum Reply: Equatable, Sendable {
         let reply: Reply
 
         private enum Keys: String, CodingKey {
-            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, colliedVersion, message
+            case type, uri, expiresInSecs, paired, detail, peers, pendingApprovals, colliedVersion, message, on
         }
 
         init(from decoder: any Decoder) throws {
@@ -99,6 +103,7 @@ enum Reply: Equatable, Sendable {
                 .watch(
                     pendingApprovals: try c.decode(Int.self, forKey: .pendingApprovals),
                     colliedVersion: try c.decodeIfPresent(String.self, forKey: .colliedVersion))
+            case "rex_resume": .rexResume(on: try c.decode(Bool.self, forKey: .on))
             case "error": .error(try c.decode(String.self, forKey: .message))
             default: .other
             }

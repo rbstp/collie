@@ -408,6 +408,19 @@ impl Model {
         })
     }
 
+    pub(super) fn shell_block(&self, block: &str) -> Option<(String, (u16, u16))> {
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = s.blocks.get(block).filter(|b| !b.exited)?;
+            b.foreground.value.as_ref().filter(|f| shell(f))?;
+            Some((session.clone(), b.size.value))
+        })
+    }
+
+    pub(super) fn foreground(&self, block: &str) -> Option<u32> {
+        (self.sessions.values())
+            .find_map(|s| Some(s.blocks.get(block)?.foreground.value.as_ref()?.pid))
+    }
+
     pub(super) fn has(&self, block: &str) -> bool {
         self.sessions.values().any(|s| s.blocks.contains_key(block))
     }
@@ -597,7 +610,7 @@ pub(super) enum Listed {
     Terminal,
 }
 
-fn shell(p: &Proc) -> bool {
+pub(super) fn shell(p: &Proc) -> bool {
     agents::shell(p.argv0.as_deref().unwrap_or(&p.name))
 }
 

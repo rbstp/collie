@@ -28,3 +28,16 @@ This signs CollieBar with your Developer ID and installs it to `~/Applications`,
 - The menu shows the status and version, turns `collied` off and on, pairs a phone, lists the paired phones and opens the audit log. **Quit** also stops `collied`.
 - **Set Up…** runs `collied setup` in Terminal, to set up the machine or sign in again. It shows only while `collied` is off, so turn it off first to sign in again.
 - **Open at Login**, off by default, starts CollieBar when you log in.
+- **Resume Rex Agents After Restart**, on by default, reopens your Claude Code, Codex, Copilot CLI and Antigravity CLI conversations in Rex after the Rex server restarts. It shows while `collied` runs.
+
+## Resume Rex agents
+
+When the Rex server restarts or the Mac reboots, Rex brings back your sessions, tabs and terminals, but each terminal starts as an empty shell. `collied` remembers which agent conversation ran in which terminal and starts it again beside the restored shell, in the folder it ran in, through your login shell, as if you had typed `claude --resume ID` (or `codex resume ID --no-daemon`, `copilot --resume=ID` or `agy --conversation ID`) in a new terminal: your shell's startup files, aliases and functions apply. Once the agent runs that conversation, `collied` closes the restored shell, so the agent takes its place in the window. If the agent fails to start, Rex closes its terminal as the agent exits, and the restored shell stays.
+
+`collied` types nothing into your shell. It leaves alone a terminal where something runs, or whose screen changes more than 2 seconds after `collied` first looks at it, about a second after the Rex server starts. Text you type into a restored terminal before that first look, or in the 2 seconds after it while the prompt settles, counts as part of the prompt: `collied` can still replace that shell with the agent, and what you typed goes with the shell. Each conversation reopens once, never one that already runs elsewhere, and `collied` stops trying 90 seconds after the Rex server started. A conversation you quit stays closed, unless you quit it less than 15 seconds before the server stopped. A conversation you never sent a prompt to has nothing to reopen and is skipped.
+
+`collied` reopens a Codex conversation only if Codex ran with `--no-daemon`: under Codex's shared background server, `collied` cannot tell which terminal runs which conversation.  Your login shell must be zsh or bash.
+
+When a resumed agent exits, its terminal closes, as a task's does. If `collied` starts more than 90 seconds after the Rex server, nothing is reopened.
+
+To stop it, uncheck **Resume Rex Agents After Restart**; `collied` then forgets what it remembered. CollieTray has no such item, since collie follows Rex only on the Mac.

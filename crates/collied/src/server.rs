@@ -605,8 +605,13 @@ pub async fn start_with(
         Arc::new(
             Rex::new(s)
                 .with_claude_sessions(sessions)
+                .with_agent_roots(Transcripts::from_env().cost_roots())
                 .with_tasks(cfg.data_dir.join(config::REX_TASKS_FILE))
                 .with_stream_marker(cfg.data_dir.join(config::REX_STREAM_MARKER))
+                .with_resume(
+                    cfg.data_dir.join(config::REX_RESUME_FILE),
+                    cfg.data_dir.join(config::REX_RESUME_OFF),
+                )
                 .with_herdr_seen(herdr_seen.clone()),
         )
     });
@@ -2971,6 +2976,7 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         }
         if let Some(rex) = state.runtime.rex() {
             rex.reread_sessions();
+            rex.resume().await;
         }
         let (agents, workspaces, answered) = match state.runtime.poll().await {
             Ok(p) => (p.agents, p.workspaces, p.herdr),

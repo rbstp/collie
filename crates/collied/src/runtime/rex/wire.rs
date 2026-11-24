@@ -251,6 +251,12 @@ pub(super) struct Window {
 }
 
 #[derive(Deserialize)]
+pub(super) struct Split {
+    #[serde(default)]
+    pub block_ids: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct Owners {
     #[serde(default)]
     pub blocks: Option<Vec<Owned>>,
@@ -303,6 +309,10 @@ pub(super) struct Version {
 #[derive(Deserialize)]
 pub(super) struct ServerStatus {
     pub pid: u32,
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
     #[serde(default)]
     pub host_id: Option<String>,
     #[serde(default)]

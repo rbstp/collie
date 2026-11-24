@@ -988,7 +988,7 @@ fn entries(path: &Path) -> (Vec<PathBuf>, bool) {
     (paths, truncated)
 }
 
-pub(super) fn held(path: &Path) -> Option<bool> {
+pub(crate) fn held(path: &Path) -> Option<bool> {
     let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     let file = match std::fs::OpenOptions::new()
         .read(true)

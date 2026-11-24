@@ -60,6 +60,9 @@ struct MenuContent: View {
                 }
             }
         }
+        if let on = daemon.rexResume {
+            Toggle("Resume Rex Agents After Restart", isOn: Binding(get: { on }, set: { daemon.setRexResume($0) }))
+        }
         Divider()
         Button("Open Audit Log") { daemon.openAuditLog() }
             .disabled(!daemon.auditLogExists)

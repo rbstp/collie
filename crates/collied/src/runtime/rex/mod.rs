@@ -20,6 +20,7 @@ mod client;
 mod discovery;
 mod input;
 mod model;
+mod resume;
 mod screen;
 mod sessions;
 mod stream;
@@ -82,6 +83,8 @@ pub struct Server {
     pub api_revision: u32,
     pub pid: Option<u32>,
     host: Option<String>,
+    instance: Option<String>,
+    started_ms: Option<u64>,
     pub missing: Vec<&'static str>,
     anonymous: Vec<String>,
     tailnet: Vec<String>,
@@ -139,6 +142,11 @@ async fn introduce(client: &Client, server_revision: u32) -> Result<Server, Erro
             .await?;
         server.pid = Some(s.pid);
         server.host = s.host_id;
+        server.instance = s.instance_id;
+        server.started_ms = s
+            .started_at
+            .as_deref()
+            .and_then(crate::transcript::timestamp_ms);
         server.tailscale = s.tailscale.is_some_and(|t| t.state == "running");
         for l in s.listeners.unwrap_or_default() {
             let endpoint = crate::printable(&l.endpoint);
@@ -228,6 +236,8 @@ pub struct Rex {
     /// One call's input at a time, so another call's key never lands among its keys.
     input: tokio::sync::Mutex<()>,
     streams: stream::Streams,
+    resume: Mutex<resume::Resume>,
+    agent_roots: crate::costs::Roots,
 }
 
 /// The connection, session, block and size of a listed block, and what it is listed as.
@@ -257,6 +267,8 @@ impl Rex {
             screens: Screens::default(),
             input: tokio::sync::Mutex::default(),
             streams: stream::Streams::default(),
+            resume: Mutex::default(),
+            agent_roots: crate::costs::Roots::default(),
         }
     }
 
@@ -573,6 +585,7 @@ impl Rex {
         self.read_dirty(client).await?;
         self.live(|live| live.synced = true)?;
         self.prune_tasks();
+        self.plan_resume();
         self.settled.send_replace(true);
         tracing::info!(socket = %self.socket.display(), version, "following Rex");
         Ok(())

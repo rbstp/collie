@@ -544,6 +544,8 @@ pub fn hc_installed() -> bool {
 pub struct RexServer {
     child: Child,
     cli: PathBuf,
+    env: Vec<(String, String)>,
+    restoring: bool,
     pub root: PathBuf,
     pub work: PathBuf,
     pub socket: PathBuf,
@@ -557,6 +559,14 @@ impl RexServer {
     /// With `env` added to the server's environment, as a server started from a terminal
     /// holding them would have it.
     pub fn start_with(cli: &Path, tag: &str, env: &[(&str, &str)]) -> Self {
+        Self::start_as(cli, tag, env, false)
+    }
+
+    pub fn start_restoring(cli: &Path, tag: &str, env: &[(&str, &str)]) -> Self {
+        Self::start_as(cli, tag, env, true)
+    }
+
+    fn start_as(cli: &Path, tag: &str, env: &[(&str, &str)], restoring: bool) -> Self {
         let pid = std::process::id();
         let root = PathBuf::from(format!("/tmp/r{tag}-{pid}"));
         let _ = std::fs::remove_dir_all(&root);
@@ -569,36 +579,61 @@ impl RexServer {
         }
         std::fs::write(root.join("init.lua"), "").unwrap();
         let socket = root.join("rex.sock");
-        let child = rex_env(&mut Command::new(cli), &root)
-            .envs(env.iter().copied())
+        let env = (env.iter())
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let mut server = Self {
+            child: Command::new("/usr/bin/true").spawn().unwrap(),
+            cli: cli.to_owned(),
+            env,
+            restoring,
+            root,
+            work,
+            socket,
+        };
+        server.spawn();
+        server
+    }
+
+    fn spawn(&mut self) {
+        let _ = self.child.wait();
+        let mut cmd = match self.restoring {
+            true => {
+                let mut cmd = Command::new("/usr/bin/sandbox-exec");
+                cmd.args(["-p", SANDBOX]).arg(&self.cli);
+                cmd
+            }
+            false => Command::new(&self.cli),
+        };
+        let restore = format!("--restore={}", self.restoring);
+        self.child = rex_env(&mut cmd, &self.root)
+            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .args(["--autostart=false", "server", "run", "--listen"])
-            .arg(format!("unix://{}", socket.display()))
+            .arg(format!("unix://{}", self.socket.display()))
             .arg("--state-dir")
-            .arg(root.join("state"))
+            .arg(self.root.join("state"))
             .arg("--config")
-            .arg(root.join("init.lua"))
-            .arg("--restore=false")
+            .arg(self.root.join("init.lua"))
+            .arg(restore)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let server = Self {
-            child,
-            cli: cli.to_owned(),
-            root,
-            work,
-            socket,
-        };
         let deadline = Instant::now() + Duration::from_secs(20);
-        while StdUnixStream::connect(&server.socket).is_err() {
+        while StdUnixStream::connect(&self.socket).is_err() {
             assert!(
                 Instant::now() < deadline,
                 "dedicated Rex server never answered"
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        server
+    }
+
+    pub fn restart(&mut self) {
+        assert!(self.stop(), "dedicated Rex server did not stop");
+        let _ = std::fs::remove_file(&self.socket);
+        self.spawn();
     }
 
     pub fn rex(&self, args: &[&str]) -> Value {
@@ -641,6 +676,9 @@ impl Drop for RexServer {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+const SANDBOX: &str =
+    "(version 1) (allow default) (deny file-read* file-write* (subpath \"/Users\"))";
 
 /// A clean environment whose home, runtime folder and config are under `root`: without them
 /// the default socket is the user's.

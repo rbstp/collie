@@ -163,6 +163,69 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
     Some((parent, name))
 }
 
+#[cfg(target_os = "macos")]
+pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
+    #[repr(C)]
+    struct Vnode {
+        file: [u8; 24],
+        info: libc::vnode_info,
+    }
+    const PROC_PIDFDVNODEINFO: i32 = 1;
+    let Ok(pid) = i32::try_from(pid) else {
+        return Vec::new();
+    };
+    let item = std::mem::size_of::<libc::proc_fdinfo>();
+    let mut fds = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0
+        };
+        4096
+    ];
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            fds.as_mut_ptr().cast(),
+            i32::try_from(fds.len() * item).unwrap_or(0),
+        )
+    };
+    fds.truncate(usize::try_from(n).unwrap_or(0) / item);
+    let size = std::mem::size_of::<Vnode>();
+    (fds.iter())
+        .filter(|f| i64::from(f.proc_fdtype) == i64::from(libc::PROX_FDTYPE_VNODE))
+        .filter_map(|f| {
+            let mut vnode = std::mem::MaybeUninit::<Vnode>::zeroed();
+            let n = unsafe {
+                libc::proc_pidfdinfo(
+                    pid,
+                    f.proc_fd,
+                    PROC_PIDFDVNODEINFO,
+                    vnode.as_mut_ptr().cast(),
+                    i32::try_from(size).ok()?,
+                )
+            };
+            (usize::try_from(n).ok()? == size).then_some(())?;
+            let stat = unsafe { vnode.assume_init() }.info.vi_stat;
+            Some((u64::from(stat.vst_dev), stat.vst_ino))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    (std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .into_iter()
+        .flatten()
+        .flatten())
+    .take(4096)
+    .filter_map(|e| std::fs::metadata(e.path()).ok())
+    .map(|m| (m.dev(), m.ino()))
+    .collect()
+}
+
 /// herdr's and Claude Code's session variables, which a herdr-core core or a Rex server passes
 /// from whatever started it to every terminal: herdr's hooks would report a task agent's
 /// session against the starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION`

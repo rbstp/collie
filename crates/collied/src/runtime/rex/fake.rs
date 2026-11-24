@@ -89,6 +89,13 @@ pub(super) struct State {
     pub bare_windows: Vec<String>,
     /// A method whose requests are never answered, the connection left open.
     pub unanswered: Option<&'static str>,
+    pub instance: &'static str,
+    pub started_at: String,
+    pub splits: Vec<Value>,
+    pub split_pid: Option<u32>,
+    pub split_exits: bool,
+    pub split_host: Option<String>,
+    pub split_cwd: Option<String>,
     pub data: Data,
 }
 
@@ -224,6 +231,13 @@ impl Fake {
             hang_up: None,
             bare_windows: Vec::new(),
             unanswered: None,
+            instance: "i",
+            splits: Vec::new(),
+            split_pid: None,
+            split_exits: false,
+            split_host: None,
+            split_cwd: None,
+            started_at: "2026-11-12T16:47:01.264128Z".to_owned(),
             data: Data::default(),
         }));
         let push = Pushes::default();
@@ -545,8 +559,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             "api_revision": 13, "api_min_revision": 0,
         })),
         ("server.status", _) => Ok(json!({
-            "pid": std::process::id(), "instance_id": "i", "host_id": HOST,
-            "started_at": "2026-11-12T16:47:01.264128Z", "exit_empty": false,
+            "pid": std::process::id(), "instance_id": s.instance, "host_id": HOST,
+            "started_at": s.started_at, "exit_empty": false,
             "session_count": s.sessions.len(), "config": {"generation": 1, "hash": ""},
             "tailscale": {"state": s.tailscale, "allow_tailnet_members": false},
             "listeners": s.listeners.clone(),
@@ -598,6 +612,18 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             Ok(json!({ "blocks": blocks }))
         }
         ("session.create", _) => Ok(create(s, payload, seq, out)),
+        ("session.new_split", _) if !s.attached.contains(&session) => Err("bad_request"),
+        ("session.new_split", _) => {
+            let anchor = payload["anchor_id"].as_str().unwrap_or_default();
+            match s
+                .blocks
+                .iter()
+                .any(|b| b.id == anchor && b.session == session)
+            {
+                true => Ok(split(s, &session, payload, seq, out)),
+                false => Err("not_found"),
+            }
+        }
         ("session.disown_block", _) if !s.attached.contains(&session) => Err("bad_request"),
         ("session.disown_block", _) => {
             let ids: Vec<String> = (payload["block_ids"].as_array().into_iter().flatten())
@@ -750,6 +776,52 @@ fn create(s: &mut State, payload: &Value, seq: &mut u64, out: &mut Vec<Value>) -
     json!({ "session_id": session, "initial_windows": [{
         "window_id": "window:019a7d2e-0000-7000-8000-000000000001", "block_ids": [block], "revision": 1,
     }]})
+}
+
+fn split(
+    s: &mut State,
+    session: &str,
+    payload: &Value,
+    seq: &mut u64,
+    out: &mut Vec<Value>,
+) -> Value {
+    s.splits.push(payload.clone());
+    let n = s.splits.len();
+    let block = format!("block:019a7d2e-0000-7000-8000-0000000f{n:04x}");
+    let options = &payload["layout"]["block"]["options"];
+    let command: Vec<&str> = (options["command"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect();
+    let mut i = 1;
+    while command.get(i) == Some(&"-u") {
+        i += 2;
+    }
+    let program = match command.get(i + 1..i + 4) {
+        Some(["-l", "-i", "-c"]) => {
+            (command.get(i + 4)).and_then(|c| c.rsplit("&& ").next()?.split(' ').next())
+        }
+        _ => command.get(i).copied(),
+    }
+    .unwrap_or_default();
+    let pid = s.split_pid.unwrap_or(950 + n as u32);
+    let cwd = s
+        .split_cwd
+        .clone()
+        .map_or_else(|| options["cwd"].clone(), Value::from);
+    let proc =
+        json!({ "pid": pid, "user_id": 501, "name": "2.1.322", "argv0": program, "cwd": cwd });
+    let process = match s.split_exits {
+        true => json!({ "last_exit": { "exit_code": 1 }, "child": null, "foreground": null }),
+        false => json!({ "last_exit": null, "child": proc, "foreground": proc }),
+    };
+    s.add(session, &block, process, Vec::new());
+    if let Some(host) = s.split_host.clone() {
+        s.block(&block).host = host;
+    }
+    s.block(&block).owner = Some(CLIENT.to_owned());
+    let created = json!({ "type": "block_created", "payload": { "block_id": block } });
+    deliver(s, seq, out, session_event(session, created));
+    json!({ "anchor_id": payload["anchor_id"], "block_ids": [block], "split_ids": ["split:1"], "revision": 1 })
 }
 
 /// The first part, by `max_bytes` as revision 13 answers it: no `eof`, and an id while more

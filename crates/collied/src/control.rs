@@ -45,6 +45,10 @@ pub enum Request {
         terminal_id: String,
         session_id: String,
     },
+    RexResume {
+        #[serde(default)]
+        on: Option<bool>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,6 +162,9 @@ pub enum Reply {
         pending_approvals: usize,
         #[serde(default)]
         collied_version: Option<String>,
+    },
+    RexResume {
+        on: bool,
     },
     Error {
         message: String,
@@ -359,6 +366,22 @@ async fn handle(stream: UnixStream, state: Arc<State>, shutdown: watch::Receiver
             }
             Reply::Noted
         }
+        Request::RexResume { on } => match (state.runtime.rex(), on) {
+            (None, _) => Reply::Error {
+                message: "collied does not follow Rex on this machine".into(),
+            },
+            (Some(rex), None) => Reply::RexResume { on: rex.resumes() },
+            (Some(rex), Some(on)) => match rex.set_resumes(on) {
+                Ok(()) => {
+                    let detail = if on { "on" } else { "off" };
+                    state.audit.log("control", "rex.resume", None, detail);
+                    Reply::RexResume { on }
+                }
+                Err(e) => Reply::Error {
+                    message: format!("could not save the setting: {e}"),
+                },
+            },
+        },
         Request::Pair => return pair(&state, &mut r, &mut w).await,
         Request::Watch => return watch_pending(&state, &mut r, &mut w, shutdown).await,
         Request::Confirm { .. } => Reply::Error {
@@ -678,6 +701,18 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&want).unwrap(), line);
         }
+        assert!(matches!(
+            serde_json::from_str(r#"{"cmd":"rex_resume"}"#).unwrap(),
+            Request::RexResume { on: None }
+        ));
+        assert!(matches!(
+            serde_json::from_str(r#"{"cmd":"rex_resume","on":false}"#).unwrap(),
+            Request::RexResume { on: Some(false) }
+        ));
+        assert_eq!(
+            serde_json::to_string(&Reply::RexResume { on: true }).unwrap(),
+            r#"{"type":"rex_resume","on":true}"#
+        );
         assert!(matches!(
             serde_json::from_str::<Reply>(r#"{"type":"watch","pending_approvals":1}"#).unwrap(),
             Reply::Watch {
