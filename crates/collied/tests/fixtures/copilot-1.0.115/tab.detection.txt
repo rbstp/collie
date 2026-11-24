@@ -1,0 +1,24 @@
+  ←   +                     │  Current   Sessions   Issues   Pull requests  →
+ Sorted: Recent             │
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ │ Source:  All   Local   Remote
+  ●  ASKME x                │
+     ⎇ master               │       Session               Status            Last
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ │   ❯ ● ASKME x (master)      —                 35m
+                            │     ○ ASKME please (maste…  In use            35m
+                            │     ○ second task in a tr…  In use            1m a
+                            │     ○ second task in a tr…  —                 2m a
+                            │     ○ second task in a tr…  In use            4m a
+                            │     ○ second task in a tr…  In use            6m a
+                            │     ○ second task in a tr…  In use            7m a
+                            │     ○ hello from collied    In use            20m
+                            │     ○ should not arrive     In use            21m
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │ / search · ↑/↓ navigate · enter open · r refresh
+                            │ · s sort:relevance · n new session · e
+                            │ environments · esc cancel

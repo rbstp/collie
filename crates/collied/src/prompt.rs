@@ -2997,6 +2997,9 @@ mod tests {
             "copilot-1.0.115/core-question",
             "copilot-1.0.115/plain-question",
             "copilot-1.0.115/permission",
+            "copilot-1.0.115/sidebar",
+            "copilot-1.0.115/tab",
+            "copilot-1.0.115/help",
         ] {
             assert_eq!(copilot_box(&fixture(name)), None, "{name}");
         }

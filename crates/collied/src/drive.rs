@@ -57,6 +57,7 @@ pub const OPS_PER_PEER: usize = 256;
 const MAX_SGR_PARAMS: usize = 64;
 const SCREEN_SETTLE: Duration = Duration::from_secs(1);
 const SCREEN_POLL: Duration = Duration::from_millis(100);
+const COPILOT_START: Duration = Duration::from_secs(10);
 pub const DRAFT_CHANGED: &str = "the agent's input box has unsent text";
 const BLOCKED: &str = "agent is blocked; answer it through an approval";
 pub const HOSTS_AGENT: &str = "the pane now hosts an agent";
@@ -1746,10 +1747,12 @@ impl Driver {
             // herdr may not rule another kind's startup prompt `blocked`, and the prompt's
             // Enter would answer it.
             if p.agent.as_str() != "claude" {
-                let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
-                let dialog = match p.agent.as_str() {
-                    "copilot" => screen.as_deref().and_then(prompt::copilot_box) != Some(true),
-                    _ => screen.as_deref().is_none_or(prompt::shows_dialog),
+                let (dialog, screen) = match p.agent.as_str() {
+                    "copilot" => (!self.copilot_started(&pane.pane_id).await, None),
+                    _ => {
+                        let screen = self.runtime.detection_text(&pane.pane_id).await.ok();
+                        (screen.as_deref().is_none_or(prompt::shows_dialog), screen)
+                    }
                 };
                 if dialog {
                     let message = startup_prompt(&p.agent, screen.as_deref());
@@ -1962,10 +1965,8 @@ impl Driver {
                                 if pane.foreground_cwd.as_deref() != Some(cwd.as_str()) {
                                     return fail(ErrorCode::AgentNotReady, ELSEWHERE);
                                 }
-                                let input = kind.as_str() != "copilot"
-                                    || (self.runtime.detection_text(id).await.ok().as_deref())
-                                        .and_then(prompt::copilot_box)
-                                        == Some(true);
+                                let input =
+                                    kind.as_str() != "copilot" || self.copilot_started(id).await;
                                 return Ok((pane, !input));
                             }
                         }
@@ -2010,6 +2011,19 @@ impl Driver {
             ErrorCode::AgentNotReady,
             "agent did not become ready within 30 s",
         )
+    }
+
+    // ADR-0015
+    async fn copilot_started(&self, pane_id: &str) -> bool {
+        let deadline = tokio::time::Instant::now() + COPILOT_START;
+        loop {
+            match self.runtime.detection_text(pane_id).await.ok().as_deref() {
+                Some(s) if prompt::copilot_box(s) == Some(true) => return true,
+                Some(s) if !prompt::shows_dialog(s) && tokio::time::Instant::now() < deadline => {}
+                _ => return false,
+            }
+            tokio::time::sleep(SCREEN_POLL).await;
+        }
     }
 
     async fn ultracode_shown(&self, pane_id: &str) -> Result<(), Fail> {

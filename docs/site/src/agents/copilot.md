@@ -26,7 +26,7 @@ In Herdr Core and Rex, Chat shows the conversation Copilot CLI marks as its own 
 
 ## Prompts and keys
 
-Your prompts, typed answers and keys reach Copilot CLI only while it shows its input box. While a picker such as `/model` or another dialog is open, collie refuses them and says to answer the dialog in Terminal on the machine; this holds in herdr, Herdr Core and Rex. A prompt also needs the input box to be empty: send or clear what is typed there first. A picker you open from the phone's keyboard can only be closed on the machine.
+Your prompts, typed answers and keys reach Copilot CLI only while it shows its input box. While a picker such as `/model` or another dialog is open, collie refuses them and says to answer the dialog in Terminal on the machine; this holds in herdr, Herdr Core and Rex. A prompt also needs the input box to be empty: send or clear what is typed there first. A picker you open from the phone's keyboard can only be closed on the machine, and so can Copilot's sidebar, its Sessions tab and its help, which Left on an empty input box, Tab and `?` open.
 
 In Herdr Core and Rex, Copilot CLI takes your input only from version 1.0.106, which reports its own status; an older one is shown but read-only.
 
