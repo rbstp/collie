@@ -42,7 +42,7 @@ Long-press an agent to follow it on the Lock Screen ([Live Activities](../notifi
 
 A Rex agent offers the same actions as a Herdr Core agent. Closing it ends its program and closes its block, and its session stays in Rex.app. The machine refuses to close a Rex session, which would end everything in it, your own Rex.app terminals included, and to focus a Rex agent, since Rex.app does not follow a focus request. Unlike herdr and Herdr Core, Rex cannot hold a prompt back while a dialog opens or while you type on the Mac: collie checks the agent's status just before it sends, but a dialog that opens in that instant takes the prompt's Return, which picks its highlighted option.
 
-When the Rex server restarts or the Mac reboots, `collied` reopens each Claude Code conversation in place of the Rex terminal it ran in, so the agent shows up again in the Agents tab. [CollieBar](../desktop/colliebar.md#resume-rex-agents) says when it does and how to turn it off.
+When the Rex server restarts or the Mac reboots, `collied` reopens each Claude Code, Codex, Copilot CLI and Antigravity CLI conversation in place of the Rex terminal it ran in, so the agent shows up again in the Agents tab. [CollieBar](../desktop/colliebar.md#resume-rex-agents) says when it does and how to turn it off.
 
 ## Appearance
 
