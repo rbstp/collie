@@ -304,6 +304,16 @@ Computer nodes are user-owned, not tag-confined: they get their user's tailnet p
 | Residual | `gh` picks the repository from the checkout's remotes and the fetch always uses `origin`, so a checkout whose `origin` is a fork of the pull request's repository fails the commit check. The branch is the repository's own code, which the agent then works in (prompt injection, as with any repository). If herdr then fails, the new local branch stays; the error says so. The fetch runs before any agent starts, as the user and with the repository's own configuration: its `core.sshCommand`, its credential helpers and its `reference-transaction` hook (or the one under its `core.hooksPath`) run, and the clone's environment (no prompts, no inherited `GIT_*`, HTTPS and SSH only) overrides none of them. The tracking branch is then created with hooks off ([Git reads in an agent's checkout](#git-reads-in-an-agents-checkout)), and the checkout that follows runs the repository's hooks and filters again: in herdr's own `worktree.create`, or in collied's `git worktree add` for Herdr Core and Rex ([herdr-core](#herdr-core-herdr-core)). |
 | Phase | Built |
 
+### Task on an issue
+
+| | |
+|---|---|
+| Assets | The user's account on the computer; what the agent is asked to do |
+| Attack | Anyone who can open an issue in the repository (on a public one, anyone) writes a title or body meant to steer the agent, or a title meant to break the phone's list; a paired phone names an issue number `gh` reads as something else. |
+| Mitigations | `task.issues` is a Drive read of a folder under the roots, audited with the path and the count, with authorization checked again after `gh`, which runs as for [linked pull requests](#linked-pull-requests) with fixed arguments and `--limit 50`. Titles lose control and format characters and are cut at 200 characters; numbers outside 1 to 2^32 - 1 are dropped. collied never reads an issue's body, and logs and audits no title. Only the number reaches what acts: `task.new` checks it at parse as for a pull request, the branch is `issue-<N>`, and the prompt the app fills in is `Work on GitHub issue #<N>.`, which the user sees and can edit before **Start**. |
+| Residual | The agent reads the issue with `gh` itself, so a hostile body reaches it as any repository content does (prompt injection). Titles show on the phone as text. |
+| Phase | Built |
+
 ### Task resume from the phone
 
 | | |

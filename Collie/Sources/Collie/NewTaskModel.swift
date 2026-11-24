@@ -13,7 +13,7 @@ extension TaskFolders {
 @Observable
 final class NewTaskModel {
     enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone", resume = "Resume" }
-    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open", pullRequest = "Pull request" }
+    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open", pullRequest = "Pull request", issue = "Issue" }
     enum Phase: Equatable {
         case editing
         case starting
@@ -74,6 +74,9 @@ final class NewTaskModel {
             guard oldValue != source else { return }
             worktrees = nil
             worktreesError = nil
+            issues = nil
+            issuesError = nil
+            issue = nil
         }
     }
     var branch = ""
@@ -86,6 +89,14 @@ final class NewTaskModel {
         guard typed.allSatisfy({ ("0"..."9").contains($0) }), let number = UInt64(typed), number > 0, number <= UInt32.max else { return nil }
         return number
     }
+    var worktreeActions: [WorktreeAction] {
+        WorktreeAction.allCases.filter { $0 != .issue || options?.issues == true }
+    }
+    private(set) var issues: [TaskIssue]?
+    private(set) var issuesError: String?
+    private(set) var issue: UInt64?
+    private var issuePrompt = ""
+    var issueBranch: String? { issue.map { "issue-\($0)" } }
     private(set) var worktrees: WorktreeListing?
     private(set) var worktreesError: String?
     private var listedSource = ""
@@ -208,6 +219,7 @@ final class NewTaskModel {
             case .create: return createPath != nil
             case .open: return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
             case .pullRequest: return pullRequest != nil
+            case .issue: return options?.issues == true && issue != nil
             }
         }
         if location == .clone {
@@ -269,6 +281,7 @@ final class NewTaskModel {
             let loaded = try await core.taskOptions(machineId: machineId)
             guard machineId == self.machineId else { return }
             options = loaded
+            if worktreeAction == .issue && !loaded.issues { worktreeAction = .create }
             if let offered = offeredAgents, !offered.contains(agent) {
                 agent = offered.contains(loaded.defaultAgent) ? loaded.defaultAgent : offered.first ?? ""
             }
@@ -292,6 +305,8 @@ final class NewTaskModel {
         guard let machineId, let requested = sourceFolder else { return }
         worktrees = nil
         worktreesError = nil
+        issues = nil
+        issuesError = nil
         do {
             let listed = try await core.taskWorktrees(machineId: machineId, cwd: requested)
             guard machineId == self.machineId, requested == sourceFolder else { return }
@@ -300,10 +315,30 @@ final class NewTaskModel {
             if worktreeAction == .open && !listed.worktrees.contains(where: { $0.path == checkoutPath }) {
                 checkoutPath = listed.worktrees.first?.path ?? ""
             }
+            guard worktreeAction == .issue else { return }
+            let found = try await core.taskIssues(machineId: machineId, cwd: listed.source)
+            guard machineId == self.machineId, requested == sourceFolder else { return }
+            issues = found
+            if !found.contains(where: { $0.number == issue }) { issue = nil }
         } catch {
             guard machineId == self.machineId, requested == sourceFolder else { return }
-            worktreesError = AgentModel.message(for: error)
+            if worktrees == nil {
+                worktreesError = AgentModel.message(for: error)
+            } else {
+                issuesError = AgentModel.message(for: error)
+            }
         }
+    }
+
+    func pick(_ picked: TaskIssue) {
+        issue = picked.number
+        let reference = "Work on GitHub issue #\(picked.number)."
+        if !issuePrompt.isEmpty, prompt.hasPrefix(issuePrompt) {
+            prompt = reference + prompt.dropFirst(issuePrompt.count)
+        } else {
+            prompt = trimmed(prompt).isEmpty ? reference : reference + " " + prompt
+        }
+        issuePrompt = reference
     }
 
     func loadSessions() async {
@@ -354,6 +389,12 @@ final class NewTaskModel {
                 case .pullRequest:
                     guard let number = pullRequest else { phase = .editing; return nil }
                     started = try await core.taskWorktreePullRequest(
+                        machineId: machineId, cwd: sourceFolder, number: number,
+                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
+                    )
+                case .issue:
+                    guard let number = issue else { phase = .editing; return nil }
+                    started = try await core.taskWorktreeIssue(
                         machineId: machineId, cwd: sourceFolder, number: number,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                     )

@@ -1210,6 +1210,7 @@ impl Driver {
             ),
             runtime_agents,
             code_mode: true,
+            issues: true,
         }))
     }
 
@@ -1251,6 +1252,22 @@ impl Driver {
             })
             .collect();
         Ok(Response::TaskWorktrees { source, worktrees })
+    }
+
+    pub async fn task_issues(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
+        authorized(auth)?;
+        let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
+        let Some(gh) = gh() else {
+            return fail(
+                ErrorCode::InvalidParams,
+                "gh is not installed on the machine",
+            );
+        };
+        let issues = pulls::issues(&gh, &cwd)
+            .await
+            .map_err(|message| invalid(&message))?;
+        authorized(auth)?;
+        Ok(Response::TaskIssues { issues })
     }
 
     pub async fn task_sessions(&self, p: TaskSessionsParams, auth: &Authorized) -> Reply {
@@ -1510,7 +1527,7 @@ impl Driver {
             TaskWorktree::Open { path } => {
                 Some(resolve_cwd(path.as_str(), &self.roots).map_err(invalid)?)
             }
-            TaskWorktree::PullRequest { .. } => None,
+            TaskWorktree::PullRequest { .. } | TaskWorktree::Issue { .. } => None,
         };
         authorized(auth)?;
         let listed = self.worktree_list(source, host.is_some()).await?;
@@ -1529,6 +1546,12 @@ impl Driver {
                     branch: head.branch.clone(),
                 };
                 (&pulled, Some((*number, head)))
+            }
+            TaskWorktree::Issue { number } => {
+                pulled = TaskWorktree::Create {
+                    branch: format!("issue-{number}"),
+                };
+                (&pulled, None)
             }
             other => (other, None),
         };
@@ -1610,7 +1633,7 @@ impl Driver {
                     )
                     .await
             }
-            TaskWorktree::PullRequest { .. } => unreachable!(),
+            TaskWorktree::PullRequest { .. } | TaskWorktree::Issue { .. } => unreachable!(),
         }
         .map_err(|e| {
             let failure = herdr_fail(e);
@@ -5166,6 +5189,51 @@ mod tests {
             control.status.success(),
             "{}",
             String::from_utf8_lossy(&control.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_issue_task_creates_the_branch_issue_n_and_its_checkout() {
+        static REPO: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let (_dir, root, repo, _) = core_tests::worktree();
+        REPO.set(repo.display().to_string()).unwrap();
+        core_tests::fake_herdr(&root.join("herdr.sock"), |method| {
+            (method == "worktree.list").then(|| {
+                serde_json::json!({"type": "worktree_list",
+                    "source": {"source_checkout_path": REPO.get().unwrap()}, "worktrees": []})
+            })
+        });
+        let claude = AgentKind::new("claude").unwrap();
+        let drive = Driver::new(
+            root.join("herdr.sock"),
+            vec![claude.clone()],
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
+        let p = TaskNewParams {
+            op_id: OpId::new("i".repeat(22)).unwrap(),
+            cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+            agent: claude,
+            prompt: Some(protocol::PromptText::new("Work on issue #940.".to_owned()).unwrap()),
+            label: None,
+            new_folder: None,
+            worktree: Some(TaskWorktree::Issue { number: 940 }),
+            clone: None,
+            resume: None,
+            ultracode: false,
+            code_mode: None,
+            runtime: None,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let (reply, _) = drive.task_new(p, &yes).await;
+        let (_, message) = reply.unwrap_err();
+        let checkout = repo.join(".worktree/issue-940");
+        assert!(
+            message.starts_with(&format!(
+                "worktree.create for branch issue-940 at {} failed",
+                checkout.display()
+            )),
+            "{message}"
         );
     }
 

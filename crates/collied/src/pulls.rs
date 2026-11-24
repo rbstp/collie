@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState};
+use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState, TaskIssue};
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -16,6 +16,7 @@ pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
 const MAX_NAME_CHARS: usize = 100;
 const MAX_FAILING_CHECKS: usize = 10;
+const MAX_ISSUES: usize = 50;
 
 pub type Key = (String, String);
 /// A pull request and its head commit.
@@ -276,6 +277,51 @@ fn parse_mine(json: &[u8]) -> Vec<Mine> {
             Some((pr, l.head_ref_name, title(&l.title)))
         })
         .collect()
+}
+
+pub async fn issues(gh: &str, checkout: &Cwd) -> Result<Vec<TaskIssue>, String> {
+    let mut command = gh_command(gh);
+    command
+        .args(["issue", "list", "--state", "open", "--limit"])
+        .arg(MAX_ISSUES.to_string())
+        .args(["--json", "number,title"])
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = timeout(GH_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "gh timed out".to_owned())?
+        .map_err(|_| "gh is unavailable".to_owned())?;
+    if output.status.code() == Some(4) {
+        return Err("gh is not signed in; run `gh auth login` on the machine".to_owned());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "gh could not list issues: {}",
+            first_line(&output.stderr)
+        ));
+    }
+    parse_issues(&output.stdout).ok_or_else(|| "gh's issue list could not be read".to_owned())
+}
+
+fn parse_issues(json: &[u8]) -> Option<Vec<TaskIssue>> {
+    #[derive(Deserialize)]
+    struct Listed {
+        number: u64,
+        title: String,
+    }
+    let listed: Vec<Listed> = serde_json::from_slice(json).ok()?;
+    let mut issues: Vec<TaskIssue> = listed
+        .into_iter()
+        .filter(|l| (1..=u64::from(u32::MAX)).contains(&l.number))
+        .map(|l| TaskIssue {
+            number: l.number,
+            title: title(&l.title),
+        })
+        .collect();
+    issues.sort_by_key(|i| std::cmp::Reverse(i.number));
+    issues.truncate(MAX_ISSUES);
+    Some(issues)
 }
 
 /// Untrusted text for display: no control or format characters, at most 200 characters.
@@ -736,6 +782,64 @@ mod tests {
             );
         }
         assert!(parse_head(b"no pull requests found").is_err());
+    }
+
+    #[tokio::test]
+    async fn an_issue_list_says_why_gh_could_not_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let cwd = Cwd::new(base.to_str().unwrap()).unwrap();
+        let fake = |name: &str, body: &str| {
+            let path = base.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        assert_eq!(
+            issues(&fake("out", "exit 4"), &cwd).await,
+            Err("gh is not signed in; run `gh auth login` on the machine".to_owned())
+        );
+        let remote = fake(
+            "remote",
+            "echo 'none of the git remotes configured for this repository point to a known GitHub host' >&2\nexit 1",
+        );
+        assert_eq!(
+            issues(&remote, &cwd).await,
+            Err("gh could not list issues: none of the git remotes configured for this repository point to a known GitHub host".to_owned())
+        );
+        let listed = fake(
+            "listed",
+            r#"[ "$*" = "issue list --state open --limit 50 --json number,title" ] && echo '[{"number":7,"title":"Seven"}]'"#,
+        );
+        assert_eq!(
+            issues(&listed, &cwd).await,
+            Ok(vec![TaskIssue {
+                number: 7,
+                title: "Seven".to_owned()
+            }])
+        );
+    }
+
+    #[test]
+    fn issues_are_newest_first_bounded_and_their_titles_cleaned_to_fit_a_frame() {
+        let mut listed: Vec<_> = (1..=60)
+            .map(|n| serde_json::json!({"number": n, "title": "𝕏".repeat(300)}))
+            .collect();
+        listed.push(serde_json::json!({"number": 0, "title": "zero"}));
+        listed.push(serde_json::json!({"number": 4294967296u64, "title": "too big"}));
+        listed.push(serde_json::json!({"number": 61, "title": "Fix \u{1b}[2J\"it\"\u{202e}\nnow"}));
+        let issues = parse_issues(serde_json::Value::from(listed).to_string().as_bytes()).unwrap();
+        assert_eq!(issues.len(), MAX_ISSUES);
+        assert_eq!(issues[0].number, 61);
+        assert_eq!(issues[0].title, "Fix [2J\"it\" now");
+        assert!(issues.windows(2).all(|w| w[0].number > w[1].number));
+        let frame = protocol::ServerFrame::Result {
+            id: u32::MAX,
+            result: protocol::Response::TaskIssues { issues },
+        };
+        assert!(serde_json::to_vec(&frame).unwrap().len() < protocol::limits::MAX_FRAME_BYTES);
+        assert_eq!(parse_issues(b"{}"), None);
     }
 
     #[test]

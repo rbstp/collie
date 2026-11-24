@@ -717,6 +717,8 @@ pub struct TaskOptions {
     pub runtime_agents: Vec<RuntimeAgents>,
     /// False from a collied too old to take Code Mode.
     pub code_mode: bool,
+    /// False from a collied too old to list issues or start a task on one.
+    pub issues: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -929,6 +931,13 @@ pub struct GitDiff {
 pub struct WorktreeListing {
     pub source: String,
     pub worktrees: Vec<WorktreeChoice>,
+}
+
+/// `title` is a stranger's text: shown, never put in a prompt.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct TaskIssue {
+    pub number: u64,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -2053,6 +2062,7 @@ impl CollieCore {
                     })
                     .collect(),
                 code_mode: o.code_mode,
+                issues: o.issues,
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -2341,6 +2351,27 @@ impl CollieCore {
         }
     }
 
+    /// The repository's open issues, newest first.
+    pub async fn task_issues(
+        &self,
+        machine_id: String,
+        cwd: String,
+    ) -> Result<Vec<TaskIssue>, CoreError> {
+        let request = Request::TaskIssues(TaskWorktreesParams {
+            cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "invalid source path"))?,
+        });
+        match self.call(&machine_id, request, GIT_GITHUB_TIMEOUT).await? {
+            Response::TaskIssues { issues } => Ok(issues
+                .into_iter()
+                .map(|i| TaskIssue {
+                    number: i.number,
+                    title: i.title,
+                })
+                .collect()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
     pub async fn task_sessions(
         &self,
         machine_id: String,
@@ -2453,6 +2484,44 @@ impl CollieCore {
             label,
             None,
             Some(TaskWorktree::PullRequest { number }),
+            None,
+            None,
+            ultracode,
+            code_mode,
+            runtime,
+        )
+        .await
+    }
+
+    /// Starts on a new branch `issue-<number>`; `prompt` names the issue, never its text.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn task_worktree_issue(
+        &self,
+        machine_id: String,
+        cwd: String,
+        number: u64,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+        ultracode: bool,
+        code_mode: Option<bool>,
+        runtime: Option<TaskRuntime>,
+    ) -> Result<TaskStarted, CoreError> {
+        if !(1..=u64::from(u32::MAX)).contains(&number) {
+            return Err(invalid(
+                "number",
+                "enter an issue number from 1 to 4294967295",
+            ));
+        }
+        task_new_inner(
+            self,
+            machine_id,
+            cwd,
+            agent,
+            prompt,
+            label,
+            None,
+            Some(TaskWorktree::Issue { number }),
             None,
             None,
             ultracode,
@@ -5675,6 +5744,7 @@ mod tailnet_tests {
                                     },
                                 ],
                                 code_mode: true,
+                                issues: true,
                             }))
                         }
                         Request::TaskFolders(p) => {
@@ -6143,6 +6213,7 @@ mod tailnet_tests {
         assert_eq!(options.roots, vec!["/src".to_owned()]);
         assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
         assert!(options.code_mode);
+        assert!(options.issues);
         assert_eq!(
             options.runtime_agents,
             [RuntimeAgents {

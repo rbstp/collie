@@ -182,7 +182,7 @@ struct NewTaskSheet: View {
                         folderPicker($model.cwd, completions: model.completions)
                     } else {
                         Picker("Action", selection: $model.worktreeAction) {
-                            ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
+                            ForEach(model.worktreeActions, id: \.self) { action in
                                 Text(action.rawValue).tag(action)
                             }
                         }
@@ -208,6 +208,32 @@ struct NewTaskSheet: View {
                                     Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
                                         .font(.footnote)
                                 }
+                            } else if model.worktreeAction == .issue {
+                                if let issues = model.issues {
+                                    if issues.isEmpty {
+                                        Text("No open issue in this repository.").foregroundStyle(.metadata)
+                                    }
+                                    ForEach(issues, id: \.number) { issue in
+                                        Button {
+                                            model.pick(issue)
+                                        } label: {
+                                            HStack(alignment: .firstTextBaseline) {
+                                                Text("#\(issue.number)").monospacedDigit().foregroundStyle(.metadata)
+                                                Text(issue.title).lineLimit(2)
+                                                Spacer()
+                                                if model.issue == issue.number { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                            }
+                                        }
+                                        .foregroundStyle(.primary)
+                                    }
+                                } else if model.issuesError == nil {
+                                    ProgressView("Finding issues…")
+                                }
+                                if let branch = model.issueBranch {
+                                    Text("Create \(branch) at \(listed.source)/.worktree/\(branch)")
+                                        .font(.footnote)
+                                }
+                                if let error = model.issuesError { Text(error).foregroundStyle(.red) }
                             } else {
                                 ForEach(listed.worktrees, id: \.path) { checkout in
                                     Button {

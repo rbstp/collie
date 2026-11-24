@@ -1807,6 +1807,26 @@
           "type": "object"
         },
         {
+          "description": "The repository's open issues, newest first, at most 50.",
+          "properties": {
+            "issues": {
+              "items": {
+                "$ref": "#/$defs/TaskIssue"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "task_issues",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "issues"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The most recent sessions of `cwd`, newest first.",
           "properties": {
             "sessions": {
@@ -2121,6 +2141,24 @@
       ],
       "type": "object"
     },
+    "TaskIssue": {
+      "properties": {
+        "number": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "title": {
+          "description": "Written by anyone who can open an issue: shown, never typed into an agent.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "title"
+      ],
+      "type": "object"
+    },
     "TaskOptions": {
       "properties": {
         "agents": {
@@ -2135,6 +2173,10 @@
         },
         "default_agent": {
           "$ref": "#/$defs/AgentKind"
+        },
+        "issues": {
+          "description": "Whether this collied takes `task.issues` and the `issue` worktree mode; false from an\nolder one.",
+          "type": "boolean"
         },
         "recent_cwds": {
           "items": {
