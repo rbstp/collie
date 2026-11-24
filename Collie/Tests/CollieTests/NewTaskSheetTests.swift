@@ -56,6 +56,55 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertFalse(model.canStart, "nothing goes while the next computer's options load")
     }
 
+    func testAnEditReplacesTheTaskAndItsKeptPromptOrKeepsTheChangesWhenRefused() async throws {
+        let core = FakeCore()
+        core.state.withLock { $0.options.schedule = true }
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let kept = FileManager.default.temporaryDirectory.appending(path: "scheduled-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: kept) }
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil, scheduledFile: kept)
+        await model.loadOptions()
+        model.startLater = true
+        model.cwd = "/Users/me/app"
+        model.prompt = "run the nightly"
+        let scheduled = await model.schedule()
+        XCTAssertTrue(scheduled)
+        await model.loadScheduled()
+        let task = try XCTUnwrap(model.scheduled.first)
+        model.prompt = "a new task"
+        XCTAssertFalse(model.canEdit(task), "an older collied takes no edit")
+
+        core.state.withLock { $0.options.editSchedule = true }
+        await model.loadOptions()
+        model.edit(task)
+        XCTAssertEqual(model.editing?.scheduleId, "s1")
+        XCTAssertEqual(model.prompt, "run the nightly")
+        model.prompt = "run the nightly, then the tests"
+        model.startAt = Date.now.addingTimeInterval(NewTaskModel.scheduleAhead + 60)
+        XCTAssertFalse(model.canSave)
+        let at = (Date.now.timeIntervalSince1970 + 3600).rounded()
+        model.startAt = Date(timeIntervalSince1970: at)
+        XCTAssertTrue(model.canSave)
+
+        core.set(error: .InvalidInput(field: nil, message: "the task is starting or started and can no longer be edited"))
+        let refused = await model.saveEdit()
+        core.set(error: nil)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(model.error, "the task is starting or started and can no longer be edited")
+        XCTAssertEqual(model.editing?.scheduleId, "s1")
+        XCTAssertEqual(model.prompt, "run the nightly, then the tests", "a refused edit keeps the changes")
+        XCTAssertEqual(ScheduledDrafts.kept(machineId: "m1", file: kept)["s1"]?.draft.text, "run the nightly")
+
+        let saved = await model.saveEdit()
+        XCTAssertTrue(saved)
+        let ms = UInt64(at * 1000)
+        XCTAssertEqual(core.snapshot.reschedules.last, "s1 \(ms) run the nightly, then the tests")
+        XCTAssertEqual(ScheduledDrafts.kept(machineId: "m1", file: kept)["s1"]?.draft.text, "run the nightly, then the tests")
+        XCTAssertEqual(model.scheduled.first?.startAtMs, ms)
+        XCTAssertNil(model.editing)
+        XCTAssertEqual(model.prompt, "a new task", "the sheet's own draft comes back")
+    }
+
     func testACancelledOrStartedTaskLeavesNoKeptPrompt() async throws {
         let core = FakeCore()
         core.state.withLock { $0.options.schedule = true }

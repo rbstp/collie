@@ -45,6 +45,8 @@ final class NewTaskModel {
             sessionsError = nil
             session = nil
             scheduled = []
+            editing = nil
+            stashed = nil
         }
     }
     private(set) var options: TaskOptions?
@@ -139,6 +141,8 @@ final class NewTaskModel {
     var startLater = false
     var startAt = Date.now.addingTimeInterval(3600)
     private(set) var scheduled: [ScheduledTask] = []
+    private(set) var editing: ScheduledTask?
+    private var stashed: (prompt: String, attachments: [AttachedFile], startAt: Date)?
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil,
@@ -212,6 +216,7 @@ final class NewTaskModel {
     static let collieTooOld = "collied on this computer is too old to choose where tasks start. Update it, or set Start tasks in to Automatic in Settings."
 
     var offersSchedule: Bool { options?.schedule == true }
+    var offersEdit: Bool { options?.editSchedule == true }
     var scheduleUnsupported: Bool { startLater && options != nil && !offersSchedule }
     static let scheduleAhead: TimeInterval = 24 * 3600
     static let scheduleTooOld = "collied on this computer is too old to schedule tasks. Update it, or turn off Start later."
@@ -571,6 +576,57 @@ final class NewTaskModel {
         var saved = AgentDrafts.load(from: draftsFile)
         saved.drafts[route] = AgentDrafts.Draft(text: typed, attachments: attachments, shell: false)
         saved.save(to: draftsFile)
+    }
+
+    func canEdit(_ task: ScheduledTask) -> Bool {
+        guard offersEdit, phase == .editing, editing == nil, let machineId else { return false }
+        return ScheduledDrafts.kept(machineId: machineId, file: scheduledFile)[task.scheduleId] != nil
+    }
+
+    func edit(_ task: ScheduledTask) {
+        guard canEdit(task), let machineId, let kept = ScheduledDrafts.kept(machineId: machineId, file: scheduledFile)[task.scheduleId] else { return }
+        stashed = (prompt, attachments, startAt)
+        editing = task
+        prompt = kept.draft.text
+        attachments = kept.draft.attachments.filter { $0.uploaded.timeIntervalSinceNow > -Attachment.keptOnMachine }
+        startAt = Date(timeIntervalSince1970: Double(task.startAtMs) / 1000)
+        error = nil
+    }
+
+    func stopEditing() {
+        guard let stashed else { return }
+        editing = nil
+        (prompt, attachments, startAt) = stashed
+        self.stashed = nil
+        error = nil
+    }
+
+    var canSave: Bool {
+        guard editing != nil, phase == .editing, upload == nil, !dictation.isActive else { return false }
+        guard (Date.now...Date.now.addingTimeInterval(Self.scheduleAhead)).contains(startAt) else { return false }
+        return !trimmed(prompt).isEmpty || !attachments.isEmpty
+    }
+
+    func saveEdit() async -> Bool {
+        guard canSave, let task = editing, let machineId else { return false }
+        let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
+        phase = .starting
+        error = nil
+        do {
+            let edited = try await core.taskReschedule(
+                machineId: machineId, scheduleId: task.scheduleId, startAtMs: UInt64(startAt.timeIntervalSince1970 * 1000), prompt: text
+            )
+            let draft = AgentDrafts.Draft(text: trimmed(prompt), attachments: attachments, shell: false)
+            ScheduledDrafts.keep(draft, for: edited, machineId: machineId, file: scheduledFile)
+            phase = .editing
+            if let index = scheduled.firstIndex(where: { $0.scheduleId == edited.scheduleId }) { scheduled[index] = edited }
+            stopEditing()
+            return true
+        } catch {
+            self.error = AgentModel.message(for: error)
+            phase = .editing
+            return false
+        }
     }
 
     func cancel() {
