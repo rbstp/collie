@@ -145,7 +145,7 @@ struct NewTaskSheet: View {
                         .tint(.primary)
                     }
                     Picker("Location", selection: $model.location) {
-                        ForEach(NewTaskModel.Location.allCases, id: \.self) { location in
+                        ForEach(model.locations, id: \.self) { location in
                             Text(location.rawValue).tag(location)
                         }
                     }
@@ -181,19 +181,56 @@ struct NewTaskSheet: View {
                     } else if model.location == .resume {
                         folderPicker($model.cwd, completions: model.completions)
                     } else {
-                        Picker("Action", selection: $model.worktreeAction) {
-                            ForEach(model.worktreeActions, id: \.self) { action in
-                                Text(action.rawValue).tag(action)
+                        if model.location == .worktree {
+                            Picker("Action", selection: $model.worktreeAction) {
+                                ForEach(NewTaskModel.WorktreeAction.allCases, id: \.self) { action in
+                                    Text(action.rawValue).tag(action)
+                                }
                             }
+                            .tint(.primary)
                         }
-                        .tint(.primary)
                         folderPicker($model.source, completions: model.sourceCompletions)
                         if model.worktrees == nil, model.worktreesError == nil, model.sourceFolder != nil {
                             ProgressView("Checking repository…")
                         }
                         if let listed = model.worktrees {
-                            Text("Repository: \(listed.source)").font(.footnote.monospaced())
-                            if model.worktreeAction == .create {
+                            if listed.source != model.sourceFolder {
+                                Text("Repository: \(listed.source)").font(.footnote.monospaced())
+                            }
+                            if model.location == .issue {
+                                if let issues = model.issues {
+                                    if issues.isEmpty {
+                                        Text("No open issue in this repository.").font(.footnote).foregroundStyle(.metadata)
+                                    }
+                                    if !issues.isEmpty {
+                                        VStack(spacing: 0) {
+                                            ForEach(issues, id: \.number) { issue in
+                                                Button {
+                                                    model.pick(issue)
+                                                } label: {
+                                                    HStack(spacing: 6) {
+                                                        Text("#\(issue.number)").monospacedDigit().foregroundStyle(.metadata)
+                                                        Text(issue.title).lineLimit(1)
+                                                        Spacer(minLength: 0)
+                                                        if model.issue == issue.number { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                                    }
+                                                    .font(.footnote)
+                                                    .padding(.vertical, 6)
+                                                    .contentShape(Rectangle())
+                                                }
+                                                .buttonStyle(.plain)
+                                                .disabled(model.phase != .editing || model.dictation.isActive)
+                                            }
+                                        }
+                                    }
+                                } else if model.issuesError == nil {
+                                    ProgressView("Finding issues…")
+                                }
+                                if let branch = model.issueBranch {
+                                    Text("Creates \(branch) under .worktree/").font(.footnote).foregroundStyle(.metadata)
+                                }
+                                if let error = model.issuesError { Text(error).foregroundStyle(.red) }
+                            } else if model.worktreeAction == .create {
                                 TextField("Branch name", text: $model.branch, prompt: Text("Branch name").foregroundStyle(.metadata))
                                     .textInputAutocapitalization(.never)
                                     .autocorrectionDisabled()
@@ -208,33 +245,6 @@ struct NewTaskSheet: View {
                                     Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
                                         .font(.footnote)
                                 }
-                            } else if model.worktreeAction == .issue {
-                                if let issues = model.issues {
-                                    if issues.isEmpty {
-                                        Text("No open issue in this repository.").foregroundStyle(.metadata)
-                                    }
-                                    ForEach(issues, id: \.number) { issue in
-                                        Button {
-                                            model.pick(issue)
-                                        } label: {
-                                            HStack(alignment: .firstTextBaseline) {
-                                                Text("#\(issue.number)").monospacedDigit().foregroundStyle(.metadata)
-                                                Text(issue.title).lineLimit(2)
-                                                Spacer()
-                                                if model.issue == issue.number { Image(systemName: "checkmark").foregroundStyle(.tint) }
-                                            }
-                                        }
-                                        .foregroundStyle(.primary)
-                                        .disabled(model.phase != .editing || model.dictation.isActive)
-                                    }
-                                } else if model.issuesError == nil {
-                                    ProgressView("Finding issues…")
-                                }
-                                if let branch = model.issueBranch {
-                                    Text("Create \(branch) at \(listed.source)/.worktree/\(branch)")
-                                        .font(.footnote)
-                                }
-                                if let error = model.issuesError { Text(error).foregroundStyle(.red) }
                             } else {
                                 ForEach(listed.worktrees, id: \.path) { checkout in
                                     Button {
@@ -426,8 +436,8 @@ struct NewTaskSheet: View {
                     now = .now
                 }
             }
-            .task(id: model.location == .worktree ? "\(model.machineId ?? ""):\(model.worktreeAction.rawValue):\(model.base ?? ""):\(model.source)" : nil) {
-                guard model.location == .worktree, model.sourceFolder != nil else {
+            .task(id: model.location == .worktree || model.location == .issue ? "\(model.machineId ?? ""):\(model.location.rawValue):\(model.worktreeAction.rawValue):\(model.base ?? ""):\(model.source)" : nil) {
+                guard model.location == .worktree || model.location == .issue, model.sourceFolder != nil else {
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(250))

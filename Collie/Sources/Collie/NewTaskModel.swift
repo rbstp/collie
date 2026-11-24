@@ -12,8 +12,8 @@ extension TaskFolders {
 @MainActor
 @Observable
 final class NewTaskModel {
-    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", clone = "Clone", resume = "Resume" }
-    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open", pullRequest = "Pull request", issue = "Issue" }
+    enum Location: String, CaseIterable { case folder = "Folder", worktree = "Git worktree", issue = "GitHub issue", clone = "Clone", resume = "Resume" }
+    enum WorktreeAction: String, CaseIterable { case create = "Create", open = "Open", pullRequest = "Pull request" }
     enum Phase: Equatable {
         case editing
         case starting
@@ -64,7 +64,7 @@ final class NewTaskModel {
     var session: TaskSession?
     var location = Location.folder {
         didSet {
-            guard oldValue != location, location == .worktree, !newFolder, let folder else { return }
+            guard oldValue != location, location == .worktree || location == .issue, !newFolder, let folder else { return }
             source = folder
         }
     }
@@ -89,8 +89,8 @@ final class NewTaskModel {
         guard typed.allSatisfy({ ("0"..."9").contains($0) }), let number = UInt64(typed), number > 0, number <= UInt32.max else { return nil }
         return number
     }
-    var worktreeActions: [WorktreeAction] {
-        WorktreeAction.allCases.filter { $0 != .issue || options?.issues == true }
+    var locations: [Location] {
+        Location.allCases.filter { $0 != .issue || options?.issues == true }
     }
     private(set) var issues: [TaskIssue]?
     private(set) var issuesError: String?
@@ -213,13 +213,13 @@ final class NewTaskModel {
             return resumable?.contains { $0.sessionId == session.sessionId } == true
         }
         guard !agent.isEmpty, !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
-        if location == .worktree {
+        if location == .worktree || location == .issue {
             guard let sourceFolder, worktrees != nil, listedSource == sourceFolder else { return false }
+            if location == .issue { return options?.issues == true && issue != nil }
             switch worktreeAction {
             case .create: return createPath != nil
             case .open: return worktrees?.worktrees.contains { $0.path == checkoutPath } == true
             case .pullRequest: return pullRequest != nil
-            case .issue: return options?.issues == true && issue != nil
             }
         }
         if location == .clone {
@@ -281,14 +281,14 @@ final class NewTaskModel {
             let loaded = try await core.taskOptions(machineId: machineId)
             guard machineId == self.machineId else { return }
             options = loaded
-            if worktreeAction == .issue && !loaded.issues { worktreeAction = .create }
+            if location == .issue && !loaded.issues { location = .worktree }
             if let offered = offeredAgents, !offered.contains(agent) {
                 agent = offered.contains(loaded.defaultAgent) ? loaded.defaultAgent : offered.first ?? ""
             }
         } catch {
             guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)
-            if worktreeAction == .issue { worktreeAction = .create }
+            if location == .issue { location = .worktree }
             return
         }
         guard let base else { return }
@@ -316,7 +316,7 @@ final class NewTaskModel {
             if worktreeAction == .open && !listed.worktrees.contains(where: { $0.path == checkoutPath }) {
                 checkoutPath = listed.worktrees.first?.path ?? ""
             }
-            guard worktreeAction == .issue, options?.issues == true else { return }
+            guard location == .issue, options?.issues == true else { return }
             let found = try await core.taskIssues(machineId: machineId, cwd: listed.source)
             guard machineId == self.machineId, requested == sourceFolder else { return }
             issues = found
@@ -375,7 +375,13 @@ final class NewTaskModel {
         startupBlocked = false
         let started: TaskStarted
         do {
-            if location == .worktree {
+            if location == .issue {
+                guard let sourceFolder, let number = issue else { phase = .editing; return nil }
+                started = try await core.taskWorktreeIssue(
+                    machineId: machineId, cwd: sourceFolder, number: number,
+                    agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
+                )
+            } else if location == .worktree {
                 guard let sourceFolder else { phase = .editing; return nil }
                 switch worktreeAction {
                 case .create:
@@ -391,12 +397,6 @@ final class NewTaskModel {
                 case .pullRequest:
                     guard let number = pullRequest else { phase = .editing; return nil }
                     started = try await core.taskWorktreePullRequest(
-                        machineId: machineId, cwd: sourceFolder, number: number,
-                        agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
-                    )
-                case .issue:
-                    guard let number = issue else { phase = .editing; return nil }
-                    started = try await core.taskWorktreeIssue(
                         machineId: machineId, cwd: sourceFolder, number: number,
                         agent: agent, prompt: text, label: trimmed(label).nilIfEmpty, ultracode: ultracode, codeMode: codeMode, runtime: runtime
                     )

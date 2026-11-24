@@ -29,10 +29,13 @@ Choose **Git worktree**, pick the repository as you would a folder, then:
 
 - **Create** a new branch, named for you unless you type a name, with its checkout under the repository's `.worktree/` folder;
 - **Open** an existing checkout;
-- check out a **Pull request** of that repository by number; `collied` asks `gh` for its branch and fetches it from `origin`, and refuses pull requests from forks;
-- start on an **Issue**: pick one of the repository's 50 newest open issues, which `collied` lists with `gh`. `collied` creates the branch `issue-<number>` and its checkout as **Create** does, and puts `Work on GitHub issue #<number>.` at the start of the prompt; picking another issue swaps that reference, and you can edit the prompt before you tap **Start**. You cannot pick an issue while you dictate. The agent reads the issue itself with `gh`; collie never sends its title or text. When `gh` is not signed in, or the repository has no GitHub remote, the sheet says why. To go back to an issue you started on, choose **Open** and its checkout. **Issue** shows only once `collied` on the machine is new enough.
+- check out a **Pull request** of that repository by number; `collied` asks `gh` for its branch and fetches it from `origin`, and refuses pull requests from forks.
 
 Check the branch and path before you tap **Start**. If the agent fails to start, the checkout and workspace stay, and the error names them.
+
+## GitHub issue
+
+Choose **GitHub issue**, pick the repository as you would a folder, then pick one of its 50 newest open issues, which `collied` lists with `gh`, one line each. `collied` creates the branch `issue-<number>` and its checkout under `.worktree/`, as **Create** does, and collie puts `Work on GitHub issue #<number>.` at the start of the prompt; picking another issue swaps that reference, and you can edit the prompt before you tap **Start**. You cannot pick an issue while you dictate. The agent reads the issue itself with `gh`; collie never sends its title or text. When `gh` is not signed in, or the repository has no GitHub remote, the sheet says why. To go back to an issue you started on, choose **Git worktree**, then **Open** and its checkout. **GitHub issue** shows only once `collied` on the machine is new enough.
 
 ## Resume a session
 

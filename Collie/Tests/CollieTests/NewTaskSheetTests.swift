@@ -368,16 +368,15 @@ final class NewTaskSheetTests: XCTestCase {
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
         let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil)
         await model.loadOptions()
-        XCTAssertFalse(model.worktreeActions.contains(.issue))
+        XCTAssertFalse(model.locations.contains(.issue))
         core.state.withLock {
             $0.options.issues = true
             $0.issuesError = .Rejected(message: "gh is not signed in; run `gh auth login` on the machine")
         }
         await model.loadOptions()
-        XCTAssertTrue(model.worktreeActions.contains(.issue))
+        XCTAssertTrue(model.locations.contains(.issue))
         model.agent = "claude"
-        model.location = .worktree
-        model.worktreeAction = .issue
+        model.location = .issue
         model.source = "/Users/me/app"
         await model.loadWorktrees()
         XCTAssertTrue(model.issuesError?.contains("gh auth login") == true)
@@ -417,16 +416,16 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.taskPrompts, ["Please Work on GitHub issue #940. Keep it small."])
         core.state.withLock { $0.options.issues = false }
         await model.loadOptions()
-        XCTAssertEqual(model.worktreeAction, .create)
+        XCTAssertEqual(model.location, .worktree)
         core.state.withLock { $0.options.issues = true }
         await model.loadOptions()
-        model.worktreeAction = .issue
+        model.location = .issue
         core.state.withLock { $0.error = .Unreachable(message: "offline") }
         await model.loadOptions()
         XCTAssertNil(model.options)
-        XCTAssertEqual(model.worktreeAction, .create)
+        XCTAssertEqual(model.location, .worktree)
         core.state.withLock { $0.error = nil }
-        model.worktreeAction = .issue
+        model.location = .issue
         await model.loadWorktrees()
         XCTAssertEqual(core.snapshot.worktreeCalls.last, "list /Users/me/app")
     }

@@ -102,8 +102,7 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
     let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil, dictationEngine: engine)
     await model.loadOptions()
     model.agent = "claude"
-    model.location = .worktree
-    model.worktreeAction = .issue
+    model.location = .issue
     model.source = "/Users/me/app"
     await model.loadWorktrees()
     model.pick(TaskIssue(number: 940, title: "This one"))
