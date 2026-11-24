@@ -2061,7 +2061,33 @@ fn layout_of(server: &RexServer, session: &str) -> serde_json::Value {
 }
 
 async fn resume_scenario(server: &RexServer, bin: &Path) {
-    let (session, block) = new_session(server, "collie-resume", &["/bin/zsh", "-f", "-i"]);
+    let (session, block) = new_session(
+        server,
+        "collie-resume",
+        &[
+            "/usr/bin/env",
+            "PROMPT=%~\n%#",
+            "RPROMPT=[right]",
+            "/bin/zsh",
+            "-f",
+            "-i",
+        ],
+    );
+    until("the two-line prompt with a right prompt", async || {
+        let args =
+            serde_json::json!({ "block_id": block, "args": { "format": "text" } }).to_string();
+        let text = server.rex(&[
+            "api",
+            "call",
+            "-s",
+            &session,
+            "com.superlogical.terminal.format",
+            &args,
+        ]);
+        let text = text["content"].as_str().unwrap_or_default().to_owned();
+        (text.contains("[right]") && text.lines().count() >= 2).then_some(())
+    })
+    .await;
     let work = std::fs::canonicalize(&server.work).unwrap();
     let beside = serde_json::json!({
         "anchor_id": block, "direction": "horizontal", "side": "after",
