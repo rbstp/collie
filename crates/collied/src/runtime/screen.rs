@@ -141,6 +141,7 @@ impl Screen {
         let row = &grid[at.line];
         row[Column(before)].c == ' '
             && (0..before).any(|c| row[Column(c)].c != ' ')
+            && (at.column.0..row.len()).all(|c| plain(&row[Column(c)]))
             && (at.line.0 + 1..grid.screen_lines() as i32).all(|l| blank(&grid[Line(l)]))
     }
 }
@@ -289,6 +290,7 @@ mod tests {
         assert!(at("user@host app % \x1b[1;17H"));
         assert!(at("Last login: today\r\nuser@host app % "));
         assert!(!at("user@host app % ls"));
+        assert!(!at("user@host app % ; other\x1b[1;17H"));
         assert!(!at("user@host app % \r\nmore\x1b[1;17H"));
         assert!(!at("    "));
         assert!(!at(""));

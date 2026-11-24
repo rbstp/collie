@@ -408,11 +408,11 @@ impl Model {
         })
     }
 
-    pub(super) fn idle_shell(&self, block: &str) -> Option<(String, String, (u16, u16))> {
+    pub(super) fn shell_block(&self, block: &str) -> Option<(String, (u16, u16))> {
         self.sessions.iter().find_map(|(session, s)| {
             let b = s.blocks.get(block).filter(|b| !b.exited)?;
-            let fg = b.foreground.value.as_ref().filter(|f| shell(f))?;
-            Some((session.clone(), fg.cwd.clone()?, b.size.value))
+            b.foreground.value.as_ref().filter(|f| shell(f))?;
+            Some((session.clone(), b.size.value))
         })
     }
 
@@ -605,7 +605,7 @@ pub(super) enum Listed {
     Terminal,
 }
 
-fn shell(p: &Proc) -> bool {
+pub(super) fn shell(p: &Proc) -> bool {
     agents::shell(p.argv0.as_deref().unwrap_or(&p.name))
 }
 

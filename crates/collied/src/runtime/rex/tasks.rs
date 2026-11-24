@@ -12,7 +12,7 @@ use crate::runtime::{Error, Occupant};
 
 /// The terminal flavor that runs a command through the user's login shell, which reads the
 /// account's profile first, so the agent gets the `PATH` the user's own terminals get.
-const FLAVOR: &str = "com.superlogical.terminal.shell";
+pub(super) const FLAVOR: &str = "com.superlogical.terminal.shell";
 
 /// A task collied started, kept by block id in its data folder: Rex holds no label of
 /// collied's own on a block, and its ids are never reused.
@@ -275,7 +275,7 @@ async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
 
 /// `session.create` makes collied the block's owner, whose size (80x24) the block would keep.
 /// Giving it up needs the session attached; attaching twice is harmless.
-async fn disown(client: &Client, session: &str, block: &str) -> Result<(), Error> {
+pub(super) async fn disown(client: &Client, session: &str, block: &str) -> Result<(), Error> {
     let at = json!({ "session_id": session });
     let (_, attached): (_, Attached) = client.call(Method::SessionAttach, at, TIMEOUT).await?;
     let payload = json!({ "session_id": session, "block_ids": [block] });

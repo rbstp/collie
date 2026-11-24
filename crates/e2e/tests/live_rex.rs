@@ -2026,24 +2026,67 @@ fn live_rex_resume() {
     let Some(cli) = rex_cli() else {
         return;
     };
+    let (bin, path) = match std::env::var("COLLIE_E2E_BIN") {
+        Ok(bin) => (bin, std::env::var("PATH").unwrap_or_default()),
+        Err(_) => {
+            let bin = format!("/tmp/rxr-{}", std::process::id());
+            let path = format!("{bin}:{}", std::env::var("PATH").unwrap_or_default());
+            (bin, path)
+        }
+    };
+    let home = format!("{bin}/home");
+    let env = [
+        ("COLLIE_E2E_BIN", bin.as_str()),
+        ("PATH", path.as_str()),
+        ("HOME", home.as_str()),
+    ];
+    if std::env::var_os("COLLIE_E2E_BIN").is_none() {
+        let _scratch = TempDir(bin.clone().into());
+        in_child_with("live_rex_resume", &env);
+        return;
+    }
+    std::fs::create_dir_all(Path::new(&bin).join("record")).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    stand_in(Path::new(&bin), "claude", "claude-code");
     let mut server = RexServer::start(&cli, "z");
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(resume_scenario(&server));
+    let rt = runtime();
+    rt.block_on(resume_scenario(&server, Path::new(&bin)));
     drop(rt);
     assert!(server.stop(), "dedicated Rex server did not stop");
 }
 
-async fn resume_scenario(server: &RexServer) {
-    let (_, block) = new_session(server, "collie-resume", &["/bin/zsh", "-f", "-i"]);
-    let folder = std::fs::canonicalize(&server.work).unwrap();
+fn layout_of(server: &RexServer, session: &str) -> serde_json::Value {
+    let view = server.rex(&["api", "call", "-s", session, "session.view"]);
+    view["windows"][0]["layers"][0]["layout"].clone()
+}
+
+async fn resume_scenario(server: &RexServer, bin: &Path) {
+    let (session, block) = new_session(server, "collie-resume", &["/bin/zsh", "-f", "-i"]);
+    let work = std::fs::canonicalize(&server.work).unwrap();
+    let beside = serde_json::json!({
+        "anchor_id": block, "direction": "horizontal", "side": "after",
+        "layout": { "block": { "flavor": "com.superlogical.terminal.shell", "options": {
+            "shell": "none", "login": false, "command": ["/bin/zsh", "-f", "-i"], "cwd": work,
+        }}},
+    });
+    let split = server.rex(&[
+        "api",
+        "call",
+        "-s",
+        &session,
+        "session.new_split",
+        &beside.to_string(),
+    ]);
+    let other = split["block_ids"][0]
+        .as_str()
+        .expect("a block beside")
+        .to_owned();
+    let before = layout_of(server, &session);
     let conversation = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     let record = server.root.join("rex-resume.json");
     let saved = serde_json::json!({
         "instance": "an-earlier-run",
-        "agents": { &block: { "kind": "claude", "conversation": conversation, "folder": folder } },
+        "agents": { &block: { "kind": "claude", "conversation": conversation, "folder": work } },
     });
     std::fs::OpenOptions::new()
         .write(true)
@@ -2060,20 +2103,42 @@ async fn resume_scenario(server: &RexServer) {
     tokio::time::timeout(Duration::from_secs(5), rex.settled())
         .await
         .unwrap();
-    let id = format!("rex:{block}");
-    let line = format!("claude --resume {conversation}");
-    let screen = until("the resume command in the shell", async || {
+    let args = bin.join("record/args-claude");
+    let ran = until("the resumed agent's arguments", async || {
         rex.resume().await;
-        let text = rex.screen_text(&id).await.ok()?;
-        text.contains(&line).then_some(text)
+        std::fs::read_to_string(&args).ok()
     })
     .await;
-    assert_eq!(screen.matches(&line).count(), 1, "{screen:?}");
+    assert_eq!(ran, format!("--resume\n{conversation}\n"));
+    let agent = until("the resumed agent listed", async || {
+        let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+        (rt.agent_list().await.ok()?.into_iter()).find(|a| a.agent.as_deref() == Some("claude"))
+    })
+    .await;
+    assert_eq!(agent.workspace_id, format!("rex:{session}"));
+    assert_eq!(agent.foreground_cwd.as_deref(), work.to_str());
+    let new = agent.terminal_id.strip_prefix("rex:").unwrap().to_owned();
+    let blocks: Vec<String> = (blocks_of(server, &session).iter())
+        .filter_map(|b| b["block_id"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(blocks.len(), 2, "{blocks:?}");
+    assert!(blocks.contains(&new) && blocks.contains(&other) && !blocks.contains(&block));
+    let after = layout_of(server, &session);
+    assert_eq!(after["split"]["split_id"], before["split"]["split_id"]);
+    assert_eq!(
+        after["split"]["before"]["rect"],
+        before["split"]["before"]["rect"]
+    );
+    assert_eq!(
+        after["split"]["before"]["block_id"],
+        new.as_str(),
+        "in the old block's place"
+    );
+    assert_eq!(after["split"]["after"]["block_id"], other.as_str());
     for _ in 0..5 {
         rex.resume().await;
     }
-    let again = rex.screen_text(&id).await.unwrap();
-    assert_eq!(again.matches(&line).count(), 1, "{again:?}");
+    assert_eq!(blocks_of(server, &session).len(), 2, "once");
     stop.send_replace(true);
     task.await.unwrap();
 }

@@ -317,18 +317,6 @@ impl Rex {
     }
 }
 
-impl Rex {
-    pub(super) async fn type_line(&self, id: &str, line: &str) -> Result<(), Error> {
-        let events = [
-            Event::Key(press("ctrl+e")?),
-            Event::Key(press("ctrl+u")?),
-            Event::Paste { text: line },
-            Event::Key(press("enter")?),
-        ];
-        self.send(id, Listed::Terminal, &events, None).await
-    }
-}
-
 fn presses(keys: &[&str]) -> Result<Vec<Event<'static>>, Error> {
     keys.iter().map(|k| press(k).map(Event::Key)).collect()
 }

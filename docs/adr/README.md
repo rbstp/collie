@@ -18,4 +18,4 @@ A record has a status, a date, Context, Decision, Consequences and the code it g
 | [0010](0010-startup-dialog-keys.md) | Keys reach a silent agent's startup dialog only while it shows |
 | [0011](0011-code-mode.md) | Code Mode is set on Claude Code's own command, or as a setting through herdr |
 | [0012](0012-question-forms.md) | A question form is answered only when its call or the screen proves it whole |
-| [0013](0013-rex-resume.md) | A Rex agent resumes only in its own restored block, once, at an empty prompt |
+| [0013](0013-rex-resume.md) | A Rex agent resumes once, in place of its own untouched restored shell, never typed |

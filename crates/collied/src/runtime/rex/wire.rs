@@ -251,6 +251,12 @@ pub(super) struct Window {
 }
 
 #[derive(Deserialize)]
+pub(super) struct Split {
+    #[serde(default)]
+    pub block_ids: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct Owners {
     #[serde(default)]
     pub blocks: Option<Vec<Owned>>,

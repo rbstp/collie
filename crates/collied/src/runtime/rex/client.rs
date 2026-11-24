@@ -76,6 +76,7 @@ methods! {
     SessionDisownBlock => "session.disown_block",
     SessionDestroy => "session.destroy",
     DataConnect => "data.connect",
+    SessionNewSplit => "session.new_split",
 }
 
 impl Method {
