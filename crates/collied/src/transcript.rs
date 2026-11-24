@@ -20,7 +20,8 @@ use crate::prompt;
 use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
-pub(crate) use live::{claude_holds, claude_session};
+pub(crate) use live::{claude_holds, claude_session, copilot_held, copilot_holds, copilot_session};
+pub(crate) use provider_subagents::held;
 pub(crate) use subagents::timestamp_ms;
 
 /// Only the end is read: transcripts reach tens of MB, and what is shown sits near the end.
@@ -386,23 +387,7 @@ impl Transcripts {
     }
 
     fn codex_rollout(&self, id: &str) -> Option<PathBuf> {
-        let root = self.codex_sessions.as_ref()?;
-        let day = (uuid_v7_ms(id)? / 86_400_000) as i64;
-        // Rollouts sit under the local date the session started; the id has it in UTC.
-        (day - 1..=day + 1)
-            .flat_map(|d| {
-                let (y, m, d) = civil(d);
-                std::fs::read_dir(root.join(format!("{y:04}/{m:02}/{d:02}")))
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-            })
-            .map(|e| e.path())
-            .filter(|p| {
-                p.file_name().and_then(|n| n.to_str()).and_then(rollout_id) == Some(id)
-                    && is_file(p)
-            })
-            .min_by_key(|p| compressed(p))
+        codex_rollout_in(self.codex_sessions.as_ref()?, id)
     }
 
     /// The most recent sessions started in `cwd` (canonical) that have a prompt, newest first.
@@ -712,6 +697,53 @@ pub(crate) fn claude_transcript(claude: &Path, cwd: &str, session: &str) -> bool
                 .join("projects")
                 .join(project_dir(cwd))
                 .join(format!("{session}.jsonl")),
+        )
+}
+
+fn codex_rollout_in(root: &Path, id: &str) -> Option<PathBuf> {
+    let day = (uuid_v7_ms(id)? / 86_400_000) as i64;
+    // Rollouts sit under the local date the session started; the id has it in UTC.
+    (day - 1..=day + 1)
+        .flat_map(|d| {
+            let (y, m, d) = civil(d);
+            std::fs::read_dir(root.join(format!("{y:04}/{m:02}/{d:02}")))
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).and_then(rollout_id) == Some(id) && is_file(p)
+        })
+        .min_by_key(|p| compressed(p))
+}
+
+pub(crate) fn codex_transcript(sessions: &Path, cwd: &str, id: &str) -> bool {
+    codex_rollout_in(sessions, id)
+        .and_then(|path| codex_head(&path, &mut open(&path)?.0, META_BYTES))
+        .and_then(|h| codex_meta(&h))
+        .is_some_and(|(i, c, _)| i == id && c == cwd)
+}
+
+pub(crate) fn codex_rollout(sessions: &Path, id: &str) -> Option<PathBuf> {
+    codex_rollout_in(sessions, id).filter(|p| !compressed(p))
+}
+
+pub(crate) fn codex_writer_lock(sessions: &Path, id: &str) -> Option<PathBuf> {
+    let home = sessions.parent()?;
+    is_session_id(id).then(|| home.join("thread-writer-locks").join(format!("{id}.lock")))
+}
+
+pub(crate) fn copilot_transcript(root: &Path, id: &str) -> bool {
+    is_session_id(id) && is_file(&root.join(id).join("events.jsonl"))
+}
+
+pub(crate) fn agy_transcript(brain: &Path, id: &str) -> bool {
+    is_session_id(id)
+        && is_file(
+            &brain
+                .join(id)
+                .join(".system_generated/logs/transcript.jsonl"),
         )
 }
 

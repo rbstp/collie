@@ -557,6 +557,90 @@ pub(crate) fn claude_holds(sessions: &Path, session: &str) -> bool {
         .any(|pid| claim(sessions, pid).is_some_and(|c| c.session == session))
 }
 
+pub(crate) fn copilot_holds(root: &Path, pid: u32, id: &str) -> bool {
+    is_session_id(id) && copilot_marked(&root.join(id), pid) == Some(true)
+}
+
+pub(crate) fn copilot_held(root: &Path, id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(root.join(id)) else {
+        return false;
+    };
+    (entries.flatten().take(MAX_LISTED)).any(|e| {
+        let name = e.file_name();
+        name.to_str()
+            .is_some_and(|n| n.starts_with("inuse.") && n.ends_with(".hold"))
+            && super::provider_subagents::held(&e.path()) != Some(false)
+    })
+}
+
+pub(crate) fn copilot_session(root: &Path, pid: u32, cwd: &str) -> Option<String> {
+    let mut found = None;
+    for entry in std::fs::read_dir(root).ok()?.flatten().take(MAX_LISTED) {
+        let name = entry.file_name();
+        let Some(id) = name.to_str().filter(|id| is_session_id(id)) else {
+            continue;
+        };
+        let dir = entry.path();
+        if copilot_marked(&dir, pid) != Some(true) || !copilot_started(&dir, id, cwd) {
+            continue;
+        }
+        if found.replace(id.to_owned()).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn copilot_marked(dir: &Path, pid: u32) -> Option<bool> {
+    let pid = i32::try_from(pid).ok()?;
+    let hold = dir.join(format!("inuse.{pid}.hold"));
+    if !super::provider_subagents::held(&hold)? {
+        return Some(false);
+    }
+    let (_, _, modified) = open(&hold)?;
+    let marked = modified.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64;
+    if !alive(pid) || started_ms(pid)? > marked.saturating_add(START_SLACK_MS) {
+        return Some(false);
+    }
+    let (file, len, _) = open(&dir.join(format!("inuse.{pid}.lock")))?;
+    if len > 32 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(33).read_to_end(&mut bytes).ok()?;
+    Some(
+        std::str::from_utf8(&bytes)
+            .ok()?
+            .trim()
+            .parse::<i32>()
+            .ok()?
+            == pid,
+    )
+}
+
+fn copilot_started(dir: &Path, id: &str, cwd: &str) -> bool {
+    let started = || -> Option<bool> {
+        let (file, len, _) = open(&dir.join("workspace.yaml"))?;
+        if len > SESSION_BYTES {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        file.take(SESSION_BYTES).read_to_end(&mut bytes).ok()?;
+        let workspace = std::str::from_utf8(&bytes).ok()?;
+        if workspace_scalar(workspace, "id")? != id || workspace_scalar(workspace, "cwd")? != cwd {
+            return Some(false);
+        }
+        let (file, _, _) = open(&dir.join("events.jsonl"))?;
+        let mut header = Vec::new();
+        std::io::BufReader::with_capacity(1024, file.take(SESSION_BYTES))
+            .read_until(b'\n', &mut header)
+            .ok()?;
+        let event: Value = serde_json::from_slice(&header).ok()?;
+        Some(event["type"] == "session.start" && event["data"]["sessionId"] == id)
+    };
+    started() == Some(true)
+}
+
 /// Trusted only while that pid is alive and started before the file says it did, so a file
 /// left by a process whose pid was reused is refused.
 fn claim(sessions: &Path, pid: i32) -> Option<Claim> {

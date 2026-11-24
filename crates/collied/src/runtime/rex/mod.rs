@@ -237,6 +237,7 @@ pub struct Rex {
     input: tokio::sync::Mutex<()>,
     streams: stream::Streams,
     resume: Mutex<resume::Resume>,
+    agent_roots: crate::costs::Roots,
 }
 
 /// The connection, session, block and size of a listed block, and what it is listed as.
@@ -267,6 +268,7 @@ impl Rex {
             input: tokio::sync::Mutex::default(),
             streams: stream::Streams::default(),
             resume: Mutex::default(),
+            agent_roots: crate::costs::Roots::default(),
         }
     }
 

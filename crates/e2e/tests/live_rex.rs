@@ -2084,8 +2084,13 @@ fn claim(sessions: &Path, pid: u64, conversation: &str, cwd: &str) {
 }
 
 async fn resume_scenario(server: &mut RexServer, bin: &Path) {
-    let zshrc = "PROMPT=$'%~\\n%#'\nRPROMPT='[right]'\n";
+    let rc = format!(
+        "export PATH='{}':\"$PATH\"\nexport CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1\nclaude() {{ COLLIE_WRAPPED=1 command claude \"$@\"; }}\n",
+        bin.display()
+    );
+    let zshrc = format!("PROMPT=$'%~\\n%#'\nRPROMPT='[right]'\n{rc}");
     std::fs::write(server.root.join("home/.zshrc"), zshrc).unwrap();
+    std::fs::write(server.root.join("home/.bash_profile"), &rc).unwrap();
     let (session, block) = new_session(server, "collie-resume", &["/bin/zsh", "-i"]);
     let work = std::fs::canonicalize(&server.work).unwrap();
     let w = work.to_str().unwrap().to_owned();
@@ -2155,6 +2160,12 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
         env.contains(&home),
         "the stand-in ran with the scratch home"
     );
+    for line in ["COLLIE_WRAPPED=1", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"] {
+        assert!(
+            env.lines().any(|l| l == line),
+            "the login shell's startup files ran: {line}"
+        );
+    }
     assert_eq!(
         block_ids(server, &session).len(),
         2,
@@ -2174,6 +2185,7 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
         process_of(server, &session, &new)["foreground"]["pid"].as_u64()
     })
     .await;
+    assert!(env.contains(&format!("REX_BLOCK={new}\n")));
     claim(&sessions, resumed, conversation, &w);
     until("the restored shell closed", async || {
         rex.reread_sessions();

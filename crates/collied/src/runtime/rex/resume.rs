@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,7 @@ use super::tasks::{FLAVOR, disown};
 use super::wire::{Formatted, Process, Split};
 use super::{CLOSE_TIMEOUT, Rex};
 use crate::runtime::screen::Screen;
-use crate::runtime::{Error, agents, herdr};
+use crate::runtime::{Error, agents};
 
 const GRACE: Duration = Duration::from_secs(15);
 const CONFIRM: Duration = Duration::from_millis(if cfg!(test) { 200 } else { 3000 });
@@ -24,6 +24,7 @@ const WINDOW: Duration = Duration::from_secs(90);
 const MAX_AGENTS: usize = 256;
 const MAX_FILE: u64 = 256 << 10;
 const MAX_FOLDER: usize = 4096;
+const SHELLS: [&str; 2] = ["zsh", "bash"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct Agent {
@@ -120,8 +121,57 @@ fn uuid(id: &str) -> bool {
 }
 
 pub(super) fn args(agent: &Agent) -> Option<Vec<String>> {
-    (uuid(&agent.conversation) && agent.kind == "claude")
-        .then(|| herdr::agent_args(&agent.kind, Some(&agent.conversation), false, None))
+    let id = agent.conversation.as_str();
+    if !uuid(id) {
+        return None;
+    }
+    let args = match agent.kind.as_str() {
+        "claude" => vec!["--resume".to_owned(), id.to_owned()],
+        "codex" => vec!["resume".to_owned(), id.to_owned(), "--no-daemon".to_owned()],
+        "copilot" => vec![format!("--resume={id}")],
+        "agy" => vec!["--conversation".to_owned(), id.to_owned()],
+        _ => return None,
+    };
+    Some(args)
+}
+
+// ADR-0013
+fn command(agent: &Agent) -> Option<String> {
+    let mut words = vec![agent.kind.clone()];
+    words.extend(args(agent)?);
+    let plain = |w: &String| {
+        !w.is_empty()
+            && (w.bytes())
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-=".contains(&b))
+    };
+    words.iter().all(plain).then(|| words.join(" "))
+}
+
+pub(super) fn login_shell() -> Option<String> {
+    let mut pwd = std::mem::MaybeUninit::<libc::passwd>::zeroed();
+    let mut buf = vec![0; 16 << 10];
+    let mut found = std::ptr::null_mut();
+    let uid = rustix::process::getuid().as_raw();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid,
+            pwd.as_mut_ptr(),
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut found,
+        )
+    };
+    if rc != 0 || found.is_null() {
+        return None;
+    }
+    let shell = unsafe { (*found).pw_shell };
+    if shell.is_null() {
+        return None;
+    }
+    let shell = unsafe { std::ffi::CStr::from_ptr(shell) }.to_str().ok()?;
+    let name = Path::new(shell).file_name()?.to_str()?;
+    (shell.starts_with('/') && !shell.contains('=') && SHELLS.contains(&name))
+        .then(|| shell.to_owned())
 }
 
 fn fits(block: &str, agent: &Agent) -> bool {
@@ -182,35 +232,6 @@ fn fit(record: &mut Record) {
             total = size(record);
         }
     }
-}
-
-fn transcript(claude: Option<&Path>, agent: &Agent) -> bool {
-    claude.is_some_and(|c| {
-        crate::transcript::claude_transcript(c, &agent.folder, &agent.conversation)
-    })
-}
-
-fn recorded(listing: &Listing, claude: Option<&Path>) -> BTreeMap<String, Agent> {
-    (listing.agents.iter())
-        .filter_map(|a| {
-            let block = a.terminal_id.strip_prefix(PREFIX)?;
-            let agent = Agent {
-                kind: a.agent.clone()?,
-                conversation: a.agent_session.as_ref()?.value.clone(),
-                folder: a.foreground_cwd.clone()?,
-            };
-            (fits(block, &agent) && transcript(claude, &agent)).then(|| (block.to_owned(), agent))
-        })
-        .collect()
-}
-
-fn runs(listing: &Listing, start: &Starting) -> bool {
-    let id = format!("{PREFIX}{}", start.new);
-    (listing.agents.iter()).any(|a| {
-        a.terminal_id == id
-            && (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation)
-            && a.foreground_cwd.as_deref() == Some(start.folder.as_str())
-    })
 }
 
 fn running(listing: &Listing, conversation: &str) -> bool {
@@ -406,8 +427,105 @@ impl Rex {
         inner.server.as_ref()?.instance.clone()
     }
 
+    pub fn with_agent_roots(mut self, roots: crate::costs::Roots) -> Self {
+        self.agent_roots = roots;
+        self
+    }
+
     fn claude_dir(&self) -> Option<&Path> {
         self.claude_sessions.as_deref()?.parent()
+    }
+
+    fn transcript(&self, agent: &Agent) -> bool {
+        let (id, folder) = (agent.conversation.as_str(), agent.folder.as_str());
+        let roots = &self.agent_roots;
+        match agent.kind.as_str() {
+            "claude" => (self.claude_dir())
+                .is_some_and(|c| crate::transcript::claude_transcript(c, folder, id)),
+            "codex" => (roots.codex.as_deref())
+                .is_some_and(|s| crate::transcript::codex_transcript(s, folder, id)),
+            "copilot" => (roots.copilot.as_deref())
+                .is_some_and(|r| crate::transcript::copilot_transcript(r, id)),
+            "agy" => {
+                (roots.agy.as_deref()).is_some_and(|b| crate::transcript::agy_transcript(b, id))
+            }
+            _ => false,
+        }
+    }
+
+    fn held(&self, agent: &Agent) -> bool {
+        let (id, roots) = (agent.conversation.as_str(), &self.agent_roots);
+        match agent.kind.as_str() {
+            "claude" => (self.claude_sessions.as_deref())
+                .is_some_and(|s| crate::transcript::claude_holds(s, id)),
+            "codex" => (roots.codex.as_deref())
+                .and_then(|s| crate::transcript::codex_writer_lock(s, id))
+                .is_some_and(|l| crate::transcript::held(&l) != Some(false)),
+            "copilot" => {
+                (roots.copilot.as_deref()).is_some_and(|r| crate::transcript::copilot_held(r, id))
+            }
+            _ => false,
+        }
+    }
+
+    // ADR-0013
+    fn holds(&self, kind: &str, pid: u32, conversation: &str) -> bool {
+        let roots = &self.agent_roots;
+        match kind {
+            "codex" => roots.codex.as_deref().is_some_and(|s| {
+                let open = agents::open_files(pid);
+                let has = |p: &Path| {
+                    std::fs::metadata(p).is_ok_and(|m| open.contains(&(m.dev(), m.ino())))
+                };
+                (crate::transcript::codex_writer_lock(s, conversation))
+                    .is_some_and(|l| has(&l) && crate::transcript::held(&l) == Some(true))
+                    && crate::transcript::codex_rollout(s, conversation).is_some_and(|r| has(&r))
+            }),
+            "copilot" => (roots.copilot.as_deref())
+                .is_some_and(|r| crate::transcript::copilot_holds(r, pid, conversation)),
+            _ => false,
+        }
+    }
+
+    fn recorded(&self, listing: &Listing) -> BTreeMap<String, Agent> {
+        (listing.agents.iter())
+            .filter_map(|a| {
+                let block = a.terminal_id.strip_prefix(PREFIX)?;
+                let (kind, folder) = (a.agent.clone()?, a.foreground_cwd.clone()?);
+                let conversation = match kind.as_str() {
+                    "copilot" => {
+                        let pid = self.live(|l| l.model.foreground(block)).ok().flatten()?;
+                        let root = self.agent_roots.copilot.as_deref()?;
+                        crate::transcript::copilot_session(root, pid, &folder)?
+                    }
+                    _ => a.agent_session.as_ref()?.value.clone(),
+                };
+                let agent = Agent {
+                    kind,
+                    conversation,
+                    folder,
+                };
+                (fits(block, &agent) && self.transcript(&agent)).then(|| (block.to_owned(), agent))
+            })
+            .collect()
+    }
+
+    fn proven(&self, listing: &Listing, start: &Starting) -> bool {
+        let id = format!("{PREFIX}{}", start.new);
+        let Some(a) = listing.agents.iter().find(|a| a.terminal_id == id) else {
+            return false;
+        };
+        let there = a.agent.as_deref() == Some(start.kind.as_str())
+            && a.foreground_cwd.as_deref() == Some(start.folder.as_str());
+        let bound = (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation);
+        there
+            && match start.kind.as_str() {
+                "codex" | "copilot" => {
+                    (self.live(|l| l.model.foreground(&start.new)).ok().flatten())
+                        .is_some_and(|pid| self.holds(&start.kind, pid, &start.conversation))
+                }
+                _ => bound,
+            }
     }
 
     pub(super) fn plan_resume(&self) {
@@ -424,17 +542,17 @@ impl Rex {
     }
 
     pub async fn resume(&self) {
-        self.resume_with(crate::runtime::task_cli).await;
+        self.resume_with(login_shell).await;
     }
 
-    pub(super) async fn resume_with(&self, cli: impl Fn(&str) -> Option<String>) {
+    pub(super) async fn resume_with(&self, shell: impl Fn() -> Option<String>) {
         let Some(listing) = self.listing() else {
             return;
         };
         let instance = self.instance();
+        let current = self.recorded(&listing);
         let (due, starting) = {
             let mut resume = crate::lock(&self.resume);
-            let current = recorded(&listing, self.claude_dir());
             resume.observe(instance.as_deref(), &current, Instant::now());
             (resume.due(Instant::now()), resume.starting.clone())
         };
@@ -442,7 +560,7 @@ impl Rex {
             self.advance(&block, start, &listing).await;
         }
         for (block, agent) in due {
-            match self.resume_one(&block, &agent, &cli).await {
+            match self.resume_one(&block, &agent, &shell).await {
                 Step::Wait(why) => {
                     crate::lock(&self.resume).waits.insert(block, why);
                 }
@@ -462,15 +580,18 @@ impl Rex {
         &self,
         block: &str,
         agent: &Agent,
-        cli: &impl Fn(&str) -> Option<String>,
+        shell: &impl Fn() -> Option<String>,
     ) -> Step {
-        let (Some(args), Some(cli)) = (args(agent), cli(&agent.kind)) else {
+        let Some(command) = command(agent) else {
             return Step::Drop("no command for its kind");
+        };
+        let Some(login) = shell() else {
+            return Step::Drop("the account's login shell is not zsh or bash");
         };
         if !Path::new(&agent.folder).is_dir() {
             return Step::Drop("its folder is gone");
         }
-        if !transcript(self.claude_dir(), agent) {
+        if !self.transcript(agent) {
             return Step::Drop("its conversation has no transcript");
         }
         let shell = self.live(|l| {
@@ -496,10 +617,8 @@ impl Rex {
                 return Step::Drop("its screen changed after collied first read it");
             }
         }
-        let held = (self.claude_sessions.as_deref())
-            .is_some_and(|s| crate::transcript::claude_holds(s, &agent.conversation));
-        if held {
-            return Step::Wait("a live Claude Code holds the conversation");
+        if self.held(agent) {
+            return Step::Wait("a live agent holds the conversation");
         }
         let Some(listing) = self.listing() else {
             return Step::Wait("not following Rex");
@@ -510,7 +629,9 @@ impl Rex {
         if !crate::lock(&self.resume).claim(block, &agent.conversation, Instant::now()) {
             return Step::Drop("claimed already, or resuming stopped");
         }
-        let argv = agents::task_argv(&cli, &args, None);
+        let mut flags = ["-l", "-i", "-c"].map(str::to_owned).to_vec();
+        flags.push(command);
+        let argv = agents::task_argv(&login, &flags, None);
         match start(&client, &session, block, &agent.folder, argv).await {
             Ok(new) => {
                 let starting = Starting {
@@ -551,9 +672,8 @@ impl Rex {
         start.seen |= (self.live(|l| l.synced && l.model.has(&start.new))).unwrap_or(false);
         let kind = start.kind.clone();
         let outcome = if self.exit(&start) == Some(true) {
-            let _ = self.close_block(&start.session, &start.new).await;
-            "the agent exited before it ran its conversation; its restored shell stays"
-        } else if runs(listing, &start) {
+            "the agent exited before it ran its conversation; its block and the restored shell stay"
+        } else if self.proven(listing, &start) {
             let since = *start.running.get_or_insert_with(Instant::now);
             if since.elapsed() < CONFIRM {
                 crate::lock(&self.resume)
@@ -563,6 +683,9 @@ impl Rex {
             }
             self.finish(block, &start).await
         } else if start.since.elapsed() >= START_LIMIT {
+            if let Ok(client) = self.live(|l| l.client.clone()) {
+                let _ = disown(&client, &start.session, &start.new).await;
+            }
             "the agent did not show its conversation in its folder in time; its block and the restored shell stay"
         } else {
             start.running = None;
@@ -580,18 +703,16 @@ impl Rex {
         let Ok(client) = self.live(|l| l.client.clone()) else {
             return "the connection ended before its restored shell closed; both stay";
         };
+        let _ = disown(&client, &start.session, &start.new).await;
         let (pid, size) = start.shell;
         let idle_now = idle(&client, &start.session, block).await;
         let screen_now = screen(&client, &start.session, block, size).await;
         let shell = idle_now == Some(pid) && screen_now.as_ref() == Some(&start.screen);
         let exited = self.exit(start) != Some(false);
-        let agent = !exited && self.listing().is_some_and(|l| runs(&l, start));
+        let agent = !exited && self.listing().is_some_and(|l| self.proven(&l, start));
         let gate = crate::lock(&self.resume).open(Instant::now());
         if !agent {
-            if self.exit(start) == Some(true) {
-                let _ = self.close_block(&start.session, &start.new).await;
-            }
-            return "the agent stopped before its restored shell closed; the shell stays";
+            return "the agent stopped before its restored shell closed; its block and the shell stay";
         }
         if !shell {
             return "resumed beside its restored shell, which changed";
@@ -623,8 +744,8 @@ async fn start(
     cwd: &str,
     argv: Vec<String>,
 ) -> Result<String, Error> {
-    let layout =
-        json!({ "block": { "flavor": FLAVOR, "options": { "command": argv, "cwd": cwd } } });
+    let options = json!({ "command": argv, "cwd": cwd, "shell": "none", "login": false });
+    let layout = json!({ "block": { "flavor": FLAVOR, "options": options } });
     let payload = json!({
         "session_id": session, "anchor_id": block, "direction": "horizontal",
         "side": "before", "layout": layout,
@@ -637,7 +758,6 @@ async fn start(
         .ok_or_else(|| {
             Error::Unsupported("Rex split the block without a block collied can name".to_owned())
         })?;
-    let _ = disown(client, session, &new).await;
     Ok(new)
 }
 
@@ -746,29 +866,34 @@ mod tests {
         p
     }
 
-    fn cli(kind: &str) -> Option<String> {
-        Some(format!("/opt/bin/{kind}"))
+    fn zsh() -> Option<String> {
+        Some("/bin/zsh".to_owned())
     }
 
     #[test]
-    fn only_a_known_agent_with_a_uuid_conversation_has_resume_arguments() {
-        let of = |kind, conversation| args(&agent(kind, conversation, "/work"));
-        assert_eq!(
-            of("claude", FIRST),
-            Some(vec!["--resume".to_owned(), FIRST.to_owned()])
-        );
-        assert_eq!(of("codex", FIRST), None, "Claude Code only, for now");
-        assert_eq!(of("agy", FIRST), None);
-        assert_eq!(of("copilot", FIRST), None);
-        for bad in [
-            "------------------------------------",
-            "3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D",
-            "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5;",
-            "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d ",
-            "",
-        ] {
-            assert_eq!(of("claude", bad), None, "{bad:?}");
+    fn each_kind_resumes_through_its_bare_name_and_only_a_checked_id_reaches_the_shell() {
+        let of = |kind, conversation| command(&agent(kind, conversation, "/work"));
+        let expected = [
+            ("claude", format!("claude --resume {FIRST}")),
+            ("codex", format!("codex resume {FIRST} --no-daemon")),
+            ("copilot", format!("copilot --resume={FIRST}")),
+            ("agy", format!("agy --conversation {FIRST}")),
+        ];
+        for (kind, line) in expected {
+            assert_eq!(of(kind, FIRST), Some(line));
+            for bad in [
+                "------------------------------------",
+                "3F1B2C4D-5E6F-4A7B-8C9D-0E1F2A3B4C5D",
+                "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5;",
+                "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d ",
+                "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3$(id)",
+                "",
+            ] {
+                assert_eq!(of(kind, bad), None, "{kind} {bad:?}");
+            }
         }
+        assert_eq!(of("pi", FIRST), None);
+        assert_eq!(of("claude; rm", FIRST), None);
     }
 
     #[test]
@@ -963,14 +1088,14 @@ mod tests {
             rex.get(&id(TWICE)).is_ok(),
             "an agent with no session is listed"
         );
-        rex.resume_with(cli).await;
+        rex.resume_with(zsh).await;
         let saved: Record = crate::peers::load_json(&record).unwrap();
         assert!(
             saved.agents.is_empty(),
             "a conversation with no transcript yet"
         );
         transcribe(dir.path(), "/work/app", FIRST);
-        rex.resume_with(cli).await;
+        rex.resume_with(zsh).await;
         let saved: Record = crate::peers::load_json(&record).unwrap();
         assert_eq!(saved.instance.as_deref(), Some("one"));
         assert_eq!(
@@ -1064,7 +1189,7 @@ mod tests {
         let end = Instant::now() + Duration::from_secs(5);
         while Instant::now() < end {
             rex.reread_sessions();
-            rex.resume_with(cli).await;
+            rex.resume_with(zsh).await;
             if until() {
                 return true;
             }
@@ -1104,17 +1229,20 @@ mod tests {
         let _task = follow(&r.rex).await;
         assert!(ticks(&r.rex, || !anchors(&r.fake).is_empty()).await);
         for _ in 0..3 {
-            r.rex.resume_with(cli).await;
+            r.rex.resume_with(zsh).await;
             tokio::time::sleep(SETTLE).await;
         }
         assert_eq!(anchors(&r.fake), [READY, TYPED]);
         let split = r.fake.state().splits[0].clone();
         assert_eq!(split["side"], "before");
+        let line = format!("claude --resume {FIRST}");
         assert_eq!(
             split["layout"]["block"]["options"],
             serde_json::json!({
-                "command": through_env("/opt/bin/claude", &["--resume", FIRST]),
+                "command": through_env("/bin/zsh", &["-l", "-i", "-c", &line]),
                 "cwd": folder,
+                "shell": "none",
+                "login": false,
             })
         );
         let on_disk: Record = crate::peers::load_json(&r.record).unwrap();
@@ -1134,11 +1262,11 @@ mod tests {
         )
         .await;
         let _task = follow(&r.rex).await;
-        r.rex.resume_with(cli).await;
+        r.rex.resume_with(zsh).await;
         tokio::time::sleep(SETTLE).await;
         r.fake.state().block(READY).screen = "user@host app % ls".to_owned();
         for _ in 0..6 {
-            r.rex.resume_with(cli).await;
+            r.rex.resume_with(zsh).await;
             tokio::time::sleep(SETTLE).await;
         }
         assert!(anchors(&r.fake).is_empty(), "typed after the first read");
@@ -1160,7 +1288,7 @@ mod tests {
         )
         .await;
         let _task = follow(&r.rex).await;
-        r.rex.resume_with(cli).await;
+        r.rex.resume_with(zsh).await;
         r.fake.state().block(READY).screen = "user@host app on main % \x1b[1;25H".to_owned();
         assert!(ticks(&r.rex, || !anchors(&r.fake).is_empty()).await);
     }
@@ -1205,7 +1333,7 @@ mod tests {
         assert!(ticks(&r.rex, || !anchors(&r.fake).is_empty()).await);
         assert_eq!(anchors(&r.fake), [READY]);
         for _ in 0..5 {
-            r.rex.resume_with(cli).await;
+            r.rex.resume_with(zsh).await;
             tokio::time::sleep(CONFIRM / 2).await;
         }
         assert!(
@@ -1243,7 +1371,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_agent_that_exits_at_once_leaves_the_restored_shell() {
+    async fn an_agent_that_exits_at_once_keeps_its_block_beside_the_restored_shell() {
         let dir = tempfile::tempdir().unwrap();
         let folder = std::fs::canonicalize(dir.path()).unwrap();
         let r = restarted(
@@ -1257,12 +1385,15 @@ mod tests {
         let _task = follow(&r.rex).await;
         assert!(ticks(&r.rex, || !anchors(&r.fake).is_empty()).await);
         assert_eq!(anchors(&r.fake), [READY]);
+        assert!(ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await);
+        let ids = blocks(&r.fake);
+        assert_eq!(ids.len(), 2, "its output stays readable: {ids:?}");
+        assert!(ids.contains(&READY.to_owned()));
+        let new = new_block(&r.fake);
         assert!(
-            ticks(&r.rex, || blocks(&r.fake) == [READY]).await,
-            "{:?}",
-            blocks(&r.fake)
+            r.fake.state().block(&new).owner.is_some(),
+            "kept by collied, so Rex does not close it"
         );
-        assert!(crate::lock(&r.rex.resume).starting.is_empty());
     }
 
     #[tokio::test]
@@ -1279,7 +1410,7 @@ mod tests {
         pid_file(&r.sessions, FIRST);
         let _task = follow(&r.rex).await;
         for _ in 0..4 {
-            r.rex.resume_with(cli).await;
+            r.rex.resume_with(zsh).await;
             tokio::time::sleep(SETTLE).await;
         }
         assert!(anchors(&r.fake).is_empty(), "held by a live process");
@@ -1314,7 +1445,7 @@ mod tests {
         assert_eq!(bound(&r.rex).as_deref(), Some(FIRST));
         std::fs::remove_file(r.sessions.join(format!("{me}.json"))).unwrap();
         for _ in 0..4 {
-            r.rex.resume_with(cli).await;
+            r.rex.resume_with(zsh).await;
             tokio::time::sleep(SETTLE).await;
         }
         assert_eq!(
@@ -1410,7 +1541,7 @@ mod tests {
                 "the agent never showed its conversation"
             );
             rex.reread_sessions();
-            rex.resume_with(cli).await;
+            rex.resume_with(zsh).await;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -1496,6 +1627,12 @@ mod tests {
         pid_file(&r.sessions, FIRST);
         assert!(ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await);
         assert_eq!(blocks(&r.fake).len(), 2, "both stay");
+        let new = new_block(&r.fake);
+        assert_eq!(
+            r.fake.state().block(&new).owner,
+            None,
+            "given up, so Rex.app sizes it"
+        );
     }
 
     #[tokio::test]
@@ -1508,6 +1645,265 @@ mod tests {
         pid_file(&r.sessions, FIRST);
         assert!(ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await);
         assert_eq!(blocks(&r.fake).len(), 2, "both stay");
+    }
+
+    fn v7(n: u64) -> String {
+        let ms = crate::now_ms();
+        format!("{:08x}-{:04x}-7000-8000-{n:012x}", ms >> 16, ms & 0xffff)
+    }
+
+    fn with_roots(r: &Restarted, dir: &Path) -> Arc<Rex> {
+        let roots = crate::costs::Roots {
+            claude: None,
+            codex: Some(dir.join("codex/sessions")),
+            copilot: Some(dir.join("copilot/session-state")),
+            agy: Some(dir.join("agy/brain")),
+        };
+        Arc::new(
+            Rex::new(r.fake.socket.clone())
+                .with_claude_sessions(Some(r.sessions.clone()))
+                .with_agent_roots(roots)
+                .with_resume(r.record.clone(), dir.join("rex-resume-off")),
+        )
+    }
+
+    fn rollout(dir: &Path, id: &str, folder: &str) -> PathBuf {
+        let day = rfc3339(crate::now_ms())[..10].to_owned();
+        let path = (dir.join("codex/sessions").join(day.replace('-', "/")))
+            .join(format!("rollout-{day}T00-00-00-{id}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let meta =
+            serde_json::json!({"type": "session_meta", "payload": {"id": id, "cwd": folder}});
+        std::fs::write(&path, format!("{meta}\n")).unwrap();
+        path
+    }
+
+    fn writer_lock(dir: &Path, id: &str) -> std::fs::File {
+        let path = dir
+            .join("codex/thread-writer-locks")
+            .join(format!("{id}.lock"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path).unwrap()
+    }
+
+    fn copilot_session(dir: &Path, id: &str, folder: &str) -> PathBuf {
+        let session = dir.join("copilot/session-state").join(id);
+        std::fs::create_dir_all(&session).unwrap();
+        let workspace = format!("id: {id}\ncwd: {folder}\n");
+        std::fs::write(session.join("workspace.yaml"), workspace).unwrap();
+        let start = serde_json::json!({"type": "session.start", "data": {"sessionId": id}});
+        std::fs::write(session.join("events.jsonl"), format!("{start}\n")).unwrap();
+        session
+    }
+
+    fn copilot_marks(session: &Path) -> std::fs::File {
+        let me = std::process::id();
+        std::fs::write(session.join(format!("inuse.{me}.lock")), me.to_string()).unwrap();
+        let hold = std::fs::File::create(session.join(format!("inuse.{me}.hold"))).unwrap();
+        hold.lock().unwrap();
+        hold
+    }
+
+    fn agy_transcript(dir: &Path, id: &str) {
+        let logs = dir
+            .join("agy/brain")
+            .join(id)
+            .join(".system_generated/logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("transcript.jsonl"), "{}\n").unwrap();
+    }
+
+    async fn still_there(rex: &Rex, fake: &Fake) -> bool {
+        for _ in 0..4 {
+            rex.resume_with(zsh).await;
+            tokio::time::sleep(CONFIRM / 2).await;
+        }
+        blocks(fake).contains(&READY.to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_resumed_codex_replaces_the_shell_only_once_its_process_holds_the_lock_and_rollout() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = folder.to_str().unwrap();
+        let id = v7(1);
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("codex", &id, folder))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        let path = rollout(dir.path(), &id, folder);
+        let lock = writer_lock(dir.path(), &id);
+        let rex = with_roots(&r, dir.path());
+        let _task = follow(&rex).await;
+        assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await);
+        lock.lock().unwrap();
+        assert!(still_there(&rex, &r.fake).await, "the lock alone");
+        let _open = std::fs::File::open(&path).unwrap();
+        assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+    }
+
+    #[tokio::test]
+    async fn a_resumed_copilot_replaces_the_shell_only_once_its_process_marks_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let folder = folder.to_str().unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("copilot", FIRST, folder))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        let session = copilot_session(dir.path(), FIRST, folder);
+        let rex = with_roots(&r, dir.path());
+        let _task = follow(&rex).await;
+        assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await);
+        assert!(still_there(&rex, &r.fake).await, "no marker of its process");
+        let _hold = copilot_marks(&session);
+        assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+    }
+
+    #[tokio::test]
+    async fn a_resumed_agy_replaces_the_shell_only_once_its_hook_names_the_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("agy", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        agy_transcript(dir.path(), FIRST);
+        let rex = with_roots(&r, dir.path());
+        let _task = follow(&rex).await;
+        assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await);
+        assert!(still_there(&rex, &r.fake).await, "an agy with no report");
+        assert!(rex.bind(&id(&new_block(&r.fake)), FIRST, std::process::id()));
+        assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+    }
+
+    #[tokio::test]
+    async fn a_copilot_is_recorded_from_the_one_session_its_process_marks() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("rex-resume.json");
+        let fake = Fake::start().await;
+        {
+            let mut s = fake.state();
+            s.instance = "one";
+            s.sessions.push((S.to_owned(), "work".to_owned()));
+            let me = std::process::id();
+            s.add(
+                S,
+                READY,
+                fake::process(me, "copilot", "copilot"),
+                Vec::new(),
+            );
+        }
+        let roots = crate::costs::Roots {
+            copilot: Some(dir.path().join("copilot/session-state")),
+            ..crate::costs::Roots::default()
+        };
+        let rex = Rex::new(fake.socket.clone())
+            .with_agent_roots(roots)
+            .with_resume(record.clone(), dir.path().join("rex-resume-off"));
+        let rex = Arc::new(rex);
+        let _task = follow(&rex).await;
+        let session = copilot_session(dir.path(), FIRST, "/work/app");
+        let other = copilot_session(dir.path(), SECOND, "/work/app");
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert!(saved.agents.is_empty(), "no marker of its process");
+        let _hold = copilot_marks(&session);
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        let expected = BTreeMap::from([(READY.to_owned(), agent("copilot", FIRST, "/work/app"))]);
+        assert_eq!(saved.agents, expected);
+        let _second = copilot_marks(&other);
+        rex.resume_with(zsh).await;
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert_eq!(saved.agents, expected, "two marked sessions add nothing");
+    }
+
+    #[tokio::test]
+    async fn a_conversation_a_live_codex_or_copilot_holds_waits_until_it_lets_go() {
+        for kind in ["codex", "copilot"] {
+            let dir = tempfile::tempdir().unwrap();
+            let folder = std::fs::canonicalize(dir.path()).unwrap();
+            let folder = folder.to_str().unwrap();
+            let id = v7(2);
+            let r = restarted(
+                dir.path(),
+                &[(READY, agent(kind, &id, folder))],
+                &[(READY, login_shell(), PROMPT)],
+                &[],
+            )
+            .await;
+            let hold = match kind {
+                "codex" => {
+                    rollout(dir.path(), &id, folder);
+                    let lock = writer_lock(dir.path(), &id);
+                    lock.lock().unwrap();
+                    lock
+                }
+                _ => copilot_marks(&copilot_session(dir.path(), &id, folder)),
+            };
+            let rex = with_roots(&r, dir.path());
+            let _task = follow(&rex).await;
+            for _ in 0..4 {
+                rex.resume_with(zsh).await;
+                tokio::time::sleep(SETTLE).await;
+            }
+            assert!(
+                anchors(&r.fake).is_empty(),
+                "{kind}: held by a live process"
+            );
+            drop(hold);
+            assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await, "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn no_kind_starts_a_conversation_without_its_transcript() {
+        for kind in ["codex", "copilot", "agy"] {
+            let dir = tempfile::tempdir().unwrap();
+            let folder = std::fs::canonicalize(dir.path()).unwrap();
+            let r = restarted(
+                dir.path(),
+                &[(READY, agent(kind, &v7(3), folder.to_str().unwrap()))],
+                &[(READY, login_shell(), PROMPT)],
+                &[],
+            )
+            .await;
+            let rex = with_roots(&r, dir.path());
+            let _task = follow(&rex).await;
+            for _ in 0..4 {
+                rex.resume_with(zsh).await;
+                tokio::time::sleep(SETTLE).await;
+            }
+            assert!(anchors(&r.fake).is_empty(), "{kind}");
+            assert!(
+                crate::lock(&rex.resume).pending.is_empty(),
+                "{kind}: dropped"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_account_whose_login_shell_is_not_zsh_or_bash_gets_no_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = started_ready(dir.path()).await;
+        let _task = follow(&r.rex).await;
+        for _ in 0..4 {
+            r.rex.resume_with(|| None).await;
+            tokio::time::sleep(SETTLE).await;
+        }
+        assert!(anchors(&r.fake).is_empty());
+        assert!(crate::lock(&r.rex.resume).pending.is_empty(), "dropped");
     }
 
     #[test]

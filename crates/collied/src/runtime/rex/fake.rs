@@ -796,7 +796,11 @@ fn split(
     while command.get(i) == Some(&"-u") {
         i += 2;
     }
-    let program = command.get(i).copied().unwrap_or_default();
+    let program = match command.get(i + 1..i + 4) {
+        Some(["-l", "-i", "-c"]) => command.get(i + 4).and_then(|c| c.split(' ').next()),
+        _ => command.get(i).copied(),
+    }
+    .unwrap_or_default();
     let pid = s.split_pid.unwrap_or(950 + n as u32);
     let cwd = s
         .split_cwd
