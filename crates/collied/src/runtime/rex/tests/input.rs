@@ -735,6 +735,16 @@ async fn a_copilot_takes_input_only_while_its_input_box_shows() {
     );
 
     show("idle");
+    let batch = AgentSendKeysParams {
+        keys: vec![Key::Enter, Key::Enter],
+        ..keys()
+    };
+    let one = (
+        ErrorCode::AgentNotReady,
+        "Copilot CLI takes one key at a time; nothing was sent".to_owned(),
+    );
+    assert_eq!(drive.send_keys(batch, &yes).await.0, Err(one));
+    assert_eq!(events(&fake, B1), Vec::<Value>::new());
     assert_eq!(
         drive.prompt(prompt(), &yes).await,
         Ok(protocol::Response::Ok)

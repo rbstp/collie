@@ -552,6 +552,7 @@ pub struct Core {
     settled: watch::Sender<bool>,
     pub(super) herdr: Arc<HerdrSeen>,
     held: Mutex<HashMap<String, Weak<Hold>>>,
+    typed: Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 type Slot = Arc<Mutex<Option<Screen>>>;
@@ -583,6 +584,7 @@ impl Core {
             settled: watch::channel(false).0,
             herdr: Arc::default(),
             held: Mutex::default(),
+            typed: Mutex::default(),
         }
     }
 
@@ -946,7 +948,13 @@ impl Core {
         let channel = attach.channel;
         let sent = attach.send(channel, DATA, text.as_bytes()).await;
         attach.close().await;
+        crate::lock(&self.typed).insert(address, tokio::time::Instant::now());
         sent
+    }
+
+    pub fn typed_at(&self, id: &str) -> Option<tokio::time::Instant> {
+        let (address, ..) = self.terminal(id).ok()?;
+        crate::lock(&self.typed).get(&address).copied()
     }
 
     fn size(&self, address: &str) -> Option<(u16, u16)> {

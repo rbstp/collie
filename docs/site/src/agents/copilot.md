@@ -26,9 +26,11 @@ In Herdr Core and Rex, Chat shows the conversation Copilot CLI marks as its own 
 
 ## Prompts and keys
 
-Your prompts, typed answers and keys reach Copilot CLI only while it shows its input box. While a picker such as `/model` or another dialog is open, collie refuses them and says to answer the dialog in Terminal on the machine; this holds in herdr, Herdr Core and Rex. A prompt also needs the input box to be empty: send or clear what is typed there first. A picker you open from the phone's keyboard can only be closed on the machine, and so can Copilot's sidebar, its Sessions tab and its help, which Left on an empty input box, Tab and `?` open.
+While Copilot CLI works or waits for you, your prompts, typed answers, keys and typed text reach it only while it shows its input box, one key at a time. While a picker such as `/model` or another dialog is open, collie refuses them and says to answer the dialog in Terminal on the machine; this holds in herdr, Herdr Core and Rex. A prompt also needs the input box to be empty: send or clear what is typed there first. A picker you open from the phone's keyboard can only be closed on the machine, and so can Copilot's sidebar, its Sessions tab and its help, which Left on an empty input box, Tab and `?` open.
 
-In Herdr Core and Rex, Copilot CLI takes your input only from version 1.0.106, which reports its own status; an older one is shown but read-only.
+Two dialogs still take your input from the phone. When Copilot asks for permission or asks you a question, it reports that it is blocked, and Terminal's keys and typed answers reach that dialog as they do for other agents, with an approval alert that has no Approve or Deny. Copilot's folder trust prompt takes its own keys, as [Startup prompts](#startup-prompts) says.
+
+In Herdr Core and Rex, Copilot CLI takes your input only from version 1.0.106, which reports its own status, and only while the `copilot` program itself leads the terminal; an older one, or one started through another program such as an npm install's `node`, is shown but read-only.
 
 ## Plan usage
 

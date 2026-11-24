@@ -369,7 +369,7 @@ pub fn copilot_box(text: &str) -> Option<bool> {
         ('╻', '▄', '╹', '▀', |_, l| l.starts_with('┃')),
         ('─', '─', '─', '─', |i, l| match i {
             0 => l.starts_with('❯'),
-            _ => l.starts_with("  "),
+            _ => l.is_empty() || l.starts_with("  "),
         }),
     ];
     let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
@@ -3019,6 +3019,9 @@ mod tests {
         let top = rows.iter().rfind(|r| r.starts_with('╻')).unwrap();
         let short = edited('╻', top.trim_end().strip_suffix('▄').unwrap());
         let text = edited('┃', "x");
+        let plain = fixture("copilot-1.0.115/plain-idle");
+        let lines = plain.replacen("\n❯\n", "\n❯ one\n\n  two\n", 1);
+        assert_eq!(copilot_box(&lines), Some(false));
         let cancel = idle.replace("/ commands", "esc to cancel");
         for screen in [&footerless, &indented, &short, &text, &cancel, ""] {
             assert_eq!(copilot_box(screen), None, "{screen}");

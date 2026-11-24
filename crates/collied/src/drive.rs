@@ -66,6 +66,14 @@ pub const LOCKED: &str = "the terminal is locked; unlock it again";
 const SCROLLED: &str = "scrolled up on the machine; jump to the bottom first";
 const COPILOT_DIALOG: &str =
     "Copilot CLI does not show its input box; answer its dialog in the terminal";
+const COPILOT_KEYS: &str = "Copilot CLI takes one key at a time; nothing was sent";
+
+#[derive(Clone, Copy)]
+enum CopilotWrite {
+    Enter,
+    Keys(usize),
+    Text,
+}
 const UNFOCUSED: &str =
     "a background task or agent below the input box is selected on the machine; nothing was sent";
 pub(crate) const ELSEWHERE: &str =
@@ -470,17 +478,28 @@ impl Driver {
     }
 
     // ADR-0015
-    async fn copilot_input(&self, a: &AgentInfo, enter: bool) -> Result<(), Fail> {
+    async fn copilot_input(&self, a: &AgentInfo, write: CopilotWrite) -> Result<(), Fail> {
         if a.agent.as_deref() != Some("copilot")
             || flock::status(&a.agent_status) == AgentStatus::Blocked
         {
             return Ok(());
         }
-        let screen = self.runtime.detection_text(&a.pane_id).await.ok();
-        match screen.as_deref().and_then(prompt::copilot_box) {
-            None => fail(ErrorCode::AgentNotReady, COPILOT_DIALOG),
-            Some(false) if enter => fail(ErrorCode::AgentNotReady, "the input box is not empty"),
-            Some(_) => Ok(()),
+        match write {
+            CopilotWrite::Keys(n) if n > 1 => return fail(ErrorCode::AgentNotReady, COPILOT_KEYS),
+            CopilotWrite::Text => {}
+            CopilotWrite::Enter | CopilotWrite::Keys(_) => {
+                if let Some(at) = self.runtime.typed_at(&a.pane_id) {
+                    tokio::time::sleep_until(at + runtime::herdr_core::TYPING_HOLD).await;
+                }
+            }
+        }
+        let screen = self.runtime.input_screen(&a.pane_id).await.ok();
+        match (screen.as_deref().and_then(prompt::copilot_box), write) {
+            (None, _) => fail(ErrorCode::AgentNotReady, COPILOT_DIALOG),
+            (Some(false), CopilotWrite::Enter) => {
+                fail(ErrorCode::AgentNotReady, "the input box is not empty")
+            }
+            (Some(_), _) => Ok(()),
         }
     }
 
@@ -766,7 +785,7 @@ impl Driver {
             let expected = p.expected_draft.as_ref().map(|d| d.as_str());
             self.replace_draft(&a.pane_id, expected, auth).await?;
         }
-        self.copilot_input(&a, true).await?;
+        self.copilot_input(&a, CopilotWrite::Enter).await?;
         authorized(auth)?;
         self.runtime
             .agent_prompt(&a.pane_id, p.text.as_str(), &a.agent_status)
@@ -856,7 +875,7 @@ impl Driver {
             if answers.is_some() {
                 self.answer(&p.terminal_id, screen);
             }
-        } else if let Err(e) = self.copilot_input(&a, false).await {
+        } else if let Err(e) = self.copilot_input(&a, CopilotWrite::Keys(keys.len())).await {
             return (Err(e), None);
         }
         let target =
@@ -876,7 +895,7 @@ impl Driver {
         let _box = self.box_writes.lock().await;
         let a = self.writable_agent(&p.terminal_id).await?;
         self.input_safeguards(&a).await?;
-        self.copilot_input(&a, true).await?;
+        self.copilot_input(&a, CopilotWrite::Enter).await?;
         authorized(auth)?;
         self.runtime
             .type_text(
@@ -907,7 +926,7 @@ impl Driver {
         let sent = async {
             self.input_safeguards(&a).await?;
             if !digit {
-                self.copilot_input(&a, false).await?;
+                self.copilot_input(&a, CopilotWrite::Text).await?;
             }
             authorized(auth)?;
             if digit {
@@ -2017,7 +2036,7 @@ impl Driver {
     async fn copilot_started(&self, pane_id: &str) -> bool {
         let deadline = tokio::time::Instant::now() + COPILOT_START;
         loop {
-            match self.runtime.detection_text(pane_id).await.ok().as_deref() {
+            match self.runtime.input_screen(pane_id).await.ok().as_deref() {
                 Some(s) if prompt::copilot_box(s) == Some(true) => return true,
                 Some(s) if !prompt::shows_dialog(s) && tokio::time::Instant::now() < deadline => {}
                 _ => return false,
@@ -3642,6 +3661,45 @@ mod tests {
             .unwrap();
         assert!(!startup_blocked);
         assert_eq!(pane.foreground_cwd.as_deref(), Some("/w/sub"));
+    }
+
+    #[tokio::test]
+    async fn a_copilot_key_after_typed_text_waits_out_the_cores_typing_hold() {
+        const IDLE: &str = include_str!("../tests/fixtures/copilot-1.0.115/idle.detection.txt");
+        fn copilot() -> serde_json::Value {
+            let status = serde_json::json!({"state": "idle", "app": "copilot"});
+            core_tests::terminal("t1", status, "/opt/homebrew/bin/copilot")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let seen = core_tests::fake_core(&root.join("core.sock"), |m| match m {
+            "terminal.read" => serde_json::json!({ "text": IDLE }),
+            "terminal.keys" => serde_json::json!({}),
+            m => core_get(m, copilot),
+        })
+        .await;
+        let core = core_tests::core_of(&root, serde_json::json!([copilot()]));
+        let drive = core_driver(&root, core);
+        let yes: Authorized = Arc::new(|| true);
+        let terminal = TerminalId::new(core_id()).unwrap();
+        let text = SendTextParams {
+            op_id: OpId::new("T".repeat(22)).unwrap(),
+            terminal_id: terminal.clone(),
+            text: protocol::TypedText::new("x".to_owned()).unwrap(),
+        };
+        assert_eq!(drive.send_text(text, &yes).await.0, Ok(Response::Ok));
+        let typed = tokio::time::Instant::now();
+        let keys = AgentSendKeysParams {
+            op_id: OpId::new("K".repeat(22)).unwrap(),
+            terminal_id: terminal,
+            keys: vec![Key::Enter],
+        };
+        assert_eq!(drive.send_keys(keys, &yes).await.0, Ok(Response::Ok));
+        let calls = crate::lock(&seen).calls.clone();
+        let read = (calls.iter()).rposition(|c| c["method"] == "terminal.read");
+        let sent = (calls.iter()).position(|c| c["method"] == "terminal.keys");
+        assert!(read.is_some() && read < sent, "{calls:?}");
+        assert!(typed.elapsed() >= runtime::herdr_core::TYPING_HOLD - Duration::from_millis(100));
     }
 
     #[tokio::test]

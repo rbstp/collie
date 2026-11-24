@@ -56,13 +56,19 @@ pub(super) fn title(raw: &str) -> &str {
         .trim_end()
 }
 
-/// `reported` is the kind a status's `app` names. Claude Code's, Codex's, Copilot CLI's and
-/// Antigravity's reports were checked: they report `blocked` at their permission and question
-/// dialogs, and Copilot CLI `idle` at its trust prompt and pickers, so its screen is read
-/// before every write (ADR-0015). Other programs were never checked. A report naming another
-/// CLI than the one leading the terminal is a previous program's.
+/// `reported` is the kind a status's `app` names; the four kinds' reports were checked
+/// (`blocked` at their dialogs, Copilot CLI `idle` at its trust prompt and pickers, so its
+/// screen is read before every write, ADR-0015). A report naming another CLI than the one
+/// leading the terminal is a previous program's, as is a Copilot CLI's or agy's under a
+/// foreground collied does not recognise, since neither runs under a wrapper.
 pub(super) fn read_only(reported: Option<&str>, cli: Option<&str>) -> bool {
-    !reported.is_some_and(|k| TASK_KINDS.contains(&k) && cli.is_none_or(|c| c == k))
+    !reported.is_some_and(|k| {
+        TASK_KINDS.contains(&k)
+            && match k {
+                "copilot" | "agy" => cli == Some(k),
+                _ => cli.is_none_or(|c| c == k),
+            }
+    })
 }
 
 /// A group's status: its most urgent agent's.
@@ -482,6 +488,16 @@ mod tests {
             Some("codex")
         );
         assert_eq!(kind("\u{200B}", None), None);
+    }
+
+    #[test]
+    fn a_copilot_or_agy_report_takes_input_only_under_its_own_cli() {
+        assert!(!read_only(Some("copilot"), Some("copilot")));
+        assert!(read_only(Some("copilot"), None));
+        assert!(!read_only(Some("agy"), Some("agy")));
+        assert!(read_only(Some("agy"), None));
+        assert!(!read_only(Some("codex"), None));
+        assert!(read_only(Some("codex"), Some("copilot")));
     }
 
     #[test]

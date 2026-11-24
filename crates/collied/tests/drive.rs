@@ -1087,8 +1087,12 @@ async fn a_copilot_takes_input_only_under_its_input_box() {
         code(drive.prompt(attempt('A'), &yes()).await),
         ErrorCode::AgentNotReady
     );
+    let down = || AgentSendKeysParams {
+        keys: vec![Key::Down],
+        ..keys(CLAUDE)
+    };
     assert_eq!(
-        code(drive.send_keys(keys(CLAUDE), &yes()).await.0),
+        code(drive.send_keys(down(), &yes()).await.0),
         ErrorCode::AgentNotReady
     );
     assert!(herdr.params("agent.prompt").is_empty());
@@ -1098,10 +1102,7 @@ async fn a_copilot_takes_input_only_under_its_input_box() {
         h.text = include_str!("fixtures/copilot-1.0.115/plain-idle.detection.txt").into()
     });
     assert_eq!(drive.prompt(attempt('B'), &yes()).await, Ok(Response::Ok));
-    assert_eq!(
-        drive.send_keys(keys(CLAUDE), &yes()).await.0,
-        Ok(Response::Ok)
-    );
+    assert_eq!(drive.send_keys(down(), &yes()).await.0, Ok(Response::Ok));
     assert_eq!(herdr.params("agent.prompt").len(), 1);
     assert_eq!(herdr.params("agent.send_keys").len(), 1);
 }

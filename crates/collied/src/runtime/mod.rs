@@ -677,6 +677,20 @@ impl Runtime {
         }
     }
 
+    pub fn typed_at(&self, pane_id: &str) -> Option<tokio::time::Instant> {
+        match Owner::of(pane_id) {
+            Owner::Core => self.followed().ok()?.typed_at(pane_id),
+            Owner::Herdr | Owner::Rex => None,
+        }
+    }
+
+    pub async fn input_screen(&self, pane_id: &str) -> Result<String, Error> {
+        match Owner::of(pane_id) {
+            Owner::Rex => self.followed_rex()?.polled_screen_text(pane_id).await,
+            Owner::Herdr | Owner::Core => self.detection_text(pane_id).await,
+        }
+    }
+
     pub async fn agent_send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<(), Error> {
         match Owner::of(pane_id) {
             Owner::Herdr => herdr::agent_send_keys(&self.herdr, pane_id, keys).await,

@@ -113,6 +113,18 @@ async fn watches_share_one_stream_read_without_format_and_closed_with_the_last()
     assert_eq!(formats(&fake, from), 1);
 }
 
+#[tokio::test]
+async fn an_input_guard_reads_a_streamed_terminal_afresh() {
+    let (fake, rex, rt, _dir) = streaming(running()).await;
+    let _watch = rt.watch(&id(B1)).unwrap();
+    eventually("the stream restored", || live(&rex)).await;
+    let from = fake.calls().len();
+    rt.detection_text(&id(B1)).await.unwrap();
+    assert_eq!(formats(&fake, from), 0);
+    rt.input_screen(&id(B1)).await.unwrap();
+    assert_eq!(formats(&fake, from), 1);
+}
+
 /// A terminal is streamed while the phone watches it, as an agent is (#755).
 #[tokio::test]
 async fn a_watched_terminal_is_streamed_and_an_unwatched_one_reads_nothing() {
