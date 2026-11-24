@@ -9,7 +9,7 @@ In herdr, collied finds a Copilot CLI conversation from the pane's processes and
 
 What the CLIs leave (checked in #741 and #932, and on the owner's machine by file name only):
 
-- Copilot CLI keeps `session-state/<id>/inuse.<pid>.lock` naming its pid and holds an `flock` on `inuse.<pid>.hold` from its start, before any prompt. After `/new` the same process holds markers in both sessions until it exits. A killed process leaves both files unlocked.
+- Copilot CLI keeps `session-state/<id>/inuse.<pid>.lock` naming its pid and holds an `flock` on `inuse.<pid>.hold` from its start, before any prompt, beside a `workspace.yaml` naming the session and the real folder; its `events.jsonl` appears only with the first prompt (package 1.0.115, a new session on a scratch home, at its folder trust prompt). After `/new` the same process holds markers in both sessions until it exits. A killed process leaves both files unlocked; one that gets SIGTERM removes them.
 - agy keeps `presence/<id>.lock` under its data folder open read-write for its conversation before any prompt, beside stale locks of past conversations no process has open. Its hook (`SessionStart`, `PreInvocation`) runs only with a prompt, and its report lives in collied's memory. Whether agy flocks the lock was not shown live.
 - An agy transcript (`brain/<id>/.system_generated/logs/transcript.jsonl`) names no folder. Its prompt history, `history.jsonl` in its data folder, has one entry per typed prompt with `workspace` and, for all but `/` commands, `conversationId`. On the owner's machine every conversation missing from it was one agy marks internal.
 
@@ -22,7 +22,7 @@ What the CLIs leave (checked in #741 and #932, and on the owner's machine by fil
 
 ## Consequences
 
-- After `/new`, a Copilot CLI agent in Herdr Core or Rex has no Chat or costs until it exits; Terminal works.
+- A new Copilot CLI session binds with its first prompt, when `events.jsonl` appears; a resumed one binds at once. After `/new`, a Copilot CLI agent in Herdr Core or Rex has no Chat or costs until it exits; Terminal works.
 - An agy agent whose hook is not installed gets Chat from its lock alone. An agy that keeps several presence locks open has Chat only once its hook names one of them.
 - An agy conversation started outside the CLI, or whose prompts are older than the last 1 MiB of its history, is not listed for Resume.
 - Each tick reads one listing of `session-state` per Copilot CLI agent and one of `presence` per agy agent; a listing reads none.
