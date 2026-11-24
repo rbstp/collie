@@ -53,6 +53,7 @@ pub(super) struct Resume {
     starting: BTreeMap<String, Starting>,
     waits: BTreeMap<String, &'static str>,
     screens: BTreeMap<String, Baseline>,
+    resumed: BTreeMap<String, Agent>,
 }
 
 struct Baseline {
@@ -264,6 +265,7 @@ impl Resume {
         self.starting.clear();
         self.waits.clear();
         self.screens.clear();
+        self.resumed.clear();
         self.until = None;
         let earlier = self.record.instance.replace(instance.to_owned()).is_some();
         let agents = std::mem::take(&mut self.record.agents);
@@ -374,6 +376,7 @@ impl Resume {
         };
         self.pending.clear();
         self.missing.clear();
+        self.resumed.clear();
         self.until = None;
         Ok(())
     }
@@ -440,9 +443,8 @@ impl Rex {
             "codex" => (roots.codex.as_deref())
                 .and_then(|s| crate::transcript::codex_writer_lock(s, id))
                 .is_some_and(|l| crate::transcript::held(&l) != Some(false)),
-            "copilot" => {
-                (roots.copilot.as_deref()).is_some_and(|r| crate::transcript::copilot_held(r, id))
-            }
+            "copilot" => (roots.copilot.as_deref())
+                .is_some_and(|r| crate::transcript::copilot_held(r, id) != Some(false)),
             _ => false,
         }
     }
@@ -467,18 +469,27 @@ impl Rex {
     }
 
     fn recorded(&self, listing: &Listing) -> BTreeMap<String, Agent> {
+        let resumed = crate::lock(&self.resume).resumed.clone();
         (listing.agents.iter())
             .filter_map(|a| {
                 let block = a.terminal_id.strip_prefix(PREFIX)?;
                 let (kind, folder) = (a.agent.clone()?, a.foreground_cwd.clone()?);
-                let conversation = match kind.as_str() {
-                    "copilot" => {
-                        let pid = self.live(|l| l.model.foreground(block)).ok().flatten()?;
-                        let root = self.agent_roots.copilot.as_deref()?;
-                        crate::transcript::copilot_session(root, pid, &folder)?
-                    }
-                    _ => a.agent_session.as_ref()?.value.clone(),
+                let pid = || self.live(|l| l.model.foreground(block)).ok().flatten();
+                let bound =
+                    match kind.as_str() {
+                        "copilot" => (self.agent_roots.copilot.as_deref()).zip(pid()).and_then(
+                            |(root, pid)| crate::transcript::copilot_session(root, pid, &folder),
+                        ),
+                        _ => a.agent_session.as_ref().map(|s| s.value.clone()),
+                    };
+                let proven = || {
+                    let r = resumed.get(block)?;
+                    let holds = r.kind == kind
+                        && r.folder == folder
+                        && pid().is_some_and(|p| self.holds(&kind, p, &r.conversation));
+                    holds.then(|| r.conversation.clone())
                 };
+                let conversation = bound.or_else(proven)?;
                 let agent = Agent {
                     kind,
                     conversation,
@@ -532,6 +543,7 @@ impl Rex {
         let current = self.recorded(&listing);
         let (due, starting) = {
             let mut resume = crate::lock(&self.resume);
+            resume.resumed.retain(|b, a| current.get(b) == Some(a));
             resume.observe(instance.as_deref(), &current, Instant::now());
             (resume.due(Instant::now()), resume.starting.clone())
         };
@@ -608,8 +620,9 @@ impl Rex {
         if !crate::lock(&self.resume).claim(block, &agent.conversation, Instant::now()) {
             return Step::Drop("claimed already, or resuming stopped");
         }
+        let script = format!("builtin cd -- \"$1\" && {command}");
         let mut flags = ["-l", "-i", "-c"].map(str::to_owned).to_vec();
-        flags.push(command);
+        flags.extend([script, "collied".to_owned(), agent.folder.clone()]);
         let argv = agents::task_argv(&login, &flags, None);
         match start(&client, &session, block, &agent.folder, argv).await {
             Ok(new) => {
@@ -689,6 +702,14 @@ impl Rex {
         if !agent {
             return "the agent stopped before its restored shell closed; its block and the shell stay";
         }
+        let confirmed = Agent {
+            kind: start.kind.clone(),
+            conversation: start.conversation.clone(),
+            folder: start.folder.clone(),
+        };
+        crate::lock(&self.resume)
+            .resumed
+            .insert(start.new.clone(), confirmed);
         if !shell {
             return "resumed beside its restored shell, which changed";
         }
@@ -1211,11 +1232,11 @@ mod tests {
         assert_eq!(anchors(&r.fake), [READY, TYPED]);
         let split = r.fake.state().splits[0].clone();
         assert_eq!(split["side"], "before");
-        let line = format!("claude --resume {FIRST}");
+        let script = format!("builtin cd -- \"$1\" && claude --resume {FIRST}");
         assert_eq!(
             split["layout"]["block"]["options"],
             serde_json::json!({
-                "command": through_env("/bin/zsh", &["-l", "-i", "-c", &line]),
+                "command": through_env("/bin/zsh", &["-l", "-i", "-c", &script, "collied", folder]),
                 "cwd": folder,
                 "shell": "none",
                 "login": false,
@@ -1708,6 +1729,16 @@ mod tests {
         assert!(still_there(&rex, &r.fake).await, "the lock alone");
         let _open = std::fs::File::open(&path).unwrap();
         assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        let new = new_block(&r.fake);
+        let expected = agent("codex", &id, folder);
+        let recorded = || {
+            crate::peers::load_json::<Record>(&r.record)
+                .is_ok_and(|s| s.agents.get(&new) == Some(&expected))
+        };
+        assert!(
+            ticks(&rex, recorded).await,
+            "recorded under its new block before its first prompt"
+        );
     }
 
     #[tokio::test]
@@ -1727,8 +1758,15 @@ mod tests {
         let _task = follow(&rex).await;
         assert!(ticks(&rex, || !anchors(&r.fake).is_empty()).await);
         assert!(still_there(&rex, &r.fake).await, "no marker of its process");
-        let _hold = copilot_marks(&session);
+        let hold = copilot_marks(&session);
+        let other = copilot_marks(&copilot_session(dir.path(), SECOND, folder));
+        assert!(
+            still_there(&rex, &r.fake).await,
+            "its process marks two sessions"
+        );
+        drop(other);
         assert!(ticks(&rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        drop(hold);
     }
 
     #[tokio::test]
@@ -1783,15 +1821,18 @@ mod tests {
         let saved: Record = crate::peers::load_json(&record).unwrap();
         assert!(saved.agents.is_empty(), "no marker of its process");
         let _hold = copilot_marks(&session);
+        let second = copilot_marks(&other);
+        rex.resume_with(zsh).await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert!(
+            saved.agents.is_empty(),
+            "two marked sessions record nothing"
+        );
+        drop(second);
         rex.resume_with(zsh).await;
         let saved: Record = crate::peers::load_json(&record).unwrap();
         let expected = BTreeMap::from([(READY.to_owned(), agent("copilot", FIRST, "/work/app"))]);
         assert_eq!(saved.agents, expected);
-        let _second = copilot_marks(&other);
-        rex.resume_with(zsh).await;
-        rex.resume_with(zsh).await;
-        let saved: Record = crate::peers::load_json(&record).unwrap();
-        assert_eq!(saved.agents, expected, "two marked sessions add nothing");
     }
 
     #[tokio::test]

@@ -2093,7 +2093,12 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
     );
     let zshrc = format!("PROMPT=$'%~\\n%#'\nRPROMPT='[right]'\n{rc}");
     std::fs::write(server.root.join("home/.zshrc"), zshrc).unwrap();
-    std::fs::write(server.root.join("home/.bash_profile"), &rc).unwrap();
+    std::fs::write(server.root.join("home/.zprofile"), "cd /\n").unwrap();
+    std::fs::write(
+        server.root.join("home/.bash_profile"),
+        format!("cd /\n{rc}"),
+    )
+    .unwrap();
     let work = std::fs::canonicalize(&server.work).unwrap();
     let w = work.to_str().unwrap().to_owned();
     let sessions = server.root.join("claude/sessions");
@@ -2172,7 +2177,12 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
         env.contains(&home),
         "the stand-in ran with the scratch home"
     );
-    for line in ["COLLIE_WRAPPED=1", "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1"] {
+    let pwd = format!("PWD={w}");
+    for line in [
+        "COLLIE_WRAPPED=1",
+        "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1",
+        &pwd,
+    ] {
         assert!(
             env.lines().any(|l| l == line),
             "the login shell's startup files ran: {line}"

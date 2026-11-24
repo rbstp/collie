@@ -797,7 +797,9 @@ fn split(
         i += 2;
     }
     let program = match command.get(i + 1..i + 4) {
-        Some(["-l", "-i", "-c"]) => command.get(i + 4).and_then(|c| c.split(' ').next()),
+        Some(["-l", "-i", "-c"]) => {
+            (command.get(i + 4)).and_then(|c| c.rsplit("&& ").next()?.split(' ').next())
+        }
         _ => command.get(i).copied(),
     }
     .unwrap_or_default();

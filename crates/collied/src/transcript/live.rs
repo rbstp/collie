@@ -558,40 +558,53 @@ pub(crate) fn claude_holds(sessions: &Path, session: &str) -> bool {
 }
 
 pub(crate) fn copilot_holds(root: &Path, pid: u32, id: &str) -> bool {
-    is_session_id(id) && copilot_marked(&root.join(id), pid) == Some(true)
+    copilot_marked_sessions(root, pid).is_some_and(|ids| ids == [id])
 }
 
-pub(crate) fn copilot_held(root: &Path, id: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir(root.join(id)) else {
-        return false;
+pub(crate) fn copilot_held(root: &Path, id: &str) -> Option<bool> {
+    let entries = match std::fs::read_dir(root.join(id)) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
     };
-    (entries.flatten().take(MAX_LISTED)).any(|e| {
-        let name = e.file_name();
-        name.to_str()
-            .is_some_and(|n| n.starts_with("inuse.") && n.ends_with(".hold"))
-            && super::provider_subagents::held(&e.path()) != Some(false)
-    })
-}
-
-pub(crate) fn copilot_session(root: &Path, pid: u32, cwd: &str) -> Option<String> {
-    let mut found = None;
-    for (listed, entry) in std::fs::read_dir(root).ok()?.flatten().enumerate() {
+    let mut held = false;
+    for (listed, entry) in entries.enumerate() {
         if listed == MAX_LISTED {
             return None;
         }
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .is_some_and(|n| n.starts_with("inuse.") && n.ends_with(".hold"))
+        {
+            held |= super::provider_subagents::held(&entry.path())?;
+        }
+    }
+    Some(held)
+}
+
+pub(crate) fn copilot_session(root: &Path, pid: u32, cwd: &str) -> Option<String> {
+    let [id] = <[String; 1]>::try_from(copilot_marked_sessions(root, pid)?).ok()?;
+    copilot_started(&root.join(&id), &id, cwd).then_some(id)
+}
+
+fn copilot_marked_sessions(root: &Path, pid: u32) -> Option<Vec<String>> {
+    let mut ids = Vec::new();
+    for (listed, entry) in std::fs::read_dir(root).ok()?.enumerate() {
+        if listed == MAX_LISTED {
+            return None;
+        }
+        let entry = entry.ok()?;
         let name = entry.file_name();
         let Some(id) = name.to_str().filter(|id| is_session_id(id)) else {
             continue;
         };
-        let dir = entry.path();
-        if copilot_marked(&dir, pid) != Some(true) || !copilot_started(&dir, id, cwd) {
-            continue;
-        }
-        if found.replace(id.to_owned()).is_some() {
-            return None;
+        if copilot_marked(&entry.path(), pid)? {
+            ids.push(id.to_owned());
         }
     }
-    found
+    Some(ids)
 }
 
 fn copilot_marked(dir: &Path, pid: u32) -> Option<bool> {
@@ -1705,5 +1718,28 @@ mod tests {
         ] {
             assert_eq!(background_job(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_copilot_holder_is_held_unheld_or_unknown() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let id = "0a0a0a0a-0000-4000-8000-000000000002";
+        assert_eq!(
+            copilot_held(dir.path(), id),
+            Some(false),
+            "no session folder"
+        );
+        let session = dir.path().join(id);
+        std::fs::create_dir(&session).unwrap();
+        let hold = File::create(session.join("inuse.1.hold")).unwrap();
+        assert_eq!(copilot_held(dir.path(), id), Some(false));
+        hold.lock().unwrap();
+        assert_eq!(copilot_held(dir.path(), id), Some(true));
+        drop(hold);
+        std::fs::set_permissions(&session, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = copilot_held(dir.path(), id);
+        std::fs::set_permissions(&session, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(unreadable, None, "a folder it cannot read");
     }
 }
