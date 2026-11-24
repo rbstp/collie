@@ -197,6 +197,14 @@ impl Rex {
             .collect())
     }
 
+    pub(super) fn move_task(&self, from: &str, to: &str) {
+        let mut inner = self.lock();
+        if let Some(task) = inner.tasks.remove(from) {
+            inner.tasks.insert(to.to_owned(), task);
+            self.save_tasks(&inner.tasks);
+        }
+    }
+
     /// A task block that closed or whose program exited, from the event pump: a closed one's
     /// record goes at once, so the file does not grow over one long connection.
     pub(super) fn task_ended(&self, inner: &mut Inner, e: &Tagged) {

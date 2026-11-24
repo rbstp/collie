@@ -2110,6 +2110,12 @@ async fn resume_scenario(server: &RexServer, bin: &Path) {
     })
     .await;
     assert_eq!(ran, format!("--resume\n{conversation}\n"));
+    let env = std::fs::read_to_string(bin.join("record/env-claude")).unwrap();
+    let home = format!("HOME={}\n", server.root.join("home").display());
+    assert!(
+        env.contains(&home),
+        "the stand-in ran with the scratch home"
+    );
     let agent = until("the resumed agent listed", async || {
         let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
         (rt.agent_list().await.ok()?.into_iter()).find(|a| a.agent.as_deref() == Some("claude"))

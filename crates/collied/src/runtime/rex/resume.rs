@@ -344,7 +344,7 @@ impl Rex {
         }
         let argv = agents::task_argv(&cli, &args, None);
         match self
-            .replace(&client, &session, block, pid, &agent.folder, argv)
+            .replace(&client, &session, block, (pid, size), &agent.folder, argv)
             .await
         {
             Ok(new) => {
@@ -362,7 +362,7 @@ impl Rex {
         client: &Client,
         session: &str,
         block: &str,
-        pid: u32,
+        (pid, size): (u32, (u16, u16)),
         cwd: &str,
         argv: Vec<String>,
     ) -> Result<String, Error> {
@@ -384,7 +384,11 @@ impl Rex {
             })?;
         let _ = disown(client, session, &new).await;
         let still = idle(client, session, block).await == Some(pid)
+            && untouched(client, session, block, size).await
             && crate::lock(&self.resume).open(Instant::now());
+        if still {
+            self.move_task(block, &new);
+        }
         let close = if still { block } else { new.as_str() };
         let payload = json!({ "session_id": session, "block_id": close });
         client
@@ -440,10 +444,12 @@ mod tests {
     const BUSY: &str = "block:019a7d2e-0000-7000-8000-0000000000e4";
     const GONE: &str = "block:019a7d2e-0000-7000-8000-0000000000e5";
     const OTHER: &str = "block:019a7d2e-0000-7000-8000-0000000000e6";
+    const NESTED: &str = "block:019a7d2e-0000-7000-8000-0000000000e7";
     const FIRST: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     const SECOND: &str = "0a0a0a0a-0000-4000-8000-000000000002";
     const THIRD: &str = "0a0a0a0a-0000-4000-8000-000000000003";
     const FOURTH: &str = "0a0a0a0a-0000-4000-8000-000000000004";
+    const FIFTH: &str = "0a0a0a0a-0000-4000-8000-000000000005";
     const PROMPT: &str = "user@host app % \x1b[1;17H";
 
     fn agent(kind: &str, conversation: &str, folder: &str) -> Agent {
@@ -493,6 +499,12 @@ mod tests {
 
     fn in_vim() -> serde_json::Value {
         let mut p = fake::under_shell(11, "vim", "vim");
+        p["ancestors"][0]["pid"] = serde_json::json!(10);
+        p
+    }
+
+    fn nested() -> serde_json::Value {
+        let mut p = fake::under_shell(12, "bash", "bash");
         p["ancestors"][0]["pid"] = serde_json::json!(10);
         p
     }
@@ -781,6 +793,7 @@ mod tests {
                 (TYPED, agent("claude", SECOND, folder)),
                 (BUSY, agent("claude", THIRD, folder)),
                 (GONE, agent("claude", FOURTH, "/no/such/folder")),
+                (NESTED, agent("claude", FIFTH, folder)),
             ],
             &[
                 (READY, login_shell(), PROMPT),
@@ -788,6 +801,7 @@ mod tests {
                 (TYPED, login_shell(), "user@host app % ls"),
                 (BUSY, in_vim(), PROMPT),
                 (GONE, login_shell(), PROMPT),
+                (NESTED, nested(), PROMPT),
             ],
         )
         .await;
@@ -862,28 +876,72 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_shell_that_changes_while_the_agent_starts_keeps_its_block() {
+    async fn a_shell_that_changes_or_a_resume_turned_off_while_the_agent_starts_keeps_its_block() {
+        for change in ["process", "screen", "off"] {
+            let dir = tempfile::tempdir().unwrap();
+            let folder = std::fs::canonicalize(dir.path()).unwrap();
+            let (fake, rex, _) = restarted(
+                dir.path(),
+                &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+                &[(READY, login_shell(), PROMPT)],
+            )
+            .await;
+            let during = rex.clone();
+            fake.state().hook(
+                Method::SessionNewSplit,
+                None,
+                true,
+                Box::new(move |s| {
+                    match change {
+                        "process" => s.block(READY).process = in_vim(),
+                        "screen" => s.block(READY).screen = "user@host app % ls".to_owned(),
+                        _ => during.set_resumes(false).unwrap(),
+                    }
+                    Vec::new()
+                }),
+            );
+            let _task = follow(&rex).await;
+            rex.resume_with(cli).await;
+            assert_eq!(anchors(&fake), [READY], "{change}");
+            let ids: Vec<String> = fake.state().blocks.iter().map(|b| b.id.clone()).collect();
+            assert_eq!(
+                ids,
+                [READY],
+                "{change}: the new block closed, the user's stayed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resumed_task_keeps_its_record_on_its_new_block() {
         let dir = tempfile::tempdir().unwrap();
         let folder = std::fs::canonicalize(dir.path()).unwrap();
-        let (fake, rex, _) = restarted(
+        let tasks = dir.path().join("rex-tasks.json");
+        let task = serde_json::json!({ READY: { "name": "collie-0a1b2c3d", "session": S } });
+        crate::peers::save_json(&tasks, &task).unwrap();
+        let (fake, _, record) = restarted(
             dir.path(),
             &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
             &[(READY, login_shell(), PROMPT)],
         )
         .await;
-        fake.state().hook(
-            Method::SessionNewSplit,
-            None,
-            true,
-            Box::new(|s| {
-                s.block(READY).process = in_vim();
-                Vec::new()
-            }),
-        );
+        let rex = Rex::new(fake.socket.clone())
+            .with_tasks(tasks.clone())
+            .with_resume(record, dir.path().join("rex-resume-off"));
+        let rex = Arc::new(rex);
         let _task = follow(&rex).await;
         rex.resume_with(cli).await;
-        assert_eq!(anchors(&fake), [READY]);
-        let ids: Vec<String> = fake.state().blocks.iter().map(|b| b.id.clone()).collect();
-        assert_eq!(ids, [READY], "the new block closed, the user's stayed");
+        let new = fake.state().blocks.last().unwrap().id.clone();
+        assert_ne!(new, READY);
+        super::super::tests::eventually("the resumed task listed", || {
+            rex.get(&id(&new))
+                .is_ok_and(|a| a.name.as_deref() == Some("collie-0a1b2c3d"))
+        })
+        .await;
+        let saved: serde_json::Value = crate::peers::load_json(&tasks).unwrap();
+        assert!(
+            saved.get(READY).is_none() && saved.get(&new).is_some(),
+            "{saved}"
+        );
     }
 }
