@@ -2260,6 +2260,10 @@
         "default_agent": {
           "$ref": "#/$defs/AgentKind"
         },
+        "edit_schedule": {
+          "description": "Whether this collied takes `task.reschedule`; false from an older one.",
+          "type": "boolean"
+        },
         "issues": {
           "description": "Whether this collied takes `task.issues` and the `issue` worktree mode; false from an\nolder one.",
           "type": "boolean"

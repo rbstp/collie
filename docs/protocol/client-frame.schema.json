@@ -1112,6 +1112,40 @@
       ],
       "type": "object"
     },
+    "TaskRescheduleParams": {
+      "additionalProperties": false,
+      "description": "Replaces a waiting task's start time and prompt, after the checks `task.schedule` makes;\nits folder, agent and place stay. Sent only to a collied whose `TaskOptions` says\n`edit_schedule`. Answers `task_scheduled`.",
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Required unless the task resumes a session."
+        },
+        "schedule_id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "start_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "op_id",
+        "schedule_id",
+        "start_at_ms"
+      ],
+      "type": "object"
+    },
     "TaskRuntime": {
       "enum": [
         "herdr",
@@ -1955,6 +1989,22 @@
         },
         "params": {
           "$ref": "#/$defs/TaskUnscheduleParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.reschedule",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskRescheduleParams"
         }
       },
       "required": [
