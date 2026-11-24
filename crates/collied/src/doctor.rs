@@ -275,7 +275,7 @@ fn check_agy_session_hook(
         );
     }
     let missing = format!(
-        "Antigravity hook `collied hook` not in {}; Herdr Core and Rex Antigravity agents get no Chat",
+        "Antigravity hook `collied hook` not in {}; Herdr Core and Rex Antigravity agents get Chat only while one presence lock names their conversation",
         path.display()
     );
     if core_answers || rex_answers {

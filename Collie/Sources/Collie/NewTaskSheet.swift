@@ -255,9 +255,9 @@ struct NewTaskSheet: View {
                         if model.sessions == nil, model.sessionsError == nil, model.folder != nil {
                             ProgressView("Finding sessions…")
                         }
-                        if let sessions = model.sessions {
+                        if let sessions = model.resumable {
                             if sessions.isEmpty {
-                                Text("No Claude Code or Codex session in this folder.").foregroundStyle(.metadata)
+                                Text("No session to resume in this folder.").foregroundStyle(.metadata)
                             }
                             ForEach(sessions, id: \.sessionId) { session in
                                 Button {

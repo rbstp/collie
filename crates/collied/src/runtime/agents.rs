@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use protocol::limits::MAX_LABEL_CHARS;
@@ -125,9 +126,8 @@ pub(super) fn reported_by(
     false
 }
 
-/// A process's parent and short name.
 #[cfg(target_os = "macos")]
-pub(super) fn process(pid: u32) -> Option<(u32, String)> {
+fn bsd(pid: u32) -> Option<libc::proc_bsdinfo> {
     let size = std::mem::size_of::<libc::proc_bsdinfo>();
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     // SAFETY: `info` is a writable `proc_bsdinfo` of `size` bytes, what PROC_PIDTBSDINFO fills.
@@ -144,7 +144,13 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
         return None;
     }
     // SAFETY: zeroed, then filled whole by the call above.
-    let info = unsafe { info.assume_init() };
+    Some(unsafe { info.assume_init() })
+}
+
+/// A process's parent and short name.
+#[cfg(target_os = "macos")]
+pub(super) fn process(pid: u32) -> Option<(u32, String)> {
+    let info = bsd(pid)?;
     let comm: Vec<u8> = info
         .pbi_comm
         .iter()
@@ -152,6 +158,32 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
         .map(|c| *c as u8)
         .collect();
     Some((info.pbi_ppid, String::from_utf8_lossy(&comm).into_owned()))
+}
+
+#[cfg(target_os = "macos")]
+fn mine(pid: u32) -> bool {
+    bsd(pid).is_some_and(|i| i.pbi_uid == unsafe { libc::getuid() })
+}
+
+#[cfg(target_os = "macos")]
+fn pids() -> Option<Vec<u32>> {
+    const PROC_ALL_PIDS: u32 = 1;
+    let n = unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
+    let room = usize::try_from(n).ok()? / std::mem::size_of::<i32>() + 256;
+    let mut all = vec![0i32; room];
+    let bytes = i32::try_from(room * std::mem::size_of::<i32>()).ok()?;
+    let n = unsafe { libc::proc_listpids(PROC_ALL_PIDS, 0, all.as_mut_ptr().cast(), bytes) };
+    let count = usize::try_from(n).ok()? / std::mem::size_of::<i32>();
+    if count == 0 || count >= room {
+        return None;
+    }
+    all.truncate(count);
+    Some(
+        all.into_iter()
+            .filter_map(|p| u32::try_from(p).ok())
+            .filter(|p| *p > 0)
+            .collect(),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -163,24 +195,48 @@ pub(super) fn process(pid: u32) -> Option<(u32, String)> {
     Some((parent, name))
 }
 
+#[cfg(target_os = "linux")]
+fn mine(pid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(format!("/proc/{pid}"))
+        .is_ok_and(|m| m.uid() == rustix::process::getuid().as_raw())
+}
+
+#[cfg(target_os = "linux")]
+fn pids() -> Option<Vec<u32>> {
+    let mut all = Vec::new();
+    for entry in std::fs::read_dir("/proc").ok()? {
+        if let Some(pid) = entry
+            .ok()?
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse().ok())
+        {
+            all.push(pid);
+        }
+    }
+    Some(all)
+}
+
+pub(crate) type Files = HashSet<(u64, u64)>;
+const MAX_FDS: usize = 4096;
+
 #[cfg(target_os = "macos")]
-pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
+pub(super) fn open_files(pid: u32) -> Option<Files> {
     #[repr(C)]
     struct Vnode {
         file: [u8; 24],
         info: libc::vnode_info,
     }
     const PROC_PIDFDVNODEINFO: i32 = 1;
-    let Ok(pid) = i32::try_from(pid) else {
-        return Vec::new();
-    };
+    let pid = i32::try_from(pid).ok()?;
     let item = std::mem::size_of::<libc::proc_fdinfo>();
     let mut fds = vec![
         libc::proc_fdinfo {
             proc_fd: 0,
             proc_fdtype: 0
         };
-        4096
+        MAX_FDS
     ];
     let n = unsafe {
         libc::proc_pidinfo(
@@ -188,42 +244,150 @@ pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
             libc::PROC_PIDLISTFDS,
             0,
             fds.as_mut_ptr().cast(),
-            i32::try_from(fds.len() * item).unwrap_or(0),
+            i32::try_from(fds.len() * item).ok()?,
         )
     };
-    fds.truncate(usize::try_from(n).unwrap_or(0) / item);
+    let count = usize::try_from(n).ok()? / item;
+    if count == 0 || count >= MAX_FDS {
+        return None;
+    }
+    fds.truncate(count);
     let size = std::mem::size_of::<Vnode>();
-    (fds.iter())
+    let mut files = Files::new();
+    for f in fds
+        .iter()
         .filter(|f| i64::from(f.proc_fdtype) == i64::from(libc::PROX_FDTYPE_VNODE))
-        .filter_map(|f| {
-            let mut vnode = std::mem::MaybeUninit::<Vnode>::zeroed();
-            let n = unsafe {
-                libc::proc_pidfdinfo(
-                    pid,
-                    f.proc_fd,
-                    PROC_PIDFDVNODEINFO,
-                    vnode.as_mut_ptr().cast(),
-                    i32::try_from(size).ok()?,
-                )
-            };
-            (usize::try_from(n).ok()? == size).then_some(())?;
-            let stat = unsafe { vnode.assume_init() }.info.vi_stat;
-            Some((u64::from(stat.vst_dev), stat.vst_ino))
-        })
-        .collect()
+    {
+        let mut vnode = std::mem::MaybeUninit::<Vnode>::zeroed();
+        let n = unsafe {
+            libc::proc_pidfdinfo(
+                pid,
+                f.proc_fd,
+                PROC_PIDFDVNODEINFO,
+                vnode.as_mut_ptr().cast(),
+                i32::try_from(size).ok()?,
+            )
+        };
+        if usize::try_from(n).ok() != Some(size) {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF) {
+                continue;
+            }
+            return None;
+        }
+        let stat = unsafe { vnode.assume_init() }.info.vi_stat;
+        files.insert((u64::from(stat.vst_dev), stat.vst_ino));
+    }
+    Some(files)
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
+pub(super) fn open_files(pid: u32) -> Option<Files> {
     use std::os::unix::fs::MetadataExt;
-    (std::fs::read_dir(format!("/proc/{pid}/fd"))
-        .into_iter()
-        .flatten()
-        .flatten())
-    .take(4096)
-    .filter_map(|e| std::fs::metadata(e.path()).ok())
-    .map(|m| (m.dev(), m.ino()))
-    .collect()
+    let mut files = Files::new();
+    for (listed, entry) in std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .ok()?
+        .enumerate()
+    {
+        if listed == MAX_FDS {
+            return None;
+        }
+        match std::fs::metadata(entry.ok()?.path()) {
+            Ok(m) => {
+                files.insert((m.dev(), m.ino()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    Some(files)
+}
+
+const MAX_PRESENCE: usize = 4096;
+
+pub(super) fn uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+        })
+}
+
+pub(crate) type Presence = Vec<(String, (u64, u64))>;
+
+pub(crate) fn presence_locks(dir: &Path) -> Option<Presence> {
+    use std::os::unix::fs::MetadataExt;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    let mut locks = Vec::new();
+    for (listed, entry) in entries.enumerate() {
+        if listed == MAX_PRESENCE {
+            return None;
+        }
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        let Some(id) = (name.to_str())
+            .and_then(|n| n.strip_suffix(".lock"))
+            .filter(|id| uuid(id))
+        else {
+            continue;
+        };
+        let m = std::fs::symlink_metadata(entry.path()).ok()?;
+        locks.push((id.to_owned(), (m.dev(), m.ino())));
+    }
+    Some(locks)
+}
+
+pub(super) fn agy_open(locks: &Presence, pid: u32) -> Option<Vec<String>> {
+    if locks.is_empty() {
+        return Some(Vec::new());
+    }
+    let open = open_files(pid)?;
+    Some(
+        locks
+            .iter()
+            .filter(|(_, file)| open.contains(file))
+            .map(|(id, _)| id.clone())
+            .collect(),
+    )
+}
+
+pub(super) fn agy_lock(dir: &Path, pid: u32) -> Option<String> {
+    let [id] = <[String; 1]>::try_from(agy_open(&presence_locks(dir)?, pid)?).ok()?;
+    Some(id)
+}
+
+pub(super) fn agy_session(hook: Option<&str>, open: Option<&[String]>) -> Option<String> {
+    match (hook, open?) {
+        (Some(hook), []) => Some(hook.to_owned()),
+        (Some(hook), open) => open.iter().any(|id| id == hook).then(|| hook.to_owned()),
+        (None, [id]) => Some(id.clone()),
+        (None, _) => None,
+    }
+}
+
+pub(crate) fn agy_holders() -> Option<Files> {
+    let mut all = Files::new();
+    for pid in pids()? {
+        if process(pid).is_some_and(|(_, name)| name == "agy") && mine(pid) {
+            all.extend(open_files(pid)?);
+        }
+    }
+    Some(all)
+}
+
+pub(crate) fn agy_held(dir: &Path, id: &str, holders: Option<&Files>) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let lock = dir.join(format!("{id}.lock"));
+    let m = match std::fs::symlink_metadata(&lock) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    crate::transcript::held(&lock) != Some(false)
+        || holders.is_none_or(|open| open.contains(&(m.dev(), m.ino())))
 }
 
 /// herdr's and Claude Code's session variables, which a herdr-core core or a Rex server passes
@@ -287,6 +451,15 @@ pub(super) fn task_argv(cli: &str, args: &[String], code_mode: Option<bool>) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_open_files_of_a_process_that_is_gone_are_unknown_not_none() {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert_eq!(super::open_files(pid), None);
+        assert!(super::open_files(std::process::id()).is_some_and(|f| !f.is_empty()));
+    }
+
     use super::*;
 
     #[test]

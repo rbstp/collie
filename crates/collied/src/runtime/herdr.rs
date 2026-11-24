@@ -581,6 +581,9 @@ pub fn agent_args(
     .into_iter()
     .map(str::to_owned)
     .collect();
+    if let ("copilot", Some(id)) = (kind, resume) {
+        args.push(format!("--resume={id}"));
+    }
     let mut settings = serde_json::Map::new();
     if kind == "claude" && ultracode {
         settings.insert("ultracode".to_owned(), json!(true));

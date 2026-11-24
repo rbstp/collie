@@ -425,8 +425,8 @@ impl CloneSource {
 }
 
 validated_string!(
-    /// A Claude Code or Codex session id. It becomes a file name and an agent argument,
-    /// so it is a plain lowercase UUID: no separator, no `..`, no leading `-`.
+    /// An agent CLI's session id. It becomes a file name and an agent argument, so it is a
+    /// plain lowercase UUID: no separator, no `..`, no leading `-`.
     SessionId,
     debug = plain,
     check = |s| s.len() == 36 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'-')) && !s.starts_with('-'),

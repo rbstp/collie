@@ -1,10 +1,8 @@
 use std::path::PathBuf;
 
-use super::model::{Model, PREFIX};
+use super::model::{Model, PREFIX, Read};
 use super::{Inner, Rex};
 use crate::runtime::agents;
-
-type Agents = Vec<(String, String, u32)>;
 
 impl Rex {
     /// Claude Code's `sessions` folder, where each process keeps `<pid>.json`.
@@ -43,8 +41,14 @@ impl Rex {
             });
         }
         codex.insert(block.to_owned(), (pid, session.to_owned()));
-        live.model
-            .bind(&rex_session, block, pid, session.to_owned());
+        if kind == "agy" {
+            drop(inner);
+            let block = block.to_owned();
+            self.read_files(|m| m.read_of(rex_session, block).into_iter().collect());
+        } else {
+            live.model
+                .bind(&rex_session, block, pid, Some(session.to_owned()));
+        }
         true
     }
 
@@ -54,43 +58,89 @@ impl Rex {
         {
             let mut inner = self.lock();
             let Inner { live, codex, .. } = &mut *inner;
-            if let (Some(live), Some((pid, value))) = (live.as_mut(), codex.get(block)) {
-                live.model.bind(session, block, *pid, value.clone());
+            if let (Some(live), Some((pid, value))) = (live.as_mut(), codex.get(block))
+                && live
+                    .model
+                    .hook_agent(block)
+                    .is_some_and(|(_, _, kind)| kind == "codex")
+            {
+                live.model.bind(session, block, *pid, Some(value.clone()));
             }
         }
-        self.claude(Model::touched);
+        let (session, block) = (session.to_owned(), block.to_owned());
+        self.read_files(move |m| {
+            let mut reads = m.touched();
+            if !reads.iter().any(|r| r.1 == block) {
+                reads.extend(m.read_of(session, block));
+            }
+            reads
+        });
     }
 
     /// Once per reconcile tick, never per listing: `/clear` rewrites Claude Code's pid file
     /// with no report and no block event. At most one small file read per Claude Code agent.
     pub fn reread_sessions(&self) {
-        self.claude(|m| m.claude());
+        self.read_files(|m| m.reads());
     }
 
-    /// Claude Code's session for the agents `which` names: the `sessionId` of the
-    /// `sessions/<pid>.json` its foreground process keeps, as Rex names that process, through
-    /// the lookup herdr-core's agents use. The files are read outside the lock every listing
-    /// takes, so a binding whose process changed meanwhile is refused.
-    pub(super) fn claude(&self, which: impl FnOnce(&mut Model) -> Agents) {
-        let wanted = match self.lock().live.as_mut() {
-            Some(live) => which(&mut live.model),
-            None => return,
+    pub(super) fn read_files(&self, which: impl FnOnce(&mut Model) -> Vec<Read>) {
+        let wanted: Vec<_> = {
+            let mut inner = self.lock();
+            let Inner { live, codex, .. } = &mut *inner;
+            let Some(live) = live.as_mut() else {
+                return;
+            };
+            (which(&mut live.model).into_iter())
+                .map(|r| {
+                    let hook = (codex.get(&r.1))
+                        .filter(|(pid, _)| *pid == r.2)
+                        .map(|(_, s)| s.clone());
+                    let scan = live.model.scan(&r.0, &r.1);
+                    (r, hook, scan)
+                })
+                .collect()
         };
-        let Some(dir) = self.claude_sessions.as_deref() else {
+        if wanted.is_empty() {
             return;
-        };
+        }
+        let roots = &self.agent_roots;
+        let pids: Vec<u32> = (wanted.iter())
+            .filter(|(r, _, _)| r.3 == "copilot")
+            .map(|(r, _, _)| r.2)
+            .collect();
+        let marked = (roots.copilot.as_deref())
+            .filter(|_| !pids.is_empty())
+            .and_then(|root| crate::lock(&self.copilot_marks).marked(root, &pids));
+        let locks = (wanted.iter().any(|(r, _, _)| r.3 == "agy")).then(|| {
+            self.presence_dir()
+                .map_or(Some(Vec::new()), |d| agents::presence_locks(&d))
+        });
         let found: Vec<_> = (wanted.into_iter())
-            .filter_map(|(session, block, pid)| {
-                let value = crate::transcript::claude_session(dir, pid)?;
-                Some((session, block, pid, value))
+            .filter_map(|((session, block, pid, kind, cwd), hook, scan)| {
+                let value = match kind {
+                    "claude" => Some(crate::transcript::claude_session(
+                        self.claude_sessions.as_deref()?,
+                        pid,
+                    )?),
+                    "copilot" => (roots.copilot.as_deref()).zip(cwd).and_then(|(root, cwd)| {
+                        crate::transcript::copilot_bound(root, marked.as_ref()?.get(&pid), &cwd)
+                    }),
+                    _ => {
+                        let open = (locks.as_ref())
+                            .and_then(Option::as_ref)
+                            .and_then(|l| agents::agy_open(l, pid));
+                        agents::agy_session(hook.as_deref(), open.as_deref())
+                    }
+                };
+                Some((session, block, pid, scan, value))
             })
             .collect();
         if found.is_empty() {
             return;
         }
         if let Some(live) = self.lock().live.as_mut() {
-            for (session, block, pid, value) in found {
-                live.model.bind(&session, &block, pid, value);
+            for (session, block, pid, scan, value) in found {
+                live.model.bind_scan((&session, &block, pid, scan), value);
             }
         }
     }
@@ -300,6 +350,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn copilot_and_agy_sessions_come_from_what_their_process_holds_and_never_from_two() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        let fake = Fake::start().await;
+        add(&fake, OTHER, fake::process(me, "copilot", "copilot"));
+        add(&fake, STALE, fake::process(me, "agy", "agy"));
+        let root = dir.path().join("copilot/session-state");
+        let roots = crate::costs::Roots {
+            copilot: Some(root.clone()),
+            agy: Some(dir.path().join("agy/brain")),
+            ..crate::costs::Roots::default()
+        };
+        let rex = Arc::new(Rex::new(fake.socket.clone()).with_agent_roots(roots));
+        let _task = follow(&rex).await;
+        let read = |block: &str| {
+            rex.reread_sessions();
+            session_of(&rex, block)
+        };
+        assert_eq!(read(OTHER), None);
+
+        let marked = |id: &str| {
+            let session = root.join(id);
+            std::fs::create_dir_all(&session).unwrap();
+            let workspace = format!("id: {id}\ncwd: /work/app\n");
+            std::fs::write(session.join("workspace.yaml"), workspace).unwrap();
+            let start = json!({"type": "session.start", "data": {"sessionId": id}});
+            std::fs::write(session.join("events.jsonl"), format!("{start}\n")).unwrap();
+            std::fs::write(session.join(format!("inuse.{me}.lock")), me.to_string()).unwrap();
+            let hold = std::fs::File::create(session.join(format!("inuse.{me}.hold"))).unwrap();
+            hold.lock().unwrap();
+            hold
+        };
+        let first = marked(FIRST);
+        assert_eq!(read(OTHER).as_deref(), Some(FIRST));
+        let second = marked(CLEARED);
+        assert_eq!(read(OTHER), None, "after /new it marks both");
+        drop(second);
+        assert_eq!(read(OTHER).as_deref(), Some(FIRST));
+        let unreadable = root.join("0a0a0a0a-0000-4000-8000-000000000009");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let found = read(OTHER);
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found, None, "a session folder it cannot read");
+        drop(first);
+
+        let presence = dir.path().join("agy/presence");
+        std::fs::create_dir_all(&presence).unwrap();
+        let lock = |id: &str| std::fs::File::create(presence.join(format!("{id}.lock"))).unwrap();
+        let own = lock(FIRST);
+        assert_eq!(read(STALE).as_deref(), Some(FIRST));
+        let block = STALE.to_owned();
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, CLEARED.to_owned()));
+        assert_eq!(read(STALE), None, "the hook names another conversation");
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, FIRST.to_owned()));
+        let other = lock(CLEARED);
+        assert_eq!(
+            read(STALE).as_deref(),
+            Some(FIRST),
+            "the hook names an open lock"
+        );
+        rex.lock().codex.remove(&block);
+        assert_eq!(read(STALE), None, "two locks and no hook");
+        drop(other);
+
+        rex.read_files(Model::touched);
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, CLEARED.to_owned()));
+        rex.read_sessions(S, STALE);
+        assert_eq!(
+            session_of(&rex, STALE),
+            None,
+            "a remembered hook shows only once checked"
+        );
+        rex.lock()
+            .codex
+            .insert(block.clone(), (me, FIRST.to_owned()));
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let found = read(STALE);
+        std::fs::set_permissions(&presence, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found, None, "a presence folder it cannot read");
+        drop(own);
+    }
+
+    #[tokio::test]
     async fn task_sessions_leaves_out_the_session_a_rex_agent_runs() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
@@ -361,13 +502,25 @@ mod tests {
             serde_json::from_value(fake::process(pid, "claude", "2.1.322")).unwrap()
         };
         model.process(S, CLAUDE, 1, claude(10));
-        assert_eq!(model.touched(), [(S.to_owned(), CLAUDE.to_owned(), 10)]);
+        let cwd = Some("/work/app".to_owned());
+        assert_eq!(
+            model.touched(),
+            [(S.to_owned(), CLAUDE.to_owned(), 10, "claude", cwd)]
+        );
         // Its pid file is read outside the lock; meanwhile another process leads the block
         // and its own session is found first.
         model.process(S, CLAUDE, 2, claude(20));
-        model.bind(S, CLAUDE, 20, CLEARED.to_owned());
-        model.bind(S, CLAUDE, 10, FIRST.to_owned());
+        model.bind(S, CLAUDE, 20, Some(CLEARED.to_owned()));
+        model.bind(S, CLAUDE, 10, Some(FIRST.to_owned()));
         let session = |m: &Model| m.listing().agents[0].agent_session.clone().map(|s| s.value);
         assert_eq!(session(&model).as_deref(), Some(CLEARED));
+        let (older, newer) = (model.scan(S, CLAUDE), model.scan(S, CLAUDE));
+        model.bind_scan((S, CLAUDE, 20, newer), Some(FIRST.to_owned()));
+        model.bind_scan((S, CLAUDE, 20, older), Some(CLEARED.to_owned()));
+        assert_eq!(
+            session(&model).as_deref(),
+            Some(FIRST),
+            "an older scan of the same process"
+        );
     }
 }

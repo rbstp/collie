@@ -5,14 +5,14 @@
 | Feature | Antigravity CLI |
 |---|---|
 | Grid preview, status and Inbox | Yes |
-| [Chat](../app/chat-terminal.md) and Terminal | Yes; Chat needs the [hook](#set-up) |
-| [Running subagents](../app/agents-tab.md#running-subagents) | Yes; needs the [hook](#set-up) |
+| [Chat](../app/chat-terminal.md) and Terminal | Yes; in herdr Chat needs herdr's [hook](#set-up) |
+| [Running subagents](../app/agents-tab.md#running-subagents) | Yes; in herdr needs herdr's [hook](#set-up) |
 | [Remaining context](../app/agents-tab.md#remaining-context) | No |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Yes; needs the [status line tap](#plan-usage) |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | Yes, in herdr, [Herdr Core](../app/new-task.md#herdr-core) or [Rex](../app/new-task.md#rex) |
+| [New task](../app/new-task.md) | Yes, in herdr, [Herdr Core](../app/new-task.md#herdr-core) or [Rex](../app/new-task.md#rex), Resume included |
 
 ## Set up
 
@@ -27,7 +27,7 @@
 
 ### Herdr Core and Rex
 
-herdr's hook does nothing in Herdr Core (herdr-core) or Rex, so Chat needs `collied`'s own hook there. Add a `collie` entry in `~/.gemini/config/hooks.json` (or `$ANTIGRAVITY_CLI_CONFIG_DIR/hooks.json`), beside herdr's:
+herdr's hook does nothing in Herdr Core (herdr-core) or Rex. There, `collied` finds the conversation from the lock file Antigravity CLI keeps open for it, from the moment it starts. Add `collied`'s own hook too: it reports the conversation with each prompt, which settles it when Antigravity CLI keeps several open. When the hook and the lock name different conversations, Chat shows neither until they agree. Add a `collie` entry in `~/.gemini/config/hooks.json` (or `$ANTIGRAVITY_CLI_CONFIG_DIR/hooks.json`), beside herdr's:
 
 ```json
 {

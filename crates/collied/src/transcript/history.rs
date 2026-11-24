@@ -37,14 +37,16 @@ impl Transcripts {
                 match agent.agent.as_deref() {
                     Some("claude") => "Claude Code has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, Herdr Core was started inside Claude Code: start the core from a plain terminal.",
                     Some("codex") => "Codex has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Codex SessionStart hook, run Codex with --no-daemon, then resume the session.",
-                    Some("agy") => "Antigravity has not reported its session ID to collied. Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
+                    Some("agy") => "Antigravity has not reported one session ID to collied: its hook and its presence lock name none, or different ones. Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
+                    Some("copilot") => "Copilot CLI has not marked exactly one session for this terminal, so Chat cannot safely identify this conversation. After /new, Copilot CLI holds both sessions until it exits. Terminal remains available.",
                     _ => "Chat is not available for this Herdr Core agent.",
                 }
             } else if rex::owns(&agent.terminal_id) {
                 match agent.agent.as_deref() {
                     Some("claude") => "Claude Code in Rex has not written its session file for this terminal, so Chat cannot safely identify this conversation. If Claude Code says transcript saving is off, the Rex server was started inside Claude Code: restart the server outside Claude Code.",
                     Some("codex") => "Codex in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Codex reports it with its first prompt through collied’s SessionStart hook: check the hook with collied doctor, run Codex with --no-daemon, then resume the session.",
-                    Some("agy") => "Antigravity in Rex has not reported its session ID to collied, so Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
+                    Some("agy") => "Antigravity in Rex has not reported one session ID to collied: its hook and its presence lock name none, or different ones. Chat cannot safely identify this conversation. Add collied’s Antigravity hook in ~/.gemini/config/hooks.json, then send a prompt or start a new session.",
+                    Some("copilot") => "Copilot CLI in Rex has not marked exactly one session for this block, so Chat cannot safely identify this conversation. After /new, Copilot CLI holds both sessions until it exits. Terminal remains available.",
                     _ => "Chat is not available for this Rex agent.",
                 }
             } else if agent.agent.as_deref() == Some("copilot") {
@@ -1525,7 +1527,7 @@ mod tests {
                 assert!(page.unavailable_reason.is_none());
             }
             agent.terminal_id = "rex:b1".into();
-            agent.agent = Some("copilot".into());
+            agent.agent = Some("unknown".into());
             let page = reader.history(&agent, &params(None, None, None));
             assert_eq!(
                 page.unavailable_reason.as_deref(),
@@ -2283,6 +2285,31 @@ mod tests {
 
         fn history(&self, p: HistoryParams) -> HistoryPage {
             self.t.history_reader().history(&self.a, &p)
+        }
+    }
+
+    #[test]
+    fn copilot_in_herdr_core_or_rex_reads_the_session_bound_to_its_terminal() {
+        let c = Copilot::new(COPILOT_HISTORY);
+        for terminal_id in [
+            "hc:abc:t1",
+            "rex:block:019a7d2e-0000-7000-8000-0000000000c1",
+        ] {
+            let mut a = c.a.clone();
+            a.terminal_id = terminal_id.into();
+            a.agent_session = None;
+            let page = c.t.history_reader().history(&a, &params(None, None, None));
+            assert!(!page.available, "{terminal_id}");
+            assert!(
+                page.unavailable_reason
+                    .unwrap()
+                    .contains("marked exactly one session")
+            );
+            a.agent_session = Some(crate::runtime::AgentSession {
+                value: COPILOT.into(),
+            });
+            let page = c.t.history_reader().history(&a, &params(None, None, None));
+            assert!(page.available && !page.messages.is_empty(), "{terminal_id}");
         }
     }
 

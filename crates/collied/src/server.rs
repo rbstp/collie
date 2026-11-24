@@ -598,6 +598,7 @@ pub async fn start_with(
         Arc::new(
             Core::new(s)
                 .with_claude_sessions(sessions.clone())
+                .with_agent_roots(Transcripts::from_env().cost_roots())
                 .with_herdr_seen(herdr_seen.clone()),
         )
     });
@@ -2973,6 +2974,9 @@ async fn reconcile(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
             _ = shutdown.changed() => return,
+        }
+        if let Some(core) = state.runtime.core() {
+            core.reread_sessions();
         }
         if let Some(rex) = state.runtime.rex() {
             rex.reread_sessions();

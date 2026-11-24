@@ -2211,8 +2211,30 @@ const CLAUDE_SESSION: &str = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 const CODEX_SESSION: &str = "01a10f07-b5ed-79a3-989d-fa10b96c5cab";
 /// The session of the Claude agent in the snapshot.
 const OPEN_SESSION: &str = "00000000-0000-4000-8000-000000000000";
+const COPILOT_SESSION: &str = "20000000-0000-4000-8000-000000000002";
+const AGY_SESSION: &str = "30000000-0000-4000-8000-000000000003";
 
-/// Transcripts of `root/a`: Claude's `CLAUDE_SESSION` and `OPEN_SESSION`, Codex's `CODEX_SESSION`.
+fn copilot_session(store: &Path, id: &str, folder: &str) -> PathBuf {
+    let dir = store.join("copilot").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("workspace.yaml"),
+        format!("id: {id}\ncwd: {folder}\n"),
+    )
+    .unwrap();
+    let events = [
+        json!({"type": "session.start", "data": {"sessionId": id}}),
+        json!({"type": "user.message", "data": {"content": "triage the open issues"}}),
+    ];
+    std::fs::write(
+        dir.join("events.jsonl"),
+        events.map(|e| e.to_string()).join("\n"),
+    )
+    .unwrap();
+    dir
+}
+
+/// Transcripts of `root/a` for each kind, Claude Code's `OPEN_SESSION` among them.
 fn sessions_driver(herdr: &Mock, base: &Path) -> (tempfile::TempDir, Arc<Driver>) {
     let store = tempfile::tempdir().unwrap();
     let folder = base.join("root/a");
@@ -2237,19 +2259,35 @@ fn sessions_driver(herdr: &Mock, base: &Path) -> (tempfile::TempDir, Arc<Driver>
         include_str!("fixtures/transcripts/codex.jsonl").replace("/Users/me/src/collie", folder),
     )
     .unwrap();
+    copilot_session(store.path(), COPILOT_SESSION, folder);
+    let logs = store
+        .path()
+        .join("agy/brain")
+        .join(AGY_SESSION)
+        .join(".system_generated/logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let request = "<USER_REQUEST>\nfinish the agy port\n</USER_REQUEST>";
+    let input = json!({"type": "USER_INPUT", "source": "USER_EXPLICIT", "content": request});
+    std::fs::write(logs.join("transcript.jsonl"), input.to_string()).unwrap();
+    let history = json!({"display": "finish the agy port", "workspace": folder, "conversationId": AGY_SESSION});
+    std::fs::write(store.path().join("agy/history.jsonl"), history.to_string()).unwrap();
     let drive = Driver::new(
         herdr.socket.clone(),
-        ["claude", "codex", "copilot"]
+        ["claude", "codex", "copilot", "agy"]
             .into_iter()
             .map(|a| AgentKind::new(a).unwrap())
             .collect(),
         &[base.join("root")],
     )
     .unwrap()
-    .with_transcripts(Transcripts::new(
-        Some(store.path().join("projects")),
-        Some(store.path().join("sessions")),
-    ));
+    .with_transcripts(
+        Transcripts::new(
+            Some(store.path().join("projects")),
+            Some(store.path().join("sessions")),
+        )
+        .with_copilot_sessions(Some(store.path().join("copilot")))
+        .with_agy_brain(Some(store.path().join("agy/brain"))),
+    );
     (store, Arc::new(drive))
 }
 
@@ -2265,7 +2303,12 @@ fn resume(cwd: &Path, agent: &str, id: &str) -> TaskNewParams {
 async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_start_nothing() {
     let herdr = Mock::start();
     let (_d, base) = root();
-    let (_store, drive) = sessions_driver(&herdr, &base);
+    let (store, drive) = sessions_driver(&herdr, &base);
+    let held_id = "20000000-0000-4000-8000-0000000000aa";
+    let folder = base.join("root/a");
+    let held = copilot_session(store.path(), held_id, folder.to_str().unwrap());
+    let hold = std::fs::File::create(held.join("inuse.1.hold")).unwrap();
+    hold.lock().unwrap();
     let list = |cwd: &str| TaskSessionsParams {
         cwd: Cwd::new(base.join(cwd).to_str().unwrap()).unwrap(),
     };
@@ -2288,12 +2331,14 @@ async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_sta
     assert_eq!(
         listed,
         [
+            ("agy", AGY_SESSION, "finish the agy port"),
             ("claude", CLAUDE_SESSION, "fix the flaky approval test"),
             (
                 "codex",
                 CODEX_SESSION,
                 "add approval tests for the codex menu"
             ),
+            ("copilot", COPILOT_SESSION, "triage the open issues"),
         ]
     );
     assert!(matches!(
@@ -2333,7 +2378,15 @@ async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_sta
         ),
         (
             resume(&a, "copilot", CLAUDE_SESSION),
-            "this agent cannot resume a session",
+            "no such session in this folder",
+        ),
+        (
+            resume(&a, "copilot", held_id),
+            "already open in another agent",
+        ),
+        (
+            resume(&base.join("root/b"), "agy", AGY_SESSION),
+            "no such session in this folder",
         ),
         (new_folder, "resume a session in its own folder"),
         (neither, "empty prompt"),
@@ -2349,6 +2402,7 @@ async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_sta
     assert_eq!(code(reply), ErrorCode::NotPaired);
     assert!(herdr.mutations().is_empty(), "{:?}", herdr.methods());
     assert!(!base.join("root/fresh").exists());
+    drop(hold);
 }
 
 #[tokio::test]
@@ -2365,6 +2419,18 @@ async fn resume_starts_the_session_in_a_new_workspace_and_prompts_only_when_aske
             CODEX_SESSION,
             json!(["resume", CODEX_SESSION, "--no-daemon"]),
             Some("keep going"),
+        ),
+        (
+            "copilot",
+            COPILOT_SESSION,
+            json!([format!("--resume={COPILOT_SESSION}")]),
+            None,
+        ),
+        (
+            "agy",
+            AGY_SESSION,
+            json!(["--conversation", AGY_SESSION]),
+            None,
         ),
     ] {
         let herdr = Mock::start();

@@ -176,6 +176,10 @@ final class NewTaskModel {
         return listed.agents
     }
 
+    var resumable: [TaskSession]? {
+        sessions?.filter { offeredAgents?.contains($0.agent) ?? true }
+    }
+
     /// What `task.options` says stops the chosen runtime, not why: collied's refusal says that, and replaces it.
     var runtimeProblem: String? {
         guard error == nil, let runtime = runtimeChoice.runtime, let options else { return nil }
@@ -195,7 +199,7 @@ final class NewTaskModel {
         guard runtimeChoice == .automatic || options?.runtimes != nil else { return false }
         if location == .resume {
             guard let session, let folder, sessionsFolder == folder else { return false }
-            return sessions?.contains { $0.sessionId == session.sessionId } == true
+            return resumable?.contains { $0.sessionId == session.sessionId } == true
         }
         guard !agent.isEmpty, !trimmed(prompt).isEmpty || !attachments.isEmpty else { return false }
         if location == .worktree {

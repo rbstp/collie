@@ -52,6 +52,7 @@ struct Block {
     /// The agent's session, with the pid it was found for: it holds only while that process
     /// leads the terminal.
     session: Option<(u32, String)>,
+    scan: u64,
     /// Its program exited; the block stays until it is closed.
     exited: bool,
 }
@@ -75,6 +76,8 @@ pub(super) struct Model {
 
 /// Rex's ids are `session:<uuid>` and `block:<uuid>`; anything else is skipped, so every id
 /// collied makes fits the phone's terminal ids.
+pub(super) type Read = (String, String, u32, &'static str, Option<String>);
+
 pub(super) fn valid(id: &str, kind: &str) -> bool {
     id.strip_prefix(kind)
         .and_then(|u| u.strip_prefix(':'))
@@ -309,28 +312,31 @@ impl Model {
         listing
     }
 
-    /// The Claude Code agents among the blocks touched since the last call: their session,
-    /// block and foreground pid.
-    pub(super) fn touched(&mut self) -> Vec<(String, String, u32)> {
+    pub(super) fn touched(&mut self) -> Vec<Read> {
         let touched = std::mem::take(&mut self.touched);
         (touched.into_iter())
-            .filter_map(|(session, block)| self.claude_of(session, block))
+            .filter_map(|(session, block)| self.read_of(session, block))
             .collect()
     }
 
-    /// Every Claude Code agent: its session, block and foreground pid.
-    pub(super) fn claude(&self) -> Vec<(String, String, u32)> {
+    pub(super) fn reads(&self) -> Vec<Read> {
         (self.sessions.iter())
             .flat_map(|(session, s)| s.blocks.keys().map(move |b| (session.clone(), b.clone())))
-            .filter_map(|(session, block)| self.claude_of(session, block))
+            .filter_map(|(session, block)| self.read_of(session, block))
             .collect()
     }
 
-    fn claude_of(&self, session: String, block: String) -> Option<(String, String, u32)> {
+    pub(super) fn read_of(&self, session: String, block: String) -> Option<Read> {
         let b = self.sessions.get(&session)?.blocks.get(&block)?;
         let a = b.agent(&session, &block)?;
-        let pid = b.foreground.value.as_ref()?.pid;
-        (a.agent.as_deref() == Some("claude")).then_some((session, block, pid))
+        let fg = b.foreground.value.as_ref()?;
+        let kind = match a.agent.as_deref()? {
+            "claude" => "claude",
+            "copilot" => "copilot",
+            "agy" => "agy",
+            _ => return None,
+        };
+        Some((session, block, fg.pid, kind, fg.cwd.clone()))
     }
 
     /// The session, foreground pid and kind of a block listed as a Codex or Antigravity agent.
@@ -350,11 +356,25 @@ impl Model {
 
     /// Kept only while `pid` still leads the block: refused when another process leads it
     /// already, as when it changed while a pid file was read outside the lock.
-    pub(super) fn bind(&mut self, session: &str, block: &str, pid: u32, value: String) {
+    pub(super) fn scan(&mut self, session: &str, block: &str) -> u64 {
+        self.block(session, block).map_or(0, |b| {
+            b.scan += 1;
+            b.scan
+        })
+    }
+
+    pub(super) fn bind_scan(&mut self, read: (&str, &str, u32, u64), value: Option<String>) {
+        let (session, block, pid, scan) = read;
+        if self.block(session, block).is_some_and(|b| b.scan == scan) {
+            self.bind(session, block, pid, value);
+        }
+    }
+
+    pub(super) fn bind(&mut self, session: &str, block: &str, pid: u32, value: Option<String>) {
         if let Some(b) = self.block(session, block)
             && b.foreground.value.as_ref().is_some_and(|f| f.pid == pid)
         {
-            b.session = Some((pid, value));
+            b.session = value.map(|v| (pid, v));
         }
     }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -284,6 +284,10 @@ impl Transcripts {
     }
 
     pub(super) fn copilot_selection(&self, a: &AgentInfo) -> Option<(String, Vec<String>)> {
+        if !matches!(Owner::of(&a.terminal_id), Owner::Herdr) {
+            let id = session_id(a)?.to_owned();
+            return Some((id.clone(), vec![id]));
+        }
         let root = self.copilot_sessions.as_deref()?;
         std::fs::symlink_metadata(root)
             .ok()?
@@ -634,16 +638,105 @@ fn copilot_marked(dir: &Path, pid: u32) -> Option<bool> {
     )
 }
 
-fn copilot_started(dir: &Path, id: &str, cwd: &str) -> bool {
-    let started = || -> Option<bool> {
-        let (file, len, _) = open(&dir.join("workspace.yaml"))?;
-        if len > SESSION_BYTES {
+pub(super) fn copilot_workspace(dir: &Path) -> Option<(String, String)> {
+    let (file, len, _) = open(&dir.join("workspace.yaml"))?;
+    if len > SESSION_BYTES {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(SESSION_BYTES).read_to_end(&mut bytes).ok()?;
+    let workspace = std::str::from_utf8(&bytes).ok()?;
+    Some((
+        workspace_scalar(workspace, "id")?,
+        workspace_scalar(workspace, "cwd")?,
+    ))
+}
+
+type Stamp = (SystemTime, i64, i64);
+
+#[derive(Default)]
+pub(crate) struct CopilotMarks {
+    dirs: HashMap<String, (Stamp, Vec<u32>)>,
+}
+
+impl CopilotMarks {
+    pub(crate) fn marked(
+        &mut self,
+        root: &Path,
+        pids: &[u32],
+    ) -> Option<HashMap<u32, Vec<String>>> {
+        let mut out: HashMap<u32, Vec<String>> = pids.iter().map(|p| (*p, Vec::new())).collect();
+        let mut seen = HashSet::new();
+        for (listed, entry) in std::fs::read_dir(root).ok()?.enumerate() {
+            if listed == MAX_LISTED {
+                return None;
+            }
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let Some(id) = name.to_str().filter(|id| is_session_id(id)) else {
+                continue;
+            };
+            let dir = entry.path();
+            let meta = std::fs::symlink_metadata(&dir).ok()?;
+            if !meta.is_dir() {
+                continue;
+            }
+            let stamp = (meta.modified().ok()?, meta.ctime(), meta.ctime_nsec());
+            let holders = match self.dirs.get(id) {
+                Some((at, holders)) if *at == stamp => holders.clone(),
+                _ => {
+                    let holders = hold_pids(&dir)?;
+                    self.dirs.insert(id.to_owned(), (stamp, holders.clone()));
+                    holders
+                }
+            };
+            seen.insert(id.to_owned());
+            for pid in holders {
+                if let Some(ids) = out.get_mut(&pid)
+                    && copilot_marked(&dir, pid)?
+                {
+                    ids.push(id.to_owned());
+                }
+            }
+        }
+        self.dirs.retain(|id, _| seen.contains(id));
+        Some(out)
+    }
+}
+
+fn hold_pids(dir: &Path) -> Option<Vec<u32>> {
+    let mut pids = Vec::new();
+    for (listed, entry) in std::fs::read_dir(dir).ok()?.enumerate() {
+        if listed == MAX_LISTED {
             return None;
         }
-        let mut bytes = Vec::new();
-        file.take(SESSION_BYTES).read_to_end(&mut bytes).ok()?;
-        let workspace = std::str::from_utf8(&bytes).ok()?;
-        if workspace_scalar(workspace, "id")? != id || workspace_scalar(workspace, "cwd")? != cwd {
+        let name = entry.ok()?.file_name();
+        let pid = (name.to_str()).and_then(|n| {
+            n.strip_prefix("inuse.")?
+                .strip_suffix(".hold")?
+                .parse::<u32>()
+                .ok()
+        });
+        pids.extend(pid);
+    }
+    Some(pids)
+}
+
+pub(crate) fn copilot_bound(
+    root: &Path,
+    marked: Option<&Vec<String>>,
+    cwd: &str,
+) -> Option<String> {
+    let [id] = marked?.as_slice() else {
+        return None;
+    };
+    copilot_started(&root.join(id), id, cwd).then(|| id.clone())
+}
+
+pub(super) fn copilot_started(dir: &Path, id: &str, cwd: &str) -> bool {
+    let started = || -> Option<bool> {
+        let (wid, wcwd) = copilot_workspace(dir)?;
+        if wid != id || wcwd != cwd {
             return Some(false);
         }
         let (file, _, _) = open(&dir.join("events.jsonl"))?;

@@ -20,7 +20,10 @@ use crate::prompt;
 use crate::runtime::AgentInfo;
 use crate::usage::Usage;
 
-pub(crate) use live::{claude_holds, claude_session, copilot_held, copilot_holds, copilot_session};
+pub(crate) use live::{
+    CopilotMarks, claude_holds, claude_session, copilot_bound, copilot_held, copilot_holds,
+    copilot_session,
+};
 pub(crate) use provider_subagents::held;
 pub(crate) use subagents::timestamp_ms;
 
@@ -40,6 +43,7 @@ const HEAD_BYTES: u64 = 256 * 1024;
 const META_BYTES: u64 = 64 * 1024;
 const MAX_LISTED: usize = 10_000;
 const MAX_CANDIDATES: usize = 400;
+const AGY_HISTORY_BYTES: u64 = 1 << 20;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Derived {
@@ -108,6 +112,11 @@ impl Transcripts {
 
     pub fn with_agy_brain(mut self, dir: Option<PathBuf>) -> Self {
         self.agy_brain = dir;
+        self
+    }
+
+    pub fn with_copilot_sessions(mut self, dir: Option<PathBuf>) -> Self {
+        self.copilot_sessions = dir;
         self
     }
 
@@ -391,16 +400,21 @@ impl Transcripts {
     }
 
     /// The most recent sessions started in `cwd` (canonical) that have a prompt, newest first.
-    pub fn sessions(&self, cwd: &str, claude: bool, codex: bool) -> Vec<Session> {
+    pub fn sessions(&self, cwd: &str, kinds: &[&str]) -> Vec<Session> {
         let mut out = Vec::new();
-        if claude {
+        if kinds.contains(&"claude") {
             out.extend(self.claude_sessions(cwd));
         }
-        if codex {
+        if kinds.contains(&"codex") {
             out.extend(self.codex_sessions(cwd));
         }
+        if kinds.contains(&"copilot") {
+            out.extend(self.copilot_listed(cwd));
+        }
+        if kinds.contains(&"agy") {
+            out.extend(self.agy_listed(cwd));
+        }
         out.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
-        out.truncate(MAX_SESSIONS);
         out
     }
 
@@ -423,8 +437,109 @@ impl Transcripts {
                 .and_then(|path| codex_head(&path, &mut open(&path)?.0, META_BYTES))
                 .and_then(|h| codex_meta(&h))
                 .is_some_and(|(i, c, _)| i == id && c == cwd),
+            "copilot" => (self.copilot_sessions.as_ref())
+                .is_some_and(|root| live::copilot_started(&root.join(id), id, cwd)),
+            "agy" => {
+                self.agy_brain
+                    .as_ref()
+                    .is_some_and(|b| agy_transcript(b, id))
+                    && self.agy_workspaces().get(id).is_some_and(|w| w == cwd)
+            }
             _ => false,
         }
+    }
+
+    pub fn in_use(&self, agent: &str, id: &str) -> bool {
+        match agent {
+            "copilot" => (self.copilot_sessions.as_deref())
+                .is_some_and(|root| copilot_held(root, id) != Some(false)),
+            "agy" => self.agy_in_use(id, crate::runtime::agy_holders().as_ref()),
+            _ => false,
+        }
+    }
+
+    fn agy_in_use(&self, id: &str, holders: Option<&crate::runtime::Files>) -> bool {
+        (self.agy_brain.as_deref().and_then(Path::parent))
+            .is_some_and(|d| crate::runtime::agy_held(&d.join("presence"), id, holders))
+    }
+
+    fn copilot_listed(&self, cwd: &str) -> Vec<Session> {
+        let Some(root) = &self.copilot_sessions else {
+            return Vec::new();
+        };
+        let files = std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .take(MAX_LISTED)
+            .filter_map(|e| {
+                let name = e.file_name();
+                let id = name.to_str().filter(|id| is_session_id(id))?;
+                let (wid, wcwd) = live::copilot_workspace(&e.path())?;
+                (wid == id && wcwd == cwd).then(|| (e.path().join("events.jsonl"), wid))
+            })
+            .collect();
+        recent("copilot", files, |path, file, id| {
+            if !live::copilot_started(path.parent()?, id, cwd) || self.in_use("copilot", id) {
+                return None;
+            }
+            let text = head(file, HEAD_BYTES)?;
+            Some(copilot_first_prompt(&String::from_utf8_lossy(&text)))
+        })
+    }
+
+    fn agy_workspaces(&self) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        let Some(path) = (self.agy_brain.as_deref())
+            .and_then(Path::parent)
+            .map(|d| d.join("history.jsonl"))
+        else {
+            return out;
+        };
+        let Some((mut file, len, _)) = open(&path) else {
+            return out;
+        };
+        let start = len.saturating_sub(AGY_HISTORY_BYTES);
+        let Some(bytes) =
+            (file.seek(SeekFrom::Start(start)).ok()).and_then(|_| head(file, AGY_HISTORY_BYTES))
+        else {
+            return out;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        let lines = text.lines().skip(usize::from(start > 0));
+        for v in lines.filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+            if let (Some(id), Some(workspace)) =
+                (v["conversationId"].as_str(), v["workspace"].as_str())
+                && is_session_id(id)
+            {
+                out.entry(id.to_owned())
+                    .or_insert_with(|| workspace.to_owned());
+            }
+        }
+        out
+    }
+
+    fn agy_listed(&self, cwd: &str) -> Vec<Session> {
+        let Some(brain) = &self.agy_brain else {
+            return Vec::new();
+        };
+        let files = (self.agy_workspaces().into_iter())
+            .filter(|(_, workspace)| workspace == cwd)
+            .map(|(id, _)| {
+                let path = brain
+                    .join(&id)
+                    .join(".system_generated/logs/transcript.jsonl");
+                (path, id)
+            })
+            .collect();
+        let holders = crate::runtime::agy_holders();
+        recent("agy", files, |_, file, id| {
+            if self.agy_in_use(id, holders.as_ref()) {
+                return None;
+            }
+            let text = head(file, HEAD_BYTES)?;
+            Some(agy_first_prompt(&String::from_utf8_lossy(&text)))
+        })
     }
 
     fn claude_sessions(&self, cwd: &str) -> Vec<Session> {
@@ -635,6 +750,30 @@ fn first_block_line(content: &Value, kind: &str) -> Option<String> {
         .iter()
         .filter(|b| b["type"] == kind)
         .find_map(|b| first_line(b["text"].as_str()?))
+}
+
+fn copilot_first_prompt(text: &str) -> Option<String> {
+    (text.lines())
+        .filter(|l| l.contains("user.message"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| {
+            let d = &v["data"];
+            let typed = v["type"] == "user.message"
+                && v["agentId"].is_null()
+                && (d["source"].is_null() || d["source"] == "user");
+            typed.then_some(())?;
+            first_line(d["content"].as_str()?)
+        })
+}
+
+fn agy_first_prompt(text: &str) -> Option<String> {
+    (text.lines())
+        .filter(|l| l.contains("USER_EXPLICIT"))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find_map(|v| {
+            (v["type"] == "USER_INPUT" && v["source"] == "USER_EXPLICIT").then_some(())?;
+            first_line(agy_user_text(v["content"].as_str()?))
+        })
 }
 
 fn claude_first_prompt(text: &str) -> Option<String> {
@@ -1689,15 +1828,15 @@ mod tests {
             5,
         );
 
-        let listed = |claude, codex| -> Vec<(&str, String, String, u64)> {
-            t.sessions(cwd, claude, codex)
+        let listed = |kinds: &[&str]| -> Vec<(&str, String, String, u64)> {
+            t.sessions(cwd, kinds)
                 .into_iter()
                 .map(|s| (s.agent, s.id, s.first_prompt, s.modified_ms))
                 .collect()
         };
         let ms = |secs: u64| (1_790_000_000 + secs) * 1000;
         assert_eq!(
-            listed(true, true),
+            listed(&["claude", "codex"]),
             [
                 (
                     "codex",
@@ -1714,9 +1853,12 @@ mod tests {
                 ("codex", uuid(7), "ship the".to_owned(), ms(5)),
             ]
         );
-        assert_eq!(listed(true, false).len(), 1);
-        assert_eq!(listed(false, true).len(), 2);
-        assert!(t.sessions("/Users/me/src/elsewhere", true, true).is_empty());
+        assert_eq!(listed(&["claude"]).len(), 1);
+        assert_eq!(listed(&["codex"]).len(), 2);
+        assert!(
+            t.sessions("/Users/me/src/elsewhere", &["claude", "codex"])
+                .is_empty()
+        );
 
         for n in 10..40 {
             aged(
@@ -1725,8 +1867,11 @@ mod tests {
                 100 + u64::from(n),
             );
         }
-        let many = listed(true, true);
-        assert_eq!(many.len(), MAX_SESSIONS);
+        let many = listed(&["claude", "codex"]);
+        assert_eq!(
+            many.iter().filter(|s| s.0 == "claude").count(),
+            MAX_SESSIONS
+        );
         assert_eq!(many[0].1, uuid(39));
         assert!(many.windows(2).all(|w| w[0].3 >= w[1].3));
 
@@ -1760,7 +1905,7 @@ mod tests {
         )
         .unwrap();
         let listed = |t: &Transcripts| -> Vec<(String, String)> {
-            t.sessions(cwd, true, true)
+            t.sessions(cwd, &["claude", "codex"])
                 .into_iter()
                 .map(|s| (s.id, s.first_prompt))
                 .collect()
@@ -1784,6 +1929,164 @@ mod tests {
         assert_eq!(listed(&t), session);
         assert_eq!(t.codex_rollout(CODEX_ID), Some(plain));
         assert!(t.derive(&c, true).is_some());
+    }
+
+    #[test]
+    fn lists_the_folders_copilot_and_agy_sessions_that_no_process_holds() {
+        use serde_json::json;
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let copilot = dir.path().join("copilot/session-state");
+        let agy = dir.path().join("agy");
+        t.copilot_sessions = Some(copilot.clone());
+        t.agy_brain = Some(agy.join("brain"));
+        let (cwd, other) = ("/Users/me/src/collie", "/Users/me/src/other");
+        let copilot_session = |n: u32, folder: &str, prompt: &str, secs: u64| {
+            let (id, d) = (uuid(n), copilot.join(uuid(n)));
+            write(
+                &d.join("workspace.yaml"),
+                &format!("id: {id}\ncwd: {folder}\n"),
+            );
+            let lines = [
+                json!({"type": "session.start", "data": {"sessionId": id}}),
+                json!({"type": "user.message", "data": {"content": "injected", "source": "skill-x"}}),
+                json!({"type": "user.message", "data": {"content": prompt}}),
+            ];
+            aged(
+                &d.join("events.jsonl"),
+                &lines.map(|l| l.to_string()).join("\n"),
+                secs,
+            );
+        };
+        copilot_session(1, cwd, "fix the copilot bug\nwith details", 10);
+        copilot_session(2, other, "elsewhere", 20);
+        copilot_session(3, cwd, "open in a live copilot", 30);
+        let hold = File::create(copilot.join(uuid(3)).join("inuse.1.hold")).unwrap();
+        hold.lock().unwrap();
+        let agy_session = |n: u32, prompt: &str, secs: u64| {
+            let path = agy.join("brain").join(uuid(n));
+            let content = format!("<USER_REQUEST>\n{prompt}\n</USER_REQUEST>");
+            let line = json!({"type": "USER_INPUT", "source": "USER_EXPLICIT", "content": content});
+            aged(
+                &path.join(".system_generated/logs/transcript.jsonl"),
+                &line.to_string(),
+                secs,
+            );
+        };
+        agy_session(4, "fix the agy bug", 40);
+        agy_session(5, "agy elsewhere", 50);
+        agy_session(6, "open in a live agy", 60);
+        agy_session(7, "never typed in this folder", 70);
+        let history: Vec<String> = [(4, cwd), (5, other), (6, cwd), (4, other)]
+            .into_iter()
+            .map(|(n, w)| {
+                json!({"display": "p", "workspace": w, "conversationId": uuid(n)}).to_string()
+            })
+            .chain([json!({"display": "/help", "workspace": cwd}).to_string()])
+            .collect();
+        write(&agy.join("history.jsonl"), &history.join("\n"));
+        std::fs::create_dir_all(agy.join("presence")).unwrap();
+        let presence =
+            File::create(agy.join("presence").join(format!("{}.lock", uuid(6)))).unwrap();
+        presence.lock().unwrap();
+
+        let listed: Vec<(&str, String, String)> =
+            (t.sessions(cwd, &["copilot", "agy"]).into_iter())
+                .map(|s| (s.agent, s.id, s.first_prompt))
+                .collect();
+        assert_eq!(
+            listed,
+            [
+                ("agy", uuid(4), "fix the agy bug".to_owned()),
+                ("copilot", uuid(1), "fix the copilot bug".to_owned()),
+            ]
+        );
+        assert!(t.sessions(cwd, &["claude", "codex"]).is_empty());
+        assert!(t.has_session("copilot", cwd, &uuid(1)));
+        assert!(!t.has_session("copilot", other, &uuid(1)));
+        assert!(t.has_session("agy", cwd, &uuid(4)));
+        assert!(
+            !t.has_session("agy", other, &uuid(4)),
+            "the folder it started in"
+        );
+        assert!(!t.has_session("agy", cwd, &uuid(7)));
+        assert!(t.in_use("copilot", &uuid(3)) && t.in_use("agy", &uuid(6)));
+        assert!(!t.in_use("copilot", &uuid(1)) && !t.in_use("agy", &uuid(4)));
+        let folder = copilot.join(uuid(1));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unknown = t.in_use("copilot", &uuid(1));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(unknown, "a folder it cannot read");
+        drop((hold, presence));
+
+        let lock = agy.join("presence").join(format!("{}.lock", uuid(4)));
+        File::create(&lock).unwrap();
+        let named = dir.path().join("agy-bin/agy");
+        std::fs::create_dir_all(named.parent().unwrap()).unwrap();
+        std::fs::copy(std::env::current_exe().unwrap(), &named).unwrap();
+        let mut holder = std::process::Command::new(&named)
+            .args([
+                "--exact",
+                "transcript::tests::agy_holding_a_lock",
+                "--nocapture",
+            ])
+            .env("COLLIE_TEST_AGY_LOCK", &lock)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let open = (0..100).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            t.in_use("agy", &uuid(4))
+        });
+        let listed = t.sessions(cwd, &["agy"]);
+        holder.kill().unwrap();
+        holder.wait().unwrap();
+        assert!(open, "an agy process has its presence lock open, unlocked");
+        assert!(listed.iter().all(|s| s.id != uuid(4)));
+        assert!(!t.in_use("agy", &uuid(4)));
+    }
+
+    #[test]
+    fn agy_holding_a_lock() {
+        let Some(lock) = std::env::var_os("COLLIE_TEST_AGY_LOCK") else {
+            return;
+        };
+        let exe = std::env::current_exe().unwrap();
+        if exe.file_name().and_then(|n| n.to_str()) != Some("agy") {
+            return;
+        }
+        let _open = File::open(lock).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_folder_keeps_its_sessions_of_each_kind_past_newer_ones_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = roots(dir.path());
+        let copilot = dir.path().join("copilot/session-state");
+        t.copilot_sessions = Some(copilot.clone());
+        let cwd = "/Users/me/src/collie";
+        let session = |n: u32, folder: &str, secs: u64| {
+            let (id, d) = (uuid(n), copilot.join(uuid(n)));
+            write(
+                &d.join("workspace.yaml"),
+                &format!("id: {id}\ncwd: {folder}\n"),
+            );
+            let start = serde_json::json!({"type": "session.start", "data": {"sessionId": id}});
+            let prompt = serde_json::json!({"type": "user.message", "data": {"content": "go"}});
+            aged(&d.join("events.jsonl"), &format!("{start}\n{prompt}"), secs);
+        };
+        for n in 0..=MAX_CANDIDATES as u32 {
+            session(1000 + n, "/Users/me/src/other", 100);
+        }
+        for n in 0..=MAX_SESSIONS as u32 {
+            session(n, cwd, 50);
+        }
+        let project = dir.path().join("claude/projects/-Users-me-src-collie");
+        aged(&project.join(format!("{CLAUDE_ID}.jsonl")), CLAUDE, 10);
+        let listed = t.sessions(cwd, &["claude", "copilot"]);
+        let kinds = |kind: &str| listed.iter().filter(|s| s.agent == kind).count();
+        assert_eq!((kinds("copilot"), kinds("claude")), (MAX_SESSIONS, 1));
     }
 
     #[test]
@@ -1827,7 +2130,7 @@ mod tests {
         }
 
         let listed: Vec<(&str, String, String)> = t
-            .sessions(cwd, true, true)
+            .sessions(cwd, &["claude", "codex"])
             .into_iter()
             .map(|s| (s.agent, s.id, s.first_prompt))
             .collect();

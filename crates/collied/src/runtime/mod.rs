@@ -14,6 +14,7 @@ pub mod screen;
 use self::herdr_core::Core;
 use self::rex::Rex;
 
+pub(crate) use agents::{Files, agy_held, agy_holders};
 pub use agents::{STRIPPED, TASK_KINDS, pane, task_cli};
 pub use herdr::{Error, PaneRead};
 

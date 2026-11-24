@@ -238,6 +238,7 @@ pub struct Rex {
     streams: stream::Streams,
     resume: Mutex<resume::Resume>,
     agent_roots: crate::costs::Roots,
+    copilot_marks: Mutex<crate::transcript::CopilotMarks>,
 }
 
 /// The connection, session, block and size of a listed block, and what it is listed as.
@@ -269,6 +270,7 @@ impl Rex {
             streams: stream::Streams::default(),
             resume: Mutex::default(),
             agent_roots: crate::costs::Roots::default(),
+            copilot_marks: Mutex::default(),
         }
     }
 
@@ -528,7 +530,7 @@ impl Rex {
         if dirty {
             self.wake.notify_one();
         }
-        self.claude(Model::touched);
+        self.read_files(Model::touched);
     }
 
     /// Subscribes before it reads, so a session or report in between is not missed: events
