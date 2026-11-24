@@ -49,6 +49,7 @@ pub(super) struct Resume {
     until: Option<Instant>,
     typed: BTreeSet<String>,
     starting: BTreeMap<String, Starting>,
+    waits: BTreeMap<String, &'static str>,
 }
 
 #[derive(Clone)]
@@ -59,6 +60,7 @@ struct Starting {
     conversation: String,
     shell: (u32, (u16, u16)),
     since: Instant,
+    seen: bool,
     running: Option<Instant>,
 }
 
@@ -175,6 +177,7 @@ impl Resume {
         self.missing.clear();
         self.typed.clear();
         self.starting.clear();
+        self.waits.clear();
         self.until = None;
         let earlier = self.record.instance.replace(instance.to_owned()).is_some();
         let agents = std::mem::take(&mut self.record.agents);
@@ -228,8 +231,10 @@ impl Resume {
     pub(super) fn due(&mut self, now: Instant) -> Vec<(String, Agent)> {
         if !self.open(now) {
             for (block, agent) in std::mem::take(&mut self.pending) {
-                tracing::warn!(block, kind = %agent.kind, "Rex resume: window ended before its shell was ready");
+                let why = self.waits.get(&block).copied().unwrap_or("not checked");
+                tracing::warn!(block, kind = %agent.kind, "Rex resume: window ended before its shell was ready ({why})");
             }
+            self.waits.clear();
         }
         (self.pending.iter())
             .map(|(b, a)| (b.clone(), a.clone()))
@@ -276,7 +281,7 @@ impl Resume {
 }
 
 enum Step {
-    Wait,
+    Wait(&'static str),
     Drop(&'static str),
     Started,
 }
@@ -339,7 +344,9 @@ impl Rex {
         }
         for (block, agent) in due {
             match self.resume_one(&block, &agent, &cli).await {
-                Step::Wait => {}
+                Step::Wait(why) => {
+                    crate::lock(&self.resume).waits.insert(block, why);
+                }
                 Step::Drop(why) => {
                     tracing::warn!(block, kind = %agent.kind, "Rex resume: not started, {why}");
                     crate::lock(&self.resume).pending.remove(&block);
@@ -371,22 +378,22 @@ impl Rex {
             (l.model.shell_block(block)).map(|(session, size)| (l.client.clone(), session, size))
         });
         let Ok(Some((client, session, size))) = shell else {
-            return Step::Wait;
+            return Step::Wait("no shell in front");
         };
         let Some(pid) = idle(&client, &session, block).await else {
-            return Step::Wait;
+            return Step::Wait("the shell runs something");
         };
         if !untouched(&client, &session, block, size).await {
-            return Step::Wait;
+            return Step::Wait("the prompt is not empty");
         }
         let held = agent.kind == "claude"
             && (self.claude_sessions.as_deref())
                 .is_some_and(|s| crate::transcript::claude_holds(s, &agent.conversation));
         if held {
-            return Step::Wait;
+            return Step::Wait("a live Claude Code holds the conversation");
         }
         let Some(listing) = self.listing() else {
-            return Step::Wait;
+            return Step::Wait("not following Rex");
         };
         if running(&listing, &agent.conversation) {
             return Step::Drop("its conversation runs elsewhere");
@@ -404,6 +411,7 @@ impl Rex {
                     conversation: agent.conversation.clone(),
                     shell: (pid, size),
                     since: Instant::now(),
+                    seen: false,
                     running: None,
                 };
                 crate::lock(&self.resume)
@@ -421,11 +429,13 @@ impl Rex {
     async fn advance(&self, block: &str, mut start: Starting, listing: &Listing) {
         let id = format!("{PREFIX}{}", start.new);
         let runs = (listing.agents.iter()).any(|a| {
-            a.terminal_id == id
-                && (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation)
+            let session = (a.agent_session.as_ref()).is_some_and(|s| s.value == start.conversation);
+            let kind = start.kind != "claude" && a.agent.as_deref() == Some(start.kind.as_str());
+            a.terminal_id == id && (session || kind)
         });
-        let ended =
-            (self.live(|l| !l.model.has(&start.new) || l.model.exited(&start.new))).unwrap_or(true);
+        let state = (self.live(|l| (l.model.has(&start.new), l.model.exited(&start.new)))).ok();
+        start.seen |= state.is_some_and(|(has, _)| has);
+        let ended = state.is_some_and(|(has, exited)| exited || (start.seen && !has));
         let kind = start.kind.clone();
         let outcome = if runs {
             let since = *start.running.get_or_insert_with(Instant::now);
@@ -1013,6 +1023,7 @@ mod tests {
         assert_eq!(anchors(&r.fake), [READY]);
         for _ in 0..5 {
             r.rex.resume_with(cli).await;
+            tokio::time::sleep(CONFIRM / 2).await;
         }
         assert!(
             blocks(&r.fake).contains(&READY.to_owned()),
@@ -1027,6 +1038,43 @@ mod tests {
             None,
             "the new block was given up"
         );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_codex_takes_the_shells_place_once_it_runs_as_codex() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("codex", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        let _task = follow(&r.rex).await;
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
+        assert!(ticks(&r.rex, || !blocks(&r.fake).contains(&READY.to_owned())).await);
+        assert_eq!(blocks(&r.fake).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_block_not_seen_yet_is_never_taken_for_one_that_exited() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = std::fs::canonicalize(dir.path()).unwrap();
+        let r = restarted(
+            dir.path(),
+            &[(READY, agent("claude", FIRST, folder.to_str().unwrap()))],
+            &[(READY, login_shell(), PROMPT)],
+            &[],
+        )
+        .await;
+        r.fake.state().split_host = Some("another-host".to_owned());
+        let _task = follow(&r.rex).await;
+        r.rex.resume_with(cli).await;
+        assert_eq!(anchors(&r.fake), [READY]);
+        assert!(ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await);
+        assert_eq!(blocks(&r.fake).len(), 2, "the new block and the shell stay");
     }
 
     #[tokio::test]
@@ -1078,24 +1126,20 @@ mod tests {
     async fn a_conversation_running_in_another_block_is_not_started_again() {
         let dir = tempfile::tempdir().unwrap();
         let folder = std::fs::canonicalize(dir.path()).unwrap();
-        let exe = dir.path().join("codex");
-        std::fs::copy("/bin/sleep", &exe).unwrap();
-        let mut codex = std::process::Command::new(&exe).arg("600").spawn().unwrap();
+        let me = std::process::id();
         let r = restarted(
             dir.path(),
-            &[(READY, agent("codex", FIRST, folder.to_str().unwrap()))],
+            &[(READY, agent("agy", FIRST, folder.to_str().unwrap()))],
             &[
                 (READY, login_shell(), PROMPT),
-                (OTHER, fake::process(codex.id(), "codex", "codex"), ""),
+                (OTHER, fake::process(me, "agy", "agy"), ""),
             ],
             &[],
         )
         .await;
         let _task = follow(&r.rex).await;
-        assert!(r.rex.bind(&id(OTHER), FIRST, codex.id()));
+        assert!(r.rex.bind(&id(OTHER), FIRST, me));
         r.rex.resume_with(cli).await;
-        let _ = codex.kill();
-        let _ = codex.wait();
         assert!(anchors(&r.fake).is_empty());
     }
 

@@ -94,6 +94,7 @@ pub(super) struct State {
     pub splits: Vec<Value>,
     pub split_pid: Option<u32>,
     pub split_exits: bool,
+    pub split_host: Option<String>,
     pub data: Data,
 }
 
@@ -233,6 +234,7 @@ impl Fake {
             splits: Vec::new(),
             split_pid: None,
             split_exits: false,
+            split_host: None,
             started_at: "2026-11-12T16:47:01.264128Z".to_owned(),
             data: Data::default(),
         }));
@@ -800,6 +802,9 @@ fn split(
         false => json!({ "last_exit": null, "child": proc, "foreground": proc }),
     };
     s.add(session, &block, process, Vec::new());
+    if let Some(host) = s.split_host.clone() {
+        s.block(&block).host = host;
+    }
     s.block(&block).owner = Some(CLIENT.to_owned());
     let created = json!({ "type": "block_created", "payload": { "block_id": block } });
     deliver(s, seq, out, session_event(session, created));
