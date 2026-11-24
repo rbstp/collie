@@ -58,7 +58,7 @@ pub(super) fn command(agent: &Agent) -> Option<String> {
     }
     let program = match agent.kind.as_str() {
         "claude" => "claude --resume",
-        "codex" => "codex resume",
+        "codex" => return Some(format!("codex resume {} --no-daemon", agent.conversation)),
         "agy" => "agy --conversation",
         _ => return None,
     };
@@ -98,12 +98,15 @@ impl Resume {
         }
     }
 
-    fn save(&self) {
-        if let Some((path, _)) = &self.files
-            && let Err(e) = crate::peers::save_json(path, &self.record)
-        {
+    fn save(&self) -> bool {
+        let Some((path, _)) = &self.files else {
+            return true;
+        };
+        let saved = crate::peers::save_json(path, &self.record);
+        if let Err(e) = &saved {
             tracing::warn!(error = %e, "could not save the Rex agents to resume");
         }
+        saved.is_ok()
     }
 
     pub(super) fn plan(&mut self, instance: Option<&str>, started_ms: Option<u64>, now_ms: u64) {
@@ -118,13 +121,13 @@ impl Resume {
         }
         let earlier = self.record.instance.replace(instance.to_owned()).is_some();
         let agents = std::mem::take(&mut self.record.agents);
+        let saved = self.save();
         if let Some(started) =
-            started_ms.filter(|s| earlier && now_ms.saturating_sub(*s) < WINDOW_MS)
+            started_ms.filter(|s| saved && earlier && now_ms.saturating_sub(*s) < WINDOW_MS)
         {
             self.pending = agents;
             self.started_ms = started;
         }
-        self.save();
     }
 
     pub(super) fn observe(
@@ -152,7 +155,7 @@ impl Resume {
         missing.retain(|block, _| agents.contains_key(block));
         if agents != self.record.agents {
             self.record.agents = agents;
-            self.save();
+            let _ = self.save();
         }
     }
 
@@ -366,7 +369,7 @@ mod tests {
         );
         assert_eq!(
             line("codex", FIRST).as_deref(),
-            Some("codex resume 3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d")
+            Some("codex resume 3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d --no-daemon")
         );
         assert_eq!(
             line("agy", FIRST).as_deref(),
@@ -509,5 +512,77 @@ mod tests {
         );
         assert_eq!(typed(READY).len(), 4);
         assert!(typed(ELSEWHERE).is_empty());
+    }
+    #[test]
+    fn turning_it_off_forgets_the_record_and_stays_off_across_a_restart() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("rex-resume.json");
+        let off = dir.path().join("rex-resume-off");
+        let ran = Record {
+            instance: Some("one".to_owned()),
+            agents: BTreeMap::from([(READY.to_owned(), agent("claude", FIRST, "/work"))]),
+        };
+        crate::peers::save_json(&record, &ran).unwrap();
+        let mut r = Resume::load(record.clone(), off.clone());
+        assert!(!r.off);
+        assert_eq!(r.record, ran);
+        r.set(false, Some("one".to_owned())).unwrap();
+        assert!(!record.exists(), "the record is deleted");
+        let mode = std::fs::metadata(&off).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let now = 10_000_000;
+        let mut again = Resume::load(record.clone(), off.clone());
+        assert!(again.off);
+        again.plan(Some("two"), Some(now), now);
+        again.observe(Some("two"), &ran.agents, Instant::now());
+        assert!(again.due(now).is_empty() && !record.exists());
+        again.set(true, Some("two".to_owned())).unwrap();
+        assert!(!again.off && !off.exists());
+        again.observe(Some("two"), &ran.agents, Instant::now());
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert_eq!(saved.instance.as_deref(), Some("two"));
+        assert_eq!(saved.agents, ran.agents);
+    }
+
+    #[tokio::test]
+    async fn a_followed_claude_code_with_its_session_is_recorded_with_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let (me, now) = (std::process::id(), crate::now_ms());
+        let claim = serde_json::json!({"pid": me, "sessionId": FIRST, "cwd": "/work/app", "startedAt": now});
+        std::fs::write(sessions.join(format!("{me}.json")), claim.to_string()).unwrap();
+        let record = dir.path().join("rex-resume.json");
+        let fake = Fake::start().await;
+        {
+            let mut s = fake.state();
+            s.instance = "one";
+            s.sessions.push((S.to_owned(), "work".to_owned()));
+            s.add(S, READY, fake::process(me, "claude", "2.1.322"), Vec::new());
+            s.add(
+                S,
+                TWICE,
+                fake::process(u32::MAX - 1, "claude", "2.1.322"),
+                Vec::new(),
+            );
+            s.add(S, TYPED, fake::process(10, "-zsh", "zsh"), Vec::new());
+        }
+        let rex = Rex::new(fake.socket.clone())
+            .with_claude_sessions(Some(sessions))
+            .with_resume(record.clone(), dir.path().join("rex-resume-off"));
+        let rex = Arc::new(rex);
+        let _task = follow(&rex).await;
+        assert!(
+            rex.get(&id(TWICE)).is_ok(),
+            "an agent with no session is listed"
+        );
+        rex.resume().await;
+        let saved: Record = crate::peers::load_json(&record).unwrap();
+        assert_eq!(saved.instance.as_deref(), Some("one"));
+        assert_eq!(
+            saved.agents,
+            BTreeMap::from([(READY.to_owned(), agent("claude", FIRST, "/work/app"))])
+        );
     }
 }

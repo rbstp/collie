@@ -49,9 +49,11 @@ final class Daemon {
 
     private func apply(_ new: DaemonState) {
         if new != .off { starting = false }
+        let started = state == .off && new != .off
         if state != new { state = new }
         if new == .off, !peers.isEmpty { peers = [] }
         if new == .off { rexResume = nil }
+        if started { refreshRexResume() }
     }
 
     private func menuOpened() {

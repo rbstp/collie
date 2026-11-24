@@ -35,11 +35,11 @@ This signs CollieBar with your Developer ID and installs it to `~/Applications`,
 When the Rex server restarts or the Mac reboots, Rex brings back your sessions, tabs and terminals, but each terminal starts as an empty shell. `collied` remembers which Claude Code, Codex or Antigravity CLI conversation ran in which terminal, and types the agent's own resume command into that terminal once its shell shows an empty prompt:
 
 - `claude --resume ID` for Claude Code
-- `codex resume ID` for Codex
+- `codex resume ID --no-daemon` for Codex
 - `agy --conversation ID` for Antigravity CLI
 
 Each conversation reopens once, in the terminal it ran in. `collied` types nothing into a terminal whose shell is in another folder, where you started typing, or where the conversation already runs, and it stops trying 90 seconds after the Rex server started. A conversation you quit stays closed, unless you quit it less than 15 seconds before the server stopped. Copilot CLI conversations are not reopened: `collied` does not learn their ID in Rex.
 
-The command runs through your shell, so your aliases and functions for `claude`, `codex` and `agy` apply. If `collied` was off while Rex restarted, nothing is typed.
+The command runs through your shell, so your aliases and functions for `claude`, `codex` and `agy` apply. If `collied` starts more than 90 seconds after the Rex server, nothing is typed.
 
 To stop it, uncheck **Resume Rex Agents After Restart**; `collied` then forgets what it remembered. CollieTray has no such item, since collie follows Rex only on the Mac.
