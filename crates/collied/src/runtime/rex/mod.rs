@@ -528,7 +528,7 @@ impl Rex {
         if dirty {
             self.wake.notify_one();
         }
-        self.claude(Model::touched);
+        self.read_files(Model::touched);
     }
 
     /// Subscribes before it reads, so a session or report in between is not missed: events

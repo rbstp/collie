@@ -1213,7 +1213,9 @@ impl Driver {
         authorized(auth)?;
         let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
         let allowed = |kind: &str| self.agents.iter().any(|a| a.as_str() == kind);
-        let (claude, codex) = (allowed("claude"), allowed("codex"));
+        let kinds: Vec<&'static str> = (["claude", "codex", "copilot", "agy"].into_iter())
+            .filter(|k| allowed(k))
+            .collect();
         let open: Vec<String> = self
             .runtime
             .agent_list()
@@ -1223,21 +1225,20 @@ impl Driver {
             .filter_map(|a| a.agent_session.map(|s| s.value))
             .collect();
         let reader = self.transcripts.history_reader();
-        let sessions =
-            tokio::task::spawn_blocking(move || reader.sessions(cwd.as_str(), claude, codex))
-                .await
-                .map_err(|_| (ErrorCode::Internal, "session listing failed".to_owned()))?
-                .into_iter()
-                .filter(|s| !open.contains(&s.id))
-                .filter_map(|s| {
-                    Some(TaskSessionInfo {
-                        agent: AgentKind::new(s.agent).ok()?,
-                        session_id: SessionId::new(s.id).ok()?,
-                        first_prompt: s.first_prompt,
-                        modified_ms: s.modified_ms,
-                    })
+        let sessions = tokio::task::spawn_blocking(move || reader.sessions(cwd.as_str(), &kinds))
+            .await
+            .map_err(|_| (ErrorCode::Internal, "session listing failed".to_owned()))?
+            .into_iter()
+            .filter(|s| !open.contains(&s.id))
+            .filter_map(|s| {
+                Some(TaskSessionInfo {
+                    agent: AgentKind::new(s.agent).ok()?,
+                    session_id: SessionId::new(s.id).ok()?,
+                    first_prompt: s.first_prompt,
+                    modified_ms: s.modified_ms,
                 })
-                .collect();
+            })
+            .collect();
         Ok(Response::TaskSessions { sessions })
     }
 
@@ -1404,7 +1405,7 @@ impl Driver {
         if !transcript::is_session_id(id.as_str()) {
             return fail(ErrorCode::InvalidParams, "invalid session id");
         }
-        if !matches!(agent.as_str(), "claude" | "codex") {
+        if !matches!(agent.as_str(), "claude" | "codex" | "copilot" | "agy") {
             return fail(
                 ErrorCode::InvalidParams,
                 "this agent cannot resume a session",
@@ -1416,10 +1417,12 @@ impl Driver {
             id.as_str().to_owned(),
             cwd.as_str().to_owned(),
         );
-        let found =
-            tokio::task::spawn_blocking(move || reader.has_session(&kind, &folder, &session))
-                .await
-                .map_err(|_| (ErrorCode::Internal, "session check failed".to_owned()))?;
+        let (found, in_use) = tokio::task::spawn_blocking(move || {
+            let found = reader.has_session(&kind, &folder, &session);
+            (found, found && reader.in_use(&kind, &session))
+        })
+        .await
+        .map_err(|_| (ErrorCode::Internal, "session check failed".to_owned()))?;
         if !found {
             return fail(ErrorCode::InvalidParams, "no such session in this folder");
         }
@@ -1434,7 +1437,7 @@ impl Driver {
                     .as_ref()
                     .is_some_and(|s| s.value == id.as_str())
             });
-        if open {
+        if open || in_use {
             return fail(
                 ErrorCode::InvalidParams,
                 "the session is already open in another agent",

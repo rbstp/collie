@@ -226,6 +226,53 @@ pub(super) fn open_files(pid: u32) -> Vec<(u64, u64)> {
     .collect()
 }
 
+const MAX_PRESENCE: usize = 4096;
+
+pub(super) fn uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
+        })
+}
+
+pub(super) fn presence(dir: &Path, open: &[(u64, u64)]) -> Option<Vec<String>> {
+    use std::os::unix::fs::MetadataExt;
+    let mut ids = Vec::new();
+    for (listed, entry) in std::fs::read_dir(dir).ok()?.enumerate() {
+        if listed == MAX_PRESENCE {
+            return None;
+        }
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        let Some(id) = (name.to_str())
+            .and_then(|n| n.strip_suffix(".lock"))
+            .filter(|id| uuid(id))
+        else {
+            continue;
+        };
+        let m = std::fs::symlink_metadata(entry.path()).ok()?;
+        if open.contains(&(m.dev(), m.ino())) {
+            ids.push(id.to_owned());
+        }
+    }
+    Some(ids)
+}
+
+pub(super) fn agy_lock(dir: &Path, pid: u32) -> Option<String> {
+    let [id] = <[String; 1]>::try_from(presence(dir, &open_files(pid))?).ok()?;
+    Some(id)
+}
+
+pub(super) fn agy_session(hook: Option<&str>, open: &[String]) -> Option<String> {
+    match (hook, open) {
+        (Some(hook), []) => Some(hook.to_owned()),
+        (Some(hook), open) => open.iter().any(|id| id == hook).then(|| hook.to_owned()),
+        (None, [id]) => Some(id.clone()),
+        (None, _) => None,
+    }
+}
+
 /// herdr's and Claude Code's session variables, which a herdr-core core or a Rex server passes
 /// from whatever started it to every terminal: herdr's hooks would report a task agent's
 /// session against the starter's herdr pane, and Claude Code with `CLAUDE_CODE_CHILD_SESSION`

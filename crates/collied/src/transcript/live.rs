@@ -284,6 +284,10 @@ impl Transcripts {
     }
 
     pub(super) fn copilot_selection(&self, a: &AgentInfo) -> Option<(String, Vec<String>)> {
+        if !matches!(Owner::of(&a.terminal_id), Owner::Herdr) {
+            let id = session_id(a)?.to_owned();
+            return Some((id.clone(), vec![id]));
+        }
         let root = self.copilot_sessions.as_deref()?;
         std::fs::symlink_metadata(root)
             .ok()?
@@ -634,7 +638,7 @@ fn copilot_marked(dir: &Path, pid: u32) -> Option<bool> {
     )
 }
 
-fn copilot_started(dir: &Path, id: &str, cwd: &str) -> bool {
+pub(super) fn copilot_started(dir: &Path, id: &str, cwd: &str) -> bool {
     let started = || -> Option<bool> {
         let (file, len, _) = open(&dir.join("workspace.yaml"))?;
         if len > SESSION_BYTES {

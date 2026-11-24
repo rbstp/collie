@@ -599,10 +599,12 @@ fn live_rex_phone() {
     let _scratch = preset.is_none().then(|| TempDir(agents.clone().into()));
     let claude = format!("{agents}/claude");
     let codex = format!("{agents}/codex");
+    let copilot = format!("{agents}/copilot");
     let env = [
         ("COLLIE_E2E_AGENTS", agents.as_str()),
         ("CLAUDE_CONFIG_DIR", claude.as_str()),
         ("CODEX_HOME", codex.as_str()),
+        ("COPILOT_HOME", copilot.as_str()),
     ];
     if !in_child_with("live_rex_phone", &env) {
         return;
@@ -698,7 +700,7 @@ async fn phone_scenario(
     // `hook` (`fake_hook`).
     let bin = server.root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    for name in ["codex", "hook"] {
+    for name in ["codex", "hook", "copilot"] {
         std::fs::copy(std::env::current_exe().unwrap(), bin.join(name)).unwrap();
     }
     let codex_exe = bin.join("codex");
@@ -708,6 +710,22 @@ async fn phone_scenario(
         &[
             codex_exe.to_str().unwrap(),
             "fake_codex",
+            "--exact",
+            "--nocapture",
+        ],
+    );
+    std::fs::write(
+        work.join("copilot-home"),
+        agents.join("copilot").to_str().unwrap(),
+    )
+    .unwrap();
+    let copilot_exe = bin.join("copilot");
+    let (_, copilot) = new_session(
+        server,
+        "collie-copilot",
+        &[
+            copilot_exe.to_str().unwrap(),
+            "fake_copilot",
             "--exact",
             "--nocapture",
         ],
@@ -737,8 +755,9 @@ async fn phone_scenario(
     let m = machine.id.clone();
 
     let (claude_id, codex_id) = (format!("rex:{claude}"), format!("rex:{codex}"));
+    let copilot_id = format!("rex:{copilot}");
     flock_until(phone, &m, "the Rex agents", |f| {
-        f.agents.len() == 2 && f.agents.iter().all(|a| a.status == AgentState::Idle)
+        f.agents.len() == 3 && f.agents.iter().all(|a| a.status == AgentState::Idle)
     })
     .await;
     let chat = phone
@@ -783,6 +802,18 @@ async fn phone_scenario(
     let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
     assert_eq!(listed, [CLOSED_SESSION], "open sessions are left out");
 
+    let chat = chat_until(phone, &m, &copilot_id, "Copilot's marked session", |p| {
+        p.available
+    })
+    .await;
+    assert!(chat.messages.iter().any(|msg| msg.role == "user"));
+    std::fs::write(work.join("copilot-new"), "").unwrap();
+    let chat = chat_until(phone, &m, &copilot_id, "no session after /new", |p| {
+        !p.available
+    })
+    .await;
+    assert!((chat.unavailable_reason.unwrap_or_default()).contains("marked exactly one session"));
+
     // `/clear`: a new session in the pid file and no report, followed by the reconcile tick.
     std::fs::write(work.join("clear"), "").unwrap();
     let mut listed = Vec::new();
@@ -801,11 +832,17 @@ async fn phone_scenario(
 
     phone.close_pane(m.clone(), claude_id, true).await.unwrap();
     phone.close_pane(m.clone(), codex_id, true).await.unwrap();
+    phone.close_pane(m.clone(), copilot_id, true).await.unwrap();
     flock_until(phone, &m, "the closed agents leave", |f| {
         f.agents.is_empty()
     })
     .await;
     handle.shutdown().await;
+}
+
+#[test]
+fn fake_copilot() {
+    copilot_stand_in();
 }
 
 /// Codex, as the phone scenario runs it in its Rex block: it reports OSC 7501, then runs its

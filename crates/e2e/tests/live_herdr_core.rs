@@ -246,10 +246,12 @@ fn live_herdr_core_phone() {
     let _scratch = preset.is_none().then(|| TempDir(agents.clone().into()));
     let claude = format!("{agents}/claude");
     let codex = format!("{agents}/codex");
+    let copilot = format!("{agents}/copilot");
     let env = [
         ("COLLIE_E2E_AGENTS", agents.as_str()),
         ("CLAUDE_CONFIG_DIR", claude.as_str()),
         ("CODEX_HOME", codex.as_str()),
+        ("COPILOT_HOME", copilot.as_str()),
     ];
     if !in_child_with("live_herdr_core_phone", &env) {
         return;
@@ -369,13 +371,38 @@ async fn phone_scenario(
             "--nocapture",
         ],
     );
+    let copilot = hc.root.join("bin/copilot");
+    std::fs::copy(std::env::current_exe().unwrap(), &copilot).unwrap();
+    std::fs::write(
+        work.join("copilot-home"),
+        agents.join("copilot").to_str().unwrap(),
+    )
+    .unwrap();
+    let copilot = run_argv(
+        hc,
+        "collie-copilot",
+        &work,
+        &[
+            copilot.to_str().unwrap(),
+            "fake_copilot",
+            "--exact",
+            "--nocapture",
+        ],
+    );
     let (machine, _) = pair(&handle.control_path(), phone, LABEL).await;
     let m = machine.id.clone();
 
     let f = flock_until(phone, &m, "the herdr-core agents", |f| {
-        f.agents.iter().any(|a| a.status == AgentState::Working) && f.agents.len() == 2
+        f.agents.iter().any(|a| a.status == AgentState::Working) && f.agents.len() == 3
     })
     .await;
+    let copilot_id = f
+        .agents
+        .iter()
+        .find(|a| a.terminal_id.ends_with(&format!(":{copilot}")))
+        .unwrap()
+        .terminal_id
+        .clone();
     let a = f
         .agents
         .iter()
@@ -460,6 +487,28 @@ async fn phone_scenario(
     let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
     assert_eq!(listed, [CLOSED_SESSION], "open sessions are left out");
 
+    let chat = chat_until(phone, &m, &copilot_id, "Copilot's marked session", |p| {
+        p.available
+    })
+    .await;
+    assert!(chat.messages.iter().any(|msg| msg.role == "user"));
+    std::fs::write(work.join("copilot-new"), "").unwrap();
+    let chat = chat_until(phone, &m, &copilot_id, "no session after /new", |p| {
+        !p.available
+    })
+    .await;
+    assert!((chat.unavailable_reason.unwrap_or_default()).contains("marked exactly one session"));
+    let sessions = phone
+        .task_sessions(m.clone(), work.to_str().unwrap().to_owned())
+        .await
+        .unwrap();
+    let listed: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(
+        listed,
+        [CLOSED_SESSION],
+        "sessions a live Copilot holds are left out"
+    );
+
     let mut cli = Client::connect(&handle.control_path()).await.unwrap();
     let Reply::Status(status) = cli.call(&Request::Status).await.unwrap() else {
         panic!("no status");
@@ -496,11 +545,17 @@ async fn phone_scenario(
         .unwrap();
     assert!(hc.hc(&["get", "--json", &agent]).is_null());
     phone.close_pane(m.clone(), codex_id, true).await.unwrap();
+    phone.close_pane(m.clone(), copilot_id, true).await.unwrap();
     flock_until(phone, &m, "the closed agents leave", |f| {
         f.agents.is_empty() && f.workspaces.is_empty()
     })
     .await;
     handle.shutdown().await;
+}
+
+#[test]
+fn fake_copilot() {
+    copilot_stand_in();
 }
 
 /// `hc attach` on a pty of the given size: a desktop client that sizes the terminal.

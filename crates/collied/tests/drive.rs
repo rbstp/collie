@@ -2333,7 +2333,7 @@ async fn task_sessions_lists_the_folders_closed_sessions_and_resume_refusals_sta
         ),
         (
             resume(&a, "copilot", CLAUDE_SESSION),
-            "this agent cannot resume a session",
+            "no such session in this folder",
         ),
         (new_folder, "resume a session in its own folder"),
         (neither, "empty prompt"),

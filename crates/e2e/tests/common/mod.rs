@@ -32,6 +32,61 @@ pub const WATCHDOG: Duration = Duration::from_secs(240);
 pub const LABEL: &str = "E2E iPhone";
 pub const PROBE: &str = "E2E probe";
 pub const SNAPSHOT: &str = include_str!("../../../collied/tests/fixtures/session.snapshot.json");
+pub const COPILOT_SESSION: &str = "20000000-0000-4000-8000-000000000002";
+pub const COPILOT_NEW: &str = "20000000-0000-4000-8000-000000000003";
+
+pub fn copilot_stand_in() {
+    let exe = std::env::current_exe().unwrap();
+    if exe.file_name().and_then(|n| n.to_str()) != Some("copilot") {
+        return;
+    }
+    let home = std::fs::read_to_string("copilot-home").unwrap();
+    let root = Path::new(home.trim()).join("session-state");
+    let cwd = std::env::current_dir().unwrap();
+    let me = std::process::id();
+    let events = include_str!("../../../collied/tests/fixtures/transcripts/copilot-history.jsonl");
+    let mark = |id: &str| {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let workspace = format!("id: {id}\ncwd: {}\n", cwd.display());
+        std::fs::write(dir.join("workspace.yaml"), workspace).unwrap();
+        let events = events.replace(COPILOT_SESSION, id);
+        std::fs::write(dir.join("events.jsonl"), events).unwrap();
+        std::fs::write(dir.join(format!("inuse.{me}.lock")), me.to_string()).unwrap();
+        let hold = std::fs::File::create(dir.join(format!("inuse.{me}.hold"))).unwrap();
+        hold.lock().unwrap();
+        hold
+    };
+    let _first = mark(COPILOT_SESSION);
+    print!("\x1b]7501;state=idle:app=copilot\x1b\\");
+    std::io::stdout().flush().unwrap();
+    while !Path::new("copilot-new").exists() {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _second = mark(COPILOT_NEW);
+    std::thread::sleep(Duration::from_secs(600));
+}
+
+pub async fn chat_until(
+    phone: &CollieCore,
+    m: &str,
+    agent: &str,
+    what: &str,
+    ok: impl Fn(&collie_core::HistoryPage) -> bool,
+) -> collie_core::HistoryPage {
+    for _ in 0..100 {
+        match phone
+            .agent_history(m.into(), agent.into(), None, None, None)
+            .await
+        {
+            Ok(page) if ok(&page) => return page,
+            Ok(_) | Err(collie_core::CoreError::AgentNotReady) => {}
+            Err(e) => panic!("{what}: {e}"),
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("Chat never showed {what}");
+}
 
 // libtailscale's Go runtime reads TS_* knobs once at load, so each test re-runs itself
 // in a child process that has them (same approach as crates/tailnet/tests/end_to_end.rs).

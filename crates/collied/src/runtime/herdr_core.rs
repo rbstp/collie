@@ -427,6 +427,14 @@ impl Live {
     }
 }
 
+fn kind_of(t: &Terminal) -> Option<String> {
+    let cli = t.foreground.as_ref().and_then(|f| f.cli.as_deref());
+    match &t.status {
+        Some(s) => agents::kind(s.app.as_deref(), cli),
+        None => cli.map(str::to_owned),
+    }
+}
+
 fn not_found() -> Error {
     Error::Core {
         kind: "not_found".to_owned(),
@@ -530,6 +538,7 @@ struct Inner {
     /// with the foreground pid they were reported under: a session holds only while that
     /// process leads the terminal.
     codex: BTreeMap<String, (u32, String)>,
+    files: BTreeMap<String, (u32, Vec<String>)>,
 }
 
 /// One core, followed through `events.subscribe`. collied never starts a core: an absent
@@ -537,6 +546,7 @@ struct Inner {
 pub struct Core {
     socket: PathBuf,
     claude_sessions: Option<PathBuf>,
+    agent_roots: crate::costs::Roots,
     inner: Mutex<Inner>,
     settled: watch::Sender<bool>,
     pub(super) herdr: Arc<HerdrSeen>,
@@ -566,6 +576,7 @@ impl Core {
         Self {
             socket,
             claude_sessions: None,
+            agent_roots: crate::costs::Roots::default(),
             inner: Mutex::default(),
             settled: watch::channel(false).0,
             herdr: Arc::default(),
@@ -582,6 +593,11 @@ impl Core {
     /// Claude Code's `sessions` folder, where each process keeps `<pid>.json`.
     pub fn with_claude_sessions(mut self, dir: Option<PathBuf>) -> Self {
         self.claude_sessions = dir;
+        self
+    }
+
+    pub fn with_agent_roots(mut self, roots: crate::costs::Roots) -> Self {
+        self.agent_roots = roots;
         self
     }
 
@@ -616,13 +632,66 @@ impl Core {
     fn session(&self, inner: &Inner, kind: &str, address: &str, pid: u32) -> Option<String> {
         match kind {
             "claude" => crate::transcript::claude_session(self.claude_sessions.as_deref()?, pid),
-            "codex" | "agy" => inner
+            "codex" => inner
                 .codex
                 .get(address)
                 .filter(|(bound, _)| *bound == pid)
                 .map(|(_, session)| session.clone()),
+            "copilot" => inner
+                .files
+                .get(address)
+                .filter(|(bound, _)| *bound == pid)
+                .and_then(|(_, found)| found.first().cloned()),
+            "agy" => {
+                let hook = (inner.codex.get(address))
+                    .filter(|(bound, _)| *bound == pid)
+                    .map(|(_, session)| session.as_str());
+                let open = (inner.files.get(address))
+                    .filter(|(bound, _)| *bound == pid)
+                    .map_or(&[][..], |(_, open)| open.as_slice());
+                agents::agy_session(hook, open)
+            }
             _ => None,
         }
+    }
+
+    pub fn reread_sessions(&self) {
+        let wanted: Vec<(String, u32, String, String)> = {
+            let inner = self.lock();
+            let Some(live) = inner.live.as_ref() else {
+                return;
+            };
+            (live.terminals.iter())
+                .filter_map(|(address, h)| {
+                    let fg = h.terminal.foreground.as_ref().filter(|f| !f.shell)?;
+                    let kind = kind_of(&h.terminal)?;
+                    let pid = fg.pid?;
+                    matches!(kind.as_str(), "copilot" | "agy")
+                        .then(|| (address.clone(), pid, kind, fg.cwd.clone()))
+                })
+                .collect()
+        };
+        let roots = &self.agent_roots;
+        let presence = roots
+            .agy
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.join("presence"));
+        let found = (wanted.into_iter())
+            .map(|(address, pid, kind, cwd)| {
+                let value = match kind.as_str() {
+                    "copilot" => (roots.copilot.as_deref())
+                        .and_then(|root| crate::transcript::copilot_session(root, pid, &cwd))
+                        .into_iter()
+                        .collect(),
+                    _ => (presence.as_deref())
+                        .and_then(|d| agents::presence(d, &agents::open_files(pid)))
+                        .unwrap_or_default(),
+                };
+                (address, (pid, value))
+            })
+            .collect();
+        self.lock().files = found;
     }
 
     /// A session reported by collied's hook from `reporter` (the hook's pid, from the control
@@ -645,10 +714,7 @@ impl Core {
         let Some(pid) = fg.pid else {
             return false;
         };
-        let kind = match &h.terminal.status {
-            Some(s) => agents::kind(s.app.as_deref(), fg.cli.as_deref()),
-            None => fg.cli.clone(),
-        };
+        let kind = kind_of(&h.terminal);
         let Some(kind) = kind.as_deref().filter(|k| matches!(*k, "codex" | "agy")) else {
             return false;
         };
@@ -2143,6 +2209,94 @@ pub(crate) mod tests {
         assert!(!core.bind("t2", "../x", pid));
     }
 
+    fn copilot_marked(root: &Path, id: &str, cwd: &str) -> std::fs::File {
+        let session = root.join(id);
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(
+            session.join("workspace.yaml"),
+            format!("id: {id}\ncwd: {cwd}\n"),
+        )
+        .unwrap();
+        let start = json!({"type": "session.start", "data": {"sessionId": id}});
+        std::fs::write(session.join("events.jsonl"), format!("{start}\n")).unwrap();
+        let me = std::process::id();
+        std::fs::write(session.join(format!("inuse.{me}.lock")), me.to_string()).unwrap();
+        let hold = std::fs::File::create(session.join(format!("inuse.{me}.hold"))).unwrap();
+        hold.lock().unwrap();
+        hold
+    }
+
+    #[test]
+    fn copilot_and_agy_sessions_come_from_what_their_process_holds_and_never_from_two() {
+        use std::os::unix::fs::PermissionsExt;
+        const OTHER: &str = "01a199ed-7993-7261-8219-300d543d7650";
+        let dir = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        let mut copilot = terminal("t1", json!({"state": "idle", "app": "copilot"}), "copilot");
+        copilot["foreground"]["pid"] = json!(pid);
+        let mut agy = terminal("t2", json!({"state": "idle", "app": "antigravity"}), "agy");
+        agy["foreground"]["pid"] = json!(pid);
+        let root = dir.path().join("session-state");
+        let roots = crate::costs::Roots {
+            copilot: Some(root.clone()),
+            agy: Some(dir.path().join("agy/brain")),
+            ..crate::costs::Roots::default()
+        };
+        let core = Core::new(dir.path().join("core.sock")).with_agent_roots(roots);
+        core.lock().live = Some(live(10, json!([copilot, agy])));
+        let sessions = |core: &Core| -> Vec<Option<String>> {
+            core.reread_sessions();
+            (core.agents().unwrap().into_iter())
+                .map(|a| a.agent_session.map(|s| s.value))
+                .collect()
+        };
+        assert_eq!(sessions(&core), [None, None]);
+
+        let first = copilot_marked(&root, SESSION, "/w/sub");
+        assert_eq!(sessions(&core)[0].as_deref(), Some(SESSION));
+        let second = copilot_marked(&root, OTHER, "/w/sub");
+        assert_eq!(sessions(&core)[0], None, "after /new it marks both");
+        drop(second);
+        assert_eq!(sessions(&core)[0].as_deref(), Some(SESSION));
+        let unreadable = root.join("01a199ed-7993-7261-8219-300d543d7651");
+        std::fs::create_dir(&unreadable).unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let found = sessions(&core)[0].clone();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found, None, "a session folder it cannot read");
+        drop(first);
+        assert_eq!(sessions(&core)[0], None, "a marker no process holds");
+
+        let presence = dir.path().join("agy/presence");
+        std::fs::create_dir_all(&presence).unwrap();
+        let lock = |id: &str| std::fs::File::create(presence.join(format!("{id}.lock"))).unwrap();
+        let own = lock(SESSION);
+        assert_eq!(sessions(&core)[1].as_deref(), Some(SESSION));
+        core.lock().codex.insert("t2".into(), (pid, OTHER.into()));
+        assert_eq!(
+            sessions(&core)[1],
+            None,
+            "the hook names another conversation"
+        );
+        core.lock().codex.insert("t2".into(), (pid, SESSION.into()));
+        assert_eq!(sessions(&core)[1].as_deref(), Some(SESSION));
+        let other = lock(OTHER);
+        assert_eq!(
+            sessions(&core)[1].as_deref(),
+            Some(SESSION),
+            "the hook names one of its open locks"
+        );
+        core.lock().codex.remove("t2");
+        assert_eq!(sessions(&core)[1], None, "two locks and no hook");
+        drop((own, other));
+        core.lock().codex.insert("t2".into(), (pid, OTHER.into()));
+        assert_eq!(
+            sessions(&core)[1].as_deref(),
+            Some(OTHER),
+            "no lock open: the hook"
+        );
+    }
+
     #[tokio::test]
     async fn without_a_followed_core_herdr_answers_alone() {
         let dir = tempfile::tempdir().unwrap();
@@ -2301,6 +2455,14 @@ pub(crate) mod tests {
         assert_eq!(
             super::super::herdr::agent_args("codex", None, false, Some(true)),
             ["--no-daemon"]
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("copilot", Some(SESSION), false, None),
+            [format!("--resume={SESSION}")]
+        );
+        assert_eq!(
+            super::super::herdr::agent_args("agy", Some(SESSION), false, None),
+            ["--conversation", SESSION]
         );
         assert!(agents::task_cli("copilot").is_none());
     }

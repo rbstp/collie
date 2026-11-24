@@ -13,8 +13,9 @@ use super::screen::MAX_TAIL;
 use super::tasks::{FLAVOR, disown};
 use super::wire::{Formatted, Process, Split};
 use super::{CLOSE_TIMEOUT, Rex};
+use crate::runtime::Error;
+use crate::runtime::agents::{self, uuid};
 use crate::runtime::screen::Screen;
-use crate::runtime::{Error, agents};
 
 const GRACE: Duration = Duration::from_secs(15);
 const CONFIRM: Duration = Duration::from_millis(if cfg!(test) { 200 } else { 3000 });
@@ -24,7 +25,6 @@ const WINDOW: Duration = Duration::from_secs(90);
 const MAX_AGENTS: usize = 256;
 const MAX_FILE: u64 = 256 << 10;
 const MAX_FOLDER: usize = 4096;
-const MAX_PRESENCE: usize = 4096;
 const SHELLS: [&str; 2] = ["zsh", "bash"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,14 +112,6 @@ struct Starting {
     since: Instant,
     seen: bool,
     running: Option<Instant>,
-}
-
-fn uuid(id: &str) -> bool {
-    id.len() == 36
-        && id.bytes().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => b == b'-',
-            _ => b.is_ascii_digit() || (b'a'..=b'f').contains(&b),
-        })
 }
 
 pub(super) fn args(agent: &Agent) -> Option<Vec<String>> {
@@ -464,7 +456,7 @@ impl Rex {
         }
     }
 
-    fn presence_dir(&self) -> Option<PathBuf> {
+    pub(super) fn presence_dir(&self) -> Option<PathBuf> {
         Some(self.agent_roots.agy.as_deref()?.parent()?.join("presence"))
     }
 
@@ -483,9 +475,8 @@ impl Rex {
             }),
             "copilot" => (roots.copilot.as_deref())
                 .is_some_and(|r| crate::transcript::copilot_holds(r, pid, conversation)),
-            "agy" => (self.presence_dir()).is_some_and(|d| {
-                presence(&d, &agents::open_files(pid)).is_some_and(|ids| ids == [conversation])
-            }),
+            "agy" => (self.presence_dir())
+                .is_some_and(|d| agents::agy_lock(&d, pid).as_deref() == Some(conversation)),
             _ => false,
         }
     }
@@ -780,28 +771,6 @@ async fn start(
         })?;
     let _ = disown(client, session, &new).await;
     Ok(new)
-}
-
-fn presence(dir: &Path, open: &[(u64, u64)]) -> Option<Vec<String>> {
-    let mut ids = Vec::new();
-    for (listed, entry) in std::fs::read_dir(dir).ok()?.enumerate() {
-        if listed == MAX_PRESENCE {
-            return None;
-        }
-        let entry = entry.ok()?;
-        let name = entry.file_name();
-        let Some(id) = (name.to_str())
-            .and_then(|n| n.strip_suffix(".lock"))
-            .filter(|id| uuid(id))
-        else {
-            continue;
-        };
-        let m = std::fs::symlink_metadata(entry.path()).ok()?;
-        if open.contains(&(m.dev(), m.ino())) {
-            ids.push(id.to_owned());
-        }
-    }
-    Some(ids)
 }
 
 async fn idle(client: &Client, session: &str, block: &str) -> Option<u32> {
