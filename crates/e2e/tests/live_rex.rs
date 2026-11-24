@@ -1,7 +1,6 @@
 #[allow(dead_code)]
 mod common;
 
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -2026,6 +2025,10 @@ fn live_rex_resume() {
     let Some(cli) = rex_cli() else {
         return;
     };
+    if !Path::new("/usr/bin/sandbox-exec").is_file() {
+        println!("skipped: a restoring Rex server runs only inside sandbox-exec");
+        return;
+    }
     let (bin, path) = match std::env::var("COLLIE_E2E_BIN") {
         Ok(bin) => (bin, std::env::var("PATH").unwrap_or_default()),
         Err(_) => {
@@ -2048,9 +2051,9 @@ fn live_rex_resume() {
     std::fs::create_dir_all(Path::new(&bin).join("record")).unwrap();
     std::fs::create_dir_all(&home).unwrap();
     stand_in(Path::new(&bin), "claude", "claude-code");
-    let mut server = RexServer::start(&cli, "z");
+    let mut server = RexServer::start_restoring(&cli, "z", &[]);
     let rt = runtime();
-    rt.block_on(resume_scenario(&server, Path::new(&bin)));
+    rt.block_on(resume_scenario(&mut server, Path::new(&bin)));
     drop(rt);
     assert!(server.stop(), "dedicated Rex server did not stop");
 }
@@ -2060,86 +2063,86 @@ fn layout_of(server: &RexServer, session: &str) -> serde_json::Value {
     view["windows"][0]["layers"][0]["layout"].clone()
 }
 
-async fn resume_scenario(server: &RexServer, bin: &Path) {
-    let (session, block) = new_session(
-        server,
-        "collie-resume",
-        &[
-            "/usr/bin/env",
-            "PROMPT=%~\n%#",
-            "RPROMPT=[right]",
-            "/bin/zsh",
-            "-f",
-            "-i",
-        ],
-    );
-    until("the two-line prompt with a right prompt", async || {
-        let args =
-            serde_json::json!({ "block_id": block, "args": { "format": "text" } }).to_string();
-        let text = server.rex(&[
-            "api",
-            "call",
-            "-s",
-            &session,
-            "com.superlogical.terminal.format",
-            &args,
-        ]);
-        let text = text["content"].as_str().unwrap_or_default().to_owned();
-        (text.contains("[right]") && text.lines().count() >= 2).then_some(())
-    })
-    .await;
+fn screen_of(server: &RexServer, session: &str, block: &str) -> String {
+    let args = serde_json::json!({ "block_id": block, "args": { "format": "text" } }).to_string();
+    let method = "com.superlogical.terminal.format";
+    let text = server.rex(&["api", "call", "-s", session, method, &args]);
+    text["content"].as_str().unwrap_or_default().to_owned()
+}
+
+fn block_ids(server: &RexServer, session: &str) -> Vec<String> {
+    (blocks_of(server, session).iter())
+        .filter_map(|b| b["block_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn claim(sessions: &Path, pid: u64, conversation: &str, cwd: &str) {
+    let claim = serde_json::json!({
+        "pid": pid, "sessionId": conversation, "cwd": cwd, "startedAt": collied::now_ms(),
+    });
+    std::fs::write(sessions.join(format!("{pid}.json")), claim.to_string()).unwrap();
+}
+
+async fn resume_scenario(server: &mut RexServer, bin: &Path) {
+    let zshrc = "PROMPT=$'%~\\n%#'\nRPROMPT='[right]'\n";
+    std::fs::write(server.root.join("home/.zshrc"), zshrc).unwrap();
+    let (session, block) = new_session(server, "collie-resume", &["/bin/zsh", "-i"]);
     let work = std::fs::canonicalize(&server.work).unwrap();
-    let beside = serde_json::json!({
-        "anchor_id": block, "direction": "horizontal", "side": "after",
-        "layout": { "block": { "flavor": "com.superlogical.terminal.shell", "options": {
-            "shell": "none", "login": false, "command": ["/bin/zsh", "-f", "-i"], "cwd": work,
-        }}},
-    });
-    let split = server.rex(&[
-        "api",
-        "call",
-        "-s",
-        &session,
-        "session.new_split",
-        &beside.to_string(),
-    ]);
-    let other = split["block_ids"][0]
-        .as_str()
-        .expect("a block beside")
-        .to_owned();
-    let before = layout_of(server, &session);
+    let w = work.to_str().unwrap().to_owned();
     let conversation = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
-    let record = server.root.join("rex-resume.json");
-    let saved = serde_json::json!({
-        "instance": "an-earlier-run",
-        "agents": { &block: { "kind": "claude", "conversation": conversation, "folder": work } },
-    });
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&record)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, saved.to_string().as_bytes()))
-        .unwrap();
     let sessions = server.root.join("claude/sessions");
-    let key: String = (work.to_str().unwrap().chars())
+    let key: String = (w.chars())
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let project = server.root.join("claude/projects").join(key);
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(project.join(format!("{conversation}.jsonl")), "{}\n").unwrap();
+    let record = server.root.join("rex-resume.json");
     let rex = Arc::new(
         Rex::new(server.socket.clone())
             .with_claude_sessions(Some(sessions.clone()))
-            .with_resume(record, server.root.join("rex-resume-off")),
+            .with_resume(record.clone(), server.root.join("rex-resume-off")),
     );
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(rex.clone().run(stopped));
     tokio::time::timeout(Duration::from_secs(5), rex.settled())
         .await
         .unwrap();
+    until("the two-line prompt with a right prompt", async || {
+        let text = screen_of(server, &session, &block);
+        (text.contains("[right]") && text.lines().count() >= 2).then_some(())
+    })
+    .await;
+    let typed = serde_json::json!({ "block_id": block, "args": { "data": format!("{}/claude\r", bin.display()) } });
+    server.rex(&[
+        "api",
+        "call",
+        "-s",
+        &session,
+        "com.superlogical.terminal.write",
+        &typed.to_string(),
+    ]);
+    let pid = until("the stand-in in front", async || {
+        let p = process_of(server, &session, &block);
+        (p["foreground"]["name"].as_str() != Some("zsh"))
+            .then(|| p["foreground"]["pid"].as_u64())
+            .flatten()
+    })
+    .await;
+    claim(&sessions, pid, conversation, &w);
+    until("the conversation recorded", async || {
+        rex.reread_sessions();
+        rex.resume().await;
+        let text = std::fs::read_to_string(&record).ok()?;
+        (text.contains(&block) && text.contains(conversation)).then_some(())
+    })
+    .await;
     let args = bin.join("record/args-claude");
+    std::fs::remove_file(&args).unwrap();
+
+    let before = layout_of(server, &session);
+    server.restart();
     let ran = until("the resumed agent's arguments", async || {
         rex.resume().await;
         std::fs::read_to_string(&args).ok()
@@ -2152,66 +2155,44 @@ async fn resume_scenario(server: &RexServer, bin: &Path) {
         env.contains(&home),
         "the stand-in ran with the scratch home"
     );
-    let ids = || -> Vec<String> {
-        (blocks_of(server, &session).iter())
-            .filter_map(|b| b["block_id"].as_str().map(str::to_owned))
-            .collect()
-    };
-    for _ in 0..3 {
-        rex.resume().await;
-    }
     assert_eq!(
-        ids().len(),
-        3,
-        "the shell stays until the agent runs its conversation"
+        block_ids(server, &session).len(),
+        2,
+        "the shell stays until the agent runs"
     );
-    let started = until("the resumed agent listed", async || {
-        let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
-        (rt.agent_list().await.ok()?.into_iter()).find(|a| a.agent.as_deref() == Some("claude"))
+    assert!(
+        screen_of(server, &session, &block).contains("[right]"),
+        "the restored shell"
+    );
+    let new = until("the resumed block", async || {
+        block_ids(server, &session)
+            .into_iter()
+            .find(|b| *b != block)
     })
     .await;
-    let new = started.terminal_id.strip_prefix("rex:").unwrap().to_owned();
-    let pid = process_of(server, &session, &new)["foreground"]["pid"]
-        .as_u64()
-        .unwrap();
-    let claim = serde_json::json!({
-        "pid": pid, "sessionId": conversation, "cwd": work, "startedAt": collied::now_ms(),
-    });
-    std::fs::write(sessions.join(format!("{pid}.json")), claim.to_string()).unwrap();
+    let resumed = until("the resumed stand-in in front", async || {
+        process_of(server, &session, &new)["foreground"]["pid"].as_u64()
+    })
+    .await;
+    claim(&sessions, resumed, conversation, &w);
     until("the restored shell closed", async || {
         rex.reread_sessions();
         rex.resume().await;
-        (!ids().contains(&block)).then_some(())
+        (!block_ids(server, &session).contains(&block)).then_some(())
     })
     .await;
-    let agent = until("the resumed agent with its conversation", async || {
-        let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
-        (rt.agent_list().await.ok()?.into_iter())
-            .find(|a| a.agent_session.as_ref().map(|s| s.value.as_str()) == Some(conversation))
-    })
-    .await;
-    assert_eq!(agent.workspace_id, format!("rex:{session}"));
-    assert_eq!(agent.foreground_cwd.as_deref(), work.to_str());
-    assert_eq!(agent.terminal_id, format!("rex:{new}"));
-    let blocks = ids();
-    assert_eq!(blocks.len(), 2, "{blocks:?}");
-    assert!(blocks.contains(&new) && blocks.contains(&other) && !blocks.contains(&block));
+    assert_eq!(block_ids(server, &session), std::slice::from_ref(&new));
     let after = layout_of(server, &session);
-    assert_eq!(after["split"]["split_id"], before["split"]["split_id"]);
     assert_eq!(
-        after["split"]["before"]["rect"],
-        before["split"]["before"]["rect"]
-    );
-    assert_eq!(
-        after["split"]["before"]["block_id"],
+        after["block_id"],
         new.as_str(),
-        "in the old block's place"
+        "in the old block's place: {after}"
     );
-    assert_eq!(after["split"]["after"]["block_id"], other.as_str());
+    assert_eq!(before["block_id"], block.as_str());
     for _ in 0..5 {
         rex.resume().await;
     }
-    assert_eq!(blocks_of(server, &session).len(), 2, "once");
+    assert_eq!(block_ids(server, &session).len(), 1, "once");
     stop.send_replace(true);
     task.await.unwrap();
 }

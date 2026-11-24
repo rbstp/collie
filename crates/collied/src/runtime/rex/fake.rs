@@ -95,6 +95,7 @@ pub(super) struct State {
     pub split_pid: Option<u32>,
     pub split_exits: bool,
     pub split_host: Option<String>,
+    pub split_cwd: Option<String>,
     pub data: Data,
 }
 
@@ -235,6 +236,7 @@ impl Fake {
             split_pid: None,
             split_exits: false,
             split_host: None,
+            split_cwd: None,
             started_at: "2026-11-12T16:47:01.264128Z".to_owned(),
             data: Data::default(),
         }));
@@ -796,7 +798,12 @@ fn split(
     }
     let program = command.get(i).copied().unwrap_or_default();
     let pid = s.split_pid.unwrap_or(950 + n as u32);
-    let proc = json!({ "pid": pid, "user_id": 501, "name": "2.1.322", "argv0": program, "cwd": options["cwd"] });
+    let cwd = s
+        .split_cwd
+        .clone()
+        .map_or_else(|| options["cwd"].clone(), Value::from);
+    let proc =
+        json!({ "pid": pid, "user_id": 501, "name": "2.1.322", "argv0": program, "cwd": cwd });
     let process = match s.split_exits {
         true => json!({ "last_exit": { "exit_code": 1 }, "child": null, "foreground": null }),
         false => json!({ "last_exit": null, "child": proc, "foreground": proc }),

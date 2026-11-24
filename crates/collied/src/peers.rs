@@ -171,6 +171,13 @@ pub fn load_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, Error>
 /// owned by the current user with no group or world bits. Non-blocking, so a FIFO is
 /// refused rather than waited on.
 pub fn read_private(path: &Path) -> Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat), Error> {
+    read_private_at_most(path, u64::MAX)
+}
+
+pub fn read_private_at_most(
+    path: &Path,
+    limit: u64,
+) -> Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat), Error> {
     use rustix::fs::{FileType, Mode, OFlags};
     let io = |source: std::io::Error| Error::Io {
         path: path.to_owned(),
@@ -194,6 +201,7 @@ pub fn read_private(path: &Path) -> Result<(Zeroizing<Vec<u8>>, rustix::fs::Stat
     }
     let mut bytes = Zeroizing::new(Vec::new());
     std::fs::File::from(fd)
+        .take(limit)
         .read_to_end(&mut bytes)
         .map_err(io)?;
     Ok((bytes, st))
