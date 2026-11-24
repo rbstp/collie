@@ -745,7 +745,7 @@ printf '\033[2J\033[Hdenied %s\n' "$k"; st idle
 draw() { printf '\033[2J\033[H'; sed "s/1\. Yes\$/1. $2/" "$1"; }
 note() {
   draw "$1" Yes; st blocked ':kind=permission:msg=approve Bash'
-  stty raw -echo min 0 time 10
+  stty raw -echo opost min 0 time 10
   n=; swapped=
   while :; do
     b=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
