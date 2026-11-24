@@ -148,40 +148,9 @@ fn command(agent: &Agent) -> Option<String> {
 }
 
 pub(super) fn login_shell() -> Option<String> {
-    let shell = account_shell()?;
+    let shell = std::env::var("SHELL").ok()?;
     let name = Path::new(&shell).file_name()?.to_str()?;
     (shell.starts_with('/') && !shell.contains('=') && SHELLS.contains(&name)).then_some(shell)
-}
-
-#[cfg(target_os = "macos")]
-fn account_shell() -> Option<String> {
-    let mut pwd = std::mem::MaybeUninit::<libc::passwd>::zeroed();
-    let mut buf = vec![0; 16 << 10];
-    let mut found = std::ptr::null_mut();
-    let uid = rustix::process::getuid().as_raw();
-    let rc = unsafe {
-        libc::getpwuid_r(
-            uid,
-            pwd.as_mut_ptr(),
-            buf.as_mut_ptr(),
-            buf.len(),
-            &mut found,
-        )
-    };
-    if rc != 0 || found.is_null() {
-        return None;
-    }
-    let shell = unsafe { (*found).pw_shell };
-    if shell.is_null() {
-        return None;
-    }
-    let shell = unsafe { std::ffi::CStr::from_ptr(shell) }.to_str().ok()?;
-    Some(shell.to_owned())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn account_shell() -> Option<String> {
-    None
 }
 
 fn fits(block: &str, agent: &Agent) -> bool {
