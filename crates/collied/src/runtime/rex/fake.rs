@@ -677,6 +677,21 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             }
             None => Err("not_found"),
         },
+        (_, Some("resize")) if s.terminal.contains(&"resize") => match found {
+            Some(i) => {
+                let args = &payload["args"];
+                let (columns, rows) = (args["columns"].as_u64(), args["rows"].as_u64());
+                let b = &mut s.blocks[i];
+                if let (Some(c), Some(r), None) = (columns, rows, &b.owner) {
+                    b.size = (c as u32, r as u32);
+                    let size = json!({ "columns": c, "rows": r });
+                    let changed = block_event(&session, &block, "size_changed", size);
+                    deliver(s, seq, out, changed);
+                }
+                Ok(json!({}))
+            }
+            None => Err("not_found"),
+        },
         (_, Some(m)) if s.terminal.contains(&m) => match found.map(|i| &s.blocks[i]) {
             Some(b) => match m {
                 "process" => Ok(b.process.clone()),

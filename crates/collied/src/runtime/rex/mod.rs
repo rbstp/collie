@@ -594,6 +594,7 @@ impl Rex {
         self.read_dirty(client).await?;
         self.live(|live| live.synced = true)?;
         self.prune_tasks();
+        self.size_tasks(client).await;
         self.plan_resume();
         self.settled.send_replace(true);
         tracing::info!(socket = %self.socket.display(), version, "following Rex");

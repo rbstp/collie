@@ -51,7 +51,7 @@ impl Rex {
 
     /// A session of the task's own whose one block runs `argv` in `cwd`, as an argument
     /// vector Rex hands to the program unchanged through the login shell. The block is
-    /// recorded, then given up, so Rex.app sizes it as it sizes the user's own; returns its id.
+    /// recorded, given up, then sized as the tallest terminal Rex holds; returns its id.
     pub async fn start_task(
         &self,
         cwd: &str,
@@ -102,6 +102,8 @@ impl Rex {
                 "Rex started agent {id}, which was left running, but did not let collied give it up: {e}"
             ))
         })?;
+        let tallest = self.live(|l| l.model.tallest()).ok().flatten();
+        resize(&client, &session, &block, tallest).await;
         Ok(id)
     }
 
@@ -197,6 +199,24 @@ impl Rex {
             .collect())
     }
 
+    pub(super) async fn size_tasks(&self, client: &Client) {
+        let (tallest, small) = {
+            let inner = self.lock();
+            let Some(live) = inner.live.as_ref() else {
+                return;
+            };
+            let small: Vec<(String, String)> = (inner.tasks.keys())
+                .filter_map(|b| live.model.target(&format!("{PREFIX}{b}")))
+                .filter(|&(_, _, size, _)| size == UNSIZED)
+                .map(|(session, block, ..)| (session, block))
+                .collect();
+            (live.model.tallest(), small)
+        };
+        for (session, block) in small {
+            resize(client, &session, &block, tallest).await;
+        }
+    }
+
     pub(super) fn move_task(&self, from: &str, to: &str) {
         let mut inner = self.lock();
         if let Some(task) = inner.tasks.remove(from) {
@@ -279,6 +299,18 @@ async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
         .call::<Value>(Method::SessionDestroy, at, CLOSE_TIMEOUT)
         .await?;
     Ok(true)
+}
+
+const UNSIZED: (u16, u16) = (80, 24);
+
+async fn resize(client: &Client, session: &str, block: &str, tallest: Option<(u16, u16)>) {
+    let Some((columns, rows)) = tallest.filter(|&(c, r)| (r, c) > (UNSIZED.1, UNSIZED.0)) else {
+        return;
+    };
+    let size = json!({ "columns": columns, "rows": rows });
+    if let Err(e) = (client.terminal::<Value>(Method::Resize, session, block, size)).await {
+        tracing::warn!(error = %e, "could not size a Rex task's block");
+    }
 }
 
 /// `session.create` makes collied the block's owner, whose size (80x24) the block would keep.

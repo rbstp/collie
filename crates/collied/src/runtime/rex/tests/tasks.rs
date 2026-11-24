@@ -132,6 +132,88 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
     assert_eq!(rex.get(&codex).unwrap().agent.as_deref(), Some("codex"));
 }
 
+async fn task_beside(sizes: &[(u32, u32)]) -> (Fake, Arc<Rex>, String) {
+    let fake = Fake::start().await;
+    for (i, &size) in sizes.iter().enumerate() {
+        let block = format!("block:019a7d2e-0000-7000-8000-00000000005{i}");
+        claude(&fake, S1, &block, 50 + i as u32, "idle", T0);
+        fake.state().block(&block).size = size;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (rex, rt) = followed(&fake, dir.path()).await;
+    let task = (host(&rt).await)
+        .start(
+            "/w",
+            NAME,
+            None,
+            "claude",
+            None,
+            "/opt/bin/claude",
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    (fake, rex, task)
+}
+
+#[tokio::test]
+async fn a_task_block_given_up_takes_the_size_of_the_tallest_terminal() {
+    let (fake, rex, task) = task_beside(&[(250, 20), (198, 68), (120, 68)]).await;
+    let calls = fake.calls();
+    let at = |m: &str| calls.iter().position(|c| c == m);
+    assert!(at("session.disown_block") < at("com.superlogical.terminal.resize"));
+    assert_eq!(fake.state().block(block_of(&task)).size, (198, 68));
+    eventually("collied's size", || {
+        rex.terminal_size(&task).ok() == Some((198, 68))
+    })
+    .await;
+
+    let (fake, _rex, task) = task_beside(&[(250, 20)]).await;
+    assert!(
+        !fake.calls().iter().any(|c| c.ends_with(".resize")),
+        "never shorter"
+    );
+    assert_eq!(fake.state().block(block_of(&task)).size, (80, 24));
+}
+
+#[tokio::test]
+async fn a_task_block_left_at_80x24_takes_the_size_of_the_tallest_terminal_once_followed() {
+    let fake = Fake::start().await;
+    let b = |n: u32| format!("block:019a7d2e-0000-7000-8000-00000000006{n}");
+    for (n, size) in [(1, (80, 24)), (2, (100, 30)), (3, (80, 24)), (4, (198, 68))] {
+        claude(&fake, S1, &b(n), 60 + n, "idle", T0);
+        fake.state().block(&b(n)).size = size;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rex-tasks.json");
+    let task = json!({ "name": NAME, "session": S1 });
+    std::fs::write(&file, json!({ b(1): task, b(2): task }).to_string()).unwrap();
+    std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+    let rex = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file));
+    let _following = follow(&rex).await;
+    eventually("the task left at 80x24 sized", || {
+        fake.state().block(&b(1)).size == (198, 68)
+    })
+    .await;
+    assert_eq!(
+        fake.state().block(&b(2)).size,
+        (100, 30),
+        "a task a client sized"
+    );
+    assert_eq!(
+        fake.state().block(&b(3)).size,
+        (80, 24),
+        "not collied's task"
+    );
+    let resized = fake
+        .calls()
+        .iter()
+        .filter(|c| c.ends_with(".resize"))
+        .count();
+    assert_eq!(resized, 1);
+}
+
 #[tokio::test]
 async fn each_kind_and_resume_runs_as_one_argument_vector_whatever_its_values_hold() {
     let fake = Fake::start().await;

@@ -1515,6 +1515,104 @@ fn live_rex_tasks() {
     assert!(server.stop(), "dedicated Rex server did not stop");
 }
 
+const FULLSCREEN: &str = r#"$| = 1;
+my $log = shift;
+sub draw {
+    my ($rows, $cols) = split ' ', `stty size`;
+    open(my $f, '>>', $log) or die;
+    print $f "${cols}x$rows\n";
+    close $f;
+    print "\e[2J";
+    print "\e[$_;1Hrow $_" for 1 .. $rows - 1;
+    print "\e[$rows;1H> ${cols}x$rows";
+}
+$SIG{WINCH} = \&draw;
+print "\e[?1049h\e]7501;state=idle:app=claude-code\e\\";
+draw();
+select(undef, undef, undef, 600) while 1;
+"#;
+
+#[test]
+fn live_rex_task_size() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "z");
+    runtime().block_on(task_size_scenario(&server));
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
+async fn task_size_scenario(server: &RexServer) {
+    let tasks = server.root.join("tasks.json");
+    let follow = async || {
+        let rex = Arc::new(Rex::new(server.socket.clone()).with_tasks(tasks.clone()));
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(rex.clone().run(stopped));
+        tokio::time::timeout(Duration::from_secs(5), rex.settled())
+            .await
+            .unwrap();
+        (rex, stop, task)
+    };
+    let log = server.root.join("sizes");
+    let drawn = || std::fs::read_to_string(&log).unwrap_or_default();
+    let fullscreen = ["/usr/bin/perl", "-e", FULLSCREEN, log.to_str().unwrap()].map(str::to_owned);
+    let work = server.work.to_str().unwrap();
+
+    let (rex, stop, task) = follow().await;
+    let id = (rex.start_task(work, "size", None, None, fullscreen.to_vec()))
+        .await
+        .unwrap();
+    until("the first draw", async || {
+        (drawn() == "80x24\n").then_some(())
+    })
+    .await;
+    stop.send(true).unwrap();
+    let _ = task.await;
+
+    let (session, block) = new_session(server, "collie-sized", &["/bin/sh", "-c", "read -r _"]);
+    let app = Control::open(&server.socket, &session).await;
+    let take = serde_json::json!({ "session_id": session, "block_ids": [block], "mode": "take" });
+    app.call("session.own_block", take).await;
+    let size = serde_json::json!({ "columns": 120, "rows": 40 });
+    let resize = serde_json::json!({ "session_id": session, "block_id": block, "args": size });
+    app.call("com.superlogical.terminal.resize", resize).await;
+    let sized = server.rex(&["block", "call", "-b", &block, "size"]);
+    assert_eq!(
+        (&sized["columns"], &sized["rows"]),
+        (&120.into(), &40.into())
+    );
+
+    let (rex, stop, task) = follow().await;
+    until(
+        "the same agent drawn again at the sized block's size",
+        async || (drawn() == "80x24\n120x40\n").then_some(()),
+    )
+    .await;
+    let _watch = rex.watch(&id).unwrap();
+    until("collied serving the whole screen", async || {
+        let read = rex.read(&id, "visible", None).await.ok()?.text;
+        (rex.terminal_size(&id).ok() == Some((120, 40))
+            && read.lines().count() == 40
+            && read.lines().last() == Some("> 120x40"))
+        .then_some(())
+    })
+    .await;
+    let given = id.strip_prefix("rex:").unwrap();
+    let given_up = server.rex(&["block", "call", "-b", given, "size"]);
+    assert!(given_up["owner"].is_null(), "{given_up}");
+
+    std::fs::remove_file(&log).unwrap();
+    rex.start_task(work, "sized", None, None, fullscreen.to_vec())
+        .await
+        .unwrap();
+    until("a new task drawn at the sized block's size", async || {
+        (drawn().lines().last() == Some("120x40")).then_some(())
+    })
+    .await;
+    stop.send(true).unwrap();
+    let _ = task.await;
+}
+
 #[test]
 fn live_rex_terminals() {
     let Some(cli) = rex_cli() else {
