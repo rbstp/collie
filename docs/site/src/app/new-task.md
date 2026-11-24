@@ -35,7 +35,7 @@ Check the branch and path before you tap **Start**. If the agent fails to start,
 
 ## Resume a session
 
-Choose **Resume** and a folder to list its recent Claude Code and Codex sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr, Herdr Core or Rex, are left out.
+Choose **Resume** and a folder to list its recent Claude Code, Codex, Copilot CLI and Antigravity CLI sessions by first prompt, then resume one in a new workspace, with an optional prompt. Sessions already open in an agent, in herdr, Herdr Core or Rex, are left out, and so is a Copilot CLI session open anywhere on the machine. Copilot CLI sessions resume only in herdr, so with Herdr Core or Rex chosen in [Where tasks start](#where-tasks-start) the list leaves them out. Antigravity CLI lists a conversation in the folder where you typed its first prompt in the CLI.
 
 ## Options
 

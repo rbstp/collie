@@ -121,6 +121,18 @@ final class NewTaskSheetTests: XCTestCase {
         model.cwd = "/Users/me/app"
         XCTAssertTrue(model.canStart)
 
+        core.state.withLock {
+            $0.sessions.append(TaskSession(agent: "copilot", sessionId: "20000000-0000-4000-8000-000000000002", firstPrompt: "triage", modifiedMs: 1_791_000_000_000))
+        }
+        model.location = .resume
+        await model.loadSessions()
+        XCTAssertEqual(model.resumable?.map(\.agent), ["codex", "claude"])
+        model.session = model.sessions?.first { $0.agent == "copilot" }
+        XCTAssertFalse(model.canStart, "Rex does not start Copilot CLI")
+        model.session = model.sessions?.first { $0.agent == "codex" }
+        XCTAssertTrue(model.canStart)
+        model.location = .folder
+
         // The last computer's choice is never started on the next one before its kinds load.
         offer(["claude"])
         model.machineId = "m2"

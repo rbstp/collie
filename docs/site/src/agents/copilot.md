@@ -5,13 +5,13 @@
 | Feature | Copilot CLI |
 |---|---|
 | Grid preview, status and Inbox | Yes |
-| [Chat](../app/chat-terminal.md) and Terminal | Chat in herdr only; in Herdr Core and Rex, Terminal only |
+| [Chat](../app/chat-terminal.md) and Terminal | Yes |
 | [Remaining context](../app/agents-tab.md#remaining-context) and [subagents](../app/agents-tab.md#running-subagents) | Subagents only |
 | [Approval alerts](../notifications/approvals.md) | Yes, without Approve or Deny: answer in the session |
 | [Plan usage](../app/usage.md) | Monthly premium usage, with `gh` signed in |
 | [Token cost](../app/usage.md#tokens-and-cost) | Yes |
 | Slash command menu, notice buttons, draft sync and [pull request watch](../app/pull-requests.md#watch-a-pull-request) | No |
-| [New task](../app/new-task.md) | In herdr only; in [Herdr Core](../app/new-task.md#herdr-core) and [Rex](../app/new-task.md#rex), you can only watch Copilot CLI |
+| [New task](../app/new-task.md) | In herdr only, Resume included; in [Herdr Core](../app/new-task.md#herdr-core) and [Rex](../app/new-task.md#rex), you can only watch Copilot CLI |
 
 ## Set up
 
@@ -20,7 +20,9 @@
 
 ## Chat
 
-Chat works in herdr only; in Herdr Core and Rex, use Terminal. Chat follows `/new`. Copilot names a session after your first prompt; until then, or while two conversations in the pane share a name, Chat cannot tell which one the pane shows and says so. Terminal still works.
+In herdr, Chat follows `/new`. Copilot names a session after your first prompt; until then, or while two conversations in the pane share a name, Chat cannot tell which one the pane shows and says so. Terminal still works.
+
+In Herdr Core and Rex, Chat shows the conversation Copilot CLI marks as its own when it starts or resumes. After `/new`, Copilot CLI keeps both conversations until it exits, so Chat says it cannot tell which one you see; use Terminal, or quit and [resume](../app/new-task.md#resume-a-session) the one you want.
 
 ## Plan usage
 
