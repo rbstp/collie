@@ -148,6 +148,13 @@ fn command(agent: &Agent) -> Option<String> {
 }
 
 pub(super) fn login_shell() -> Option<String> {
+    let shell = account_shell()?;
+    let name = Path::new(&shell).file_name()?.to_str()?;
+    (shell.starts_with('/') && !shell.contains('=') && SHELLS.contains(&name)).then_some(shell)
+}
+
+#[cfg(target_os = "macos")]
+fn account_shell() -> Option<String> {
     let mut pwd = std::mem::MaybeUninit::<libc::passwd>::zeroed();
     let mut buf = vec![0; 16 << 10];
     let mut found = std::ptr::null_mut();
@@ -169,9 +176,12 @@ pub(super) fn login_shell() -> Option<String> {
         return None;
     }
     let shell = unsafe { std::ffi::CStr::from_ptr(shell) }.to_str().ok()?;
-    let name = Path::new(shell).file_name()?.to_str()?;
-    (shell.starts_with('/') && !shell.contains('=') && SHELLS.contains(&name))
-        .then(|| shell.to_owned())
+    Some(shell.to_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn account_shell() -> Option<String> {
+    None
 }
 
 fn fits(block: &str, agent: &Agent) -> bool {
@@ -683,9 +693,6 @@ impl Rex {
             }
             self.finish(block, &start).await
         } else if start.since.elapsed() >= START_LIMIT {
-            if let Ok(client) = self.live(|l| l.client.clone()) {
-                let _ = disown(&client, &start.session, &start.new).await;
-            }
             "the agent did not show its conversation in its folder in time; its block and the restored shell stay"
         } else {
             start.running = None;
@@ -703,7 +710,6 @@ impl Rex {
         let Ok(client) = self.live(|l| l.client.clone()) else {
             return "the connection ended before its restored shell closed; both stay";
         };
-        let _ = disown(&client, &start.session, &start.new).await;
         let (pid, size) = start.shell;
         let idle_now = idle(&client, &start.session, block).await;
         let screen_now = screen(&client, &start.session, block, size).await;
@@ -758,6 +764,7 @@ async fn start(
         .ok_or_else(|| {
             Error::Unsupported("Rex split the block without a block collied can name".to_owned())
         })?;
+    let _ = disown(client, session, &new).await;
     Ok(new)
 }
 
@@ -1389,11 +1396,6 @@ mod tests {
         let ids = blocks(&r.fake);
         assert_eq!(ids.len(), 2, "its output stays readable: {ids:?}");
         assert!(ids.contains(&READY.to_owned()));
-        let new = new_block(&r.fake);
-        assert!(
-            r.fake.state().block(&new).owner.is_some(),
-            "kept by collied, so Rex does not close it"
-        );
     }
 
     #[tokio::test]
@@ -1627,12 +1629,6 @@ mod tests {
         pid_file(&r.sessions, FIRST);
         assert!(ticks(&r.rex, || crate::lock(&r.rex.resume).starting.is_empty()).await);
         assert_eq!(blocks(&r.fake).len(), 2, "both stay");
-        let new = new_block(&r.fake);
-        assert_eq!(
-            r.fake.state().block(&new).owner,
-            None,
-            "given up, so Rex.app sizes it"
-        );
     }
 
     #[tokio::test]

@@ -575,7 +575,10 @@ pub(crate) fn copilot_held(root: &Path, id: &str) -> bool {
 
 pub(crate) fn copilot_session(root: &Path, pid: u32, cwd: &str) -> Option<String> {
     let mut found = None;
-    for entry in std::fs::read_dir(root).ok()?.flatten().take(MAX_LISTED) {
+    for (listed, entry) in std::fs::read_dir(root).ok()?.flatten().enumerate() {
+        if listed == MAX_LISTED {
+            return None;
+        }
         let name = entry.file_name();
         let Some(id) = name.to_str().filter(|id| is_session_id(id)) else {
             continue;

@@ -2084,17 +2084,18 @@ fn claim(sessions: &Path, pid: u64, conversation: &str, cwd: &str) {
 }
 
 async fn resume_scenario(server: &mut RexServer, bin: &Path) {
+    let conversation = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    let missing = "0a0a0a0a-0000-4000-8000-00000000000f";
     let rc = format!(
-        "export PATH='{}':\"$PATH\"\nexport CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1\nclaude() {{ COLLIE_WRAPPED=1 command claude \"$@\"; }}\n",
-        bin.display()
+        "export PATH='{}':\"$PATH\"\nexport CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1\nclaude() {{ if [ \"$2\" = {missing} ]; then echo $2 > '{record}/failed'; echo \"No conversation found with session ID: $2\"; sleep 1; return 1; fi; COLLIE_WRAPPED=1 command claude \"$@\"; }}\n",
+        bin.display(),
+        record = bin.join("record").display(),
     );
     let zshrc = format!("PROMPT=$'%~\\n%#'\nRPROMPT='[right]'\n{rc}");
     std::fs::write(server.root.join("home/.zshrc"), zshrc).unwrap();
     std::fs::write(server.root.join("home/.bash_profile"), &rc).unwrap();
-    let (session, block) = new_session(server, "collie-resume", &["/bin/zsh", "-i"]);
     let work = std::fs::canonicalize(&server.work).unwrap();
     let w = work.to_str().unwrap().to_owned();
-    let conversation = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
     let sessions = server.root.join("claude/sessions");
     let key: String = (w.chars())
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -2102,7 +2103,6 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
     let project = server.root.join("claude/projects").join(key);
     std::fs::create_dir_all(&sessions).unwrap();
     std::fs::create_dir_all(&project).unwrap();
-    std::fs::write(project.join(format!("{conversation}.jsonl")), "{}\n").unwrap();
     let record = server.root.join("rex-resume.json");
     let rex = Arc::new(
         Rex::new(server.socket.clone())
@@ -2114,33 +2114,45 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
     tokio::time::timeout(Duration::from_secs(5), rex.settled())
         .await
         .unwrap();
-    until("the two-line prompt with a right prompt", async || {
-        let text = screen_of(server, &session, &block);
-        (text.contains("[right]") && text.lines().count() >= 2).then_some(())
-    })
-    .await;
-    let typed = serde_json::json!({ "block_id": block, "args": { "data": format!("{}/claude\r", bin.display()) } });
-    server.rex(&[
-        "api",
-        "call",
-        "-s",
-        &session,
-        "com.superlogical.terminal.write",
-        &typed.to_string(),
-    ]);
-    let pid = until("the stand-in in front", async || {
-        let p = process_of(server, &session, &block);
-        (p["foreground"]["name"].as_str() != Some("zsh"))
-            .then(|| p["foreground"]["pid"].as_u64())
-            .flatten()
-    })
-    .await;
-    claim(&sessions, pid, conversation, &w);
-    until("the conversation recorded", async || {
+    let mut started = Vec::new();
+    for (label, id) in [
+        ("collie-resume", conversation),
+        ("collie-resume-fail", missing),
+    ] {
+        let (session, block) = new_session(server, label, &["/bin/zsh", "-i"]);
+        std::fs::write(project.join(format!("{id}.jsonl")), "{}\n").unwrap();
+        until("the two-line prompt with a right prompt", async || {
+            let text = screen_of(server, &session, &block);
+            (text.contains("[right]") && text.lines().count() >= 2).then_some(())
+        })
+        .await;
+        let typed = serde_json::json!({ "block_id": block, "args": { "data": format!("{}/claude\r", bin.display()) } });
+        server.rex(&[
+            "api",
+            "call",
+            "-s",
+            &session,
+            "com.superlogical.terminal.write",
+            &typed.to_string(),
+        ]);
+        let pid = until("the stand-in in front", async || {
+            let p = process_of(server, &session, &block);
+            (p["foreground"]["name"].as_str() != Some("zsh"))
+                .then(|| p["foreground"]["pid"].as_u64())
+                .flatten()
+        })
+        .await;
+        claim(&sessions, pid, id, &w);
+        started.push((session, block));
+    }
+    let (failing_session, failing) = started.pop().unwrap();
+    let (session, block) = started.pop().unwrap();
+    until("the conversations recorded", async || {
         rex.reread_sessions();
         rex.resume().await;
         let text = std::fs::read_to_string(&record).ok()?;
-        (text.contains(&block) && text.contains(conversation)).then_some(())
+        let both = [block.as_str(), failing.as_str(), conversation, missing];
+        both.iter().all(|s| text.contains(s)).then_some(())
     })
     .await;
     let args = bin.join("record/args-claude");
@@ -2205,6 +2217,21 @@ async fn resume_scenario(server: &mut RexServer, bin: &Path) {
         rex.resume().await;
     }
     assert_eq!(block_ids(server, &session).len(), 1, "once");
+
+    until("the failing agent's resume ran", async || {
+        rex.resume().await;
+        std::fs::read_to_string(bin.join("record/failed")).ok()
+    })
+    .await;
+    for _ in 0..5 {
+        rex.resume().await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        block_ids(server, &failing_session).contains(&failing),
+        "the shell stays when its agent fails"
+    );
+    assert!(screen_of(server, &failing_session, &failing).contains("[right]"));
     stop.send_replace(true);
     task.await.unwrap();
 }
