@@ -61,6 +61,62 @@ i=0; while [ $i -lt 150 ]; do printf x; i=$((i+1)); done; printf '\n'
 exec sleep 600"#;
 
 #[test]
+fn fake_copilot_box() {
+    copilot_box_stand_in();
+}
+
+#[test]
+fn live_herdr_core_copilot() {
+    if !hc_installed() {
+        return;
+    }
+    let mut core = CoreSession::start("cp");
+    let copilot = core.root.join("bin/copilot");
+    std::fs::create_dir_all(core.root.join("bin")).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &copilot).unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let work = std::fs::canonicalize(&core.work).unwrap();
+        let argv = [
+            copilot.to_str().unwrap(),
+            "fake_copilot_box",
+            "--exact",
+            "--nocapture",
+        ];
+        let address = run_argv(&core, "collie-copilot", &work, &argv);
+        let followed = Arc::new(Core::new(core.socket.clone()));
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(followed.clone().run(stopped));
+        tokio::time::timeout(Duration::from_secs(5), followed.settled())
+            .await
+            .unwrap();
+        let rt = Runtime::new(core.root.join("no-herdr.sock")).with_core(Some(followed.clone()));
+        let listed = until("the stand-in's idle report", async || {
+            (rt.agent_list().await.ok()?.into_iter()).find(|a| {
+                a.terminal_id.ends_with(&format!(":{address}")) && a.agent_status == "idle"
+            })
+        })
+        .await;
+        assert_eq!(
+            (listed.agent.as_deref(), listed.read_only),
+            (Some("copilot"), false)
+        );
+        let drive = Driver::new(
+            core.root.join("no-herdr.sock"),
+            vec![],
+            std::slice::from_ref(&work),
+        )
+        .unwrap()
+        .with_core(Some(followed));
+        copilot_takes_input_only_under_its_box(&drive, &rt, &work, &listed.terminal_id).await;
+        stop.send(true).unwrap();
+        let _ = task.await;
+    });
+    drop(rt);
+    assert!(core.stop(), "dedicated herdr-core did not stop");
+}
+
+#[test]
 fn live_herdr_core() {
     if !hc_installed() {
         return;

@@ -845,6 +845,58 @@ fn fake_copilot() {
     copilot_stand_in();
 }
 
+#[test]
+fn fake_copilot_box() {
+    copilot_box_stand_in();
+}
+
+#[test]
+fn live_rex_copilot() {
+    let Some(cli) = rex_cli() else {
+        return;
+    };
+    let mut server = RexServer::start(&cli, "cp");
+    let bin = server.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let copilot = bin.join("copilot");
+    std::fs::copy(std::env::current_exe().unwrap(), &copilot).unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let argv = [
+            copilot.to_str().unwrap(),
+            "fake_copilot_box",
+            "--exact",
+            "--nocapture",
+        ];
+        let (_, block) = new_session(&server, "collie-copilot", &argv);
+        let rex = Arc::new(Rex::new(server.socket.clone()));
+        let (stop, stopped) = watch::channel(false);
+        let task = tokio::spawn(rex.clone().run(stopped));
+        tokio::time::timeout(Duration::from_secs(5), rex.settled())
+            .await
+            .unwrap();
+        let rt = Runtime::new(server.root.join("no-herdr.sock")).with_rex(Some(rex.clone()));
+        let terminal = format!("rex:{block}");
+        let listed = until("the stand-in's idle report", async || {
+            (rt.agent_list().await.ok()?.into_iter())
+                .find(|a| a.terminal_id == terminal && a.agent_status == "idle")
+        })
+        .await;
+        assert_eq!(
+            (listed.agent.as_deref(), listed.read_only),
+            (Some("copilot"), false)
+        );
+        let drive = Driver::new(server.root.join("no-herdr.sock"), vec![], &[])
+            .unwrap()
+            .with_rex(Some(rex));
+        copilot_takes_input_only_under_its_box(&drive, &rt, &server.work, &terminal).await;
+        stop.send(true).unwrap();
+        let _ = task.await;
+    });
+    drop(rt);
+    assert!(server.stop(), "dedicated Rex server did not stop");
+}
+
 /// Codex, as the phone scenario runs it in its Rex block: it reports OSC 7501, then runs its
 /// SessionStart hook (`fake_hook`) once the test creates `report`, as Codex runs `collied
 /// hook`, from the process that leads the block.
