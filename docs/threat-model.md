@@ -384,6 +384,16 @@ Computer nodes are user-owned, not tag-confined: they get their user's tailnet p
 | Residual | The woken agent may open a review or comment URL and read its untrusted text, as it would if the user asked it to. |
 | Phase | Built |
 
+### Scheduled tasks
+
+| | |
+|---|---|
+| Assets | The user's agents, folders and repositories on the machine; the scheduled prompt |
+| Attack | collied starts an agent with a stored prompt while no phone acts: a tampered store, a revoked phone's task, or text from a screen, transcript or the network ends up typed into an agent; or the prompt leaks through the store, the audit log or an alert. |
+| Mitigations | A task is stored only on an audited `task.schedule` from a paired phone, after the checks `task.new` makes before creating anything, for at most 24 hours ahead and at most 10 tasks per machine. The stored prompt is the `PromptText` the phone sent, unchanged; nothing from a screen, transcript or the network is added. The store is a private (0600) file in the data folder, read only when owned by the user with no group or world bits, at most 1 MiB. The start runs `task.new`'s own checks and path again, with an authorization that holds only while the scheduling phone is paired, checked before each write; revoking that phone, online or offline, removes its tasks before they start. A resent request answers its stored task instead of adding another. Tasks are claimed one at a time and saved as starting before each start, so a task starts at most once: one still starting after a restart is reported, never started again, and one more than an hour late when its turn comes is dropped. After a start that stops at a startup prompt, collied removes the prompt from the store. The audit log records each schedule, cancel, start and drop without the prompt; the start's runtime errors reach the debug log without their text, which can quote the prompt; and alerts name only the folder and a fixed reason. |
+| Residual | Unlike the pull request watch, which types into an agent the phone already started, this creates folders, worktrees and agents with no phone present at the time; a user who schedules a task and forgets it gets it anyway, within the 24 hours. Same-UID malware can write the store, as it can type into herdr. The prompt waits in plain text in the data folder until the start, like a draft in the Mac's input box. |
+| Phase | Built |
+
 ### Archive when the pull request merges
 
 | | |

@@ -32,6 +32,7 @@ mod push_display;
 pub mod reflow;
 pub mod relay;
 pub mod runtime;
+pub mod schedule;
 pub mod server;
 pub mod service;
 pub mod setup;

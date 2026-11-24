@@ -21,6 +21,7 @@ This policy covers the Collie app for iPhone and Apple Watch, its notification e
 - recorded plan usage, and token counts from your agents' transcripts for the last 32 days, by transcript, model and quarter hour, without any message text;
 - starred agents, the pull requests you watch with their URLs, and the last 20 prompts that watching typed into each agent, so Chat can tell them from yours;
 - attachments you sent from the phone, deleted after 24 hours;
+- tasks you schedule, with their prompt, until they start (at most 25 hours: 24 ahead, and an hour late at most); for one that stopped at a startup prompt, its folder and terminal, without the prompt, for up to a day;
 - for each Claude Code, Codex, Copilot CLI and Antigravity CLI agent in Rex, its terminal, its conversation ID and its folder, so it can reopen the conversation after Rex restarts, unless you turn that off in CollieBar.
 
 Your agents' transcripts and your files stay where the agents keep them; `collied` reads them only to answer the phone.
@@ -31,7 +32,7 @@ On a Mac, when a herdr agent finishes a long turn that herdr counts as seen, `co
 
 - its Tailscale node keys and the machines you paired, including a Tailscale user ID as an ownership pin, in a state folder excluded from iCloud and Finder backups;
 - its signing keys and per-machine notification keys, in the iPhone's Keychain, on this device only and never synced; its TLS signing key is generated in the Secure Enclave and cannot be exported;
-- your settings, saved prompts, key shortcuts and other preferences, and unsent drafts (with their attachments for up to 23 hours), in the same state folder, which backups leave out.
+- your settings, saved prompts, key shortcuts and other preferences, unsent drafts (with their attachments for up to 23 hours) and the prompts of tasks you scheduled until they start, in the same state folder, which backups leave out.
 
 iOS keeps a picture of each app for the app switcher. The app covers its screen when it goes to the background, so that picture shows none of your content.
 

@@ -27,6 +27,7 @@ final class NewTaskModel {
     private let core: any AgentCore
     private let prefsFile: URL?
     private let draftsFile: URL?
+    private let scheduledFile: URL?
     private let runtimeChoice: TaskRuntimeChoice
     var machineId: String? {
         didSet {
@@ -43,6 +44,7 @@ final class NewTaskModel {
             sessions = nil
             sessionsError = nil
             session = nil
+            scheduled = []
         }
     }
     private(set) var options: TaskOptions?
@@ -134,15 +136,19 @@ final class NewTaskModel {
     private(set) var error: String?
     private(set) var cancelled = false
     private(set) var startupBlocked = false
+    var startLater = false
+    var startAt = Date.now.addingTimeInterval(3600)
+    private(set) var scheduled: [ScheduledTask] = []
 
     init(
         core: any AgentCore, machines: [Machine], preferredMachineId: String? = nil,
-        prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil,
+        prefsFile: URL? = DevicePrefs.file, draftsFile: URL? = nil, scheduledFile: URL? = nil,
         dictationEngine: any DictationEngine = SpeechDictationEngine()
     ) {
         self.core = core
         self.prefsFile = prefsFile
         self.draftsFile = draftsFile
+        self.scheduledFile = scheduledFile
         let prefs = DevicePrefs.load(from: prefsFile)
         runtimeChoice = prefs.taskRuntime
         dictation = DictationModel(engine: dictationEngine, language: prefs.dictationLanguage, prefsFile: prefsFile)
@@ -205,8 +211,16 @@ final class NewTaskModel {
 
     static let collieTooOld = "collied on this computer is too old to choose where tasks start. Update it, or set Start tasks in to Automatic in Settings."
 
+    var offersSchedule: Bool { options?.schedule == true }
+    var scheduleUnsupported: Bool { startLater && options != nil && !offersSchedule }
+    static let scheduleAhead: TimeInterval = 24 * 3600
+    static let scheduleTooOld = "collied on this computer is too old to schedule tasks. Update it, or turn off Start later."
+
     var canStart: Bool {
         guard !cancelled, phase == .editing, machineId != nil, upload == nil, !dictation.isActive else { return false }
+        if startLater {
+            guard offersSchedule, (Date.now...Date.now.addingTimeInterval(Self.scheduleAhead)).contains(startAt) else { return false }
+        }
         guard runtimeChoice == .automatic || options?.runtimes != nil else { return false }
         if location == .resume {
             guard let session, let folder, sessionsFolder == folder else { return false }
@@ -473,6 +487,81 @@ final class NewTaskModel {
         phase = .startedNotVisible
         error = "The task started, but its agent has not appeared yet. It will show in the flock."
         return nil
+    }
+
+    private var place: (cwd: String, place: TaskPlace)? {
+        switch location {
+        case .folder:
+            guard let cwd = newFolder ? newFolderParent : folder else { return nil }
+            return (cwd, .folder(newFolder: newFolder ? trimmed(folderName) : nil))
+        case .clone:
+            guard let cwd = newFolderParent else { return nil }
+            return (cwd, .clone(repository: trimmed(repository)))
+        case .resume:
+            guard let cwd = folder, let session else { return nil }
+            return (cwd, .resume(sessionId: session.sessionId))
+        case .worktree:
+            guard let cwd = sourceFolder else { return nil }
+            switch worktreeAction {
+            case .create: return (cwd, .worktreeCreate(branch: createBranch))
+            case .open: return (cwd, .worktreeOpen(path: checkoutPath))
+            case .pullRequest:
+                guard let number = pullRequest else { return nil }
+                return (cwd, .pullRequest(number: number))
+            }
+        case .issue:
+            guard let cwd = sourceFolder, let number = issue else { return nil }
+            return (cwd, .issue(number: number))
+        }
+    }
+
+    func schedule() async -> Bool {
+        guard canStart, startLater, let machineId, let place else { return false }
+        let text = (attachments.map(\.path) + [trimmed(prompt)].filter { !$0.isEmpty }).joined(separator: " ")
+        let agent = location == .resume ? session?.agent ?? "" : agent
+        let codeMode = offersCodeMode ? self.codeMode : nil
+        phase = .starting
+        error = nil
+        do {
+            let task = try await core.taskSchedule(
+                machineId: machineId, startAtMs: UInt64(startAt.timeIntervalSince1970 * 1000), place: place.place, cwd: place.cwd,
+                agent: agent, prompt: text, label: trimmed(label).nilIfEmpty,
+                ultracode: location != .resume && agent == "claude" && ultracode, codeMode: codeMode, runtime: runtimeChoice.runtime
+            )
+            if !trimmed(prompt).isEmpty || !attachments.isEmpty {
+                let draft = AgentDrafts.Draft(text: trimmed(prompt), attachments: attachments, shell: false)
+                ScheduledDrafts.keep(draft, for: task, machineId: machineId, file: scheduledFile)
+            }
+            phase = .editing
+            return true
+        } catch {
+            self.error = AgentModel.message(for: error)
+            phase = .editing
+            return false
+        }
+    }
+
+    func loadScheduled() async {
+        guard offersSchedule, let machineId else { return }
+        let kept = ScheduledDrafts.kept(machineId: machineId, file: scheduledFile)
+        guard let listed = try? await core.taskScheduled(machineId: machineId), machineId == self.machineId else { return }
+        await ScheduledDrafts.settle(listed, kept: kept, machineId: machineId, core: core, file: scheduledFile, draftsFile: draftsFile)
+        guard machineId == self.machineId, !cancelled else { return }
+        scheduled = listed.filter { $0.blocked == nil }
+    }
+
+    func unschedule(_ task: ScheduledTask) async {
+        guard let machineId else { return }
+        do {
+            try await core.taskUnschedule(machineId: machineId, scheduleId: task.scheduleId)
+            ScheduledDrafts.forget(task.scheduleId, machineId: machineId, file: scheduledFile)
+        } catch CoreError.NotFound {
+        } catch {
+            self.error = AgentModel.message(for: error)
+            return
+        }
+        guard machineId == self.machineId else { return }
+        scheduled.removeAll { $0.scheduleId == task.scheduleId }
     }
 
     private func saveStartupDraft(for route: AgentRoute) {

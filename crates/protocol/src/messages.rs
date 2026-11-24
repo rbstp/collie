@@ -416,6 +416,12 @@ pub enum Request {
     TaskArchive(TaskArchiveParams),
     #[serde(rename = "task.archive_on_merge")]
     TaskArchiveOnMerge(TaskArchiveOnMergeParams),
+    #[serde(rename = "task.schedule")]
+    TaskSchedule(TaskScheduleParams),
+    #[serde(rename = "task.scheduled")]
+    TaskScheduled(Empty),
+    #[serde(rename = "task.unschedule")]
+    TaskUnschedule(TaskUnscheduleParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "pane.close")]
@@ -493,6 +499,9 @@ impl Request {
         "task.sessions",
         "task.archive",
         "task.archive_on_merge",
+        "task.schedule",
+        "task.scheduled",
+        "task.unschedule",
         "workspace.close",
         "pane.close",
         "approval.list",
@@ -548,6 +557,9 @@ impl Request {
             Self::TaskSessions(_) => "task.sessions",
             Self::TaskArchive(_) => "task.archive",
             Self::TaskArchiveOnMerge(_) => "task.archive_on_merge",
+            Self::TaskSchedule(_) => "task.schedule",
+            Self::TaskScheduled(_) => "task.scheduled",
+            Self::TaskUnschedule(_) => "task.unschedule",
             Self::WorkspaceClose(_) => "workspace.close",
             Self::PaneClose(_) => "pane.close",
             Self::ApprovalList(_) => "approval.list",
@@ -585,6 +597,7 @@ impl Request {
             | Self::FileOpen(_)
             | Self::FileChunk(_)
             | Self::FileClose(_)
+            | Self::TaskScheduled(_)
             | Self::ApprovalList(_) => MethodClass::Read,
             Self::AgentPrompt(_)
             | Self::AgentSendKeys(_)
@@ -603,6 +616,8 @@ impl Request {
             | Self::TaskSessions(_)
             | Self::TaskArchive(_)
             | Self::TaskArchiveOnMerge(_)
+            | Self::TaskSchedule(_)
+            | Self::TaskUnschedule(_)
             | Self::WorkspaceClose(_)
             | Self::PaneClose(_)
             | Self::AttachmentBegin(_)
@@ -1076,6 +1091,40 @@ impl TaskNewParams {
     }
 }
 
+/// collied checks `task` as it would a task started now, keeps it in its data folder and
+/// starts it at `start_at_ms` (Unix time), at most 24 hours ahead. Sent only to a collied
+/// whose `TaskOptions` says `schedule`: an older one does not know the method.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TaskScheduleParams {
+    pub start_at_ms: u64,
+    pub task: TaskNewParams,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TaskUnscheduleParams {
+    pub op_id: OpId,
+    pub schedule_id: ScheduleId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct ScheduledTask {
+    pub schedule_id: ScheduleId,
+    pub start_at_ms: u64,
+    pub cwd: Cwd,
+    pub agent: AgentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<Label>,
+    /// Set once the task started and stopped at a startup prompt in this terminal: its
+    /// prompt was not sent, and collied no longer keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<TerminalId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -1387,6 +1436,14 @@ pub enum Response {
     },
     TaskArchived {
         message: String,
+    },
+    TaskScheduled {
+        task: ScheduledTask,
+    },
+    /// The tasks waiting on this computer, soonest first, and those that stopped at a
+    /// startup prompt until a phone clears them.
+    ScheduledTasks {
+        tasks: Vec<ScheduledTask>,
     },
     /// The folders directly inside `path`, its canonical form, sorted; `truncated` when
     /// some were left out.
@@ -1890,6 +1947,10 @@ pub struct TaskOptions {
     /// older one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub issues: bool,
+    /// Whether this collied takes `task.schedule`, `task.scheduled` and `task.unschedule`;
+    /// false from an older one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub schedule: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2164,6 +2225,7 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame, FrameError> {
         Request::ApprovalDecide(p) => p.is_valid(),
         Request::AttachmentBegin(p) => p.is_valid(),
         Request::TaskNew(p) => p.is_valid(),
+        Request::TaskSchedule(p) => p.task.is_valid(),
         _ => true,
     };
     if !valid {

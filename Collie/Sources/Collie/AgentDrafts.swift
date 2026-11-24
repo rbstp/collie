@@ -13,9 +13,10 @@ struct AgentDrafts: StateFile {
     var drafts: [AgentRoute: Draft] = [:]
 
     /// A draft goes with its pane: once its machine's loaded flock lists it no longer, or the machine is no longer paired.
-    static func prune(_ entries: [MachineFlockEntry], file: URL?) {
+    static func prune(_ entries: [MachineFlockEntry], keeping: Set<AgentRoute> = [], file: URL?) {
         var saved = load(from: file)
         let kept = saved.drafts.filter { route, _ in
+            guard !keeping.contains(route) else { return true }
             guard let entry = entries.first(where: { $0.id == route.machineId }) else { return entries.isEmpty }
             guard entry.error == nil, let flock = entry.flock, flock.link == .connected, flock.details != nil else { return true }
             return flock.agents.contains { $0.terminalId == route.terminalId } || flock.terminals.contains { $0.terminalId == route.terminalId }

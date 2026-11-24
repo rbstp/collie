@@ -16,7 +16,7 @@ use protocol::{
     AgentStarParams, AgentWatchParams, AgentWatchPullRequestParams, AttachmentChunkParams, Cwd,
     ErrorBody, ErrorCode, Event, HelloResult, KeyPin, MachineInfo, MethodClass, PairCompleteParams,
     PairingCode, PairingInvite, PullRequest, PullState, Request, Response, ServerFrame,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
+    TaskScheduleParams, TerminalGrantParams, TerminalId, TerminalKey, TerminalWatchParams,
 };
 use serde::{Deserialize, Serialize};
 use tailnet::{Accepted, BackendState, Node, WhoIs};
@@ -50,6 +50,7 @@ use crate::push::{self, ActivityError, Push};
 use crate::runtime::herdr_core::Core;
 use crate::runtime::rex::Rex;
 use crate::runtime::{self, HerdrSeen, Owner, Runtime};
+use crate::schedule::{self, Due, Schedule};
 use crate::terminal::{self, Grants};
 use crate::transcript::Transcripts;
 use crate::turns::Turns;
@@ -70,6 +71,8 @@ const RECONCILE_EVERY: Duration = Duration::from_secs(1);
 const RECONCILE_MAX_BACKOFF: Duration = Duration::from_secs(30);
 const PULLS_EVERY: Duration = Duration::from_secs(30);
 const WATCH_EVERY: Duration = Duration::from_secs(30);
+const SCHEDULE_EVERY: Duration = Duration::from_secs(5);
+const SCHEDULE_SETTLE: Duration = Duration::from_secs(30);
 const RATE_PER_SEC: f64 = 20.0;
 const RATE_BURST: f64 = 40.0;
 const REJECT_AUDIT_PER_SEC: f64 = 1.0;
@@ -264,6 +267,7 @@ pub struct State {
     live: Mutex<activity::Live>,
     turns: Mutex<Turns>,
     pulls: Mutex<Pulls>,
+    schedule: Mutex<Schedule>,
     events: broadcast::Sender<Event>,
     drive: Arc<Driver>,
     pub(crate) approvals: Arc<Approvals>,
@@ -386,6 +390,7 @@ impl State {
             let _ = self.events.send(Event::FlockChanged {});
         }
         lock(&self.pulls).archive.forget(&peer.stable_id);
+        lock(&self.schedule).forget(&peer.stable_id);
         self.audit.log(
             &peer.label,
             "peers.revoke",
@@ -703,6 +708,7 @@ pub async fn start_with(
     let watches = Watches::load(cfg.data_dir.join(config::WATCHES_FILE));
     let wakes = Wakes::load(cfg.data_dir.join(config::WAKES_FILE));
     let archive = pulls::ArchiveOnMerge::load(cfg.data_dir.join(config::ARCHIVE_ON_MERGE_FILE));
+    let schedule = Schedule::load(cfg.data_dir.join(config::SCHEDULE_FILE));
 
     let state = Arc::new(State {
         machine: MachineInfo {
@@ -734,6 +740,7 @@ pub async fn start_with(
         live: Mutex::new(activity::Live::default()),
         turns: Mutex::new(Turns::default()),
         pulls: Mutex::new(Pulls::new(watches, wakes, archive)),
+        schedule: Mutex::new(schedule),
         events,
         drive,
         approvals,
@@ -771,6 +778,7 @@ pub async fn start_with(
         tokio::spawn(copilot_usage(state.clone(), rx.clone())),
         tokio::spawn(pull_requests(state.clone(), rx.clone())),
         tokio::spawn(pr_watches(state.clone(), rx.clone())),
+        tokio::spawn(scheduled_tasks(state.clone(), rx.clone())),
     ];
     if let Some(core) = core {
         tasks.push(essential("herdr-core", core.run(rx.clone()), life));
@@ -1091,6 +1099,164 @@ async fn pr_watches(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
             let _ = state.events.send(Event::FlockChanged {});
         }
     }
+}
+
+async fn scheduled_tasks(state: Arc<State>, mut shutdown: watch::Receiver<bool>) {
+    let settled = async {
+        if let Some(core) = state.runtime.core() {
+            core.settled().await;
+        }
+        if let Some(rex) = state.runtime.rex() {
+            rex.settled().await;
+        }
+    };
+    tokio::select! {
+        _ = tokio::time::timeout(SCHEDULE_SETTLE, settled) => {}
+        _ = shutdown.changed() => return,
+    }
+    let interrupted = lock(&state.schedule).interrupted();
+    for (id, entry) in interrupted {
+        let target = format!("{} schedule={}", entry.task.cwd.as_str(), id.as_str());
+        state.audit.log(
+            "collied",
+            "task.new",
+            Some(&target),
+            "interrupted: collied stopped while it started",
+        );
+        state.push.notify(push::schedule_alert(
+            "Scheduled task interrupted",
+            &format!(
+                "{}: collied stopped while it started; check the computer",
+                folder_name(entry.task.cwd.as_str())
+            ),
+            &state.machine.node_id,
+        ));
+    }
+    let mut interval = tokio::time::interval(SCHEDULE_EVERY);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown.changed() => return,
+        }
+        let peers = state.peers();
+        {
+            let mut schedule = lock(&state.schedule);
+            schedule.retain_paired(|by| peers.get(by).is_some());
+            schedule.expire(crate::now_ms());
+        }
+        loop {
+            let due = lock(&state.schedule).claim(crate::now_ms());
+            let Some(due) = due else {
+                break;
+            };
+            start_scheduled(&state, due).await;
+        }
+    }
+}
+
+async fn start_scheduled(state: &Arc<State>, due: Due) {
+    let node = &state.machine.node_id;
+    let (id, entry) = match due {
+        Due::Late(id, entry) => {
+            let target = format!("{} schedule={}", entry.task.cwd.as_str(), id.as_str());
+            state.audit.log(
+                "collied",
+                "task.new",
+                Some(&target),
+                "dropped: more than an hour late",
+            );
+            state.push.notify(push::schedule_alert(
+                "Scheduled task dropped",
+                &format!(
+                    "{}: more than an hour late, so it did not start",
+                    folder_name(entry.task.cwd.as_str())
+                ),
+                node,
+            ));
+            return;
+        }
+        Due::Start(id, entry) => (id, entry),
+    };
+    let auth: Authorized = {
+        let (state, by) = (state.clone(), entry.by.clone());
+        Arc::new(move || lock(&state.peers).get(&by).is_some())
+    };
+    let (reply, cwd) = state.drive.task_new(entry.task.clone(), &auth).await;
+    let cwd = cwd.unwrap_or(entry.task.cwd);
+    let folder = folder_name(cwd.as_str());
+    let target = format!("{} schedule={}", cwd.as_str(), id.as_str());
+    state
+        .audit
+        .log("collied", "task.new", Some(&target), &outcome(&reply));
+    match reply {
+        Ok(Response::TaskStarted {
+            terminal_id,
+            startup_blocked: true,
+            ..
+        }) => {
+            lock(&state.schedule).block(&id, terminal_id.clone());
+            state.push.notify(push::agent_alert(
+                &terminal_id,
+                "Scheduled task waiting",
+                &format!("Stopped at a startup prompt in {folder}; its prompt was not sent"),
+                node,
+            ));
+        }
+        Ok(Response::TaskStarted { terminal_id, .. }) => {
+            lock(&state.schedule).finish(&id);
+            state.push.notify(push::agent_alert(
+                &terminal_id,
+                "Scheduled task started",
+                &format!("Started in {folder}"),
+                node,
+            ));
+        }
+        Ok(_) => lock(&state.schedule).finish(&id),
+        Err((code, _)) => {
+            lock(&state.schedule).finish(&id);
+            state.push.notify(push::schedule_alert(
+                "Scheduled task failed",
+                &format!("{folder}: {}", failed_reason(code)),
+                node,
+            ));
+        }
+    }
+    let _ = state.events.send(Event::FlockChanged {});
+}
+
+fn failed_reason(code: ErrorCode) -> &'static str {
+    match code {
+        ErrorCode::InvalidParams => "it no longer passes collied's checks",
+        ErrorCode::HerdrUnavailable => "its runtime did not answer",
+        ErrorCode::AgentBlocked => "the agent stopped before it took the prompt",
+        ErrorCode::AgentNotReady => "the agent was not ready",
+        ErrorCode::NotPaired => "the phone that scheduled it is no longer paired",
+        _ => "the start failed",
+    }
+}
+
+fn folder_name(cwd: &str) -> &str {
+    std::path::Path::new(cwd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(cwd)
+}
+
+async fn schedule_task(
+    state: &State,
+    p: TaskScheduleParams,
+    by: String,
+    auth: &Authorized,
+) -> Reply {
+    state.drive.schedule_check(&p.task).await?;
+    if !auth() {
+        return err(ErrorCode::NotPaired, "peer is no longer authorized");
+    }
+    let entry = schedule::Entry::new(by, p.start_at_ms, p.task);
+    let task = lock(&state.schedule)
+        .add(entry, crate::now_ms())
+        .map_err(|m| (ErrorCode::InvalidParams, m.to_owned()))?;
+    Ok(Response::TaskScheduled { task })
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -1876,6 +2042,42 @@ impl Session<'_> {
                     }
                 });
                 return Flow::Continue;
+            }
+            Request::TaskSchedule(p) => {
+                let (op_id, state, by) = (p.task.op_id.clone(), self.state.clone(), peer.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    (schedule_task(&state, p, by, &auth).await, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
+            }
+            Request::TaskScheduled(_) => (
+                Ok(Response::ScheduledTasks {
+                    tasks: lock(&self.state.schedule).list(),
+                }),
+                None,
+            ),
+            Request::TaskUnschedule(p) => {
+                let (op_id, state) = (p.op_id.clone(), self.state.clone());
+                let op = self.audited(method, target.clone(), async move {
+                    let cancelled = lock(&state.schedule).cancel(&p.schedule_id);
+                    let reply = match cancelled {
+                        schedule::Cancel::Done => Ok(Response::Ok),
+                        schedule::Cancel::Missing => {
+                            err(ErrorCode::NotFound, "no such scheduled task")
+                        }
+                        schedule::Cancel::Starting => err(
+                            ErrorCode::AgentNotReady,
+                            "the task is starting and can no longer be cancelled",
+                        ),
+                        schedule::Cancel::Unsaved => {
+                            err(ErrorCode::Internal, "could not save the scheduled tasks")
+                        }
+                    };
+                    (reply, None)
+                });
+                let (reply, origin) = drive.once(&peer, &op_id, fingerprint, op).await;
+                (reply, Some(origin))
             }
             Request::TaskFolders(p) => (drive.task_folders(p, &auth).await, None),
             Request::TaskWorktrees(p) => (drive.task_worktrees(p, &auth).await, None),
@@ -2667,6 +2869,7 @@ fn unaudited(method: &str) -> bool {
         "hello"
             | "flock.snapshot"
             | "approval.list"
+            | "task.scheduled"
             | "usage.costs"
             | "file.chunk"
             | "file.close"
@@ -2742,6 +2945,11 @@ fn audit_target(request: &Request) -> Option<String> {
                 None => p.cwd.as_str(),
             }
         }
+        Request::TaskSchedule(p) => {
+            let task = audit_target(&Request::TaskNew(p.task.clone()))?;
+            return Some(format!("{task} start_at_ms={}", p.start_at_ms));
+        }
+        Request::TaskUnschedule(p) => p.schedule_id.as_str(),
         Request::TaskFolders(p) => p.path.as_str(),
         Request::TaskWorktrees(p) | Request::TaskIssues(p) => p.cwd.as_str(),
         Request::TaskSessions(p) => p.cwd.as_str(),
@@ -2892,6 +3100,9 @@ fn outcome(reply: &Reply) -> String {
         ),
         Ok(Response::TaskSessions { sessions }) => format!("ok sessions={}", sessions.len()),
         Ok(Response::TaskIssues { issues }) => format!("ok issues={}", issues.len()),
+        Ok(Response::TaskScheduled { task }) => {
+            format!("ok schedule={}", task.schedule_id.as_str())
+        }
         Ok(_) => "ok".to_owned(),
         Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),

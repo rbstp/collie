@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use collie_core::{
-    AgentKey, CollieCore, CoreError, RuntimeAgents, TaskFolders, TaskOptions, TaskRuntime,
-    TaskStarted, TerminalSource,
+    AgentKey, CollieCore, CoreError, RuntimeAgents, TaskFolders, TaskOptions, TaskPlace,
+    TaskRuntime, TaskStarted, TerminalSource,
 };
 use collied::config::TasksConfig;
 use collied::control::{Reply, Request};
@@ -320,6 +320,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             }],
             code_mode: true,
             issues: true,
+            schedule: true,
         }
     );
     let before = herdr.mutations();
@@ -434,6 +435,153 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
         )
     );
     println!("  task.new in {:?}", t.elapsed());
+
+    println!("task.schedule refuses at once, cancels, and starts on time");
+    let now_ms = || collied::now_ms();
+    let schedule = |cwd: String, agent: &str, at: u64, runtime: Option<TaskRuntime>| {
+        core.task_schedule(
+            m.clone(),
+            at,
+            TaskPlace::Folder { new_folder: None },
+            cwd,
+            agent.into(),
+            "Write the scheduled tests".into(),
+            None,
+            false,
+            None,
+            runtime,
+        )
+    };
+    let before = herdr.mutations();
+    for (cwd, agent, at, runtime, message) in [
+        (
+            s(&outside),
+            "claude",
+            now_ms() + 60_000,
+            None,
+            "outside the allowed roots",
+        ),
+        (s(&app), "codex", now_ms() + 60_000, None, "not allowed"),
+        (
+            s(&app),
+            "claude",
+            now_ms() + 60_000,
+            Some(TaskRuntime::Rex),
+            "Rex is not running on this computer",
+        ),
+        (
+            s(&app),
+            "claude",
+            now_ms() + 25 * 3_600_000,
+            None,
+            "at most 24 hours",
+        ),
+        (s(&app), "claude", now_ms() - 1000, None, "has passed"),
+    ] {
+        let err = schedule(cwd, agent, at, runtime).await.unwrap_err();
+        assert!(
+            matches!(&err, CoreError::InvalidInput { message: msg, .. } if msg.contains(message)),
+            "{message}: {err:?}"
+        );
+    }
+    let existing = core
+        .task_schedule(
+            m.clone(),
+            now_ms() + 60_000,
+            TaskPlace::Folder {
+                new_folder: Some("app".into()),
+            },
+            s(&projects),
+            "claude".into(),
+            "Write the scheduled tests".into(),
+            None,
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&existing, CoreError::InvalidInput { message, .. } if message == "folder already exists"),
+        "{existing:?}"
+    );
+    assert!(core.task_scheduled(m.clone()).await.unwrap().is_empty());
+    let cancelled = schedule(s(&app), "claude", now_ms() + 3_600_000, None)
+        .await
+        .unwrap();
+    core.task_unschedule(m.clone(), cancelled.schedule_id.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        core.task_unschedule(m.clone(), cancelled.schedule_id).await,
+        Err(CoreError::NotFound)
+    ));
+    let soon = schedule(s(&app), "claude", now_ms() + 2000, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        core.task_scheduled(m.clone()).await.unwrap(),
+        vec![soon.clone()]
+    );
+    assert_eq!(
+        herdr.mutations(),
+        before,
+        "a scheduled task reached herdr early"
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while herdr.mutations().len() < before.len() + 3 {
+        assert!(
+            Instant::now() < deadline,
+            "the scheduled task did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(now_ms() >= soon.start_at_ms, "started early");
+    let calls = herdr.mutation_calls();
+    assert_eq!(calls[before.len()].0, "workspace.create");
+    assert_eq!(calls[before.len()].1["cwd"], json!(s(&app_real)));
+    assert_eq!(calls[before.len() + 2].0, "agent.prompt");
+    assert_eq!(
+        calls[before.len() + 2].1["text"],
+        "Write the scheduled tests"
+    );
+    while !core.task_scheduled(m.clone()).await.unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the started task stayed listed");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let lines = audit_lines(&audit);
+    let scheduled: Vec<&Value> = lines
+        .iter()
+        .filter(|l| {
+            l["method"] == "task.schedule"
+                || l["target"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("schedule="))
+        })
+        .collect();
+    assert!(
+        scheduled
+            .iter()
+            .all(|l| !l.to_string().contains("Write the scheduled tests")),
+        "{scheduled:?}"
+    );
+    assert_eq!(
+        scheduled
+            .last()
+            .map(|l| (&l["peer"], &l["method"], &l["target"])),
+        Some((
+            &json!("collied"),
+            &json!("task.new"),
+            &json!(format!("{} schedule={}", s(&app_real), soon.schedule_id))
+        ))
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l["method"] == "task.unschedule")
+            .count(),
+        2
+    );
 
     println!("task.folders lists names only, task.new creates one new folder");
     assert_eq!(
@@ -672,6 +820,9 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
             "agent.send_keys",
             "pane.send_input",
             "agent.send_keys",
+            "workspace.create",
+            "agent.start",
+            "agent.prompt",
             "workspace.create",
             "agent.start",
             "agent.prompt",

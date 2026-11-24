@@ -461,6 +461,22 @@ pub fn agent_alert(terminal_id: &TerminalId, title: &str, body: &str, node_id: &
     }
 }
 
+pub fn schedule_alert(title: &str, body: &str, node_id: &str) -> Alert {
+    Alert {
+        payload: json!({
+            "aps": {
+                "alert": {"title": title, "body": body},
+                "thread-id": "collie-scheduled",
+            },
+            "node_id": node_id,
+        }),
+        collapse_id: None,
+        expiration: Some(0),
+        context: None,
+        delivery: Delivery::Alert,
+    }
+}
+
 pub fn test_alert() -> Alert {
     Alert {
         payload: json!({

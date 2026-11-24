@@ -489,6 +489,13 @@ validated_string!(
 );
 
 validated_string!(
+    ScheduleId,
+    debug = plain,
+    check = |s| lower_hex(s, 32),
+    schema = { "pattern": "^[0-9a-f]{32}$" }
+);
+
+validated_string!(
     Sha256Hex,
     debug = plain,
     check = |s| lower_hex(s, 64),

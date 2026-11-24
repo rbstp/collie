@@ -920,6 +920,10 @@
       "pattern": "^v1\\.[A-Za-z0-9_-]{1,32}\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$",
       "type": "string"
     },
+    "ScheduleId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
     "SendTextParams": {
       "additionalProperties": false,
       "description": "Keystrokes for `agent.send_text` and `terminal.send_text`, typed as is without Enter.",
@@ -1117,6 +1121,25 @@
       ],
       "type": "string"
     },
+    "TaskScheduleParams": {
+      "additionalProperties": false,
+      "description": "collied checks `task` as it would a task started now, keeps it in its data folder and\nstarts it at `start_at_ms` (Unix time), at most 24 hours ahead. Sent only to a collied\nwhose `TaskOptions` says `schedule`: an older one does not know the method.",
+      "properties": {
+        "start_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskNewParams"
+        }
+      },
+      "required": [
+        "start_at_ms",
+        "task"
+      ],
+      "type": "object"
+    },
     "TaskSessionsParams": {
       "additionalProperties": false,
       "properties": {
@@ -1126,6 +1149,22 @@
       },
       "required": [
         "cwd"
+      ],
+      "type": "object"
+    },
+    "TaskUnscheduleParams": {
+      "additionalProperties": false,
+      "properties": {
+        "op_id": {
+          "$ref": "#/$defs/OpId"
+        },
+        "schedule_id": {
+          "$ref": "#/$defs/ScheduleId"
+        }
+      },
+      "required": [
+        "op_id",
+        "schedule_id"
       ],
       "type": "object"
     },
@@ -1868,6 +1907,54 @@
         },
         "params": {
           "$ref": "#/$defs/TaskArchiveOnMergeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.schedule",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskScheduleParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.scheduled",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/Empty"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.unschedule",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskUnscheduleParams"
         }
       },
       "required": [

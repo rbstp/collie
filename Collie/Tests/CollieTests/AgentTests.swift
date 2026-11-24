@@ -57,6 +57,9 @@ final class FakeCore: AgentCore {
         var issues: [TaskIssue] = []
         var issuesError: CoreError?
         var started: TaskStarted?
+        var schedules: [String] = []
+        var scheduled: [ScheduledTask] = []
+        var unscheduled: [String] = []
         var cloneError: CoreError?
         var sessions = [
             TaskSession(agent: "codex", sessionId: "01a10f07-b5ed-79a3-989d-fa10b96c5cab", firstPrompt: "add approval tests", modifiedMs: 1_790_000_000_000),
@@ -401,6 +404,25 @@ final class FakeCore: AgentCore {
         }
         guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
         return started
+    }
+    func taskSchedule(machineId: String, startAtMs: UInt64, place: TaskPlace, cwd: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> ScheduledTask {
+        try await call {
+            $0.schedules.append("\(startAtMs) \(place) \(cwd) \(agent)")
+            $0.taskPrompts.append(prompt)
+        }
+        let task = ScheduledTask(scheduleId: "s\(state.withLock { $0.schedules.count })", startAtMs: startAtMs, cwd: cwd, agent: agent, label: label, blocked: nil)
+        state.withLock { $0.scheduled.append(task) }
+        return task
+    }
+    func taskScheduled(machineId: String) async throws -> [ScheduledTask] {
+        try await call { _ in }
+        return state.withLock { $0.scheduled }
+    }
+    func taskUnschedule(machineId: String, scheduleId: String) async throws {
+        try await call {
+            $0.unscheduled.append(scheduleId)
+            $0.scheduled.removeAll { $0.scheduleId == scheduleId }
+        }
     }
     func uploadAttachment(machineId: String, name: String, data: Data, progress: any UploadProgress) async throws -> String {
         progress.onProgress(sent: UInt64(data.count / 2), total: UInt64(data.count))

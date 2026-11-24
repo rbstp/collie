@@ -202,20 +202,28 @@ fn canonical_limit(message: &str) -> bool {
     message.contains("terminal is in canonical mode")
 }
 
-/// herdr's error message may quote the input, so only its code is kept, or the fact that
-/// the line was too long.
+/// A runtime's error message may quote the input, so only its code is kept, or the fact
+/// that the line was too long.
 fn quiet_fail(e: runtime::Error) -> Fail {
-    match e {
-        runtime::Error::Herdr { code, message } => herdr_fail(runtime::Error::Herdr {
+    herdr_fail(match e {
+        runtime::Error::Herdr { code, message } => runtime::Error::Herdr {
             code,
             message: if canonical_limit(&message) {
                 message
             } else {
                 String::new()
             },
-        }),
-        other => herdr_fail(other),
-    }
+        },
+        runtime::Error::Core { kind, .. } => runtime::Error::Core {
+            kind,
+            message: String::new(),
+        },
+        runtime::Error::Rex { code, .. } => runtime::Error::Rex {
+            code,
+            message: String::new(),
+        },
+        other => other,
+    })
 }
 
 pub fn fingerprint(request: &Request) -> u64 {
@@ -1211,6 +1219,7 @@ impl Driver {
             runtime_agents,
             code_mode: true,
             issues: true,
+            schedule: true,
         }))
     }
 
@@ -1303,81 +1312,15 @@ impl Driver {
 
     /// Also returns the canonical cwd once it is resolved or created, for the audit line.
     pub async fn task_new(&self, p: TaskNewParams, auth: &Authorized) -> (Reply, Option<Cwd>) {
-        if [
-            p.worktree.is_some(),
-            p.new_folder.is_some(),
-            p.clone.is_some(),
-        ]
-        .into_iter()
-        .filter(|set| *set)
-        .count()
-            > 1
-        {
-            return (
-                fail(
-                    ErrorCode::InvalidParams,
-                    "choose a folder, worktree or clone",
-                ),
-                None,
-            );
-        }
-        if p.resume.is_some()
-            && (p.worktree.is_some() || p.new_folder.is_some() || p.clone.is_some())
-        {
-            return (
-                fail(
-                    ErrorCode::InvalidParams,
-                    "resume a session in its own folder",
-                ),
-                None,
-            );
-        }
-        if p.prompt.is_none() && p.resume.is_none() {
-            return (fail(ErrorCode::InvalidParams, "empty prompt"), None);
-        }
-        if p.ultracode && p.agent.as_str() != "claude" {
-            return (
-                fail(ErrorCode::InvalidParams, "ultracode needs Claude Code"),
-                None,
-            );
-        }
-        if p.code_mode.is_some() && p.agent.as_str() != "claude" {
-            return (
-                fail(ErrorCode::InvalidParams, "Code Mode needs Claude Code"),
-                None,
-            );
-        }
         let made = if p.clone.is_some() {
             Some("cloned")
         } else {
             p.new_folder.as_ref().map(|_| "created")
         };
-        // Decided before any folder is created or cloned, so a task herdr-core or Rex cannot
-        // start leaves nothing behind.
-        let chosen = match p.runtime {
-            None => None,
-            Some(TaskRuntime::Herdr) => Some(Owner::Herdr),
-            Some(TaskRuntime::HerdrCore) => Some(Owner::Core),
-            Some(TaskRuntime::Rex) => Some(Owner::Rex),
-            Some(TaskRuntime::Unknown) => {
-                return (
-                    fail(
-                        ErrorCode::InvalidParams,
-                        "collied on this computer does not know that runtime",
-                    ),
-                    None,
-                );
-            }
-        };
-        let host = match self.runtime.task_host(chosen).await {
+        let host = match self.task_check(&p).await {
             Ok(host) => host,
-            Err(e) => return (Err(herdr_fail(e)), None),
+            Err(e) => return (Err(e), None),
         };
-        if let Some(host) = &host
-            && runtime::task_cli(p.agent.as_str()).is_none()
-        {
-            return (fail(ErrorCode::InvalidParams, host_kinds(host)), None);
-        }
         match self.task_cwd(&p, auth).await {
             Ok(cwd) => {
                 let mut reply = if p.worktree.is_some() {
@@ -1397,10 +1340,116 @@ impl Driver {
         }
     }
 
-    async fn task_cwd(&self, p: &TaskNewParams, auth: &Authorized) -> Result<Cwd, Fail> {
+    pub async fn schedule_check(&self, p: &TaskNewParams) -> Result<(), Fail> {
+        if self.task_check(p).await?.is_none() {
+            (self.runtime.task_host(Some(Owner::Herdr)).await).map_err(herdr_fail)?;
+            let known = self.runtime.agent_manifests().await.map_err(herdr_fail)?;
+            if !known.iter().any(|m| m == p.agent.as_str()) {
+                return fail(
+                    ErrorCode::InvalidParams,
+                    "herdr on this computer cannot start this agent",
+                );
+            }
+        }
+        let roots = self.roots.clone();
+        let paths: Vec<String> = std::iter::once(p.cwd.as_str().to_owned())
+            .chain(match &p.worktree {
+                Some(TaskWorktree::Open { path }) => Some(path.as_str().to_owned()),
+                _ => None,
+            })
+            .collect();
+        let made =
+            (p.new_folder.clone()).or_else(|| p.clone.as_ref().map(CloneSource::folder_name));
+        let cwd = tokio::task::spawn_blocking(move || {
+            let resolved: Result<Vec<Cwd>, _> =
+                paths.iter().map(|p| resolve_cwd(p, &roots)).collect();
+            let cwd = resolved.map(|mut r| r.swap_remove(0))?;
+            match made {
+                Some(name)
+                    if Path::new(cwd.as_str())
+                        .join(name.as_str())
+                        .symlink_metadata()
+                        .is_ok() =>
+                {
+                    Err("folder already exists")
+                }
+                _ => Ok(cwd),
+            }
+        })
+        .await
+        .map_err(|_| (ErrorCode::Internal, "cwd check failed".to_owned()))?
+        .map_err(invalid)?;
+        if let Some(TaskWorktree::Create { branch }) = &p.worktree
+            && !valid_branch(branch)
+        {
+            return fail(ErrorCode::InvalidParams, "invalid branch name");
+        }
+        if let Some(id) = &p.resume {
+            self.resumable(&p.agent, id, &cwd).await?;
+        }
+        Ok(())
+    }
+
+    async fn task_check(&self, p: &TaskNewParams) -> Result<Option<TaskHost>, Fail> {
+        if [
+            p.worktree.is_some(),
+            p.new_folder.is_some(),
+            p.clone.is_some(),
+        ]
+        .into_iter()
+        .filter(|set| *set)
+        .count()
+            > 1
+        {
+            return fail(
+                ErrorCode::InvalidParams,
+                "choose a folder, worktree or clone",
+            );
+        }
+        if p.resume.is_some()
+            && (p.worktree.is_some() || p.new_folder.is_some() || p.clone.is_some())
+        {
+            return fail(
+                ErrorCode::InvalidParams,
+                "resume a session in its own folder",
+            );
+        }
+        if p.prompt.is_none() && p.resume.is_none() {
+            return fail(ErrorCode::InvalidParams, "empty prompt");
+        }
+        if p.ultracode && p.agent.as_str() != "claude" {
+            return fail(ErrorCode::InvalidParams, "ultracode needs Claude Code");
+        }
+        if p.code_mode.is_some() && p.agent.as_str() != "claude" {
+            return fail(ErrorCode::InvalidParams, "Code Mode needs Claude Code");
+        }
+        // Decided before any folder is created or cloned, so a task herdr-core or Rex cannot
+        // start leaves nothing behind.
+        let chosen = match p.runtime {
+            None => None,
+            Some(TaskRuntime::Herdr) => Some(Owner::Herdr),
+            Some(TaskRuntime::HerdrCore) => Some(Owner::Core),
+            Some(TaskRuntime::Rex) => Some(Owner::Rex),
+            Some(TaskRuntime::Unknown) => {
+                return fail(
+                    ErrorCode::InvalidParams,
+                    "collied on this computer does not know that runtime",
+                );
+            }
+        };
+        let host = self.runtime.task_host(chosen).await.map_err(herdr_fail)?;
+        if let Some(host) = &host
+            && runtime::task_cli(p.agent.as_str()).is_none()
+        {
+            return fail(ErrorCode::InvalidParams, host_kinds(host));
+        }
         if !self.agents.contains(&p.agent) {
             return fail(ErrorCode::InvalidParams, "agent kind is not allowed");
         }
+        Ok(host)
+    }
+
+    async fn task_cwd(&self, p: &TaskNewParams, auth: &Authorized) -> Result<Cwd, Fail> {
         let roots = self.roots.clone();
         let requested = p.cwd.as_str().to_owned();
         let new_folder = p
@@ -1814,7 +1863,7 @@ impl Driver {
             self.runtime
                 .agent_prompt(target, text.as_str(), &current.agent_status)
                 .await
-                .map_err(herdr_fail)?;
+                .map_err(quiet_fail)?;
         }
         Ok(())
     }
