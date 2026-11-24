@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::client::{Client, Method, TERMINAL, TIMEOUT};
-use super::model::{self, Listing, PREFIX};
+use super::model::{self, Listed, Listing, PREFIX};
 use super::wire::{Attached, Blocks, Created, Owners, Process, Sessions, Tagged};
 use super::{CLOSE_TIMEOUT, Inner, Rex, gone};
 use crate::runtime::{Error, Occupant};
@@ -207,7 +207,7 @@ impl Rex {
             };
             let small: Vec<(String, String)> = (inner.tasks.keys())
                 .filter_map(|b| live.model.target(&format!("{PREFIX}{b}")))
-                .filter(|&(_, _, size, _)| size == UNSIZED)
+                .filter(|&(_, _, size, listed)| size == UNSIZED && listed == Listed::Agent)
                 .map(|(session, block, ..)| (session, block))
                 .collect();
             (live.model.tallest(), small)

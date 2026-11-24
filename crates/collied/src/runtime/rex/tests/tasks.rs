@@ -185,10 +185,15 @@ async fn a_task_block_left_at_80x24_takes_the_size_of_the_tallest_terminal_once_
         claude(&fake, S1, &b(n), 60 + n, "idle", T0);
         fake.state().block(&b(n)).size = size;
     }
+    (fake.state()).add(S1, &b(5), fake::process(65, "-zsh", "zsh"), vec![]);
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("rex-tasks.json");
     let task = json!({ "name": NAME, "session": S1 });
-    std::fs::write(&file, json!({ b(1): task, b(2): task }).to_string()).unwrap();
+    std::fs::write(
+        &file,
+        json!({ b(1): task, b(2): task, b(5): task }).to_string(),
+    )
+    .unwrap();
     std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let rex = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file));
     let _following = follow(&rex).await;
@@ -205,6 +210,11 @@ async fn a_task_block_left_at_80x24_takes_the_size_of_the_tallest_terminal_once_
         fake.state().block(&b(3)).size,
         (80, 24),
         "not collied's task"
+    );
+    assert_eq!(
+        fake.state().block(&b(5)).size,
+        (80, 24),
+        "a shell, as Rex restores a task"
     );
     let resized = fake
         .calls()
