@@ -226,6 +226,7 @@ impl NegotiatedProtocol {
             | Request::TaskNew(_)
             | Request::TaskFolders(_)
             | Request::TaskWorktrees(_)
+            | Request::TaskIssues(_)
             | Request::TaskSessions(_)
             | Request::TaskArchive(_)
             | Request::TaskArchiveOnMerge(_)
@@ -279,6 +280,7 @@ impl NegotiatedProtocol {
                 | Response::TaskOptions(_)
                 | Response::History(_)
                 | Response::TaskWorktrees { .. }
+                | Response::TaskIssues { .. }
                 | Response::TaskSessions { .. }
                 | Response::TaskStarted { .. }
                 | Response::TaskArchived { .. }

@@ -319,6 +319,7 @@ async fn scenario(root: &Path, net: &Net, core: &Arc<CollieCore>) {
                 agents: vec!["claude".into()],
             }],
             code_mode: true,
+            issues: true,
         }
     );
     let before = herdr.mutations();

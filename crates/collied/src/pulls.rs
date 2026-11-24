@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState};
+use protocol::{Agent, Cwd, PullChecks, PullRequest, PullState, TaskIssue};
 use serde::Deserialize;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -16,17 +17,25 @@ pub(crate) const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_URL_BYTES: usize = 512;
 const MAX_NAME_CHARS: usize = 100;
 const MAX_FAILING_CHECKS: usize = 10;
+const MAX_ISSUES: usize = 50;
+const MAX_OUTPUT_BYTES: u64 = 1 << 20;
 
 pub type Key = (String, String);
 /// A pull request and its head commit.
 pub type Pull = (PullRequest, String);
 
-/// Never prompts and never uses a token from collied's environment: only the user's
-/// `gh auth login`.
+/// Never prompts, and takes no token or repository from collied's environment: only the
+/// user's `gh auth login` and the folder it runs in.
 pub fn gh_command(gh: &str) -> Command {
     let mut command = Command::new(gh);
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(key);
+        }
+    }
     command
         .env("PATH", crate::drive::tool_path())
+        .env_remove("GH_REPO")
         .env_remove("GH_TOKEN")
         .env_remove("GITHUB_TOKEN")
         .env_remove("GH_ENTERPRISE_TOKEN")
@@ -37,6 +46,46 @@ pub fn gh_command(gh: &str) -> Command {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     command
+}
+
+pub(crate) enum Unread {
+    Unavailable,
+    TooLarge,
+}
+
+pub(crate) async fn run(command: &mut Command, limit: u64) -> Result<std::process::Output, Unread> {
+    let mut child = command.spawn().map_err(|_| Unread::Unavailable)?;
+    let read = tokio::try_join!(
+        capped(child.stdout.take(), limit),
+        capped(child.stderr.take(), limit)
+    );
+    let (stdout, stderr) = match read {
+        Ok(read) => read,
+        Err(e) => {
+            let _ = child.kill().await;
+            return Err(e);
+        }
+    };
+    let status = child.wait().await.map_err(|_| Unread::Unavailable)?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+async fn capped(pipe: Option<impl AsyncRead + Unpin>, limit: u64) -> Result<Vec<u8>, Unread> {
+    let mut bytes = Vec::new();
+    if let Some(pipe) = pipe {
+        pipe.take(limit + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| Unread::Unavailable)?;
+    }
+    if bytes.len() as u64 > limit {
+        return Err(Unread::TooLarge);
+    }
+    Ok(bytes)
 }
 
 pub async fn signed_in(gh: &str) -> bool {
@@ -65,7 +114,7 @@ pub async fn fetch(gh: &str, checkout: &Cwd) -> Result<Option<Pull>, &'static st
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = timeout(GH_TIMEOUT, command.output())
+    let output = timeout(GH_TIMEOUT, run(&mut command, MAX_OUTPUT_BYTES))
         .await
         .map_err(|_| "timed out")?
         .map_err(|_| "unavailable")?;
@@ -87,7 +136,10 @@ pub async fn merged_head(gh: &str, checkout: &Cwd) -> Option<(u64, String)> {
         .args(["pr", "view", "--json", "number,state,headRefOid"])
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped());
-    let output = timeout(GH_TIMEOUT, command.output()).await.ok()?.ok()?;
+    let output = timeout(GH_TIMEOUT, run(&mut command, MAX_OUTPUT_BYTES))
+        .await
+        .ok()?
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -183,7 +235,7 @@ pub async fn head(gh: &str, checkout: &Cwd, number: u64) -> Result<Head, String>
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = timeout(GH_TIMEOUT, command.output())
+    let output = timeout(GH_TIMEOUT, run(&mut command, MAX_OUTPUT_BYTES))
         .await
         .map_err(|_| "gh timed out".to_owned())?
         .map_err(|_| "gh is unavailable".to_owned())?;
@@ -229,7 +281,7 @@ pub async fn mine(gh: &str, checkout: &Cwd) -> Vec<Mine> {
         ])
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped());
-    match timeout(GH_TIMEOUT, command.output()).await {
+    match timeout(GH_TIMEOUT, run(&mut command, MAX_OUTPUT_BYTES)).await {
         Ok(Ok(output)) if output.status.success() => parse_mine(&output.stdout),
         _ => Vec::new(),
     }
@@ -276,6 +328,60 @@ fn parse_mine(json: &[u8]) -> Vec<Mine> {
             Some((pr, l.head_ref_name, title(&l.title)))
         })
         .collect()
+}
+
+pub async fn issues(gh: &str, checkout: &Cwd) -> Result<Vec<TaskIssue>, &'static str> {
+    let mut command = gh_command(gh);
+    command
+        .args(["issue", "list", "--state", "open", "--limit"])
+        .arg(MAX_ISSUES.to_string())
+        .args(["--json", "number,title"])
+        .current_dir(checkout.as_str())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = timeout(GH_TIMEOUT, run(&mut command, MAX_OUTPUT_BYTES))
+        .await
+        .map_err(|_| "gh timed out")?
+        .map_err(|e| match e {
+            Unread::Unavailable => "gh is unavailable",
+            Unread::TooLarge => "gh's issue list is too large",
+        })?;
+    if output.status.code() == Some(4) {
+        return Err("gh is not signed in; run `gh auth login` on the machine");
+    }
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        return Err(
+            if said.contains("no git remotes found")
+                || said.contains("none of the git remotes configured")
+            {
+                "the repository has no GitHub remote"
+            } else {
+                "gh could not list the issues"
+            },
+        );
+    }
+    parse_issues(&output.stdout).ok_or("gh's issue list could not be read")
+}
+
+fn parse_issues(json: &[u8]) -> Option<Vec<TaskIssue>> {
+    #[derive(Deserialize)]
+    struct Listed {
+        number: u64,
+        title: String,
+    }
+    let listed: Vec<Listed> = serde_json::from_slice(json).ok()?;
+    let mut issues: Vec<TaskIssue> = listed
+        .into_iter()
+        .filter(|l| (1..=u64::from(u32::MAX)).contains(&l.number))
+        .map(|l| TaskIssue {
+            number: l.number,
+            title: title(&l.title),
+        })
+        .collect();
+    issues.sort_by_key(|i| std::cmp::Reverse(i.number));
+    issues.truncate(MAX_ISSUES);
+    Some(issues)
 }
 
 /// Untrusted text for display: no control or format characters, at most 200 characters.
@@ -736,6 +842,132 @@ mod tests {
             );
         }
         assert!(parse_head(b"no pull requests found").is_err());
+    }
+
+    #[tokio::test]
+    async fn an_issue_list_says_why_gh_could_not_read_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let cwd = Cwd::new(base.to_str().unwrap()).unwrap();
+        let fake = |name: &str, body: &str| {
+            let path = base.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        assert_eq!(
+            issues(&fake("out", "exit 4"), &cwd).await,
+            Err("gh is not signed in; run `gh auth login` on the machine")
+        );
+        for said in [
+            "no git remotes found",
+            "none of the git remotes configured for this repository point to a known GitHub host",
+        ] {
+            let remote = fake("remote", &format!("echo '{said}' >&2\nexit 1"));
+            assert_eq!(
+                issues(&remote, &cwd).await,
+                Err("the repository has no GitHub remote")
+            );
+        }
+        let sentinel = fake(
+            "sentinel",
+            "echo 'HTTP 401: token ghp_SENTINEL4242 for private-repo' >&2\nexit 1",
+        );
+        assert_eq!(
+            issues(&sentinel, &cwd).await,
+            Err("gh could not list the issues")
+        );
+        assert_eq!(
+            issues(&fake("endless", "exec yes"), &cwd).await,
+            Err("gh's issue list is too large")
+        );
+        assert_eq!(
+            issues(&fake("shouting", "exec yes >&2"), &cwd).await,
+            Err("gh's issue list is too large")
+        );
+        let listed = fake(
+            "listed",
+            r#"[ "$*" = "issue list --state open --limit 50 --json number,title" ] && echo '[{"number":7,"title":"Seven"}]'"#,
+        );
+        assert_eq!(
+            issues(&listed, &cwd).await,
+            Ok(vec![TaskIssue {
+                number: 7,
+                title: "Seven".to_owned()
+            }])
+        );
+    }
+
+    #[test]
+    fn gh_never_takes_a_repository_from_collieds_environment() {
+        const CHILD: &str = "COLLIED_TEST_REPOSITORY_FROM_ENV";
+        if std::env::var_os(CHILD).is_none() {
+            let test = format!(
+                "{}::gh_never_takes_a_repository_from_collieds_environment",
+                module_path!().split_once("::").unwrap().1
+            );
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([test.as_str(), "--exact", "--nocapture"])
+                .env(CHILD, "1")
+                .env("GH_REPO", "owner/other")
+                .env("GIT_DIR", "/elsewhere/.git")
+                .env("GIT_WORK_TREE", "/elsewhere")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success(),
+                "child failed: {stdout}{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(stdout.contains("1 passed"), "child did not run the test");
+            return;
+        }
+        assert!(std::env::var_os("GH_REPO").is_some() && std::env::var_os("GIT_DIR").is_some());
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().canonicalize().unwrap();
+        let seen = base.join("seen");
+        let gh = base.join("gh");
+        std::fs::write(
+            &gh,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$GH_REPO$GIT_DIR$GIT_WORK_TREE\" > '{}'\necho '[]'\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cwd = Cwd::new(base.to_str().unwrap()).unwrap();
+        let listed = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(issues(gh.to_str().unwrap(), &cwd));
+        assert_eq!(listed, Ok(Vec::new()));
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "");
+    }
+
+    #[test]
+    fn issues_are_newest_first_bounded_and_their_titles_cleaned_to_fit_a_frame() {
+        let mut listed: Vec<_> = (1..=60)
+            .map(|n| serde_json::json!({"number": n, "title": "𝕏".repeat(300)}))
+            .collect();
+        listed.push(serde_json::json!({"number": 0, "title": "zero"}));
+        listed.push(serde_json::json!({"number": 4294967296u64, "title": "too big"}));
+        listed.push(serde_json::json!({"number": 61, "title": "Fix \u{1b}[2J\"it\"\u{202e}\nnow"}));
+        let issues = parse_issues(serde_json::Value::from(listed).to_string().as_bytes()).unwrap();
+        assert_eq!(issues.len(), MAX_ISSUES);
+        assert_eq!(issues[0].number, 61);
+        assert_eq!(issues[0].title, "Fix [2J\"it\" now");
+        assert!(issues.windows(2).all(|w| w[0].number > w[1].number));
+        let frame = protocol::ServerFrame::Result {
+            id: u32::MAX,
+            result: protocol::Response::TaskIssues { issues },
+        };
+        assert!(serde_json::to_vec(&frame).unwrap().len() < protocol::limits::MAX_FRAME_BYTES);
+        assert_eq!(parse_issues(b"{}"), None);
     }
 
     #[test]

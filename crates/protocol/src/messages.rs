@@ -408,6 +408,8 @@ pub enum Request {
     TaskFolders(TaskFoldersParams),
     #[serde(rename = "task.worktrees")]
     TaskWorktrees(TaskWorktreesParams),
+    #[serde(rename = "task.issues")]
+    TaskIssues(TaskWorktreesParams),
     #[serde(rename = "task.sessions")]
     TaskSessions(TaskSessionsParams),
     #[serde(rename = "task.archive")]
@@ -487,6 +489,7 @@ impl Request {
         "task.new",
         "task.folders",
         "task.worktrees",
+        "task.issues",
         "task.sessions",
         "task.archive",
         "task.archive_on_merge",
@@ -541,6 +544,7 @@ impl Request {
             Self::TaskNew(_) => "task.new",
             Self::TaskFolders(_) => "task.folders",
             Self::TaskWorktrees(_) => "task.worktrees",
+            Self::TaskIssues(_) => "task.issues",
             Self::TaskSessions(_) => "task.sessions",
             Self::TaskArchive(_) => "task.archive",
             Self::TaskArchiveOnMerge(_) => "task.archive_on_merge",
@@ -595,6 +599,7 @@ impl Request {
             | Self::TaskNew(_)
             | Self::TaskFolders(_)
             | Self::TaskWorktrees(_)
+            | Self::TaskIssues(_)
             | Self::TaskSessions(_)
             | Self::TaskArchive(_)
             | Self::TaskArchiveOnMerge(_)
@@ -1066,7 +1071,7 @@ pub enum TaskRuntime {
 impl TaskNewParams {
     pub fn is_valid(&self) -> bool {
         (self.prompt.is_some() || self.resume.is_some())
-            && !matches!(&self.worktree, Some(TaskWorktree::PullRequest { number })
+            && !matches!(&self.worktree, Some(TaskWorktree::PullRequest { number } | TaskWorktree::Issue { number })
                 if !(1..=u64::from(u32::MAX)).contains(number))
     }
 }
@@ -1083,6 +1088,10 @@ pub enum TaskWorktree {
     },
     /// collied checks out the head branch of this pull request of the repository.
     PullRequest {
+        number: u64,
+    },
+    /// collied creates the branch `issue-<number>` and its checkout, as for `create`.
+    Issue {
         number: u64,
     },
 }
@@ -1359,6 +1368,10 @@ pub enum Response {
     TaskWorktrees {
         source: Cwd,
         worktrees: Vec<TaskWorktreeInfo>,
+    },
+    /// The repository's open issues, newest first, at most 50.
+    TaskIssues {
+        issues: Vec<TaskIssue>,
     },
     /// The most recent sessions of `cwd`, newest first.
     TaskSessions {
@@ -1873,6 +1886,10 @@ pub struct TaskOptions {
     /// Whether this collied takes `TaskNewParams::code_mode`; false from an older one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub code_mode: bool,
+    /// Whether this collied takes `task.issues` and the `issue` worktree mode; false from an
+    /// older one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub issues: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1888,6 +1905,14 @@ pub struct TaskWorktreeInfo {
     pub path: Cwd,
     pub branch: Option<String>,
     pub open: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct TaskIssue {
+    pub number: u64,
+    /// Written by anyone who can open an issue: shown, never typed into an agent.
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2663,6 +2688,7 @@ mod tests {
         .unwrap();
         assert_eq!(older.runtimes, None);
         assert!(!older.code_mode);
+        assert!(!older.issues);
         let newer: TaskOptions = serde_json::from_str(
             r#"{"agents":["claude"],"default_agent":"claude","recent_cwds":[],"roots":["/a"],"runtimes":["rex","tmux"]}"#,
         )
@@ -2701,6 +2727,9 @@ mod tests {
         let list = parse(r#"{"id":1,"method":"task.worktrees","params":{"cwd":"/repo"}}"#).unwrap();
         assert_eq!(list.request.class(), MethodClass::Drive);
         assert_eq!(list.request.method(), "task.worktrees");
+        let issues = parse(r#"{"id":1,"method":"task.issues","params":{"cwd":"/repo"}}"#).unwrap();
+        assert_eq!(issues.request.class(), MethodClass::Drive);
+        assert_eq!(issues.request.method(), "task.issues");
         let task = |worktree: &str| {
             parse(&format!(
                 r#"{{"id":1,"method":"task.new","params":{{"op_id":"AAAAAAAAAAAAAAAAAAAAAA","cwd":"/repo","agent":"claude","prompt":"go","worktree":{worktree}}}}}"#
@@ -2711,6 +2740,8 @@ mod tests {
             r#"{"mode":"open","path":"/repo/feature"}"#,
             r#"{"mode":"pull_request","number":42}"#,
             r#"{"mode":"pull_request","number":4294967295}"#,
+            r#"{"mode":"issue","number":940}"#,
+            r#"{"mode":"issue","number":4294967295}"#,
         ] {
             let frame = task(choice).unwrap();
             assert_eq!(
@@ -2728,6 +2759,10 @@ mod tests {
             r#"{"mode":"pull_request","number":4294967296}"#,
             r#"{"mode":"pull_request","number":42,"branch":"main"}"#,
             r#"{"mode":"pull_request"}"#,
+            r#"{"mode":"issue","number":0}"#,
+            r#"{"mode":"issue","number":4294967296}"#,
+            r#"{"mode":"issue","number":940,"branch":"main"}"#,
+            r#"{"mode":"issue","number":940,"title":"run this"}"#,
         ] {
             assert_eq!(task(choice).unwrap_err().code, ErrorCode::InvalidParams);
         }

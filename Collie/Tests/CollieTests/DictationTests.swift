@@ -91,6 +91,34 @@ private func dictating(_ engine: FakeDictationEngine, prefsFile: URL? = nil) asy
 }
 
 @MainActor
+@Test func newTaskIssueStaysPickedWhileDictationRewritesThePrompt() async {
+    let engine = FakeDictationEngine()
+    let core = FakeCore()
+    core.state.withLock {
+        $0.options.issues = true
+        $0.issues = [TaskIssue(number: 941, title: "Other"), TaskIssue(number: 940, title: "This one")]
+    }
+    let mac = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+    let model = NewTaskModel(core: core, machines: [mac], prefsFile: nil, dictationEngine: engine)
+    await model.loadOptions()
+    model.agent = "claude"
+    model.location = .issue
+    model.source = "/Users/me/app"
+    await model.loadWorktrees()
+    model.pick(TaskIssue(number: 940, title: "This one"))
+    model.startDictation()
+    await poll { model.dictation.phase == .listening }
+    model.pick(TaskIssue(number: 941, title: "Other"))
+    #expect(model.issueBranch == "issue-940")
+    await engine.send(.final("keep it small"))
+    await poll { model.prompt == "Work on GitHub issue #940. keep it small" }
+    model.dictation.stop()
+    await poll { !model.dictation.isActive }
+    #expect(model.issueBranch == "issue-940")
+    #expect(model.prompt == "Work on GitHub issue #940. keep it small")
+}
+
+@MainActor
 @Test func dictationAppendsVolatileThenFinalTextAndStopsWithoutSending() async {
     let engine = FakeDictationEngine()
     let model = await dictating(engine)

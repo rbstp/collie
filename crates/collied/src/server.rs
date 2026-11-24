@@ -1845,6 +1845,7 @@ impl Session<'_> {
                     protocol::TaskWorktree::PullRequest { number } => {
                         format!("pull_request={number}")
                     }
+                    protocol::TaskWorktree::Issue { number } => format!("issue={number}"),
                 });
                 let op = self.audited(method, target.clone(), async move {
                     let (reply, cwd) = d.task_new(p, &auth).await;
@@ -1878,6 +1879,7 @@ impl Session<'_> {
             }
             Request::TaskFolders(p) => (drive.task_folders(p, &auth).await, None),
             Request::TaskWorktrees(p) => (drive.task_worktrees(p, &auth).await, None),
+            Request::TaskIssues(p) => (drive.task_issues(p, &auth).await, None),
             Request::TaskSessions(p) => (drive.task_sessions(p, &auth).await, None),
             Request::TaskArchive(_) if !self.tasks.is_empty() => (
                 err(
@@ -2722,6 +2724,9 @@ fn audit_target(request: &Request) -> Option<String> {
                     protocol::TaskWorktree::PullRequest { number } => {
                         format!("{} pull_request={number}", p.cwd.as_str())
                     }
+                    protocol::TaskWorktree::Issue { number } => {
+                        format!("{} issue={number}", p.cwd.as_str())
+                    }
                 });
             }
             if let Some(source) = &p.clone {
@@ -2738,7 +2743,7 @@ fn audit_target(request: &Request) -> Option<String> {
             }
         }
         Request::TaskFolders(p) => p.path.as_str(),
-        Request::TaskWorktrees(p) => p.cwd.as_str(),
+        Request::TaskWorktrees(p) | Request::TaskIssues(p) => p.cwd.as_str(),
         Request::TaskSessions(p) => p.cwd.as_str(),
         Request::TaskArchive(p) => p.terminal_id.as_str(),
         Request::TaskArchiveOnMerge(p) => return Some(format!("enabled={}", p.enabled)),
@@ -2886,6 +2891,7 @@ fn outcome(reply: &Reply) -> String {
             if *truncated { " truncated" } else { "" }
         ),
         Ok(Response::TaskSessions { sessions }) => format!("ok sessions={}", sessions.len()),
+        Ok(Response::TaskIssues { issues }) => format!("ok issues={}", issues.len()),
         Ok(_) => "ok".to_owned(),
         Err((ErrorCode::DraftChanged, _)) => code_name(ErrorCode::DraftChanged),
         Err((code, message)) => format!("{}: {message}", code_name(*code)),

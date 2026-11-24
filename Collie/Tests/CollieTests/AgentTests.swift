@@ -44,7 +44,7 @@ final class FakeCore: AgentCore {
         var hold = false
         var held: [CheckedContinuation<Void, Never>] = []
         var error: CoreError?
-        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil, runtimeAgents: [], codeMode: false)
+        var options = TaskOptions(agents: ["claude", "codex"], defaultAgent: "codex", recentCwds: ["/Users/me/app"], roots: ["/Users/me"], runtimes: nil, runtimeAgents: [], codeMode: false, issues: false)
         var folders = TaskFolders(path: "/Users/me/git", folders: ["app", "collie", "Cobalt", "docs"], truncated: false)
         var folderPaths: [String] = []
         var taskNews: [String] = []
@@ -54,6 +54,8 @@ final class FakeCore: AgentCore {
             WorktreeChoice(path: "/Users/me/app-feature", branch: "feature", open: true)
         ])
         var worktreeCalls: [String] = []
+        var issues: [TaskIssue] = []
+        var issuesError: CoreError?
         var started: TaskStarted?
         var cloneError: CoreError?
         var sessions = [
@@ -357,6 +359,20 @@ final class FakeCore: AgentCore {
     func taskWorktreePullRequest(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
         try await call {
             $0.worktreeCalls.append("pull_request \(cwd) \(number) \(agent)" + (codeMode.map { " codeMode=\($0)" } ?? ""))
+            $0.taskPrompts.append(prompt)
+            $0.taskRuntimes.append(runtime)
+        }
+        guard let started = state.withLock({ $0.started }) else { throw CoreError.NotImplemented }
+        return started
+    }
+    func taskIssues(machineId: String, cwd: String) async throws -> [TaskIssue] {
+        try await call { $0.worktreeCalls.append("issues \(cwd)") }
+        if let error = state.withLock({ $0.issuesError }) { throw error }
+        return state.withLock { $0.issues }
+    }
+    func taskWorktreeIssue(machineId: String, cwd: String, number: UInt64, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted {
+        try await call {
+            $0.worktreeCalls.append("issue \(cwd) \(number) \(agent)")
             $0.taskPrompts.append(prompt)
             $0.taskRuntimes.append(runtime)
         }

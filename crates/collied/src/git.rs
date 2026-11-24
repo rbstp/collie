@@ -1098,10 +1098,16 @@ async fn gh(checkout: &Cwd, args: &[&str], path: Option<&str>) -> Result<Vec<u8>
         .current_dir(checkout.as_str())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = tokio::time::timeout(crate::pulls::GH_TIMEOUT, command.output())
-        .await
-        .map_err(|_| error("gh took too long; try again"))?
-        .map_err(|_| error("gh is unavailable"))?;
+    let output = tokio::time::timeout(
+        crate::pulls::GH_TIMEOUT,
+        crate::pulls::run(&mut command, OUTPUT_LIMIT as u64),
+    )
+    .await
+    .map_err(|_| error("gh took too long; try again"))?
+    .map_err(|e| match e {
+        crate::pulls::Unread::Unavailable => error("gh is unavailable"),
+        crate::pulls::Unread::TooLarge => error("The pull request is too large to preview"),
+    })?;
     if output.status.code() == Some(4) {
         return Err(error(
             "gh is not signed in; run `gh auth login` on the machine",
@@ -1112,9 +1118,6 @@ async fn gh(checkout: &Cwd, args: &[&str], path: Option<&str>) -> Result<Vec<u8>
             "gh could not read the pull request: {}",
             crate::pulls::first_line(&output.stderr)
         )));
-    }
-    if output.stdout.len() > OUTPUT_LIMIT {
-        return Err(error("The pull request is too large to preview"));
     }
     Ok(output.stdout)
 }

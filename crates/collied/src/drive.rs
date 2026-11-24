@@ -1210,6 +1210,7 @@ impl Driver {
             ),
             runtime_agents,
             code_mode: true,
+            issues: true,
         }))
     }
 
@@ -1251,6 +1252,20 @@ impl Driver {
             })
             .collect();
         Ok(Response::TaskWorktrees { source, worktrees })
+    }
+
+    pub async fn task_issues(&self, p: TaskWorktreesParams, auth: &Authorized) -> Reply {
+        authorized(auth)?;
+        let cwd = resolve_cwd(p.cwd.as_str(), &self.roots).map_err(invalid)?;
+        let Some(gh) = gh() else {
+            return fail(
+                ErrorCode::InvalidParams,
+                "gh is not installed on the machine",
+            );
+        };
+        let issues = pulls::issues(&gh, &cwd).await.map_err(invalid)?;
+        authorized(auth)?;
+        Ok(Response::TaskIssues { issues })
     }
 
     pub async fn task_sessions(&self, p: TaskSessionsParams, auth: &Authorized) -> Reply {
@@ -1510,7 +1525,7 @@ impl Driver {
             TaskWorktree::Open { path } => {
                 Some(resolve_cwd(path.as_str(), &self.roots).map_err(invalid)?)
             }
-            TaskWorktree::PullRequest { .. } => None,
+            TaskWorktree::PullRequest { .. } | TaskWorktree::Issue { .. } => None,
         };
         authorized(auth)?;
         let listed = self.worktree_list(source, host.is_some()).await?;
@@ -1529,6 +1544,12 @@ impl Driver {
                     branch: head.branch.clone(),
                 };
                 (&pulled, Some((*number, head)))
+            }
+            TaskWorktree::Issue { number } => {
+                pulled = TaskWorktree::Create {
+                    branch: format!("issue-{number}"),
+                };
+                (&pulled, None)
             }
             other => (other, None),
         };
@@ -1610,7 +1631,7 @@ impl Driver {
                     )
                     .await
             }
-            TaskWorktree::PullRequest { .. } => unreachable!(),
+            TaskWorktree::PullRequest { .. } | TaskWorktree::Issue { .. } => unreachable!(),
         }
         .map_err(|e| {
             let failure = herdr_fail(e);
@@ -5167,6 +5188,122 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&control.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn an_issue_task_creates_the_branch_issue_n_and_its_checkout_once() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (_dir, root, repo, _) = core_tests::worktree();
+        let created = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let listener = tokio::net::UnixListener::bind(root.join("herdr.sock")).unwrap();
+        let (seen, source) = (created.clone(), repo.clone());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (reader, mut writer) = stream.into_split();
+                let mut line = String::new();
+                tokio::io::BufReader::new(reader)
+                    .read_line(&mut line)
+                    .await
+                    .unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let params = &request["params"];
+                let result = match request["method"].as_str().unwrap() {
+                    "ping" => {
+                        serde_json::json!({"type": "pong", "version": "0.9.5", "protocol": 1})
+                    }
+                    "worktree.list" => serde_json::json!({"type": "worktree_list",
+                        "source": {"source_checkout_path": source}, "worktrees": []}),
+                    "worktree.create" => {
+                        seen.lock().unwrap().push(params.clone());
+                        let (branch, path) = (&params["branch"], &params["path"]);
+                        let added = std::process::Command::new("git")
+                            .current_dir(&source)
+                            .args(["worktree", "add", "-q", "-b"])
+                            .args([branch.as_str().unwrap(), path.as_str().unwrap()])
+                            .status()
+                            .unwrap();
+                        assert!(added.success());
+                        serde_json::json!({"type": "worktree_created",
+                            "workspace": {"workspace_id": "w9", "number": 9, "label": branch,
+                                "active_tab_id": null, "agent_status": "unknown"},
+                            "root_pane": {"pane_id": "w9:p1", "terminal_id": "term_9",
+                                "workspace_id": "w9", "tab_id": "w9:t1", "cwd": path,
+                                "foreground_cwd": null},
+                            "worktree": {"path": path, "branch": branch, "open_workspace_id": "w9",
+                                "is_bare": false, "is_linked_worktree": true}})
+                    }
+                    _ => serde_json::Value::Null,
+                };
+                let reply = if result.is_null() {
+                    serde_json::json!({"id": request["id"], "error": {"code": "unknown_method", "message": "no"}})
+                } else {
+                    serde_json::json!({"id": request["id"], "result": result})
+                };
+                writer
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let claude = AgentKind::new("claude").unwrap();
+        let drive = Driver::new(
+            root.join("herdr.sock"),
+            vec![claude.clone()],
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
+        let p = TaskNewParams {
+            op_id: OpId::new("i".repeat(22)).unwrap(),
+            cwd: Cwd::new(repo.to_str().unwrap()).unwrap(),
+            agent: claude,
+            prompt: Some(
+                protocol::PromptText::new("Work on GitHub issue #940.".to_owned()).unwrap(),
+            ),
+            label: None,
+            new_folder: None,
+            worktree: Some(TaskWorktree::Issue { number: 940 }),
+            clone: None,
+            resume: None,
+            ultracode: false,
+            code_mode: None,
+            runtime: None,
+        };
+        let yes: Authorized = Arc::new(|| true);
+        let checkout = repo.join(".worktree/issue-940");
+        let head = || {
+            let out = std::process::Command::new("git")
+                .current_dir(&checkout)
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let (reply, _) = drive.task_new(p.clone(), &yes).await;
+        let (_, message) = reply.unwrap_err();
+        assert!(
+            message.starts_with(&format!(
+                "checkout {} (branch issue-940) and workspace w9 were left in place",
+                checkout.display()
+            )),
+            "{message}"
+        );
+        assert_eq!(
+            *created.lock().unwrap(),
+            [
+                serde_json::json!({"cwd": repo, "branch": "issue-940", "path": checkout, "focus": false})
+            ]
+        );
+        assert_eq!(head(), "issue-940");
+        let (again, _) = drive.task_new(p, &yes).await;
+        assert_eq!(
+            again.unwrap_err(),
+            (
+                ErrorCode::InvalidParams,
+                "checkout path already exists".to_owned()
+            )
+        );
+        assert_eq!(created.lock().unwrap().len(), 1);
+        assert_eq!(head(), "issue-940");
     }
 
     #[tokio::test]

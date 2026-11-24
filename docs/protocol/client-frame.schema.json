@@ -1184,6 +1184,26 @@
             "number"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "collied creates the branch `issue-<number>` and its checkout, as for `create`.",
+          "properties": {
+            "mode": {
+              "const": "issue",
+              "type": "string"
+            },
+            "number": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "number"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1780,6 +1800,22 @@
       "properties": {
         "method": {
           "const": "task.worktrees",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/TaskWorktreesParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "task.issues",
           "type": "string"
         },
         "params": {
