@@ -1,6 +1,6 @@
 --- magicsock.orig.go
 +++ magicsock.go
-@@ -3731,6 +3731,11 @@
+@@ -3899,6 +3899,11 @@
  	}
  }
  
@@ -9,22 +9,26 @@
 +// each newly built, unsigned test binary. collied and the app never set it.
 +var bindLoopback = envknob.RegisterBool("TS_DEBUG_MAGICSOCK_BIND_LOOPBACK")
 +
- // listenPacket opens a packet listener.
- // The network must be "udp4" or "udp6".
- func (c *Conn) listenPacket(network string, port uint16) (nettype.PacketConn, error) {
-@@ -3740,7 +3745,14 @@
- 	} else {
- 		ctx = sockstats.WithSockStats(ctx, sockstats.LabelMagicsockConnUDP6, c.logf)
- 	}
--	addr := net.JoinHostPort("", fmt.Sprint(port))
-+	host := ""
+ // canShareUDPPort reports whether magicsock supports per-family UDP port sharing.
+ // See [Options.UDPSockets].
+ var canShareUDPPort = sockopts.CanShareUDPPort && runtime.GOOS != "android"
+@@ -3930,6 +3935,19 @@
+ 			c.logf("[unexpected] magicsock: unparseable local address (from %T): %s", pconn, addrStr)
+ 		}
+ 		return []nettype.PacketConn{pconn}, port, nil
++	}
 +	if bindLoopback() {
-+		host = "127.0.0.1"
++		host := "127.0.0.1"
 +		if network == "udp6" {
 +			host = "::1"
 +		}
-+	}
-+	addr := net.JoinHostPort(host, fmt.Sprint(port))
- 	if c.testOnlyPacketListener != nil {
- 		return nettype.MakePacketListenerWithNetIP(c.testOnlyPacketListener).ListenPacket(ctx, network, addr)
++		pconn, err := netns.Listener(c.logf, c.netMon).ListenPacket(ctx, network, net.JoinHostPort(host, fmt.Sprint(port)))
++		if err != nil {
++			return nil, 0, err
++		}
++		uc := pconn.(*net.UDPConn)
++		trySetUDPSocketOptions(uc, c.logf)
++		return []nettype.PacketConn{uc}, uint16(uc.LocalAddr().(*net.UDPAddr).Port), nil
  	}
+ 	pconns, boundPort, err := sockopts.BindUDPGroup(
+ 		ctx,
