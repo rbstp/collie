@@ -225,6 +225,7 @@ struct NewTaskSheet: View {
                                             }
                                         }
                                         .foregroundStyle(.primary)
+                                        .disabled(model.phase != .editing || model.dictation.isActive)
                                     }
                                 } else if model.issuesError == nil {
                                     ProgressView("Finding issues…")

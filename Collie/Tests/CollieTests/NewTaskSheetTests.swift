@@ -402,6 +402,11 @@ final class NewTaskSheetTests: XCTestCase {
         model.prompt = "Keep it small."
         model.pick(model.issues![1])
         XCTAssertEqual(model.prompt, "Work on GitHub issue #940. Keep it small.")
+        model.prompt = "Please " + model.prompt
+        model.pick(model.issues![0])
+        XCTAssertEqual(model.prompt, "Please Work on GitHub issue #941. Keep it small.")
+        model.pick(model.issues![1])
+        XCTAssertEqual(model.prompt, "Please Work on GitHub issue #940. Keep it small.")
         XCTAssertTrue(model.canStart)
         core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
         let route = await model.start()
@@ -409,10 +414,21 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertEqual(core.snapshot.worktreeCalls, [
             "list /Users/me/app", "issues /Users/me/app", "list /Users/me/app", "issues /Users/me/app", "issue /Users/me/app 940 claude",
         ])
-        XCTAssertEqual(core.snapshot.taskPrompts, ["Work on GitHub issue #940. Keep it small."])
+        XCTAssertEqual(core.snapshot.taskPrompts, ["Please Work on GitHub issue #940. Keep it small."])
         core.state.withLock { $0.options.issues = false }
         await model.loadOptions()
         XCTAssertEqual(model.worktreeAction, .create)
+        core.state.withLock { $0.options.issues = true }
+        await model.loadOptions()
+        model.worktreeAction = .issue
+        core.state.withLock { $0.error = .Unreachable(message: "offline") }
+        await model.loadOptions()
+        XCTAssertNil(model.options)
+        XCTAssertEqual(model.worktreeAction, .create)
+        core.state.withLock { $0.error = nil }
+        model.worktreeAction = .issue
+        await model.loadWorktrees()
+        XCTAssertEqual(core.snapshot.worktreeCalls.last, "list /Users/me/app")
     }
 
     func testStartupBlockedTaskSignalsOpenInTerminal() async throws {

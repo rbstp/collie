@@ -288,6 +288,7 @@ final class NewTaskModel {
         } catch {
             guard machineId == self.machineId else { return }
             optionsError = AgentModel.message(for: error)
+            if worktreeAction == .issue { worktreeAction = .create }
             return
         }
         guard let base else { return }
@@ -315,7 +316,7 @@ final class NewTaskModel {
             if worktreeAction == .open && !listed.worktrees.contains(where: { $0.path == checkoutPath }) {
                 checkoutPath = listed.worktrees.first?.path ?? ""
             }
-            guard worktreeAction == .issue else { return }
+            guard worktreeAction == .issue, options?.issues == true else { return }
             let found = try await core.taskIssues(machineId: machineId, cwd: listed.source)
             guard machineId == self.machineId, requested == sourceFolder else { return }
             issues = found
@@ -331,10 +332,11 @@ final class NewTaskModel {
     }
 
     func pick(_ picked: TaskIssue) {
+        guard phase == .editing, !dictation.isActive else { return }
         issue = picked.number
         let reference = "Work on GitHub issue #\(picked.number)."
-        if !issuePrompt.isEmpty, prompt.hasPrefix(issuePrompt) {
-            prompt = reference + prompt.dropFirst(issuePrompt.count)
+        if !issuePrompt.isEmpty, let range = prompt.range(of: issuePrompt) {
+            prompt.replaceSubrange(range, with: reference)
         } else {
             prompt = trimmed(prompt).isEmpty ? reference : reference + " " + prompt
         }
