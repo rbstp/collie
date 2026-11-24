@@ -168,8 +168,14 @@ struct FlockScreen: View {
                 while !Task.isCancelled {
                     let snapshot = tick % 20 == 0
                     await model.refresh(core: core, machines: machines, snapshot: snapshot)
+                    if persistsState, let core {
+                        for entry in model.entries where entry.flock?.link == .connected {
+                            await ScheduledDrafts.reconcile(machineId: entry.id, core: core, file: ScheduledDrafts.file, draftsFile: AgentDrafts.file)
+                        }
+                    }
                     if snapshot && persistsState {
-                        AgentDrafts.prune(model.entries, file: AgentDrafts.file)
+                        ScheduledDrafts.seen(model.entries)
+                        AgentDrafts.prune(model.entries, keeping: ScheduledDrafts.restored, file: AgentDrafts.file)
                         if core != nil {
                             let previous = seen.markers.count
                             seen.prune(model.entries)

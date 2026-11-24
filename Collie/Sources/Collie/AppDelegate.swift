@@ -113,6 +113,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if let machine = app.machines.first(where: { $0.nodeId == nodeId }),
                 let link = AgentLink(machineId: machine.id, terminalId: terminalId)
             {
+                if let core = app.core {
+                    await ScheduledDrafts.reconcile(machineId: machine.id, core: core, file: ScheduledDrafts.file, draftsFile: AgentDrafts.file)
+                }
+                guard terminalId != ScheduledDrafts.alertThread else { return }
                 app.open(link.url)
             }
         case .ignore:

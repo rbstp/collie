@@ -230,6 +230,9 @@ impl NegotiatedProtocol {
             | Request::TaskSessions(_)
             | Request::TaskArchive(_)
             | Request::TaskArchiveOnMerge(_)
+            | Request::TaskSchedule(_)
+            | Request::TaskScheduled(_)
+            | Request::TaskUnschedule(_)
             | Request::WorkspaceClose(_)
             | Request::PaneClose(_)
             | Request::ApprovalList(_)
@@ -284,6 +287,8 @@ impl NegotiatedProtocol {
                 | Response::TaskSessions { .. }
                 | Response::TaskStarted { .. }
                 | Response::TaskArchived { .. }
+                | Response::TaskScheduled { .. }
+                | Response::ScheduledTasks { .. }
                 | Response::TaskFolders { .. }
                 | Response::Approvals { .. }
                 | Response::ApprovalResolved { .. }

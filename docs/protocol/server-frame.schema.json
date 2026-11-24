@@ -1887,6 +1887,42 @@
           "type": "object"
         },
         {
+          "properties": {
+            "task": {
+              "$ref": "#/$defs/ScheduledTask"
+            },
+            "type": {
+              "const": "task_scheduled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The tasks waiting on this computer, soonest first, and those that stopped at a\nstartup prompt until a phone clears them.",
+          "properties": {
+            "tasks": {
+              "items": {
+                "$ref": "#/$defs/ScheduledTask"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "scheduled_tasks",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "tasks"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The folders directly inside `path`, its canonical form, sorted; `truncated` when\nsome were left out.",
           "properties": {
             "folders": {
@@ -2096,6 +2132,56 @@
       ],
       "type": "object"
     },
+    "ScheduleId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "ScheduledTask": {
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentKind"
+        },
+        "blocked": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Set once the task started and stopped at a startup prompt in this terminal: its\nprompt was not sent, and collied no longer keeps it."
+        },
+        "cwd": {
+          "$ref": "#/$defs/Cwd"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schedule_id": {
+          "$ref": "#/$defs/ScheduleId"
+        },
+        "start_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schedule_id",
+        "start_at_ms",
+        "cwd",
+        "agent"
+      ],
+      "type": "object"
+    },
     "SessionId": {
       "pattern": "^[0-9a-f][0-9a-f-]{35}$",
       "type": "string"
@@ -2206,6 +2292,10 @@
             "array",
             "null"
           ]
+        },
+        "schedule": {
+          "description": "Whether this collied takes `task.schedule`, `task.scheduled` and `task.unschedule`;\nfalse from an older one.",
+          "type": "boolean"
         }
       },
       "required": [

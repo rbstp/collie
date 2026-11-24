@@ -5,6 +5,98 @@ import XCTest
 
 @MainActor
 final class NewTaskSheetTests: XCTestCase {
+    func testAScheduledTaskSendsItsTimeAndKeepsItsPromptForAStartupPrompt() async throws {
+        let core = FakeCore()
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let dir = FileManager.default.temporaryDirectory.appending(path: "schedule-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let (drafts, kept) = (dir.appending(path: "drafts.json"), dir.appending(path: "scheduled.json"))
+        let other = Machine(id: "m2", label: "omarchy", host: "omarchy.ts.net", port: 8457, nodeId: "n2", kind: .linux, key: "")
+        let model = NewTaskModel(core: core, machines: [machine, other], prefsFile: nil, draftsFile: drafts, scheduledFile: kept)
+        await model.loadOptions()
+        model.startLater = true
+        model.prompt = "run the nightly"
+        model.cwd = "/Users/me/app"
+        XCTAssertTrue(model.scheduleUnsupported, "an older collied takes no start time")
+        XCTAssertFalse(model.canStart, "nor does Schedule turn into Start")
+        let refused = await model.schedule()
+        XCTAssertFalse(refused)
+        XCTAssertTrue(core.snapshot.schedules.isEmpty && core.snapshot.taskNews.isEmpty)
+
+        core.state.withLock { $0.options.schedule = true }
+        await model.loadOptions()
+        model.startAt = Date.now.addingTimeInterval(NewTaskModel.scheduleAhead + 60)
+        XCTAssertFalse(model.canStart)
+        let at = (Date.now.timeIntervalSince1970 + 7200).rounded()
+        model.startAt = Date(timeIntervalSince1970: at)
+        XCTAssertTrue(model.canStart)
+        let scheduled = await model.schedule()
+        XCTAssertTrue(scheduled)
+        let ms = UInt64(at * 1000)
+        XCTAssertEqual(core.snapshot.schedules, ["\(ms) folder(newFolder: nil) /Users/me/app codex"])
+        XCTAssertEqual(core.snapshot.taskPrompts, ["run the nightly"])
+        XCTAssertTrue(core.snapshot.taskNews.isEmpty, "nothing starts now")
+        await model.loadScheduled()
+        XCTAssertEqual(model.scheduled.map(\.scheduleId), ["s1"])
+
+        let early = Date(timeIntervalSince1970: at - 1)
+        core.state.withLock { $0.scheduled[0].blocked = "term_new" }
+        await ScheduledDrafts.reconcile(machineId: "m1", core: core, now: early, file: kept, draftsFile: drafts)
+        XCTAssertTrue(core.snapshot.unscheduled.isEmpty, "collied is not asked before the start time")
+        await ScheduledDrafts.reconcile(machineId: "m1", core: core, now: Date(timeIntervalSince1970: at), file: kept, draftsFile: drafts)
+        let draft = AgentDrafts.load(from: drafts).drafts[AgentRoute(machineId: "m1", terminalId: "term_new")]
+        XCTAssertEqual(draft?.text, "run the nightly")
+        XCTAssertEqual(core.snapshot.unscheduled, ["s1"])
+        XCTAssertTrue(ScheduledDrafts.load(from: kept).pending.isEmpty)
+        XCTAssertTrue(ScheduledDrafts.restored.contains(AgentRoute(machineId: "m1", terminalId: "term_new")), "pruning leaves it until its terminal shows")
+
+        model.machineId = "m2"
+        XCTAssertTrue(model.startLater)
+        XCTAssertFalse(model.canStart, "nothing goes while the next computer's options load")
+    }
+
+    func testACancelledOrStartedTaskLeavesNoKeptPrompt() async throws {
+        let core = FakeCore()
+        core.state.withLock { $0.options.schedule = true }
+        let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")
+        let kept = FileManager.default.temporaryDirectory.appending(path: "scheduled-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: kept) }
+        let model = NewTaskModel(core: core, machines: [machine], prefsFile: nil, scheduledFile: kept)
+        await model.loadOptions()
+        model.startLater = true
+        model.cwd = "/Users/me/app"
+        for prompt in ["first", "second"] {
+            model.prompt = prompt
+            let scheduled = await model.schedule()
+            XCTAssertTrue(scheduled)
+        }
+        await model.loadScheduled()
+        await model.unschedule(model.scheduled[0])
+        XCTAssertEqual(core.snapshot.unscheduled, ["s1"])
+        XCTAssertEqual(model.scheduled.map(\.scheduleId), ["s2"])
+        XCTAssertEqual(ScheduledDrafts.load(from: kept).pending["m1"].map { Array($0.keys) }, ["s2"])
+
+        core.set(error: .NotFound)
+        await model.unschedule(model.scheduled[0])
+        core.set(error: nil)
+        XCTAssertTrue(model.scheduled.isEmpty)
+        XCTAssertNotNil(ScheduledDrafts.load(from: kept).pending["m1"]?["s2"], "a refused cancel keeps the prompt")
+
+        let read = ScheduledDrafts.kept(machineId: "m1", file: kept)
+        model.prompt = "third"
+        let third = await model.schedule()
+        XCTAssertTrue(third)
+        await ScheduledDrafts.settle([], kept: read, machineId: "m1", core: core, file: kept, draftsFile: nil)
+        XCTAssertEqual(ScheduledDrafts.load(from: kept).pending["m1"].map { Array($0.keys) }, ["s3"], "a prompt kept after the list was read stays")
+
+        await ScheduledDrafts.reconcile(machineId: "m1", core: core, now: model.startAt, file: kept, draftsFile: nil)
+        XCTAssertNotNil(ScheduledDrafts.load(from: kept).pending["m1"]?["s3"], "kept while collied lists it, starting included")
+        core.state.withLock { $0.scheduled = [] }
+        await ScheduledDrafts.reconcile(machineId: "m1", core: core, now: model.startAt, file: kept, draftsFile: nil)
+        XCTAssertTrue(ScheduledDrafts.load(from: kept).pending.isEmpty, "a task that started leaves no copy")
+    }
+
     func testBrowsingDoesNotCancelTheTask() async throws {
         let core = FakeCore()
         let machine = Machine(id: "m1", label: "Mac", host: "mac.ts.net", port: 8457, nodeId: "n1", kind: .mac, key: "")

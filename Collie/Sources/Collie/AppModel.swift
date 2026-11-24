@@ -280,6 +280,7 @@ final class AppModel {
         PromptResends.shared.stop(machineId: machine.id)
         let unpaired = try await core?.removeMachine(id: machine.id) ?? false
         AgentDrafts.forget(machineId: machine.id, file: AgentDrafts.file)
+        ScheduledDrafts.forget(machineId: machine.id, file: ScheduledDrafts.file)
         SeenAgents.forget(machineId: machine.id, file: SeenAgents.file)
         SnoozedAgents.forget(machineId: machine.id, file: SnoozedAgents.file)
         GitViewed.forget(machineId: machine.id, file: GitViewed.file)

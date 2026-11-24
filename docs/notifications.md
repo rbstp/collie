@@ -35,6 +35,18 @@ An alert's title names the session as the app's session page does: its terminal 
 
 iPhone and Apple Watch show the authenticated preview, as does an iPhone notification mirrored to macOS; CollieBar and CollieTray send no desktop notifications.
 
+## Scheduled task alerts
+
+A task scheduled from New task ([architecture](architecture.md#herdr-integration-verified-against-093-source-and-live-socket), Scheduled tasks) sends one alert when collied starts it, fails to start it, drops it or finds its start cut short by a restart, to every registered device, whether or not done alerts are muted. Titles and bodies name only the folder and the reason, never the prompt, and travel encrypted like every alert:
+
+- `Scheduled task started`, `Started in <folder>`: a tap opens the new session.
+- `Scheduled task waiting`, `Stopped at a startup prompt in <folder>; its prompt was not sent`: a tap opens the new session, whose composer holds the prompt the phone kept.
+- `Scheduled task failed`, `<folder>: <reason>`, a fixed reason chosen by the error code, such as `it no longer passes collied's checks` or `the agent was not ready`; the audit log has the error itself.
+- `Scheduled task dropped`, `<folder>: more than an hour late, so it did not start`.
+- `Scheduled task interrupted`, `<folder>: collied stopped while it started; check the computer`, after a restart, for a task whose start may or may not have created its agent.
+
+The last three name no session: their thread is `collie-scheduled`, and a tap opens the app alone.
+
 ## Done alert at the desk
 
 collied skips a done alert (#774) only when three signals, read when the turn ends, are all known and true; any missing or failed signal sends it. Approval alerts, pull request watch and archive alerts, Live Activities and Usage are unchanged. Design and calls: [architecture](architecture.md#apns).

@@ -48,6 +48,20 @@ Choose **Resume** and a folder to list its recent Claude Code, Codex, Copilot CL
 - **Name workspace**, under the agent, shows a field for the herdr workspace's label.
 - Codex tasks start with `--no-daemon`: see [Codex](../agents/codex.md).
 
+## Schedule a task
+
+To start a task later, such as overnight or after a plan limit resets, turn on **Start later** under the agent and pick a date and time, in your phone's time zone, up to 24 hours ahead. **Start** then reads **Schedule**. The option shows once `collied` on the machine is new enough.
+
+`collied` checks the task when you tap **Schedule**, as it checks one you start now: the folder must be inside a task root, the agent allowed and the runtime available. A mistake shows in the sheet at once, not at the start time. `collied` then keeps the task in its data folder, so a restart does not lose it, and at the start time starts it as if you had tapped **Start** then.
+
+- The machine must be awake and `collied` running at the start time. If they come back within an hour of it, the task starts then; after that, `collied` drops it.
+- An alert tells you when the task starts, fails or is dropped, and why. Tap a started task's alert to open its session.
+- If the agent stops at a startup prompt, `collied` leaves your prompt unsent, as **Start** does, and the alert says so. The phone kept your prompt and attachments, and puts them in the session's Chat composer once it reaches the machine again.
+- The sheet lists the machine's scheduled tasks under **Scheduled on** with their folder, agent and time. Swipe one to cancel it until it starts; once `collied` is starting it, the sheet says it can no longer be cancelled.
+- If `collied` stops while it starts a task, it does not start that task again when it is back, since the agent may already run, and an alert asks you to check the machine.
+- A machine holds at most 10 scheduled tasks. `collied` deletes an attachment 24 hours after you upload it, so a task that starts later than that finds it gone.
+- Revoking the phone that scheduled a task cancels the task.
+
 ## Where tasks start
 
 **Settings > Sessions > Start tasks in** picks where New task starts agents, on every machine:

@@ -30,7 +30,7 @@ struct NewTaskSheet: View {
         onStarted: @escaping (AgentRoute, Bool) -> Void
     ) {
         self.init(
-            model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId, draftsFile: AgentDrafts.file),
+            model: NewTaskModel(core: core, machines: machines, preferredMachineId: preferredMachineId, draftsFile: AgentDrafts.file, scheduledFile: ScheduledDrafts.file),
             machines: machines, planUsage: planUsage, onStarted: onStarted
         )
     }
@@ -357,6 +357,14 @@ struct NewTaskSheet: View {
                     if model.offersCodeMode {
                         Toggle("Code Mode", isOn: $model.codeMode)
                     }
+                    if model.offersSchedule || model.startLater {
+                        Toggle("Start later", isOn: $model.startLater)
+                        if model.scheduleUnsupported {
+                            Text(NewTaskModel.scheduleTooOld).font(.footnote).foregroundStyle(.red)
+                        } else if model.startLater {
+                            DatePicker("Start at", selection: $model.startAt, in: Date.now...Date.now.addingTimeInterval(NewTaskModel.scheduleAhead))
+                        }
+                    }
                     if naming {
                         TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
                             .focused($editingLabel)
@@ -377,6 +385,30 @@ struct NewTaskSheet: View {
                         // The footer takes taps only inside its own bounds: a 44-point target fills it from the top, the
                         // words where they were, which adds room only at the form's end.
                         .padding(.vertical, -7)
+                    }
+                }
+
+                if !model.scheduled.isEmpty {
+                    Section {
+                        ForEach(model.scheduled, id: \.scheduleId) { task in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(URL(filePath: task.cwd).lastPathComponent)
+                                    Text(Date(timeIntervalSince1970: Double(task.startAtMs) / 1000), format: .dateTime.weekday(.abbreviated).hour().minute())
+                                        .font(.footnote)
+                                        .foregroundStyle(.metadata)
+                                }
+                                Spacer()
+                                AgentKindLabel(kind: task.agent)
+                            }
+                            .swipeActions {
+                                Button("Cancel", role: .destructive) {
+                                    Task { await model.unschedule(task) }
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Scheduled on \(machines.first { $0.id == model.machineId }?.label ?? "this computer")")
                     }
                 }
             }
@@ -412,7 +444,9 @@ struct NewTaskSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         startTask = Task {
-                            if let route = await model.start() {
+                            if model.startLater {
+                                if await model.schedule() { dismiss() }
+                            } else if let route = await model.start() {
                                 dismiss()
                                 onStarted(route, model.startupBlocked)
                             }
@@ -421,15 +455,18 @@ struct NewTaskSheet: View {
                         if model.phase == .starting || model.phase == .waitingForAgent {
                             ProgressView()
                         } else {
-                            Text("Start").onAccentFill()
+                            Text(model.startLater ? "Schedule" : "Start").onAccentFill()
                         }
                     }
                     .buttonStyle(.glassProminent)
-                    .accessibilityLabel("Start")
+                    .accessibilityLabel(model.startLater ? "Schedule" : "Start")
                     .disabled(!model.canStart)
                 }
             }
-            .task(id: model.machineId) { await model.loadOptions() }
+            .task(id: model.machineId) {
+                await model.loadOptions()
+                await model.loadScheduled()
+            }
             .task {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(60))

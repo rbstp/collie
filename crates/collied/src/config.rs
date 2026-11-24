@@ -198,6 +198,7 @@ pub const STARS_FILE: &str = "stars.json";
 pub const WATCHES_FILE: &str = "pr-watches.json";
 pub const WAKES_FILE: &str = "pr-wakes.json";
 pub const ARCHIVE_ON_MERGE_FILE: &str = "archive-on-merge.json";
+pub const SCHEDULE_FILE: &str = "scheduled-tasks.json";
 pub const REX_TASKS_FILE: &str = "rex-tasks.json";
 pub const REX_STREAM_MARKER: &str = "rex-streaming";
 pub const REX_RESUME_FILE: &str = "rex-resume.json";

@@ -39,6 +39,9 @@ protocol AgentCore: AnyObject, Sendable {
     func taskClone(machineId: String, cwd: String, repository: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted
     func taskSessions(machineId: String, cwd: String) async throws -> [TaskSession]
     func taskResume(machineId: String, cwd: String, agent: String, sessionId: String, prompt: String, label: String?, codeMode: Bool?, runtime: TaskRuntime?) async throws -> TaskStarted
+    func taskSchedule(machineId: String, startAtMs: UInt64, place: TaskPlace, cwd: String, agent: String, prompt: String, label: String?, ultracode: Bool, codeMode: Bool?, runtime: TaskRuntime?) async throws -> ScheduledTask
+    func taskScheduled(machineId: String) async throws -> [ScheduledTask]
+    func taskUnschedule(machineId: String, scheduleId: String) async throws
     func flock(machineId: String) async throws -> MachineFlock
     func usageCosts(machineId: String, range: CostRange, utcOffsetMinutes: Int16) async throws -> UsageCosts
     func openFile(machineId: String, terminalId: String, path: String) async throws -> OpenedFile

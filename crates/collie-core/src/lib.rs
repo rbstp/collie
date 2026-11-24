@@ -23,11 +23,12 @@ use protocol::{
     AgentWatchPullRequestParams, ApprovalId, CloneSource, Cwd, DraftText, Empty, ErrorCode,
     FolderName, Key, KeyCombo, Label, NoticeDigit, NotificationKey, OpId, PairCompleteParams,
     PairingInvite, PaneCloseParams, PromptText, PushActivityEndParams, PushActivityTokenParams,
-    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, SendTextParams,
-    SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams, TaskArchiveParams,
-    TaskFoldersParams, TaskNewParams, TaskSessionsParams, TaskWorktree, TaskWorktreesParams,
-    TerminalGrantParams, TerminalId, TerminalKey, TerminalRead, TerminalRunParams,
-    TerminalWatchParams, TypedText, WorkspaceCloseParams, WorkspaceId, limits,
+    PushRegisterParams, PushToken, ReadParams, ReadSource, Request, Response, ScheduleId,
+    SendTextParams, SessionId, Signature, SlashCommand, TaskArchiveOnMergeParams,
+    TaskArchiveParams, TaskFoldersParams, TaskNewParams, TaskScheduleParams, TaskSessionsParams,
+    TaskUnscheduleParams, TaskWorktree, TaskWorktreesParams, TerminalGrantParams, TerminalId,
+    TerminalKey, TerminalRead, TerminalRunParams, TerminalWatchParams, TypedText,
+    WorkspaceCloseParams, WorkspaceId, limits,
 };
 use tailnet::{BackendState, Config, Node};
 use tokio::sync::watch;
@@ -719,6 +720,9 @@ pub struct TaskOptions {
     pub code_mode: bool,
     /// False from a collied too old to list issues or start a task on one.
     pub issues: bool,
+    /// False from a collied too old to schedule a task.
+    #[uniffi(default = false)]
+    pub schedule: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -768,6 +772,44 @@ pub struct TaskStarted {
     pub terminal_id: String,
     #[uniffi(default = false)]
     pub startup_blocked: bool,
+}
+
+/// Where a scheduled task starts, as the matching `task_*` call takes it; `Folder` with a
+/// `new_folder` creates it inside `cwd`.
+#[derive(Debug, Clone, PartialEq, uniffi::Enum)]
+pub enum TaskPlace {
+    Folder { new_folder: Option<String> },
+    Clone { repository: String },
+    Resume { session_id: String },
+    WorktreeCreate { branch: String },
+    WorktreeOpen { path: String },
+    PullRequest { number: u64 },
+    Issue { number: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ScheduledTask {
+    pub schedule_id: String,
+    pub start_at_ms: u64,
+    pub cwd: String,
+    pub agent: String,
+    pub label: Option<String>,
+    /// The terminal of a task that started and stopped at a startup prompt, its prompt
+    /// unsent; None while it waits.
+    pub blocked: Option<String>,
+}
+
+impl From<protocol::ScheduledTask> for ScheduledTask {
+    fn from(t: protocol::ScheduledTask) -> Self {
+        Self {
+            schedule_id: t.schedule_id.into(),
+            start_at_ms: t.start_at_ms,
+            cwd: t.cwd.into(),
+            agent: t.agent.into(),
+            label: t.label.map(Into::into),
+            blocked: t.blocked.map(Into::into),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -1011,6 +1053,38 @@ async fn task_new_inner(
     } else {
         TASK_NEW_TIMEOUT
     };
+    let request = Request::TaskNew(task_params(
+        cwd, agent, prompt, label, new_folder, worktree, clone, resume, ultracode, code_mode,
+        runtime,
+    )?);
+    match core.mutate(&machine_id, request, timeout).await? {
+        Response::TaskStarted {
+            workspace_id,
+            terminal_id,
+            startup_blocked,
+        } => Ok(TaskStarted {
+            workspace_id: workspace_id.into(),
+            terminal_id: terminal_id.into(),
+            startup_blocked,
+        }),
+        other => Err(unexpected(&other).into()),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn task_params(
+    cwd: String,
+    agent: String,
+    prompt: String,
+    label: Option<String>,
+    new_folder: Option<String>,
+    worktree: Option<TaskWorktree>,
+    clone: Option<String>,
+    resume: Option<String>,
+    ultracode: bool,
+    code_mode: Option<bool>,
+    runtime: Option<TaskRuntime>,
+) -> Result<TaskNewParams, CoreError> {
     let label = label
         .map(|l| l.trim().to_owned())
         .filter(|l| !l.is_empty())
@@ -1023,7 +1097,7 @@ async fn task_new_inner(
             })
         })
         .transpose()?;
-    let request = Request::TaskNew(TaskNewParams {
+    Ok(TaskNewParams {
         op_id: new_op_id(),
         cwd: Cwd::new(cwd).map_err(|_| invalid("cwd", "folder must be an absolute path of at most 1024 bytes"))?,
         agent: AgentKind::new(agent).map_err(|_| invalid("agent", "unknown agent kind"))?,
@@ -1052,19 +1126,7 @@ async fn task_new_inner(
         ultracode,
         code_mode,
         runtime: runtime.map(Into::into),
-    });
-    match core.mutate(&machine_id, request, timeout).await? {
-        Response::TaskStarted {
-            workspace_id,
-            terminal_id,
-            startup_blocked,
-        } => Ok(TaskStarted {
-            workspace_id: workspace_id.into(),
-            terminal_id: terminal_id.into(),
-            startup_blocked,
-        }),
-        other => Err(unexpected(&other).into()),
-    }
+    })
 }
 
 #[uniffi::export]
@@ -2063,6 +2125,7 @@ impl CollieCore {
                     .collect(),
                 code_mode: o.code_mode,
                 issues: o.issues,
+                schedule: o.schedule,
             }),
             other => Err(unexpected(&other).into()),
         }
@@ -2561,6 +2624,91 @@ impl CollieCore {
             runtime,
         )
         .await
+    }
+
+    /// Checks the task as `task_new` would and leaves it with collied, which starts it at
+    /// `start_at_ms` (Unix time, at most 24 hours ahead). Only for a machine whose
+    /// `TaskOptions` says `schedule`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn task_schedule(
+        &self,
+        machine_id: String,
+        start_at_ms: u64,
+        place: TaskPlace,
+        cwd: String,
+        agent: String,
+        prompt: String,
+        label: Option<String>,
+        ultracode: bool,
+        code_mode: Option<bool>,
+        runtime: Option<TaskRuntime>,
+    ) -> Result<ScheduledTask, CoreError> {
+        let (mut new_folder, mut worktree, mut clone, mut resume) = (None, None, None, None);
+        match place {
+            TaskPlace::Folder { new_folder: name } => new_folder = name,
+            TaskPlace::Clone { repository } => clone = Some(repository),
+            TaskPlace::Resume { session_id } => resume = Some(session_id),
+            TaskPlace::WorktreeCreate { branch } => {
+                worktree = Some(TaskWorktree::Create { branch })
+            }
+            TaskPlace::WorktreeOpen { path } => {
+                let path = Cwd::new(path).map_err(|_| invalid("path", "invalid checkout path"))?;
+                worktree = Some(TaskWorktree::Open { path });
+            }
+            TaskPlace::PullRequest { number } => {
+                if !(1..=u64::from(u32::MAX)).contains(&number) {
+                    return Err(invalid(
+                        "number",
+                        "enter a pull request number from 1 to 4294967295",
+                    ));
+                }
+                worktree = Some(TaskWorktree::PullRequest { number });
+            }
+            TaskPlace::Issue { number } => {
+                if !(1..=u64::from(u32::MAX)).contains(&number) {
+                    return Err(invalid(
+                        "number",
+                        "enter an issue number from 1 to 4294967295",
+                    ));
+                }
+                worktree = Some(TaskWorktree::Issue { number });
+            }
+        }
+        let task = task_params(
+            cwd, agent, prompt, label, new_folder, worktree, clone, resume, ultracode, code_mode,
+            runtime,
+        )?;
+        let request = Request::TaskSchedule(TaskScheduleParams { start_at_ms, task });
+        match self.mutate(&machine_id, request, TASK_NEW_TIMEOUT).await? {
+            Response::TaskScheduled { task } => Ok(task.into()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    pub async fn task_scheduled(
+        &self,
+        machine_id: String,
+    ) -> Result<Vec<ScheduledTask>, CoreError> {
+        match self
+            .call(&machine_id, Request::TaskScheduled(Empty {}), CALL_TIMEOUT)
+            .await?
+        {
+            Response::ScheduledTasks { tasks } => Ok(tasks.into_iter().map(Into::into).collect()),
+            other => Err(unexpected(&other).into()),
+        }
+    }
+
+    pub async fn task_unschedule(
+        &self,
+        machine_id: String,
+        schedule_id: String,
+    ) -> Result<(), CoreError> {
+        let request = Request::TaskUnschedule(TaskUnscheduleParams {
+            op_id: new_op_id(),
+            schedule_id: ScheduleId::new(schedule_id)
+                .map_err(|_| invalid("schedule_id", "invalid scheduled task"))?,
+        });
+        expect_ok(self.mutate(&machine_id, request, CALL_TIMEOUT).await?)
     }
 
     /// Fails with `ConfirmRequired` unless `confirm` is true.
@@ -4003,6 +4151,8 @@ fn op_id_mut(request: &mut Request) -> Option<&mut OpId> {
         Request::AgentSendKeys(p) => Some(&mut p.op_id),
         Request::AgentTypeText(p) => Some(&mut p.op_id),
         Request::TaskNew(p) => Some(&mut p.op_id),
+        Request::TaskSchedule(p) => Some(&mut p.task.op_id),
+        Request::TaskUnschedule(p) => Some(&mut p.op_id),
         Request::TaskArchive(p) => Some(&mut p.op_id),
         Request::TerminalRun(p) => Some(&mut p.op_id),
         Request::TerminalSendKeys(p) => Some(&mut p.op_id),
@@ -5745,7 +5895,26 @@ mod tailnet_tests {
                                 ],
                                 code_mode: true,
                                 issues: true,
+                                schedule: true,
                             }))
+                        }
+                        Request::TaskSchedule(p) => {
+                            assert_eq!(p.start_at_ms, 1_800_000_000_000);
+                            assert_eq!(
+                                p.task.worktree,
+                                Some(TaskWorktree::PullRequest { number: 7 })
+                            );
+                            assert_eq!(p.task.prompt.unwrap().as_str(), "fix it");
+                            Ok(Response::TaskScheduled {
+                                task: protocol::ScheduledTask {
+                                    schedule_id: ScheduleId::new("0".repeat(32)).unwrap(),
+                                    start_at_ms: p.start_at_ms,
+                                    cwd: p.task.cwd,
+                                    agent: p.task.agent,
+                                    label: None,
+                                    blocked: None,
+                                },
+                            })
                         }
                         Request::TaskFolders(p) => {
                             assert_eq!(p.path.as_str(), "/src/");
@@ -6214,6 +6383,7 @@ mod tailnet_tests {
         assert_eq!(options.runtimes, Some(vec![TaskRuntime::Rex]));
         assert!(options.code_mode);
         assert!(options.issues);
+        assert!(options.schedule);
         assert_eq!(
             options.runtime_agents,
             [RuntimeAgents {
@@ -6248,6 +6418,43 @@ mod tailnet_tests {
             ("w2", "term_2")
         );
         assert_eq!(lock(&seen).task_ops.len(), 1);
+        let scheduled = rt
+            .block_on(core.task_schedule(
+                id(),
+                1_800_000_000_000,
+                TaskPlace::PullRequest { number: 7 },
+                "/src/collie".into(),
+                "claude".into(),
+                "fix it".into(),
+                None,
+                false,
+                None,
+                None,
+            ))
+            .unwrap();
+        assert_eq!(
+            (
+                scheduled.schedule_id.len(),
+                scheduled.cwd.as_str(),
+                scheduled.blocked
+            ),
+            (32, "/src/collie", None)
+        );
+        assert!(matches!(
+            rt.block_on(core.task_schedule(
+                id(),
+                1_800_000_000_000,
+                TaskPlace::PullRequest { number: 0 },
+                "/src/collie".into(),
+                "claude".into(),
+                "fix it".into(),
+                None,
+                false,
+                None,
+                None,
+            )),
+            Err(CoreError::InvalidInput { .. })
+        ));
         let err = rt
             .block_on(core.close_pane(id(), "term_2".into(), false))
             .unwrap_err();
