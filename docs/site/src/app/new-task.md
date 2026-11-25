@@ -43,14 +43,17 @@ Choose **Resume** and a folder to list its recent Claude Code, Codex, Copilot CL
 
 ## Options
 
-- **Ultracode** (Claude Code only, off by default) turns on Claude Code's Ultracode setting; if it stays off, the task fails without sending the prompt.
-- **Code Mode** (Claude Code only, on until you turn it off, remembered per machine) starts Claude Code with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` set to 1, or to 0 when off. Turn it off to use Remote Control, which Claude Code does not offer in Code Mode. It also shows when you resume a Claude Code session, and only once `collied` on the machine is new enough. In Herdr Core and Rex the value wins over one your shell start-up files export. In herdr, Claude Code takes it as a setting: off always wins, but on cannot override a 0 that your start-up files export.
-- **Name workspace**, under the agent, shows a field for the herdr workspace's label.
+A row of icons under the agent holds the task's options. Tap one to turn it on, and again to turn it off; an option that is on shows its icon in your accent color.
+
+- **Ultracode** (sparkles; Claude Code only, off by default) turns on Claude Code's Ultracode setting; if it stays off, the task fails without sending the prompt.
+- **Code Mode** (`</>`; Claude Code only, on until you turn it off, remembered per machine) starts Claude Code with `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` set to 1, or to 0 when off. Turn it off to use Remote Control, which Claude Code does not offer in Code Mode. It also shows when you resume a Claude Code session, and only once `collied` on the machine is new enough. In Herdr Core and Rex the value wins over one your shell start-up files export. In herdr, Claude Code takes it as a setting: off always wins, but on cannot override a 0 that your start-up files export.
+- **Start later** (clock) schedules the task: see [Schedule a task](#schedule-a-task).
+- **Name workspace** (tag) shows a field for the herdr workspace's label. Turning it off clears the label.
 - Codex tasks start with `--no-daemon`: see [Codex](../agents/codex.md).
 
 ## Schedule a task
 
-To start a task later, such as overnight or after a plan limit resets, turn on **Start later** under the agent and pick a date and time, in your phone's time zone, up to 24 hours ahead. **Start** then reads **Schedule**. The option shows once `collied` on the machine is new enough.
+To start a task later, such as overnight or after a plan limit resets, turn on **Start later** (the clock) in the options row and pick a date and time, in your phone's time zone, up to 24 hours ahead. **Start** then reads **Schedule**. The option shows once `collied` on the machine is new enough.
 
 `collied` checks the task when you tap **Schedule**, as it checks one you start now: the folder must be inside a task root, the agent allowed and the runtime available. A mistake shows in the sheet at once, not at the start time. `collied` then keeps the task in its data folder, so a restart does not lose it, and at the start time starts it as if you had tapped **Start** then.
 

@@ -444,27 +444,17 @@ final class NewTaskSheetTests: XCTestCase {
         XCTAssertFalse(model.ultracode)
         model.prompt = "go"
         model.cwd = "/Users/me/app"
-        let host = UIHostingController(rootView: NewTaskSheet(model: model, machines: [mac, linux]) { _, _ in })
-        try await hosting(host) { _ in
-            let switches = {
-                host.view.layoutIfNeeded()
-                return descendants(host.view).filter { view in
-                    view is UISwitch && view.window != nil
-                        && sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0 }
-                }.count
-            }
-            _ = try await waitFor("only the new folder switch") { switches() == 1 ? true : nil }
-            model.agent = "claude"
-            _ = try await waitFor("the ultracode switch") { switches() == 2 ? true : nil }
-            model.ultracode = true
-            model.agent = "copilot"
-            _ = try await waitFor("no ultracode switch for Copilot CLI") { switches() == 1 ? true : nil }
-            model.agent = "claude"
-            core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
-            let route = await model.start()
-            XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
-            XCTAssertEqual(core.snapshot.taskNews, ["/Users/me/app - ultracode"])
-        }
+        XCTAssertFalse(model.offersUltracode)
+        model.agent = "claude"
+        XCTAssertTrue(model.offersUltracode)
+        model.ultracode = true
+        model.agent = "copilot"
+        XCTAssertFalse(model.offersUltracode, "no Ultracode for Copilot CLI")
+        model.agent = "claude"
+        core.state.withLock { $0.started = TaskStarted(workspaceId: "w1", terminalId: "term_new") }
+        let route = await model.start()
+        XCTAssertEqual(route, AgentRoute(machineId: "m1", terminalId: "term_new"))
+        XCTAssertEqual(core.snapshot.taskNews, ["/Users/me/app - ultracode"])
         XCTAssertEqual(DevicePrefs.load(from: prefs).taskUltracode, ["m1": true])
 
         let next = NewTaskModel(core: core, machines: [mac, linux], preferredMachineId: "m2", prefsFile: prefs)

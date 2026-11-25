@@ -49,7 +49,7 @@
 25 Collie/Sources/Collie/KeychainItem.swift
 1 Collie/Sources/Collie/MachinesView.swift
 11 Collie/Sources/Collie/NewTaskModel.swift
-18 Collie/Sources/Collie/NewTaskSheet.swift
+16 Collie/Sources/Collie/NewTaskSheet.swift
 16 Collie/Sources/Collie/Notifications.swift
 1 Collie/Sources/Collie/PairingModel.swift
 8 Collie/Sources/Collie/PlanUsageView.swift
@@ -97,7 +97,7 @@
 9 Collie/Tests/CollieUITests/KeyStripTests.swift
 33 Collie/Tests/CollieUITests/LandscapeTests.swift
 1 Collie/Tests/CollieUITests/MachineConnectionTests.swift
-6 Collie/Tests/CollieUITests/NewTaskPromptTests.swift
+5 Collie/Tests/CollieUITests/NewTaskPromptTests.swift
 2 Collie/Tests/CollieUITests/ScreenshotTests.swift
 5 Collie/Tests/CollieUITests/SessionPromptTests.swift
 10 Collie/Tests/CollieUITests/SwipeOrderTests.swift
