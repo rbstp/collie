@@ -17,6 +17,7 @@ struct NewTaskSheet: View {
     @FocusState private var editingPrompt: Bool
     @State private var naming = false
     @FocusState private var editingLabel: Bool
+    @Environment(\.appAccent) private var appAccent
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -196,7 +197,7 @@ struct NewTaskSheet: View {
                                 ProgressView("Checking repository…")
                             }
                             if let listed = model.worktrees {
-                                if listed.source != model.sourceFolder {
+                                if model.location != .issue, listed.source != model.sourceFolder {
                                     Text("Repository: \(listed.source)").font(.footnote.monospaced())
                                 }
                                 if model.location == .issue {
@@ -351,44 +352,35 @@ struct NewTaskSheet: View {
                                         .foregroundStyle(ContextRing.tone(100 - warning.used))
                                         .accessibilityLabel(warning.spoken)
                                 }
-                                if model.agent == "claude" {
-                                    Toggle("Ultracode", isOn: $model.ultracode)
-                                }
                             } else if model.options == nil, model.optionsError == nil {
                                 ProgressView()
                             }
                         }
-                        if model.offersCodeMode {
-                            Toggle("Code Mode", isOn: $model.codeMode)
-                        }
-                        if model.offersSchedule || model.startLater {
-                            Toggle("Start later", isOn: $model.startLater)
-                            if model.scheduleUnsupported {
-                                Text(NewTaskModel.scheduleTooOld).font(.footnote).foregroundStyle(.red)
-                            } else if model.startLater {
-                                DatePicker("Start at", selection: $model.startAt, in: Date.now...Date.now.addingTimeInterval(NewTaskModel.scheduleAhead))
+                        HStack(spacing: 12) {
+                            if model.location != .resume, model.offeredAgents?.isEmpty == false, model.agent == "claude" {
+                                optionToggle("Ultracode", systemImage: "sparkles", isOn: $model.ultracode)
                             }
+                            if model.offersCodeMode {
+                                optionToggle("Code Mode", systemImage: "chevron.left.forwardslash.chevron.right", isOn: $model.codeMode)
+                            }
+                            if model.offersSchedule || model.startLater {
+                                optionToggle("Start later", systemImage: "clock", isOn: $model.startLater)
+                            }
+                            optionToggle("Name workspace", systemImage: "tag", isOn: Binding(get: { naming }, set: { on in
+                                naming = on
+                                editingLabel = on
+                                if !on { model.label = "" }
+                            }))
+                        }
+                        if model.scheduleUnsupported {
+                            Text(NewTaskModel.scheduleTooOld).font(.footnote).foregroundStyle(.red)
+                        } else if model.startLater {
+                            DatePicker("Start at", selection: $model.startAt, in: Date.now...Date.now.addingTimeInterval(NewTaskModel.scheduleAhead))
                         }
                         if naming {
                             TextField("Workspace label", text: $model.label, prompt: Text("Workspace label").foregroundStyle(.metadata))
                                 .focused($editingLabel)
                                 .id(KeepsFieldVisible.label)
-                        }
-                    } footer: {
-                        if !naming {
-                            Button {
-                                naming = true
-                                editingLabel = true
-                            } label: {
-                                Text("Name workspace")
-                                    .padding(.top, 7)
-                                    .frame(minHeight: 44, alignment: .top)
-                                    .contentShape(Rectangle())
-                            }
-                            .font(.footnote)
-                            // The footer takes taps only inside its own bounds: a 44-point target fills it from the top, the
-                            // words where they were, which adds room only at the form's end.
-                            .padding(.vertical, -7)
                         }
                     }
                     .listRowInsets(.vertical, 8)
@@ -546,6 +538,22 @@ struct NewTaskSheet: View {
     private var missingFolder: Bool {
         model.location == .folder && !model.newFolder && model.folder == nil
             && (!model.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.attachments.isEmpty)
+    }
+
+    private func optionToggle(_ title: String, systemImage: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 28, height: 28)
+        }
+        .appGlassButton(dim: .never)
+        .tint(isOn.wrappedValue ? appAccent : .primary)
+        .buttonBorderShape(.circle)
+        .controlSize(.small)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isOn.wrappedValue ? .isSelected : [])
     }
 
     @ViewBuilder
