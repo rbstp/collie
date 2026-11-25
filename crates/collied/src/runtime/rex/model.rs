@@ -435,6 +435,14 @@ impl Model {
             .max_by_key(|&(columns, rows)| (rows, columns))
     }
 
+    pub(super) fn leading_agent(&self, block: &str) -> Option<(String, (u16, u16))> {
+        self.sessions.iter().find_map(|(session, s)| {
+            let b = (s.blocks.get(block)).filter(|b| !b.exited && !b.under_shell.value)?;
+            b.agent(session, block)?;
+            Some((session.clone(), b.size.value))
+        })
+    }
+
     pub(super) fn shell_block(&self, block: &str) -> Option<(String, (u16, u16))> {
         self.sessions.iter().find_map(|(session, s)| {
             let b = s.blocks.get(block).filter(|b| !b.exited)?;

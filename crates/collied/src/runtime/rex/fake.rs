@@ -682,7 +682,8 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
                 let args = &payload["args"];
                 let (columns, rows) = (args["columns"].as_u64(), args["rows"].as_u64());
                 let b = &mut s.blocks[i];
-                if let (Some(c), Some(r), None) = (columns, rows, &b.owner) {
+                let owned = b.owner.as_deref().is_none_or(|o| o == CLIENT);
+                if let (Some(c), Some(r), true) = (columns, rows, owned) {
                     b.size = (c as u32, r as u32);
                     let size = json!({ "columns": c, "rows": r });
                     let changed = block_event(&session, &block, "size_changed", size);

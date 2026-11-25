@@ -527,6 +527,7 @@ impl Rex {
             return;
         }
         self.task_ended(&mut inner, &e);
+        self.task_sized(&mut inner, &e);
         let Some(live) = inner.live.as_mut() else {
             return;
         };

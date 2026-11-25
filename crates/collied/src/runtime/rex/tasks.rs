@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::client::{Client, Method, TERMINAL, TIMEOUT};
-use super::model::{self, Listed, Listing, PREFIX};
+use super::model::{self, Listing, PREFIX};
 use super::wire::{Attached, Blocks, Created, Owners, Process, Sessions, Tagged};
 use super::{CLOSE_TIMEOUT, Inner, Rex, gone};
 use crate::runtime::{Error, Occupant};
@@ -26,6 +26,8 @@ pub(super) struct Task {
     /// The session collied created for it: only that session is ever removed, by its archive.
     #[serde(default)]
     pub session: Option<String>,
+    #[serde(default)]
+    pub sized: bool,
 }
 
 pub(super) type Tasks = BTreeMap<String, Task>;
@@ -93,6 +95,7 @@ impl Rex {
                 name: name.to_owned(),
                 worktree: worktree.map(str::to_owned),
                 session: Some(session.clone()),
+                sized: false,
             };
             inner.tasks.insert(block.clone(), task);
             self.save_tasks(&inner.tasks);
@@ -103,7 +106,9 @@ impl Rex {
             ))
         })?;
         let tallest = self.live(|l| l.model.tallest()).ok().flatten();
-        resize(&client, &session, &block, tallest).await;
+        if resize(&client, &session, &block, tallest).await {
+            self.mark_sized(&block);
+        }
         Ok(id)
     }
 
@@ -200,20 +205,48 @@ impl Rex {
     }
 
     pub(super) async fn size_tasks(&self, client: &Client) {
-        let (tallest, small) = {
-            let inner = self.lock();
-            let Some(live) = inner.live.as_ref() else {
-                return;
+        let blocks: Vec<String> = (self.lock().tasks.iter())
+            .filter(|(_, t)| !t.sized)
+            .map(|(b, _)| b.clone())
+            .collect();
+        for block in blocks {
+            let target = {
+                let inner = self.lock();
+                let live = inner.live.as_ref();
+                let task = inner.tasks.get(&block).filter(|t| !t.sized);
+                match (live, task) {
+                    (Some(live), Some(_)) => live
+                        .model
+                        .leading_agent(&block)
+                        .map(|(session, size)| (session, size, live.model.tallest())),
+                    _ => None,
+                }
             };
-            let small: Vec<(String, String)> = (inner.tasks.keys())
-                .filter_map(|b| live.model.target(&format!("{PREFIX}{b}")))
-                .filter(|&(_, _, size, listed)| size == UNSIZED && listed == Listed::Agent)
-                .map(|(session, block, ..)| (session, block))
-                .collect();
-            (live.model.tallest(), small)
-        };
-        for (session, block) in small {
-            resize(client, &session, &block, tallest).await;
+            match target {
+                Some((session, UNSIZED, tallest)) => {
+                    if resize(client, &session, &block, tallest).await {
+                        self.mark_sized(&block);
+                    }
+                }
+                Some(_) => self.mark_sized(&block),
+                None => {}
+            }
+        }
+    }
+
+    fn mark_sized(&self, block: &str) {
+        let mut inner = self.lock();
+        if let Some(task) = inner.tasks.get_mut(block).filter(|t| !t.sized) {
+            task.sized = true;
+            self.save_tasks(&inner.tasks);
+        }
+    }
+
+    pub(super) fn task_sized(&self, inner: &mut Inner, e: &Tagged) {
+        let Some(block) = resized(e) else { return };
+        if let Some(task) = inner.tasks.get_mut(&block).filter(|t| !t.sized) {
+            task.sized = true;
+            self.save_tasks(&inner.tasks);
         }
     }
 
@@ -252,6 +285,14 @@ impl Rex {
             self.save_tasks(tasks);
         }
     }
+}
+
+fn resized(e: &Tagged) -> Option<String> {
+    let event = &e.payload["event"];
+    let sized = e.kind == "session_event"
+        && event["type"] == "block_event"
+        && event["payload"]["name"] == "size_changed";
+    sized.then(|| event["payload"]["block_id"].as_str().map(str::to_owned))?
 }
 
 /// The block an event says closed (`true`) or whose program exited (`false`).
@@ -303,13 +344,17 @@ async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
 
 const UNSIZED: (u16, u16) = (80, 24);
 
-async fn resize(client: &Client, session: &str, block: &str, tallest: Option<(u16, u16)>) {
+async fn resize(client: &Client, session: &str, block: &str, tallest: Option<(u16, u16)>) -> bool {
     let Some((columns, rows)) = tallest.filter(|&(c, r)| (r, c) > (UNSIZED.1, UNSIZED.0)) else {
-        return;
+        return false;
     };
     let size = json!({ "columns": columns, "rows": rows });
-    if let Err(e) = (client.terminal::<Value>(Method::Resize, session, block, size)).await {
-        tracing::warn!(error = %e, "could not size a Rex task's block");
+    match (client.terminal::<Value>(Method::Resize, session, block, size)).await {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, block, columns, rows, "could not size a Rex task's block");
+            false
+        }
     }
 }
 

@@ -110,6 +110,7 @@ async fn a_task_starts_in_a_session_of_its_own_through_env_and_its_block_is_give
             name: NAME.to_owned(),
             worktree: None,
             session: Some(session.clone()),
+            sized: false,
         })
     );
 
@@ -168,6 +169,7 @@ async fn a_task_block_given_up_takes_the_size_of_the_tallest_terminal() {
         rex.terminal_size(&task).ok() == Some((198, 68))
     })
     .await;
+    assert!(rex.lock().tasks[block_of(&task)].sized);
 
     let (fake, _rex, task) = task_beside(&[(250, 20)]).await;
     assert!(
@@ -181,47 +183,56 @@ async fn a_task_block_given_up_takes_the_size_of_the_tallest_terminal() {
 async fn a_task_block_left_at_80x24_takes_the_size_of_the_tallest_terminal_once_followed() {
     let fake = Fake::start().await;
     let b = |n: u32| format!("block:019a7d2e-0000-7000-8000-00000000006{n}");
-    for (n, size) in [(1, (80, 24)), (2, (100, 30)), (3, (80, 24)), (4, (198, 68))] {
+    for (n, size) in [
+        (1, (80, 24)),
+        (2, (100, 30)),
+        (3, (80, 24)),
+        (4, (198, 68)),
+        (6, (80, 24)),
+    ] {
         claude(&fake, S1, &b(n), 60 + n, "idle", T0);
         fake.state().block(&b(n)).size = size;
     }
+    let mut under_shell = fake::process(67, "claude", "2.1.322");
+    under_shell["ancestors"] =
+        json!([{ "pid": 2, "user_id": 501, "name": "zsh", "argv0": "-zsh" }]);
+    let record = fake::record("idle", 67, "2.1.322", T0);
+    (fake.state()).add(S1, &b(7), under_shell, vec![record]);
     (fake.state()).add(S1, &b(5), fake::process(65, "-zsh", "zsh"), vec![]);
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("rex-tasks.json");
     let task = json!({ "name": NAME, "session": S1 });
-    std::fs::write(
-        &file,
-        json!({ b(1): task, b(2): task, b(5): task }).to_string(),
-    )
-    .unwrap();
+    let sized = json!({ "name": NAME, "session": S1, "sized": true });
+    let tasks = json!({ b(1): task, b(2): task, b(5): task, b(6): sized, b(7): task });
+    std::fs::write(&file, tasks.to_string()).unwrap();
     std::fs::set_permissions(&file, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
     let rex = Arc::new(Rex::new(fake.socket.clone()).with_tasks(file));
     let _following = follow(&rex).await;
-    eventually("the task left at 80x24 sized", || {
-        fake.state().block(&b(1)).size == (198, 68)
-    })
-    .await;
-    assert_eq!(
-        fake.state().block(&b(2)).size,
-        (100, 30),
-        "a task a client sized"
-    );
-    assert_eq!(
-        fake.state().block(&b(3)).size,
-        (80, 24),
-        "not collied's task"
-    );
-    assert_eq!(
-        fake.state().block(&b(5)).size,
-        (80, 24),
-        "a shell, as Rex restores a task"
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), rex.settled())
+        .await
+        .unwrap();
+    assert_eq!(fake.state().block(&b(1)).size, (198, 68));
+    for (n, size, why) in [
+        (2, (100, 30), "a task a client sized"),
+        (3, (80, 24), "not collied's task"),
+        (5, (80, 24), "a shell, as Rex restores a task"),
+        (6, (80, 24), "a task sized once already"),
+        (
+            7,
+            (80, 24),
+            "an agent a shell runs, not the program collied started",
+        ),
+    ] {
+        assert_eq!(fake.state().block(&b(n)).size, size, "{why}");
+    }
     let resized = fake
         .calls()
         .iter()
         .filter(|c| c.ends_with(".resize"))
         .count();
     assert_eq!(resized, 1);
+    let tasks = &rex.lock().tasks;
+    assert!(tasks[&b(1)].sized && tasks[&b(2)].sized && !tasks[&b(7)].sized);
 }
 
 #[tokio::test]
@@ -999,6 +1010,7 @@ async fn records_are_kept_on_disk_and_forgotten_once_their_block_is_gone() {
         saved,
         json!({ block.clone(): {
             "name": NAME, "worktree": "/w/.worktree/x", "session": fake.state().block(&block).session,
+            "sized": false,
         }})
     );
     eventually("the task listed", || rex.get(&started).is_ok()).await;

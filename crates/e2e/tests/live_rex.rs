@@ -1611,6 +1611,29 @@ async fn task_size_scenario(server: &RexServer) {
     .await;
     stop.send(true).unwrap();
     let _ = task.await;
+
+    let records: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&tasks).unwrap()).unwrap();
+    let task_session = records[given]["session"].as_str().unwrap();
+    let user = Control::open(&server.socket, task_session).await;
+    let back = serde_json::json!({ "columns": 80, "rows": 24 });
+    let back = serde_json::json!({ "session_id": task_session, "block_id": given, "args": back });
+    user.call("com.superlogical.terminal.resize", back).await;
+    let size = || server.rex(&["block", "call", "-b", given, "size"]);
+    let picked = size();
+    assert_eq!(
+        (&picked["columns"], &picked["rows"]),
+        (&80.into(), &24.into())
+    );
+    let (_rex, stop, task) = follow().await;
+    let kept = size();
+    assert_eq!(
+        (&kept["columns"], &kept["rows"]),
+        (&80.into(), &24.into()),
+        "the user's size stays"
+    );
+    stop.send(true).unwrap();
+    let _ = task.await;
 }
 
 #[test]
