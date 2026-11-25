@@ -1605,8 +1605,8 @@ async fn task_size_scenario(server: &RexServer) {
     rex.start_task(work, "sized", None, None, fullscreen.to_vec())
         .await
         .unwrap();
-    until("a new task drawn at the sized block's size", async || {
-        (drawn().lines().last() == Some("120x40")).then_some(())
+    until("a new task started at the sized block's size", async || {
+        (drawn() == "120x40\n").then_some(())
     })
     .await;
     stop.send(true).unwrap();

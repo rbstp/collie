@@ -788,6 +788,12 @@ fn create(s: &mut State, payload: &Value, seq: &mut u64, out: &mut Vec<Value>) -
         records,
     );
     s.block(&block).owner = Some(CLIENT.to_owned());
+    if let (Some(c), Some(r)) = (
+        options["size"]["columns"].as_u64(),
+        options["size"]["rows"].as_u64(),
+    ) {
+        s.block(&block).size = (c as u32, r as u32);
+    }
     deliver(s, seq, out, session_created(&session, &label));
     json!({ "session_id": session, "initial_windows": [{
         "window_id": "window:019a7d2e-0000-7000-8000-000000000001", "block_ids": [block], "revision": 1,

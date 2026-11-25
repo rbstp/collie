@@ -53,7 +53,7 @@ impl Rex {
 
     /// A session of the task's own whose one block runs `argv` in `cwd`, as an argument
     /// vector Rex hands to the program unchanged through the login shell. The block is
-    /// recorded, given up, then sized as the tallest terminal Rex holds; returns its id.
+    /// created at the tallest terminal's size, recorded, then given up; returns its id.
     pub async fn start_task(
         &self,
         cwd: &str,
@@ -63,9 +63,12 @@ impl Rex {
         argv: Vec<String>,
     ) -> Result<String, Error> {
         let client = (self.live(|l| l.synced.then(|| l.client.clone()))?).ok_or(Error::Closed)?;
-        let block = json!({
-            "flavor": FLAVOR, "label": name, "options": { "command": argv, "cwd": cwd },
-        });
+        let mut options = json!({ "command": argv, "cwd": cwd });
+        let tallest = self.live(|l| l.model.tallest()).ok().flatten();
+        if let Some((columns, rows)) = larger(tallest) {
+            options["size"] = json!({ "columns": columns, "rows": rows });
+        }
+        let block = json!({ "flavor": FLAVOR, "label": name, "options": options });
         let payload = json!({
             "label": label.unwrap_or(name),
             "initial_windows": [{ "layout": { "block": block } }],
@@ -105,10 +108,6 @@ impl Rex {
                 "Rex started agent {id}, which was left running, but did not let collied give it up: {e}"
             ))
         })?;
-        let tallest = self.live(|l| l.model.tallest()).ok().flatten();
-        if resize(&client, &session, &block, tallest).await {
-            self.mark_sized(&block);
-        }
         Ok(id)
     }
 
@@ -344,8 +343,12 @@ async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
 
 const UNSIZED: (u16, u16) = (80, 24);
 
+fn larger(tallest: Option<(u16, u16)>) -> Option<(u16, u16)> {
+    tallest.filter(|&(c, r)| (r, c) > (UNSIZED.1, UNSIZED.0))
+}
+
 async fn resize(client: &Client, session: &str, block: &str, tallest: Option<(u16, u16)>) -> bool {
-    let Some((columns, rows)) = tallest.filter(|&(c, r)| (r, c) > (UNSIZED.1, UNSIZED.0)) else {
+    let Some((columns, rows)) = larger(tallest) else {
         return false;
     };
     let size = json!({ "columns": columns, "rows": rows });

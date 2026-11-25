@@ -159,23 +159,21 @@ async fn task_beside(sizes: &[(u32, u32)]) -> (Fake, Arc<Rex>, String) {
 }
 
 #[tokio::test]
-async fn a_task_block_given_up_takes_the_size_of_the_tallest_terminal() {
+async fn a_task_block_starts_at_the_size_of_the_tallest_terminal() {
     let (fake, rex, task) = task_beside(&[(250, 20), (198, 68), (120, 68)]).await;
-    let calls = fake.calls();
-    let at = |m: &str| calls.iter().position(|c| c == m);
-    assert!(at("session.disown_block") < at("com.superlogical.terminal.resize"));
-    assert_eq!(fake.state().block(block_of(&task)).size, (198, 68));
+    let options =
+        fake.state().created[0]["initial_windows"][0]["layout"]["block"]["options"].clone();
+    assert_eq!(options["size"], json!({ "columns": 198, "rows": 68 }));
     eventually("collied's size", || {
         rex.terminal_size(&task).ok() == Some((198, 68))
     })
     .await;
-    assert!(rex.lock().tasks[block_of(&task)].sized);
+    assert!(!fake.calls().iter().any(|c| c.ends_with(".resize")));
 
     let (fake, _rex, task) = task_beside(&[(250, 20)]).await;
-    assert!(
-        !fake.calls().iter().any(|c| c.ends_with(".resize")),
-        "never shorter"
-    );
+    let options =
+        fake.state().created[0]["initial_windows"][0]["layout"]["block"]["options"].clone();
+    assert!(options.get("size").is_none(), "never shorter: {options}");
     assert_eq!(fake.state().block(block_of(&task)).size, (80, 24));
 }
 
