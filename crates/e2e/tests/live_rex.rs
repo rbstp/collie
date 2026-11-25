@@ -1602,7 +1602,7 @@ async fn task_size_scenario(server: &RexServer) {
     assert!(given_up["owner"].is_null(), "{given_up}");
 
     std::fs::remove_file(&log).unwrap();
-    rex.start_task(work, "sized", None, None, fullscreen.to_vec())
+    let created = (rex.start_task(work, "sized", None, None, fullscreen.to_vec()))
         .await
         .unwrap();
     until("a new task started at the sized block's size", async || {
@@ -1614,23 +1614,31 @@ async fn task_size_scenario(server: &RexServer) {
 
     let records: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&tasks).unwrap()).unwrap();
-    let task_session = records[given]["session"].as_str().unwrap();
-    let user = Control::open(&server.socket, task_session).await;
-    let back = serde_json::json!({ "columns": 80, "rows": 24 });
-    let back = serde_json::json!({ "session_id": task_session, "block_id": given, "args": back });
-    user.call("com.superlogical.terminal.resize", back).await;
-    let size = || server.rex(&["block", "call", "-b", given, "size"]);
-    let picked = size();
-    assert_eq!(
-        (&picked["columns"], &picked["rows"]),
-        (&80.into(), &24.into())
-    );
+    let size = |block: &str| {
+        let s = server.rex(&["block", "call", "-b", block, "size"]);
+        (s["columns"].as_u64(), s["rows"].as_u64())
+    };
+    let created = created.strip_prefix("rex:").unwrap();
+    let mut users = Vec::new();
+    for block in [given, created] {
+        let session = records[block]["session"].as_str().unwrap();
+        let user = Control::open(&server.socket, session).await;
+        let back = serde_json::json!({ "columns": 80, "rows": 24 });
+        let back = serde_json::json!({ "session_id": session, "block_id": block, "args": back });
+        user.call("com.superlogical.terminal.resize", back).await;
+        assert_eq!(size(block), (Some(80), Some(24)));
+        users.push(user);
+    }
     let (_rex, stop, task) = follow().await;
-    let kept = size();
     assert_eq!(
-        (&kept["columns"], &kept["rows"]),
-        (&80.into(), &24.into()),
-        "the user's size stays"
+        size(given),
+        (Some(80), Some(24)),
+        "the user's size stays on a repaired task"
+    );
+    assert_eq!(
+        size(created),
+        (Some(80), Some(24)),
+        "the user's size stays on a task created at a size"
     );
     stop.send(true).unwrap();
     let _ = task.await;

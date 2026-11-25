@@ -169,12 +169,28 @@ async fn a_task_block_starts_at_the_size_of_the_tallest_terminal() {
     })
     .await;
     assert!(!fake.calls().iter().any(|c| c.ends_with(".resize")));
+    assert!(
+        rex.lock().tasks[block_of(&task)].sized,
+        "started at its size"
+    );
 
-    let (fake, _rex, task) = task_beside(&[(250, 20)]).await;
+    let (fake, rex, task) = task_beside(&[(250, 20)]).await;
     let options =
         fake.state().created[0]["initial_windows"][0]["layout"]["block"]["options"].clone();
     assert!(options.get("size").is_none(), "never shorter: {options}");
     assert_eq!(fake.state().block(block_of(&task)).size, (80, 24));
+    let block = block_of(&task).to_owned();
+    assert!(!rex.lock().tasks[&block].sized);
+    let session = fake.state().block(&block).session.clone();
+    fake.emit(move |s| {
+        s.block(&block).size = (100, 30);
+        let size = json!({ "columns": 100, "rows": 30 });
+        vec![fake::block_event(&session, &block, "size_changed", size)]
+    });
+    eventually("a size a client gave retires the repair", || {
+        rex.lock().tasks[block_of(&task)].sized
+    })
+    .await;
 }
 
 #[tokio::test]

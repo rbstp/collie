@@ -837,6 +837,12 @@ fn split(
         false => json!({ "last_exit": null, "child": proc, "foreground": proc }),
     };
     s.add(session, &block, process, Vec::new());
+    if let (Some(c), Some(r)) = (
+        options["size"]["columns"].as_u64(),
+        options["size"]["rows"].as_u64(),
+    ) {
+        s.block(&block).size = (c as u32, r as u32);
+    }
     if let Some(host) = s.split_host.clone() {
         s.block(&block).host = host;
     }

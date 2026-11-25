@@ -640,7 +640,7 @@ impl Rex {
         let mut flags = ["-l", "-i", "-c"].map(str::to_owned).to_vec();
         flags.extend([script, "collied".to_owned(), agent.folder.clone()]);
         let argv = agents::task_argv(&login, &flags, None);
-        match start(&client, &session, block, &agent.folder, argv).await {
+        match start(&client, &session, block, &agent.folder, argv, size).await {
             Ok(new) => {
                 let starting = Starting {
                     session,
@@ -755,8 +755,12 @@ async fn start(
     block: &str,
     cwd: &str,
     argv: Vec<String>,
+    (columns, rows): (u16, u16),
 ) -> Result<String, Error> {
-    let options = json!({ "command": argv, "cwd": cwd, "shell": "none", "login": false });
+    let mut options = json!({ "command": argv, "cwd": cwd, "shell": "none", "login": false });
+    if columns > 0 && rows > 0 {
+        options["size"] = json!({ "columns": columns, "rows": rows });
+    }
     let layout = json!({ "block": { "flavor": FLAVOR, "options": options } });
     let payload = json!({
         "session_id": session, "anchor_id": block, "direction": "horizontal",
@@ -1239,6 +1243,7 @@ mod tests {
             &[SIXTH],
         )
         .await;
+        r.fake.state().block(READY).size = (120, 40);
         let _task = follow(&r.rex).await;
         assert!(ticks(&r.rex, || !anchors(&r.fake).is_empty()).await);
         for _ in 0..3 {
@@ -1256,6 +1261,7 @@ mod tests {
                 "cwd": folder,
                 "shell": "none",
                 "login": false,
+                "size": { "columns": 120, "rows": 40 },
             })
         );
         let on_disk: Record = crate::peers::load_json(&r.record).unwrap();

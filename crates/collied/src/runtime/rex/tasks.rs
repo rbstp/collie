@@ -64,8 +64,8 @@ impl Rex {
     ) -> Result<String, Error> {
         let client = (self.live(|l| l.synced.then(|| l.client.clone()))?).ok_or(Error::Closed)?;
         let mut options = json!({ "command": argv, "cwd": cwd });
-        let tallest = self.live(|l| l.model.tallest()).ok().flatten();
-        if let Some((columns, rows)) = larger(tallest) {
+        let sized = larger(self.live(|l| l.model.tallest()).ok().flatten());
+        if let Some((columns, rows)) = sized {
             options["size"] = json!({ "columns": columns, "rows": rows });
         }
         let block = json!({ "flavor": FLAVOR, "label": name, "options": options });
@@ -98,7 +98,7 @@ impl Rex {
                 name: name.to_owned(),
                 worktree: worktree.map(str::to_owned),
                 session: Some(session.clone()),
-                sized: false,
+                sized: sized.is_some(),
             };
             inner.tasks.insert(block.clone(), task);
             self.save_tasks(&inner.tasks);
