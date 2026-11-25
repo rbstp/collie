@@ -26,6 +26,8 @@ pub(super) struct Task {
     /// The session collied created for it: only that session is ever removed, by its archive.
     #[serde(default)]
     pub session: Option<String>,
+    #[serde(default)]
+    pub sized: bool,
 }
 
 pub(super) type Tasks = BTreeMap<String, Task>;
@@ -51,7 +53,7 @@ impl Rex {
 
     /// A session of the task's own whose one block runs `argv` in `cwd`, as an argument
     /// vector Rex hands to the program unchanged through the login shell. The block is
-    /// recorded, then given up, so Rex.app sizes it as it sizes the user's own; returns its id.
+    /// created at the tallest terminal's size, recorded, then given up; returns its id.
     pub async fn start_task(
         &self,
         cwd: &str,
@@ -61,9 +63,12 @@ impl Rex {
         argv: Vec<String>,
     ) -> Result<String, Error> {
         let client = (self.live(|l| l.synced.then(|| l.client.clone()))?).ok_or(Error::Closed)?;
-        let block = json!({
-            "flavor": FLAVOR, "label": name, "options": { "command": argv, "cwd": cwd },
-        });
+        let mut options = json!({ "command": argv, "cwd": cwd });
+        let sized = larger(self.live(|l| l.model.tallest()).ok().flatten());
+        if let Some((columns, rows)) = sized {
+            options["size"] = json!({ "columns": columns, "rows": rows });
+        }
+        let block = json!({ "flavor": FLAVOR, "label": name, "options": options });
         let payload = json!({
             "label": label.unwrap_or(name),
             "initial_windows": [{ "layout": { "block": block } }],
@@ -93,6 +98,7 @@ impl Rex {
                 name: name.to_owned(),
                 worktree: worktree.map(str::to_owned),
                 session: Some(session.clone()),
+                sized: sized.is_some(),
             };
             inner.tasks.insert(block.clone(), task);
             self.save_tasks(&inner.tasks);
@@ -197,6 +203,52 @@ impl Rex {
             .collect())
     }
 
+    pub(super) async fn size_tasks(&self, client: &Client) {
+        let blocks: Vec<String> = (self.lock().tasks.iter())
+            .filter(|(_, t)| !t.sized)
+            .map(|(b, _)| b.clone())
+            .collect();
+        for block in blocks {
+            let target = {
+                let inner = self.lock();
+                let live = inner.live.as_ref();
+                let task = inner.tasks.get(&block).filter(|t| !t.sized);
+                match (live, task) {
+                    (Some(live), Some(_)) => live
+                        .model
+                        .leading_agent(&block)
+                        .map(|(session, size)| (session, size, live.model.tallest())),
+                    _ => None,
+                }
+            };
+            match target {
+                Some((session, UNSIZED, tallest)) => {
+                    if resize(client, &session, &block, tallest).await {
+                        self.mark_sized(&block);
+                    }
+                }
+                Some(_) => self.mark_sized(&block),
+                None => {}
+            }
+        }
+    }
+
+    fn mark_sized(&self, block: &str) {
+        let mut inner = self.lock();
+        if let Some(task) = inner.tasks.get_mut(block).filter(|t| !t.sized) {
+            task.sized = true;
+            self.save_tasks(&inner.tasks);
+        }
+    }
+
+    pub(super) fn task_sized(&self, inner: &mut Inner, e: &Tagged) {
+        let Some(block) = resized(e) else { return };
+        if let Some(task) = inner.tasks.get_mut(&block).filter(|t| !t.sized) {
+            task.sized = true;
+            self.save_tasks(&inner.tasks);
+        }
+    }
+
     pub(super) fn move_task(&self, from: &str, to: &str) {
         let mut inner = self.lock();
         if let Some(task) = inner.tasks.remove(from) {
@@ -232,6 +284,14 @@ impl Rex {
             self.save_tasks(tasks);
         }
     }
+}
+
+fn resized(e: &Tagged) -> Option<String> {
+    let event = &e.payload["event"];
+    let sized = e.kind == "session_event"
+        && event["type"] == "block_event"
+        && event["payload"]["name"] == "size_changed";
+    sized.then(|| event["payload"]["block_id"].as_str().map(str::to_owned))?
 }
 
 /// The block an event says closed (`true`) or whose program exited (`false`).
@@ -279,6 +339,26 @@ async fn remove_empty(client: &Client, session: &str) -> Result<bool, Error> {
         .call::<Value>(Method::SessionDestroy, at, CLOSE_TIMEOUT)
         .await?;
     Ok(true)
+}
+
+const UNSIZED: (u16, u16) = (80, 24);
+
+fn larger(tallest: Option<(u16, u16)>) -> Option<(u16, u16)> {
+    tallest.filter(|&(c, r)| (r, c) > (UNSIZED.1, UNSIZED.0))
+}
+
+async fn resize(client: &Client, session: &str, block: &str, tallest: Option<(u16, u16)>) -> bool {
+    let Some((columns, rows)) = larger(tallest) else {
+        return false;
+    };
+    let size = json!({ "columns": columns, "rows": rows });
+    match (client.terminal::<Value>(Method::Resize, session, block, size)).await {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, block, columns, rows, "could not size a Rex task's block");
+            false
+        }
+    }
 }
 
 /// `session.create` makes collied the block's owner, whose size (80x24) the block would keep.

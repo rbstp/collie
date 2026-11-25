@@ -527,6 +527,7 @@ impl Rex {
             return;
         }
         self.task_ended(&mut inner, &e);
+        self.task_sized(&mut inner, &e);
         let Some(live) = inner.live.as_mut() else {
             return;
         };
@@ -594,6 +595,7 @@ impl Rex {
         self.read_dirty(client).await?;
         self.live(|live| live.synced = true)?;
         self.prune_tasks();
+        self.size_tasks(client).await;
         self.plan_resume();
         self.settled.send_replace(true);
         tracing::info!(socket = %self.socket.display(), version, "following Rex");

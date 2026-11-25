@@ -99,6 +99,7 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "session.destroy",
             "data.connect",
             "session.new_split",
+            "com.superlogical.terminal.resize",
         ]
     );
     let terminal: Vec<&str> = Method::ALL
@@ -113,7 +114,8 @@ fn the_allowlist_is_these_methods_by_these_wire_names() {
             "title",
             "size",
             "format",
-            "blob_read"
+            "blob_read",
+            "resize"
         ]
     );
 }

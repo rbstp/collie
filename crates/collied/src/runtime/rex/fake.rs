@@ -677,6 +677,22 @@ fn answer(s: &mut State, request: &Value, seq: &mut u64, out: &mut Vec<Value>) {
             }
             None => Err("not_found"),
         },
+        (_, Some("resize")) if s.terminal.contains(&"resize") => match found {
+            Some(i) => {
+                let args = &payload["args"];
+                let (columns, rows) = (args["columns"].as_u64(), args["rows"].as_u64());
+                let b = &mut s.blocks[i];
+                let owned = b.owner.as_deref().is_none_or(|o| o == CLIENT);
+                if let (Some(c), Some(r), true) = (columns, rows, owned) {
+                    b.size = (c as u32, r as u32);
+                    let size = json!({ "columns": c, "rows": r });
+                    let changed = block_event(&session, &block, "size_changed", size);
+                    deliver(s, seq, out, changed);
+                }
+                Ok(json!({}))
+            }
+            None => Err("not_found"),
+        },
         (_, Some(m)) if s.terminal.contains(&m) => match found.map(|i| &s.blocks[i]) {
             Some(b) => match m {
                 "process" => Ok(b.process.clone()),
@@ -772,6 +788,12 @@ fn create(s: &mut State, payload: &Value, seq: &mut u64, out: &mut Vec<Value>) -
         records,
     );
     s.block(&block).owner = Some(CLIENT.to_owned());
+    if let (Some(c), Some(r)) = (
+        options["size"]["columns"].as_u64(),
+        options["size"]["rows"].as_u64(),
+    ) {
+        s.block(&block).size = (c as u32, r as u32);
+    }
     deliver(s, seq, out, session_created(&session, &label));
     json!({ "session_id": session, "initial_windows": [{
         "window_id": "window:019a7d2e-0000-7000-8000-000000000001", "block_ids": [block], "revision": 1,
@@ -815,6 +837,12 @@ fn split(
         false => json!({ "last_exit": null, "child": proc, "foreground": proc }),
     };
     s.add(session, &block, process, Vec::new());
+    if let (Some(c), Some(r)) = (
+        options["size"]["columns"].as_u64(),
+        options["size"]["rows"].as_u64(),
+    ) {
+        s.block(&block).size = (c as u32, r as u32);
+    }
     if let Some(host) = s.split_host.clone() {
         s.block(&block).host = host;
     }

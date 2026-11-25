@@ -77,6 +77,7 @@ methods! {
     SessionDestroy => "session.destroy",
     DataConnect => "data.connect",
     SessionNewSplit => "session.new_split",
+    Resize => "com.superlogical.terminal.resize",
 }
 
 impl Method {
