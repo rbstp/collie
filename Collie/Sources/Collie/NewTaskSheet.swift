@@ -75,7 +75,7 @@ struct NewTaskSheet: View {
                         .scrollIndicators(.hidden)
                     }
                     GlassEffectContainer(spacing: 4) {
-                        PromptInputLayout(expanded: verticalSizeClass != .compact || model.dictation.isActive || dictationShown) {
+                        PromptInputLayout(expanded: expandedPrompt && verticalSizeClass != .compact || model.dictation.isActive || dictationShown) {
                             ZStack {
                                 AttachmentMenu(
                                     savedPromptsEnabled: !model.dictation.isActive,
@@ -92,7 +92,7 @@ struct NewTaskSheet: View {
                             HStack(alignment: .bottom, spacing: 8) {
                                 let placeholder = model.location == .resume ? "Prompt" : "What should the agent do?"
                                 TextField(placeholder, text: $model.prompt, selection: $selection, prompt: Text(placeholder).foregroundStyle(.metadata), axis: .vertical)
-                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 3...5 : 2...3))
+                                    .lineLimit(verticalSizeClass == .compact ? (expandedPrompt ? 1...2 : 1...1) : (expandedPrompt ? 1...5 : 1...3))
                                     .focused($editingPrompt)
                                     .disabled(model.dictation.isActive || (model.editing != nil && model.phase == .starting))
                                 if expandedPrompt && !model.prompt.isEmpty {
@@ -134,6 +134,7 @@ struct NewTaskSheet: View {
                     }
                     .id(KeepsFieldVisible.prompt)
                 }
+                .listRowInsets(.vertical, 8)
 
                 if model.editing == nil {
                     Section {
@@ -235,16 +236,16 @@ struct NewTaskSheet: View {
                                     TextField("Branch name", text: $model.branch, prompt: Text("Branch name").foregroundStyle(.metadata))
                                         .textInputAutocapitalization(.never)
                                         .autocorrectionDisabled()
-                                    if let path = model.createPath {
-                                        Text("Create \(model.createBranch) at \(path)")
-                                            .font(.footnote)
+                                    if model.createPath != nil {
+                                        Text("Creates \(model.createBranch) under .worktree/")
+                                            .font(.footnote).foregroundStyle(.metadata)
                                     }
                                 } else if model.worktreeAction == .pullRequest {
                                     TextField("Pull request number", text: $model.pullRequestNumber, prompt: Text("Pull request number").foregroundStyle(.metadata))
                                         .keyboardType(.numberPad)
                                     if let number = model.pullRequest {
-                                        Text("Check out the branch of #\(number) under \(listed.source)/.worktree/")
-                                            .font(.footnote)
+                                        Text("Checks out #\(number) under .worktree/")
+                                            .font(.footnote).foregroundStyle(.metadata)
                                     }
                                 } else {
                                     ForEach(listed.worktrees, id: \.path) { checkout in
@@ -254,7 +255,7 @@ struct NewTaskSheet: View {
                                             HStack {
                                                 VStack(alignment: .leading) {
                                                     Text(checkout.branch ?? "Detached")
-                                                    Text(checkout.path).font(.footnote.monospaced())
+                                                    Text(checkout.path).font(.caption.monospaced()).foregroundStyle(.metadata)
                                                 }
                                                 Spacer()
                                                 if checkout.open { Text("Open").font(.footnote) }
@@ -287,6 +288,7 @@ struct NewTaskSheet: View {
                             }
                         }
                     }
+                    .listRowInsets(.vertical, 8)
 
                     if model.location == .resume {
                         Section("Session") {
@@ -320,6 +322,7 @@ struct NewTaskSheet: View {
                             }
                             if let error = model.sessionsError { Text(error).foregroundStyle(.red) }
                         }
+                        .listRowInsets(.vertical, 8)
                     }
 
                     Section {
@@ -388,6 +391,7 @@ struct NewTaskSheet: View {
                             .padding(.vertical, -7)
                         }
                     }
+                    .listRowInsets(.vertical, 8)
 
                 } else {
                     Section {
@@ -395,6 +399,7 @@ struct NewTaskSheet: View {
                     } footer: {
                         Text("The folder, agent and place stay as scheduled. To change them, cancel the task and schedule it again.")
                     }
+                    .listRowInsets(.vertical, 8)
                 }
 
                 if model.editing == nil, !model.scheduled.isEmpty {
@@ -424,9 +429,11 @@ struct NewTaskSheet: View {
                     } header: {
                         Text("Scheduled on \(machines.first { $0.id == model.machineId }?.label ?? "this computer")")
                     }
+                    .listRowInsets(.vertical, 8)
                 }
             }
             .listSectionSpacing(.compact)
+            .environment(\.defaultMinListRowHeight, 44)
             .contentMargins(.top, 6, for: .scrollContent)
             .safeAreaPadding(.bottom, editingPrompt ? 48 : 0)
             .modifier(KeepsFieldVisible(row: editingPrompt ? KeepsFieldVisible.prompt : editingLabel ? KeepsFieldVisible.label : nil))
