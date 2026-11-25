@@ -818,6 +818,7 @@ async fn archive_closes_nothing_while_anything_else_works_in_the_checkout() {
     fake.state().add(S1, SHELL, p, vec![]);
     fake.emit(|_| vec![fake::session_created(S1, "mine")]);
     eventually("the task listed", || rex.get(&task).is_ok()).await;
+    eventually("the shell listed", || rex.terminal_size(&id(SHELL)).is_ok()).await;
     fake.state().block(SHELL).process["foreground"]["cwd"] = json!(checkout.join("src"));
     let drive = driver(&root, rex.clone());
     let yes: Authorized = Arc::new(|| true);
