@@ -357,7 +357,7 @@ struct NewTaskSheet: View {
                             }
                         }
                         HStack(spacing: 12) {
-                            if model.location != .resume, model.offeredAgents?.isEmpty == false, model.agent == "claude" {
+                            if model.offersUltracode {
                                 optionToggle("Ultracode", systemImage: "sparkles", isOn: $model.ultracode)
                             }
                             if model.offersCodeMode {

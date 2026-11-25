@@ -211,6 +211,8 @@ final class NewTaskModel {
         return offered.contains(runtime) ? nil : "\(runtimeChoice.label) is not available on this computer right now"
     }
 
+    var offersUltracode: Bool { location != .resume && offeredAgents?.isEmpty == false && agent == "claude" }
+
     var offersCodeMode: Bool {
         options?.codeMode == true && (location == .resume ? session?.agent : agent) == "claude"
     }
